@@ -14,7 +14,7 @@ TensorFlow MUSA Extension 是一个高性能的 TensorFlow 插件，专为摩尔
 
 ### 环境要求
 
-- TensorFlow 2.x
+- TensorFlow 2.4
 - 摩尔线程 MUSA 驱动和 SDK
 - CMake 3.15+
 - GCC/G++ 7.0+

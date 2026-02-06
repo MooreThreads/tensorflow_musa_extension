@@ -14,7 +14,7 @@ TensorFlow MUSA Extension is a high-performance TensorFlow plugin specifically d
 
 ### Prerequisites
 
-- TensorFlow 2.x
+- TensorFlow 2.4
 - Moore Threads MUSA Driver and SDK
 - CMake 3.15+
 - GCC/G++ 7.0+
