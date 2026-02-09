@@ -30,7 +30,7 @@ class MusaZerosLikeOp : public MusaOpKernel {
     auto out_mt = CreateMTensor(*output);
 
     // 3. 调用下沉后的 Fill 算子
-    // 你在 mudnn_tensor.h 中搜到了 class Fill，它的用法如下：
+   
     ::musa::dnn::Fill op;
     
     // 设置填充值为 0

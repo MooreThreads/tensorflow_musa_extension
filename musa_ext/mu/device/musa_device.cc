@@ -7,7 +7,6 @@
 #include "tensorflow/core/framework/device_base.h"
 #include <iostream>
 
-// 这个头文件其实在 .cc 里如果不做查找可以不需要，但保留着也没事
 #include "tensorflow/stream_executor/multi_platform_manager.h"
 
 namespace tensorflow {
@@ -22,8 +21,7 @@ MusaDeviceContext::MusaDeviceContext(musaStream_t stream, ::stream_executor::Str
     
     implementation_ = new ::stream_executor::musa::MusaStream(stream);
     
-    // 【修正】：把 executor 传进去，不再传 nullptr
-    // 这解决了 "stream was already in an error state" 的问题
+    // 传入 executor 
     official_stream_ = new ::stream_executor::Stream(executor, implementation_);
     
     // 初始化 Stream
@@ -87,33 +85,29 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
 // MusaDevice 实现
 // ============================================================
 
-// 【关键修改】：这里必须加上 executor 参数，跟头文件保持一致！
+// 参数跟头文件保持一致
 MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes, int device_id, 
                        ::stream_executor::StreamExecutor* executor)
     : Device(env, attributes), device_id_(device_id) {
 
-    // 1. 切卡
+    // 切卡
     musaSetDevice(device_id_);
 
-    // 2. 创建流
+    // 创建流
     musaStreamCreate(&stream_);
 
-    // 【删除】：删除了这里原本的 PlatformWithName 代码，防止崩溃
-    // auto platform = ...; (已删除)
-    // auto* stream_executor = ...; (已删除)
-
-    // 3. 初始化 muDNN
+    // 初始化 muDNN
     mudnn_handle_.reset(new ::musa::dnn::Handle());
     ::musa::dnn::Status s = mudnn_handle_->SetStream(stream_);
     if (s != ::musa::dnn::Status::SUCCESS) {
         std::cerr << ">>> [MUSA] ERROR: Device " << device_id_ << " failed to bind muDNN handle!" << std::endl;
     }
 
-    // 4. 初始化 muBLAS
+    // 初始化 muBLAS
     mublasCreate(&mublas_handle_);
     mublasSetStream(mublas_handle_, stream_);
 
-    // 5. 初始化 Context
+    // 初始化 Context
     // 直接使用参数里的 executor
     device_context_ = new MusaDeviceContext(stream_, executor);
     musa_allocator_ = new MusaRawAllocator(device_id_);

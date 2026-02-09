@@ -51,7 +51,7 @@ class MusaFloorDivOp : public MusaOpKernel {
     mTensor t1 = CreateMTensor(in1, format_);
     mTensor t_out = CreateMTensor(*out, format_);
 
-    // 直接使用原生 FLOORDIV 模式
+
     ::musa::dnn::Binary binary_op;
     binary_op.SetMode(::musa::dnn::Binary::Mode::FLOORDIV); 
 
@@ -60,7 +60,7 @@ class MusaFloorDivOp : public MusaOpKernel {
     OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
                 errors::Internal("MUSA Native FLOORDIV execution failed. Status code: ", (int)status));
   }
-}; // 这里必须有分号结束类定义
+}; 
 
 // 注册宏必须在类定义之外、命名空间之内
 #define REGISTER_MUSA_FLOORDIV(TYPE) \

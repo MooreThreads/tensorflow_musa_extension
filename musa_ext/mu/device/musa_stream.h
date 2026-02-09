@@ -9,19 +9,14 @@
 namespace stream_executor {
 namespace musa {
 
-// 我们不加 override，也不加 final
+
 class MusaStream : public internal::StreamInterface {
  public:
   explicit MusaStream(musaStream_t stream) : musa_stream_(stream) {}
   ~MusaStream() override {}
   musaStream_t GetStream() const { return musa_stream_; }
 
-  // ==============================================================
-  // 【诊断模式】
-  // 我们故意写一个名字稍微不一样的函数，或者去掉 override。
-  // 这样编译器就会报错说“你没实现基类的 BlockHostUntilDone”。
-  // 我们通过那个报错来看基类到底长什么样。
-  // ==============================================================
+
   port::Status BlockHostUntilDone_DEBUG(Stream* stream) {
     musaError_t result = musaStreamSynchronize(musa_stream_);
     if (result != musaSuccess) {

@@ -18,8 +18,7 @@ class MusaSliceOp : public MusaOpKernel {
     std::vector<int64_t> starts_mt(dims);
     TensorShape output_shape;
 
-    // --- 核心修复：动态类型检测与提取 ---
-    // 定义一个 lambda 函数来安全地获取索引值
+
     auto get_index_value = [](const Tensor& t, int i) -> int64_t {
       if (t.dtype() == DT_INT32) {
         return static_cast<int64_t>(t.flat<int32>()(i));

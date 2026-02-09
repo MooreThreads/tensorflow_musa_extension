@@ -57,14 +57,14 @@ class MusaAssignVariableOp : public OpKernel {
 
 
 
-// 3. MusaReadVariableOp - 强制日志调试版
+// 3. MusaReadVariableOp 
 class MusaReadVariableOp : public OpKernel {
  public:
   explicit MusaReadVariableOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
     // 【埋点 1】确认进入 Compute
-    std::cerr << ">>>>> [MUSA_READ_LOG] 1. Enter Compute for Node: " << ctx->op_kernel().name() << std::endl;
+    // std::cerr << ">>>>> [MUSA_READ_LOG] 1. Enter Compute for Node: " << ctx->op_kernel().name() << std::endl;
 
     core::RefCountPtr<Var> var;
     // 1. 获取 Handle
@@ -72,12 +72,12 @@ class MusaReadVariableOp : public OpKernel {
     const ResourceHandle& handle = handle_tensor.flat<ResourceHandle>()(0);
     
     // 【埋点 2】确认 Handle 信息
-    std::cerr << ">>>>> [MUSA_READ_LOG] 2. Handle Name: " << handle.name() << ", Device: " << handle.device() << std::endl;
+    // std::cerr << ">>>>> [MUSA_READ_LOG] 2. Handle Name: " << handle.name() << ", Device: " << handle.device() << std::endl;
 
     // 2. 查找资源
     Status s = LookupResource(ctx, handle, &var);
     if (!s.ok()) {
-      std::cerr << ">>>>> [MUSA_READ_LOG] ❌ 3. LookupResource FAILED: " << s.ToString() << std::endl;
+      // std::cerr << ">>>>> [MUSA_READ_LOG] ❌ 3. LookupResource FAILED: " << s.ToString() << std::endl;
       ctx->CtxFailure(s);
       return;
     }
@@ -86,21 +86,21 @@ class MusaReadVariableOp : public OpKernel {
     
     // 3. 检查初始化
     if (!var->is_initialized) {
-      std::cerr << ">>>>> [MUSA_READ_LOG] ❌ 4. Variable NOT Initialized!" << std::endl;
+      // std::cerr << ">>>>> [MUSA_READ_LOG] ❌ 4. Variable NOT Initialized!" << std::endl;
       ctx->CtxFailure(errors::FailedPrecondition("Variable not initialized."));
       return;
     }
 
     // 【埋点 3】确认 Tensor 状态
     const Tensor& t = *var->tensor();
-    std::cerr << ">>>>> [MUSA_READ_LOG] 5. Tensor Ready. DType: " << DataTypeString(t.dtype()) 
-              << ", Shape: " << t.shape().DebugString() << std::endl;
+    // std::cerr << ">>>>> [MUSA_READ_LOG] 5. Tensor Ready. DType: " << DataTypeString(t.dtype()) 
+    //           << ", Shape: " << t.shape().DebugString() << std::endl;
 
     // 4. 【核心输出】
     ctx->set_output(0, t);
     
     // 【埋点 4】确认成功结束
-    std::cerr << ">>>>> [MUSA_READ_LOG] 6. set_output(0) SUCCESS. Done." << std::endl;
+    // std::cerr << ">>>>> [MUSA_READ_LOG] 6. set_output(0) SUCCESS. Done." << std::endl;
   }
 };
 

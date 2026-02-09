@@ -6,19 +6,17 @@
 #include "tensorflow/stream_executor/lib/statusor.h"
 #include <memory>
 
-// 【新增】引用你的功能头文件
 #include "musa_stream.h" 
 #include "musa_event.h"  
-#include "musa_memcpy.h"  // 你的 Memcpy 定义
-#include "musa_memset.h"  // 你的 Memset 定义
+#include "musa_memcpy.h"
+#include "musa_memset.h"
 #include "musa_device.h"
 namespace stream_executor {
 namespace musa {
 
-// 辅助函数：将你的 mStatus 转换为 TF 的 port::Status
-// 假设 mStatus::SUCCESS 是 0 (或者枚举的第一个)
+
 inline port::Status FromMusaStatus(mStatus s) {
-    if (s == mStatus::SUCCESS) { // 请确认你的 SUCCESS 定义
+    if (s == mStatus::SUCCESS) { 
         return port::Status::OK();
     }
     return port::Status(port::error::INTERNAL, "MUSA Operation Failed");
@@ -61,8 +59,7 @@ class MusaExecutor : public internal::StreamExecutorInterface {
   // ========================================================================
 
   DeviceMemoryBase Allocate(uint64 size, int64 memory_space) override { 
-      // 这里通常需要调用 musaMalloc，如果你有 musa_allocator.h 也可以在这里用
-      // 暂时保留空实现，通常 DeviceContext 会处理分配
+      
       return DeviceMemoryBase(nullptr, 0); 
   }
   
@@ -81,19 +78,19 @@ class MusaExecutor : public internal::StreamExecutorInterface {
   void HostMemoryDeallocate(void* mem) override {}
 
   // ========================================================================
-  // 3. 内存拷贝 (同步) - 填坑完毕！
+  // 3. 内存拷贝 (同步)
   // ========================================================================
   
   port::Status SynchronousMemZero(DeviceMemoryBase* location, uint64 size) override { 
       // Memset 同步版，这里临时创建一个 handle
       mHandle h; 
-      // 注意：这里没有 stream，默认走 0 流或默认流
+      
       return FromMusaStatus(tensorflow::musa::Memset(h, location->opaque(), size, 0));
   }
 
   port::Status SynchronousMemSet(DeviceMemoryBase* location, int value, uint64 size) override { 
       mHandle h;
-      // Memset 只支持 uint8 pattern
+      
       return FromMusaStatus(tensorflow::musa::Memset(h, location->opaque(), size, static_cast<uint8_t>(value)));
   }
 
@@ -113,13 +110,13 @@ class MusaExecutor : public internal::StreamExecutorInterface {
   }
   
   // ========================================================================
-  // 4. 内存拷贝 (异步) - 填坑完毕！
+  // 4. 内存拷贝 (异步)
   // ========================================================================
 
-  // 辅助：从 TF Stream 中获取底层 musaStream_t
+  // 从 TF Stream 中获取底层 musaStream_t
   musaStream_t GetMusaStream(Stream* stream) {
       auto* musa_stream_impl = static_cast<MusaStream*>(stream->implementation());
-      // 【注意】这里假设你在 musa_stream.h 里加了 GetStream() 方法
+      
       return musa_stream_impl->GetStream(); 
   }
 
@@ -162,7 +159,7 @@ class MusaExecutor : public internal::StreamExecutorInterface {
   // 5. 其他接口
   // ========================================================================
 
-  // 这里的 BlockHostUntilDone 保持上次修复后的样子（带参数）
+ 
   port::Status BlockHostUntilDone(Stream* stream) override {
       internal::StreamInterface* implementation = stream->implementation();
       auto* musa_stream = static_cast<MusaStream*>(implementation);
@@ -170,7 +167,7 @@ class MusaExecutor : public internal::StreamExecutorInterface {
   }
 
   bool HostCallback(Stream* stream, std::function<port::Status()> callback) override { 
-      // 如果 MUSA 支持 host callback，可以在这里实现
+
       return true; 
   }
   

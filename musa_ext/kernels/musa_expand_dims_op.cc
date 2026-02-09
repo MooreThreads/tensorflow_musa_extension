@@ -52,7 +52,7 @@ class MusaExpandDimsOp : public MusaOpKernel {
 
     // =====================================================================
     // 4. MUSA 处理逻辑
-    // 虽然 ExpandDims 可以直接 memcpy，但为了配合你的宏使用，我们使用 Permute 逻辑
+   
     // =====================================================================
     auto in_mt = CreateMTensor(input);
     auto out_mt = CreateMTensor(*output);
@@ -61,9 +61,7 @@ class MusaExpandDimsOp : public MusaOpKernel {
     auto& h = GetHandleByCtx(context);
     ::musa::dnn::Permute op;
 
-    // 【使用 MTOP_CHECK_OK】：
-    // 这里需要注意，ExpandDims 在物理上是 Identity，
-    // 我们将 out_mt 的描述符配置为与 in_mt 一致，使其执行简单的内存搬运。
+
     std::vector<int64_t> m_dims;
     for (int i = 0; i < input_dims; ++i) {
         m_dims.push_back(static_cast<int64_t>(input.dim_size(i)));

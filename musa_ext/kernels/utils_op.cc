@@ -29,9 +29,7 @@ mType GetType(DataType t) {
 mStatus MusaFree(void* ptr) { if (ptr) musaFree(ptr); return mStatus::SUCCESS; }
 mStatus MusaAllocate(size_t size, void** ptr) { musaMalloc(ptr, size); return mStatus::SUCCESS; }
 
-// ============================================================
-// CreateMTensor: 极简策略 (Low-Dim -> Force NCHW)
-// ============================================================
+
 mTensor CreateMTensor(const Tensor& t, mFormat format) {
   mTensor rst;
   rst.SetAddr(const_cast<void*>(static_cast<const void*>(t.tensor_data().data())));
@@ -45,16 +43,11 @@ mTensor CreateMTensor(const Tensor& t, mFormat format) {
   }
 
   // 2. 格式策略 (你的核心想法)
-  // 如果是真正的 4D 数据 (Conv/BN 输入)，必须尊重传入的 format (NHWC/NCHW)，
-  // 这样才能支持 Layout Optimization。
+
   if (dims.size() >= 4) {
       rst.SetFormat(format);
   }
-  // 如果是低维数据 (1D 参数, 2D/3D 中间变量)，
-  // 强制使用 NCHW。
-  // NCHW 在这里代表 "Linear Contiguous Memory" (线性连续内存)。
-  // - 对 Sub ([8]): 线性内存 -> 不崩。
-  // - 对 BN Param ([32]): 线性内存 -> 参数读取正确。
+
   else {
       rst.SetFormat(mFormat::NCHW);
   }

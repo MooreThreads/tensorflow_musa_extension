@@ -82,9 +82,7 @@ class MusaSelectOp : public MusaOpKernel {
     std::vector<std::vector<int64_t>> shape_storage;
     shape_storage.reserve(10); 
 
-    // 通用构建器：支持两种广播模式
-    // is_cond: 是否是条件 Tensor
-    // force_left_align: 是否强制左对齐 (用于 Legacy 模式的 Cond)
+    
     auto CreateMTensor = [&](const Tensor& input, bool force_left_align = false) -> mTensor {
         mTensor mt;
         mt.SetAddr(const_cast<void*>(static_cast<const void*>(input.tensor_data().data())));
@@ -106,7 +104,7 @@ class MusaSelectOp : public MusaOpKernel {
 
         if (force_left_align) {
             // --- 模式 B: 左对齐广播 (Cond [N] -> Out [N, C]) ---
-            // 假设 input 是 1 维，映射到 target 的第 0 维
+           
             if (input_rank == 1) {
                 i_strides[0] = dense_strides[0]; // Batch 维度有步长
                 for(int i=1; i<target_rank; ++i) i_strides[i] = 0; // 其他维度步长为0 (广播)

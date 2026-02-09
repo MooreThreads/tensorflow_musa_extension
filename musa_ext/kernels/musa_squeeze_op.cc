@@ -40,7 +40,7 @@ class MusaSqueezeOp : public OpKernel {
     }
 
     // 2. 关键：零拷贝实现
-    // 我们不分配新显存，直接将输出指向输入的内存，只改 Shape 描述
+    
     Tensor output;
     if (!output.CopyFrom(input, output_shape)) {
       c->CtxFailure(errors::Internal("Failed to squeeze tensor shape"));

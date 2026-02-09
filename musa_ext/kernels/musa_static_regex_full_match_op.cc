@@ -14,7 +14,7 @@ class MusaStaticRegexFullMatchOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("pattern", &pattern_str));
     
     // 2. 预编译正则表达式
-    // 这样做的好处是：不用每处理一个字符串都重新编译一遍正则，极大提高效率。
+    
     try {
       // 使用 ECMAScript 标准语法 (也是 C++ 默认的)
       regex_ = std::regex(pattern_str, std::regex_constants::optimize);

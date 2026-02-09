@@ -31,7 +31,7 @@ class MusaGreaterOp : public MusaOpKernel {
     auto& handle = GetHandleByCtx(ctx);
 
     // 2. 创建 MUSA Tensor
-    // 注意：muDNN 的 Binary 算子通常能自动处理符合广播规则的输入
+
     mTensor mt_x = CreateMTensor(x);
     mTensor mt_y = CreateMTensor(y);
     mTensor mt_out = CreateMTensor(*output);

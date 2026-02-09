@@ -12,9 +12,7 @@ namespace musa {
 
 // =========================================================================
 // 1. MusaPackOp (Stack)
-// [终极修复版] 
-// 移除了复杂的 vector 容器，改用单一的 shared_dims 变量。
-// 确保内存地址绝对固定，不会被释放或移动。
+
 // =========================================================================
 template <typename T>
 class MusaPackOp : public OpKernel {
@@ -53,12 +51,7 @@ class MusaPackOp : public OpKernel {
 
     const int64_t axis_dim = output_shape.dim_size(axis); 
 
-    // =================================================================
-    // [终极修复]
-    // 定义一个单一的 shared_dims 向量。
-    // 因为所有输入的 View 形状都是 [before_dim, after_dim]，
-    // 我们只需要这一份内存，并且它在 Compute 函数结束前绝对安全。
-    // =================================================================
+    
     std::vector<int64_t> shared_input_dims = {before_dim, after_dim};
 
     // 构造输入列表
@@ -117,7 +110,7 @@ class MusaUnpackOp : public OpKernel {
     
     std::vector<int64_t> starts(input.dims(), 0);
 
-    // 预先计算好 view dims (Unpack 的输入需要视为 [..., 1, ...])
+    
     std::vector<int64_t> shared_view_dims;
     for(int d = 0; d < input.dims(); ++d) {
         shared_view_dims.push_back(input.dim_size(d));

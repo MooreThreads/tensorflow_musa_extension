@@ -26,7 +26,7 @@ class MusaPlatform : public Platform {
     return count;
   }
 
-  // 【新增】：这是刚才缺少的必须实现的接口
+
   port::StatusOr<std::unique_ptr<DeviceDescription>> DescriptionForDevice(int ordinal) const override {
     internal::DeviceDescriptionBuilder builder;
     builder.set_name("MUSA Device");

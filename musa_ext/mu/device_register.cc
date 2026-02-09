@@ -8,7 +8,7 @@
 #include "tensorflow/core/platform/env.h"
 #include "device/musa_device.h"
 
-// 【新增】必须包含这个头文件，才能获取 StreamExecutor
+// 必须包含这个头文件，才能获取 StreamExecutor
 #include "tensorflow/stream_executor/multi_platform_manager.h" 
 
 namespace tensorflow {
@@ -46,8 +46,7 @@ class MusaDeviceFactory : public DeviceFactory {
 
     fprintf(stderr, ">>>> [MUSA] DeviceFactory creating %d logical instances <<<<\n", count);
 
-    // 【关键步骤 1】获取 "MUSA" 平台管理器
-    // 如果这里报错，说明你没有注册 Platform (即缺少 musa_platform.cc)
+    // 获取 "MUSA" 平台管理器
     auto platform_status = ::stream_executor::MultiPlatformManager::PlatformWithName("MUSA");
     if (!platform_status.ok()) {
         return platform_status.status();
@@ -63,15 +62,14 @@ class MusaDeviceFactory : public DeviceFactory {
       attr.mutable_locality()->set_bus_id(i);
       attr.set_physical_device_desc(strings::StrCat("device: MUSA device ", i));
 
-      // 【关键步骤 2】获取当前设备的 Executor
+      // 获取当前设备的 Executor
       auto executor_status = platform->ExecutorForDevice(i);
       if (!executor_status.ok()) {
           return executor_status.status();
       }
       auto* executor = executor_status.ValueOrDie();
 
-      // 【关键步骤 3】依赖注入：把 executor 传给 MusaDevice
-      // (注意：这要求你已经改好了 MusaDevice 的构造函数)
+      // 依赖注入：把 executor 传给 MusaDevice
       devices->push_back(std::unique_ptr<Device>(
         new MusaDevice(Env::Default(), attr, i, executor)
       ));

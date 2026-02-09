@@ -23,12 +23,12 @@ class MusaResourceGatherOp : public MusaOpKernel {
 
   void Compute(OpKernelContext* c) override {
     // [DEBUG] 1. 进入函数
-    LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: Enter Compute. batch_dims=" << batch_dims_;
+    // LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: Enter Compute. batch_dims=" << batch_dims_;
 
     core::RefCountPtr<Var> v;
     Status s = LookupResource(c, HandleFromInput(c, 0), &v);
     if (!s.ok()) {
-        LOG(ERROR) << ">>>>> [MUSA_DEBUG] ResourceGather: LookupResource Failed: " << s.ToString();
+        // LOG(ERROR) << ">>>>> [MUSA_DEBUG] ResourceGather: LookupResource Failed: " << s.ToString();
         c->CtxFailure(s);
         return;
     }
@@ -38,8 +38,8 @@ class MusaResourceGatherOp : public MusaOpKernel {
     const Tensor& indices = c->input(1);
 
     // [DEBUG] 2. 打印输入形状
-    LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: Params Shape=" << params.shape().DebugString() 
-              << ", Indices Shape=" << indices.shape().DebugString();
+    // LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: Params Shape=" << params.shape().DebugString() 
+    //           << ", Indices Shape=" << indices.shape().DebugString();
 
     OP_REQUIRES(c, TensorShapeUtils::IsVectorOrHigher(params.shape()),
                 errors::InvalidArgument("params must be at least 1 dimensional"));
@@ -52,7 +52,7 @@ class MusaResourceGatherOp : public MusaOpKernel {
     for (int i = batch_dims_ + 1; i < params.dims(); ++i) result_shape.AddDim(params.dim_size(i));
 
     // [DEBUG] 3. 打印计算出的输出形状
-    LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: Calculated Output Shape=" << result_shape.DebugString();
+    // LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: Calculated Output Shape=" << result_shape.DebugString();
 
     Tensor* out = nullptr;
     s = c->allocate_output(0, result_shape, &out);
@@ -63,11 +63,11 @@ class MusaResourceGatherOp : public MusaOpKernel {
     }
 
     // [DEBUG] 4. 检查输出 Tensor 是否有效
-    LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: Output Allocated. Ptr=" << out 
-              << ", NumElements=" << out->NumElements();
+    // LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: Output Allocated. Ptr=" << out 
+    //           << ", NumElements=" << out->NumElements();
 
     if (out->NumElements() == 0) {
-        LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: Output is empty, returning early.";
+       //  LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: Output is empty, returning early.";
         return;
     }
 
@@ -76,7 +76,7 @@ class MusaResourceGatherOp : public MusaOpKernel {
       mGatherX op;
       
       // [DEBUG] 5. 准备调用 muDNN
-      LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: Invoking mGatherX...";
+     //  LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: Invoking mGatherX...";
       
       MTOP_CHECK_OK(op.SetMode(mGatherX::Mode::GATHER), "SetMode", c);
       MTOP_CHECK_OK(op.SetAxis(static_cast<int>(batch_dims_)), "SetAxis", c);
@@ -87,13 +87,13 @@ class MusaResourceGatherOp : public MusaOpKernel {
       
       auto status = op.Run(h, out_mt, indices_mt, params_mt);
       if (status != ::musa::dnn::Status::SUCCESS) {
-          LOG(ERROR) << ">>>>> [MUSA_DEBUG] ResourceGather: mGatherX Run Failed! Status=" << static_cast<int>(status);
+          // LOG(ERROR) << ">>>>> [MUSA_DEBUG] ResourceGather: mGatherX Run Failed! Status=" << static_cast<int>(status);
           c->CtxFailure(errors::Internal("mGatherX execution failed"));
           return;
       }
-      LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: mGatherX Success.";
+     //  LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: mGatherX Success.";
     } else {
-      LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: Indices empty, skipping Kernel.";
+      // LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: Indices empty, skipping Kernel.";
     }
   }
  private:

@@ -5,7 +5,7 @@
 namespace tensorflow {
 namespace musa {
 
-// 通用比较算子模板，减少冗余代码
+
 template <::musa::dnn::Binary::Mode mode>
 class MusaComparisonOp : public MusaOpKernel {
  public:
@@ -32,8 +32,7 @@ class MusaComparisonOp : public MusaOpKernel {
     // 2. 准备 muDNN 资源
     auto& handle = GetHandleByCtx(ctx);
     
-    // 💡 建议：如果 in0 和 in1 形状不同，这里使用你定义的广播版 CreateMTensor
-    // 如果没有广播版，muDNN 会要求输入维度完全一致
+  
     mTensor t0 = CreateMTensor(in0); 
     mTensor t1 = CreateMTensor(in1);
     mTensor t_out = CreateMTensor(*out);

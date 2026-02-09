@@ -26,11 +26,9 @@ class MusaFusedBatchNormOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
-    // 我们的 utils_op.cc 已经支持自动推导，所以理论上支持所有格式
-    // 但为了对比测试，我们还是主要关注 NHWC
+    
     if (!is_nhwc_) {
-         // 如果你也想测试 NCHW 输入，可以把这个检查去掉
-         // OP_REQUIRES(ctx, false, errors::Unimplemented("Only NHWC is supported."));
+         
     }
 fprintf(stderr, "\n>>>>> MY CUSTOM MUSA KERNEL IS RUNNING (Standard NHWC) <<<<<\n");
     const Tensor& x = ctx->input(0);
@@ -68,15 +66,11 @@ fprintf(stderr, "\n>>>>> MY CUSTOM MUSA KERNEL IS RUNNING (Standard NHWC) <<<<<\
     };
     auto maintainer = device->GetMemMaintainer(internal_maintainer);
 
-    // =====================================================================
-    // TEST: Standard NHWC
-    // 不再使用 CreateFakeNCHW，而是直接告诉内核：这是 NHWC！
-    // =====================================================================
+   
     mTensor mt_x = CreateMTensor(x, mFormat::NHWC);
     mTensor mt_y = CreateMTensor(*y, mFormat::NHWC);
     
-    // 参数必须是 1D 的 (utils_op.cc 会自动处理 NCHW/NHWC 下的 1D tensor)
-    // 这里的 Format 传 NCHW 或 NHWC 对 1D tensor 其实没区别，习惯上传 NCHW
+    
     mTensor mt_scale = CreateMTensor(scale, mFormat::NCHW);
     mTensor mt_offset = CreateMTensor(offset, mFormat::NCHW);
     mTensor mt_fresh_mean = CreateMTensor(*saved_mean, mFormat::NCHW);

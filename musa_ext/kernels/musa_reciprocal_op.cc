@@ -12,7 +12,7 @@ class MusaReciprocalOp : public MusaOpKernel {
   explicit MusaReciprocalOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
-    fprintf(stderr, ">>> [MUSA_TRACE_AUTO] %s\n", name().c_str());
+    // fprintf(stderr, ">>> [MUSA_TRACE_AUTO] %s\n", name().c_str());
     
     const Tensor& input = ctx->input(0);
     

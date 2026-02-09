@@ -75,9 +75,7 @@ MusaDevice* GetDeviceByCtx(tensorflow::OpKernelContext* context);
 inline ::musa::dnn::Handle& GetHandleByCtx(tensorflow::OpKernelContext* context) {
     auto* musa_device = static_cast<MusaDevice*>(context->device());
     int device_id = musa_device->get_device_id();
-    
-    // 【核心保底】每次获取 Handle 时，强行校准当前线程的物理设备 ID
-    // 解决 TensorFlow 线程池随机分配导致的 Context 不匹配问题
+   
     musaSetDevice(device_id); 
     
     return musa_device->mudnn_handle();

@@ -23,7 +23,7 @@ class MusaArgOp : public OpKernel {
                 errors::Internal("MUSA _Arg: No call frame found."));
 
     const Tensor* val_ptr = nullptr;
-    // 👈 适配源码中的 GetArg(int, const Tensor**)
+   
     Status s = frame->GetArg(index_, &val_ptr);
     OP_REQUIRES_OK(ctx, s);
     OP_REQUIRES(ctx, val_ptr != nullptr, 

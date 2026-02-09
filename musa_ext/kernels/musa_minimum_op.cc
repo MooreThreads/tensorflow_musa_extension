@@ -16,8 +16,7 @@ class MusaMinimumOp : public MusaOpKernel { // 继承 MusaOpKernel 以获取 for
     const Tensor& in0 = ctx->input(0);
     const Tensor& in1 = ctx->input(1);
 
-    // 假设输入形状相同，如果涉及广播(Broadcasting)，muDNN 的 binary_op.Run 
-    // 通常要求 mt_x, mt_y 和 mt_out 形状一致，除非你的 CreateMTensor 支持处理 Stride。
+   
     Tensor* out = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, in0.shape(), &out));
 

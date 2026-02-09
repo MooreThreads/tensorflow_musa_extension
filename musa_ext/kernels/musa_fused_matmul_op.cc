@@ -99,12 +99,11 @@ public:
             mTensor mt1 = CreateMTensor(in1, format_);
             mTensor mt_out = CreateMTensor(*out, format_);
 
-            // [关键修复] 创建一个持久化容器，确保 Shape 数据在 Run() 执行前一直存活
+            
             std::vector<std::vector<int64_t>> shape_storage;
-            // 预留足够的空间防止 vector 扩容导致指针失效 (最多存3个张量的dim和stride，共6个)
-            shape_storage.reserve(6); 
+            
 
-            // 修改 Lambda，让它把数据存到外部的 shape_storage 里
+            
             auto FixToBatchFormat = [&](mTensor& mt, const Tensor& t) {
                 if (t.dims() == 2) {
                     int64_t rows = t.dim_size(0);
@@ -122,10 +121,8 @@ public:
                     int64_t* p_dims = shape_storage[shape_storage.size()-2].data();
                     int64_t* p_strides = shape_storage[shape_storage.size()-1].data();
                     
-                    // 4. 安全地传递给 mTensor (假设 SetNdInfo 接受指针和长度)
-                    // 注意：这里需要适配你的 SetNdInfo 接口，如果是 initializer_list 版本，
-                    // 它通常会拷贝数据，但如果是指针版本则必须这样做。
-                    // 鉴于之前 Pack Op 的经验，这样做最安全。
+                    // 4. 安全地传递给 mTensor
+              
                     mt.SetNdInfo(3, p_dims, p_strides);
                 }
             };
@@ -134,7 +131,7 @@ public:
             FixToBatchFormat(mt1, in1);
             FixToBatchFormat(mt_out, *out);
 
-            // 此时 shape_storage 依然存活，指针有效
+            
             auto status = matmul_op.Run(handle, mt_out, mt0, mt1);
             OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
                         errors::Internal("MatMul failed. Status: ", (int)status));

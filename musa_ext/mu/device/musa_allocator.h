@@ -11,7 +11,7 @@ namespace musa {
 
 class MusaRawAllocator : public Allocator {
  public:
-  // 1. 构造函数
+  // 构造函数
   explicit MusaRawAllocator(int device_id) : device_id_(device_id) {}
   
   ~MusaRawAllocator() override = default;
@@ -21,7 +21,7 @@ class MusaRawAllocator : public Allocator {
   void* AllocateRaw(size_t alignment, size_t num_bytes) override {
     if (num_bytes == 0) return nullptr;
 
-    // 【核心修复】切换到分配器绑定的物理卡
+    // 切换到分配器绑定的物理卡
     musaSetDevice(device_id_);
 
     size_t target_alignment = std::max((size_t)256, alignment);
@@ -37,14 +37,14 @@ class MusaRawAllocator : public Allocator {
 
   void DeallocateRaw(void* ptr) override {
     if (ptr) {
-      // 【核心修复】释放时也需要切换上下文
+      // 释放时也需要切换上下文
       musaSetDevice(device_id_);
       musaFree(ptr);
     }
   }
 
  private:
-  // 【刚才缺少的行】：定义成员变量
+  // 定义成员变量
   int device_id_; 
 };
 

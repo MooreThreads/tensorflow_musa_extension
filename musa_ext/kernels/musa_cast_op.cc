@@ -23,8 +23,7 @@ class MusaCastOp : public MusaOpKernel {
     if (inp.NumElements() == 0) return;
 
     // 1. 准备 muDNN 张量描述符
-    // 注意：因为你修复了 GetType，所以当 external_src_dtype_ == DT_BOOL 时，
-    // in_mt 内部的描述符会正确设置为 mType::BOOL
+
     auto in_mt = CreateMTensor(inp);
     auto out_mt = CreateMTensor(*output);
 
@@ -32,7 +31,7 @@ class MusaCastOp : public MusaOpKernel {
     ::musa::dnn::Unary op;
 
     // 2. 设置 Cast 模式
-    // 对于相同类型的 Cast，使用 IDENTITY；不同类型使用 CAST
+
     mStatus m_status;
     if (external_src_dtype_ == external_dst_dtype_) {
         m_status = op.SetMode(::musa::dnn::Unary::Mode::IDENTITY);
@@ -44,7 +43,7 @@ class MusaCastOp : public MusaOpKernel {
                 errors::Internal("muDNN Unary SetMode failed in Cast"));
 
     // 3. 执行 Cast
-    // 这里是“决战点”：muDNN 是否能处理 bool (1 byte) -> float (4 byte)
+
     m_status = op.Run(h, out_mt, in_mt);
 
     if (m_status != mStatus::SUCCESS) {

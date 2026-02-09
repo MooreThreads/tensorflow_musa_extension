@@ -30,7 +30,7 @@ void Compute(OpKernelContext* ctx) override {
   auto& handle = GetHandleByCtx(ctx);
   musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 
-  // 修复点：对 output 使用 const_cast
+
   MusaInvertPermutationKernelLauncher<T>(
       input.tensor_data().data(),
       const_cast<char*>(output->tensor_data().data()),  // ← 关键修复！

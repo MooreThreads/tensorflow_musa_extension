@@ -36,23 +36,13 @@ class MusaLessEqualOp : public MusaOpKernel {
     auto& handle = GetHandleByCtx(ctx);
 
     // 2. 策略：全部展平为 1D 进行计算
-    // muDNN 在 float16/int64 等类型下对多维广播支持不稳定。
-    // 为了保证正确性和形状安全，我们使用 Temporary Tensor 中转。
+   
     
     // A. 准备输入 Views (1D)
     TensorShape flat_shape_in0({input_0.NumElements()});
     TensorShape flat_shape_in1({input_1.NumElements()});
     
-    // 如果需要广播，这里不能简单展平，必须使用 BCast 扩展后的形状并展平？
-    // 不，如果形状不同 (Broadcasting)，简单的 1D 展平会丢失广播语义。
-    // 但是之前的测试表明，对于 float32，4D Padding 是工作的。
-    // 对于 float16/int64，muDNN 报错。
-    
-    // 让我们区分处理：
-    // Case 1: 形状完全相同 -> 展平为 1D，使用 Temp Tensor 输出。
-    // Case 2: 需要广播 -> 尝试使用 4D Padding (目前已知 float32/int32 work)。
-    //         如果 float16/int64 在广播时也崩，那 muDNN 就暂不支持这些类型的广播。
-    
+   
     if (input_0.shape() == input_1.shape()) {
         // --- 路径 A: 形状相同，强制 1D ---
         Tensor input_0_flat; 
@@ -77,8 +67,7 @@ class MusaLessEqualOp : public MusaOpKernel {
         OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
                    errors::Internal("MUSA LessEqual execution failed. Status: ", (int)status));
         
-        // 拷贝回真正的 output (2D)
-        // 这是一个 Device-to-Device copy
+  
         auto dst_ptr = output->flat<bool>().data();
         auto src_ptr = temp_output.flat<bool>().data();
         auto copy_status = musaMemcpy(dst_ptr, src_ptr, output->NumElements() * sizeof(bool), musaMemcpyDeviceToDevice);
@@ -86,9 +75,7 @@ class MusaLessEqualOp : public MusaOpKernel {
                     errors::Internal("MUSA memcpy failed"));
 
     } else {
-        // --- 路径 B: 广播，使用 4D Padding ---
-        // float16/int64 在此处可能会报错，但这是 muDNN 的限制。
-        // 我们先保证相同形状的 Case (测试集里的主要 failures) 能过。
+     
         auto get_padded_4d_shape = [](const TensorShape& s) -> TensorShape {
             if (s.dims() >= 4) return s;
             TensorShape new_s = s;
@@ -100,8 +87,7 @@ class MusaLessEqualOp : public MusaOpKernel {
         
         Tensor input_0_view;
         Tensor input_1_view;
-        Tensor output_view; // 这里可以用 View，因为 4D 形状不会被 Python 误解为 1D (只要秩对即可)
-        
+        Tensor output_view; 
         CHECK(input_0_view.CopyFrom(input_0, get_padded_4d_shape(input_0.shape())));
         CHECK(input_1_view.CopyFrom(input_1, get_padded_4d_shape(input_1.shape())));
         CHECK(output_view.CopyFrom(*output, get_padded_4d_shape(output_shape)));

@@ -41,7 +41,7 @@ class MusaMultiplyOp : public MusaOpKernel {
     auto& handle = GetHandleByCtx(ctx);
 
     // 4. 设置 Op 模式
-    // [修改点] 使用 mBinary (双目) 而不是 mUnary (单目)
+  
     mBinary binary_op;
     binary_op.SetMode(::musa::dnn::Binary::Mode::MUL); // 设置模式为乘法
 

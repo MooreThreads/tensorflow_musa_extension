@@ -2,7 +2,7 @@
 #include "tensorflow/core/framework/register_types.h"
 #include "absl/strings/str_cat.h"
 #include "mu/device/musa_memcpy.h"
-#include "utils_op.h" // 确保包含 MusaDevice 定义
+#include "utils_op.h" 
 #include <musa_runtime.h> // 为了使用 musaDeviceSynchronize
 
 namespace tensorflow {
@@ -18,8 +18,7 @@ class MusaPrintVOp : public OpKernel {
   }
 
   void Compute(OpKernelContext* c) override {
-    // 1. 强行同步设备，确保之前的 MUSA 计算已完成
-    // 这是解决数据不一致最简单暴力的方法
+  
     musaDeviceSynchronize();
 
     for (int i = 0; i < c->num_inputs(); ++i) {

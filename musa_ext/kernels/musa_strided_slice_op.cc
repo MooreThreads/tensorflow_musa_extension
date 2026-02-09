@@ -36,7 +36,7 @@ class MusaStridedSliceOp : public OpKernel {
 
   explicit MusaStridedSliceOp(OpKernelConstruction* context) : OpKernel(context) {
 
-    // 【修正】：确保这里的变量名与下方的 private 成员变量一致
+  
 
     OP_REQUIRES_OK(context, context->GetAttr("begin_mask", &begin_mask_));
 

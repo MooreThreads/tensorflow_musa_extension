@@ -32,7 +32,7 @@ Status MusaOptimizationPass::Run(const GraphOptimizationPassOptions& options) {
   if (options.graph == nullptr) return Status::OK();
   Graph* graph = options.graph->get();
 
-  // 1. 收集所有的 BiasAdd 节点作为潜在的融合起点
+  // 收集所有的 BiasAdd 节点作为潜在的融合起点
   std::vector<Node*> bias_add_nodes;
   for (Node* n : graph->op_nodes()) {
     if (n->type_string() == "BiasAdd") {
@@ -59,16 +59,16 @@ Status MusaOptimizationPass::Run(const GraphOptimizationPassOptions& options) {
 
     if (!is_matmul && !is_conv) continue;
 
-    // 安全检查：如果 MatMul 的结果被多处引用，不能融合 BiasAdd
+    // 如果 MatMul 的结果被多处引用，不能融合 BiasAdd
     if (CountConsumers(matmul_node) > 1) continue;
 
     // =========================================================
-    // 【新增逻辑】: 向前多看一步，寻找 Relu
+    // 向前多看一步，寻找 Relu
     // =========================================================
     Node* relu_node = nullptr;
     
     // 只有当 BiasAdd 只有一个消费者时，才尝试寻找 Relu
-    // (防止 BiasAdd 的结果被分叉使用)
+    // 防止 BiasAdd 的结果被分叉使用
     if (CountConsumers(bias_node) == 1) {
         for (const Edge* e : bias_node->out_edges()) {
             if (!e->IsControlEdge() && e->dst()->type_string() == "Relu") {
@@ -127,9 +127,9 @@ Status MusaOptimizationPass::Run(const GraphOptimizationPassOptions& options) {
         if (mm_attrs.Find("padding")) (*attr)["padding"] = *mm_attrs.Find("padding");
     }
 
-    // --- 【关键】设置 fused_ops 列表 ---
+    // --- 设置 fused_ops 列表 ---
     auto* fused_ops_list = (*attr)["fused_ops"].mutable_list();
-    fused_ops_list->add_s("BiasAdd"); // 必定包含
+    fused_ops_list->add_s("BiasAdd");
     if (relu_node) {
         fused_ops_list->add_s("Relu"); // 如果找到了 Relu，追加进去
     }
@@ -138,14 +138,14 @@ Status MusaOptimizationPass::Run(const GraphOptimizationPassOptions& options) {
     (*attr)["epsilon"].set_f(0.0001f);
     
     // --- 修改图结构 ---
-    // 1. 移除旧节点
+    // 移除旧节点
     graph->RemoveNode(bias_node);
     graph->RemoveNode(matmul_node);
     if (relu_node) {
-        graph->RemoveNode(relu_node); // 别忘了移除 Relu
+        graph->RemoveNode(relu_node);
     }
     
-    // 2. 添加新节点
+    // 添加新节点
     Status status;
     Node* new_node = graph->AddNode(new_def, &status);
     if (!status.ok()) {
@@ -153,12 +153,12 @@ Status MusaOptimizationPass::Run(const GraphOptimizationPassOptions& options) {
         continue;
     }
     
-    // 3. 重连输入边
+    // 重连输入边
     graph->AddEdge(node_a, idx_a, new_node, 0);
     graph->AddEdge(node_b, idx_b, new_node, 1);
     graph->AddEdge(bias_tensor_node, bias_tensor_idx, new_node, 2);
     
-    // 4. 重连输出边 (连接到原来 Relu 或 BiasAdd 的消费者)
+    // 重连输出边 (连接到原来 Relu 或 BiasAdd 的消费者)
     for (auto& c : consumers) {
         graph->AddEdge(new_node, 0, c.first, c.second);
     }
