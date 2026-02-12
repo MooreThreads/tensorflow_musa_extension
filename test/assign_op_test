@@ -1,0 +1,132 @@
+# assign_op_test.py
+# Copyright 2026 The TensorFlow MUSA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
+"""Tests for MUSA Assign (TF2 AssignVariableOp via tf.Variable.assign)."""
+
+import numpy as np
+import tensorflow as tf
+
+from musa_test_utils import MUSATestCase
+
+
+class AssignOpTest(MUSATestCase):
+  """Tests for MUSA AssignVariableOp (TF2)."""
+
+  def _rand_np(self, shape, dtype):
+    """Generate numpy array for given shape/dtype."""
+    # bfloat16 用 float32 生成，再 cast 到 tf.bfloat16（你们 compare 里也会 cast 到 f32 比较）
+    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    if np_dtype in [np.int32, np.int64]:
+      return np.random.randint(-10, 10, size=shape).astype(np_dtype)
+    return np.random.uniform(-1, 1, size=shape).astype(np_dtype)
+
+  def _test_assign(self, init_shape, value_shape, dtype, validate_shape=True, rtol=1e-5, atol=1e-8):
+    """Compare CPU vs MUSA for variable.assign + read_value()."""
+    init_np = self._rand_np(init_shape, dtype)
+    val_np = self._rand_np(value_shape, dtype)
+
+    init_tf = tf.constant(init_np, dtype=dtype)
+    val_tf = tf.constant(val_np, dtype=dtype)
+
+    def assign_wrapper(init_tensor, value_tensor):
+      # 在 _compare_cpu_musa_results 的 device scope 里创建变量，确保变量落在对应设备
+      v = tf.Variable(init_tensor, trainable=False)
+      v.assign(value_tensor, validate_shape=validate_shape)
+      return v.read_value()
+
+    self._compare_cpu_musa_results(
+        assign_wrapper, [init_tf, val_tf], dtype, rtol=rtol, atol=atol
+    )
+
+  def _test_assign_twice(self, shape, dtype, rtol=1e-5, atol=1e-8):
+    """Assign twice and compare final value."""
+    init_np = self._rand_np(shape, dtype)
+    v1_np = self._rand_np(shape, dtype)
+    v2_np = self._rand_np(shape, dtype)
+
+    init_tf = tf.constant(init_np, dtype=dtype)
+    v1_tf = tf.constant(v1_np, dtype=dtype)
+    v2_tf = tf.constant(v2_np, dtype=dtype)
+
+    def assign_twice_wrapper(init_tensor, value1, value2):
+      v = tf.Variable(init_tensor, trainable=False)
+      v.assign(value1, validate_shape=True)
+      v.assign(value2, validate_shape=True)
+      return v.read_value()
+
+    self._compare_cpu_musa_results(
+        assign_twice_wrapper, [init_tf, v1_tf, v2_tf], dtype, rtol=rtol, atol=atol
+    )
+
+  def testAssignBasicSameShape(self):
+    """Basic assign with same shape."""
+    for dtype in [tf.float32, tf.float16, tf.bfloat16, tf.float64]:
+      rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
+      atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
+
+      self._test_assign([10], [10], dtype, validate_shape=True, rtol=rtol, atol=atol)
+      self._test_assign([256, 256], [256, 256], dtype, validate_shape=True, rtol=rtol, atol=atol)
+
+  def testAssignOverwriteTwice(self):
+    """Assign twice, ensure overwrite works."""
+    for dtype in [tf.float32, tf.float16, tf.bfloat16, tf.float64]:
+      rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
+      atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
+
+      self._test_assign_twice([128], dtype, rtol=rtol, atol=atol)
+      self._test_assign_twice([64, 64], dtype, rtol=rtol, atol=atol)
+
+  def testAssignValidateShapeFalseAllowsReshape(self):
+    """validate_shape=False should allow reshape (reallocation)."""
+    for dtype in [tf.float32, tf.float16, tf.bfloat16, tf.float64]:
+      rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
+      atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
+
+      # init shape != value shape
+      self._test_assign([2, 3], [3, 2], dtype, validate_shape=False, rtol=rtol, atol=atol)
+      self._test_assign([0], [0, 5], dtype, validate_shape=False, rtol=rtol, atol=atol)
+
+  def testAssignValidateShapeTrueMismatchRaises(self):
+    """validate_shape=True with mismatched shapes should raise on both CPU and MUSA."""
+    for dtype in [tf.float32, tf.float16, tf.bfloat16, tf.float64]:
+      init_np = self._rand_np([2, 3], dtype)
+      val_np = self._rand_np([3, 2], dtype)
+      init_tf = tf.constant(init_np, dtype=dtype)
+      val_tf = tf.constant(val_np, dtype=dtype)
+
+      def run_on_device(dev):
+        with tf.device(dev):
+          v = tf.Variable(init_tf, trainable=False)
+          v.assign(val_tf, validate_shape=True)
+
+      with self.assertRaises(tf.errors.InvalidArgumentError):
+        run_on_device("/CPU:0")
+
+      with self.assertRaises(tf.errors.InvalidArgumentError):
+        run_on_device("/device:MUSA:0")
+
+  def testAssignEmptyTensor(self):
+    """Assign with empty tensors."""
+    for dtype in [tf.float32, tf.float16, tf.bfloat16, tf.float64]:
+      rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
+      atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
+
+      self._test_assign([0], [0], dtype, validate_shape=True, rtol=rtol, atol=atol)
+      self._test_assign([0, 5], [0, 5], dtype, validate_shape=True, rtol=rtol, atol=atol)
+
+
+if __name__ == "__main__":
+  tf.test.main()
