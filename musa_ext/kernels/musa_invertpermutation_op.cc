@@ -7,7 +7,6 @@
 namespace tensorflow {
 namespace musa {
 
-// --- 外部声明 ---
 template <typename T>
 void MusaInvertPermutationKernelLauncher(const void* perm, void* inv_perm,
                                          int64_t n, musaStream_t stream);
@@ -30,11 +29,9 @@ class MusaInvertPermutationOp : public MusaOpKernel {
     auto& handle = GetHandleByCtx(ctx);
     musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 
-    // 修复点：对 output 使用 const_cast
     MusaInvertPermutationKernelLauncher<T>(
         input.tensor_data().data(),
-        const_cast<char*>(output->tensor_data().data()),  // ← 关键修复！
-        n, stream);
+        const_cast<char*>(output->tensor_data().data()), n, stream);
   }
 };
 

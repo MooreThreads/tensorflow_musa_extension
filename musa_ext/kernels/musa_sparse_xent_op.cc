@@ -18,7 +18,6 @@ class MusaSparseSoftMaxCrossEntroyWithLogitsOp : public MusaOpKernel {
     const Tensor& logits = context->input(0);
     const Tensor& labels = context->input(1);
 
-    // 1. 维度与形状检查
     OP_REQUIRES(context, logits.dims() == 2,
                 errors::InvalidArgument("logits must be 2-D, but got shape ",
                                         logits.shape().DebugString()));
@@ -32,7 +31,6 @@ class MusaSparseSoftMaxCrossEntroyWithLogitsOp : public MusaOpKernel {
     const int64 batch_size = logits.dim_size(0);
     const int64 num_classes = logits.dim_size(1);
 
-    // 2. 分配输出
     Tensor* loss_tensor = nullptr;
     OP_REQUIRES_OK(context,
                    context->allocate_output(0, labels.shape(), &loss_tensor));
@@ -44,7 +42,6 @@ class MusaSparseSoftMaxCrossEntroyWithLogitsOp : public MusaOpKernel {
 
     mHandle& h = GetHandleByCtx(context);
 
-    // 3. 准备临时张量
     Tensor log_probs_t, gathered_log_t, ones_t;
     OP_REQUIRES_OK(context, context->allocate_temp(
                                 logits.dtype(), logits.shape(), &log_probs_t));
@@ -54,7 +51,6 @@ class MusaSparseSoftMaxCrossEntroyWithLogitsOp : public MusaOpKernel {
     OP_REQUIRES_OK(context, context->allocate_temp(logits.dtype(),
                                                    labels.shape(), &ones_t));
 
-    // 创建局部左值变量
     mTensor logits_m = CreateMTensor(logits, format_);
     mTensor labels_m = CreateMTensor(labels, format_);
     mTensor log_probs_m = CreateMTensor(log_probs_t, format_);
@@ -63,7 +59,6 @@ class MusaSparseSoftMaxCrossEntroyWithLogitsOp : public MusaOpKernel {
     mTensor loss_m = CreateMTensor(*loss_tensor, format_);
     mTensor back_m = CreateMTensor(*back_tensor, format_);
 
-    // --- Step I: 计算 Loss ---
     mSoftmax softmax_op;
     softmax_op.SetAlgorithm(mSoftmax::Algorithm::ACCURATE);
     softmax_op.SetDim(1);
@@ -82,7 +77,6 @@ class MusaSparseSoftMaxCrossEntroyWithLogitsOp : public MusaOpKernel {
     unary_op.SetAlpha(-1.0);
     unary_op.Run(h, loss_m, gathered_log_m);
 
-    // --- Step II: 计算 Gradient ---
     softmax_op.SetMode(SOFTMAX_MODE::SOFTMAX);
     softmax_op.Run(h, back_m, logits_m);
 
@@ -90,7 +84,6 @@ class MusaSparseSoftMaxCrossEntroyWithLogitsOp : public MusaOpKernel {
     fill_op.SetValue(1.0);
     fill_op.Run(h, ones_m);
 
-    // 显式强转 static_cast<int> 解决歧义报错
     std::vector<int64_t> fake_2d_shape = {batch_size, 1};
     labels_m.SetNdInfo(static_cast<int>(fake_2d_shape.size()),
                        fake_2d_shape.data());
@@ -100,11 +93,9 @@ class MusaSparseSoftMaxCrossEntroyWithLogitsOp : public MusaOpKernel {
     mScatter scatter_op;
     scatter_op.SetMode(mScatter::Mode::SUB);
     scatter_op.Run(h, back_m, labels_m, ones_m, 1, nullptr);
-    
-#ifndef MUSA_DISABLE_DEBUG_LOGGING
-    VLOG(1)
-        << ">>> [MUSA_TRACE] SparseSoftmaxCrossEntropy computed successfully.";
-#endif
+
+    //  VLOG(1) << ">>> [MUSA_TRACE] SparseSoftmaxCrossEntropy computed
+    //  successfully.";
   }
 };
 

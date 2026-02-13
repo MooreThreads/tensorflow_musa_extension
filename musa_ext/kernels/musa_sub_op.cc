@@ -1,8 +1,6 @@
-/* Copyright @2020-2026 Moore Threads Technology Co., Ltd. All rights reserved.
- */
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
-#include "tensorflow/core/util/bcast.h"  // 引入广播辅助类
+#include "tensorflow/core/util/bcast.h"
 #include "utils_op.h"
 
 namespace tensorflow {
@@ -17,7 +15,6 @@ class MusaSubOp : public MusaOpKernel {
     const Tensor& in0 = ctx->input(0);
     const Tensor& in1 = ctx->input(1);
 
-    // --- 1. 使用 Add 中那套成熟的广播形状计算逻辑 ---
     const int dims0 = in0.dims();
     const int dims1 = in1.dims();
     const int out_dims = std::max(dims0, dims1);
@@ -42,12 +39,10 @@ class MusaSubOp : public MusaOpKernel {
 
     auto& handle = GetHandleByCtx(ctx);
 
-    // --- 2. 保持 CreateMTensor 简单调用 ---
     mTensor t0 = CreateMTensor(in0);
     mTensor t1 = CreateMTensor(in1);
     mTensor t_out = CreateMTensor(*out);
 
-    // --- 3. 唯二的区别：Mode 设为 SUB ---
     ::musa::dnn::Binary op;
     op.SetMode(::musa::dnn::Binary::Mode::SUB);
 
@@ -57,8 +52,6 @@ class MusaSubOp : public MusaOpKernel {
   }
 };
 
-// --- 注册算子 ---
-// 减法在 TF 中通常有 Sub 和 SubV2 两个名称
 #define REGISTER_MUSA_SUB(TYPE)                                     \
   REGISTER_KERNEL_BUILDER(                                          \
       Name("Sub").Device(DEVICE_MTGPU).TypeConstraint<TYPE>("T"),   \

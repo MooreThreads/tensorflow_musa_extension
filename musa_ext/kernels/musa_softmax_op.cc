@@ -5,7 +5,6 @@
 namespace tensorflow {
 namespace musa {
 
-// 1. 实现部分
 namespace {
 
 class MusaSoftmaxCall : public MusaOpKernel {
@@ -53,8 +52,6 @@ class MusaSoftmaxOp : public MusaSoftmaxCall {
 
 }  // namespace
 
-// 2. 核心修改：模仿 Add 的宏定义，直接使用原生 REGISTER_KERNEL_BUILDER
-// 这里的 Device("MUSA") 必须和你 Add 算子里的字符串完全一致
 #define REGISTER_MUSA_SOFTMAX_TYPE(TYPE)                           \
   REGISTER_KERNEL_BUILDER(                                         \
       Name("Softmax").Device("MUSA").TypeConstraint<TYPE>("T"),    \
@@ -63,7 +60,6 @@ class MusaSoftmaxOp : public MusaSoftmaxCall {
       Name("LogSoftmax").Device("MUSA").TypeConstraint<TYPE>("T"), \
       MusaSoftmaxOp<SOFTMAX_MODE::LOGSOFTMAX>);
 
-// 3. 像 Add 一样直接在全局/命名空间域注册，不包裹在任何自定义函数块里
 REGISTER_MUSA_SOFTMAX_TYPE(float);
 REGISTER_MUSA_SOFTMAX_TYPE(Eigen::half);
 REGISTER_MUSA_SOFTMAX_TYPE(bfloat16);

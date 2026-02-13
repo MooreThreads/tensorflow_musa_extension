@@ -28,7 +28,6 @@ class MusaProdOp : public MusaOpKernel {
 
     int64_t num_axes = axes_tensor.NumElements();
 
-    // [修复 1] 使用 int (32位) 以匹配 muDNN 接口: SetDim(int, const int*)
     std::vector<int> reduce_dims;
 
     gtl::InlinedVector<bool, 4> bitmap(input.dims(), false);
@@ -90,7 +89,6 @@ class MusaProdOp : public MusaOpKernel {
     OP_REQUIRES(ctx, out_reshaped.CopyFrom(*out, musa_output_shape),
                 errors::Internal("Reshape failed."));
 
-    // [修复 2] 使用持久化容器管理 Shape/Stride 指针，防止野指针
     std::vector<std::vector<int64_t>> p_storage;
     p_storage.reserve(4);
 
@@ -115,7 +113,6 @@ class MusaProdOp : public MusaOpKernel {
     SafeSetShape(t_out, out_reshaped);
 
     mReduce op;
-    // [修复 3] 根据头文件确认，使用 PROD 模式
     op.SetMode(::musa::dnn::Reduce::Mode::PROD);
     op.SetDim(static_cast<int>(reduce_dims.size()), reduce_dims.data());
 

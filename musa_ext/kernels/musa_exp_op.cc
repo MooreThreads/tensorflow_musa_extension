@@ -12,8 +12,6 @@ class MusaExpOp : public MusaOpKernel {
   explicit MusaExpOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
-    // fprintf(stderr, ">>> [MUSA_TRACE_AUTO] %s\n", name().c_str());
-
     const Tensor& input = ctx->input(0);
 
     Tensor* output = nullptr;

@@ -1,12 +1,9 @@
-/* Copyright @2020-2026 Moore Threads Technology Co., Ltd. All rights reserved.
- */
 #include "tensorflow/core/util/bcast.h"
 #include "utils_op.h"
 
 namespace tensorflow {
 namespace musa {
 
-// 通用比较算子模板，减少冗余代码
 template <::musa::dnn::Binary::Mode mode>
 class MusaComparisonOp : public MusaOpKernel {
  public:
@@ -16,7 +13,6 @@ class MusaComparisonOp : public MusaOpKernel {
     const Tensor& in0 = ctx->input(0);
     const Tensor& in1 = ctx->input(1);
 
-    // 1. 广播形状检查与计算
     BCast bcast(BCast::Vec(in0.shape().dim_sizes()),
                 BCast::Vec(in1.shape().dim_sizes()));
     OP_REQUIRES(
@@ -31,11 +27,8 @@ class MusaComparisonOp : public MusaOpKernel {
 
     if (out->NumElements() == 0) return;
 
-    // 2. 准备 muDNN 资源
     auto& handle = GetHandleByCtx(ctx);
 
-    // 💡 建议：如果 in0 和 in1 形状不同，这里使用你定义的广播版 CreateMTensor
-    // 如果没有广播版，muDNN 会要求输入维度完全一致
     mTensor t0 = CreateMTensor(in0);
     mTensor t1 = CreateMTensor(in1);
     mTensor t_out = CreateMTensor(*out);
@@ -51,14 +44,10 @@ class MusaComparisonOp : public MusaOpKernel {
   }
 };
 
-// 定义具体的类名，方便注册
 using MusaEqualOp = MusaComparisonOp<::musa::dnn::Binary::Mode::EQ>;
 using MusaNotEqualOp = MusaComparisonOp<::musa::dnn::Binary::Mode::NE>;
 using MusaGreaterEqualOp = MusaComparisonOp<::musa::dnn::Binary::Mode::GE>;
-
-// =====================================================================
-// 算子注册宏
-// =====================================================================
+using MusaLessEqualOp = MusaComparisonOp<::musa::dnn::Binary::Mode::LE>;
 
 #define REGISTER_COMPPARISON_KERNELS(type)                                 \
   REGISTER_KERNEL_BUILDER(                                                 \
@@ -69,9 +58,11 @@ using MusaGreaterEqualOp = MusaComparisonOp<::musa::dnn::Binary::Mode::GE>;
       MusaNotEqualOp);                                                     \
   REGISTER_KERNEL_BUILDER(                                                 \
       Name("GreaterEqual").Device(DEVICE_MTGPU).TypeConstraint<type>("T"), \
-      MusaGreaterEqualOp);
+      MusaGreaterEqualOp);                                                 \
+  REGISTER_KERNEL_BUILDER(                                                 \
+      Name("LessEqual").Device(DEVICE_MTGPU).TypeConstraint<type>("T"),    \
+      MusaLessEqualOp);
 
-// 注册 6 种基础数据类型
 REGISTER_COMPPARISON_KERNELS(float);        // FP32
 REGISTER_COMPPARISON_KERNELS(double);       // FP64
 REGISTER_COMPPARISON_KERNELS(int32);        // INT32

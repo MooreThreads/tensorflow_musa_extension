@@ -15,14 +15,14 @@ class MusaLayoutOptimizer : public CustomGraphOptimizer {
   std::string name() const override { return "musa_layout_optimizer"; }
 
   Status Init(
-      const tensorflow::RewriterConfig_CustomGraphOptimizer* config) override {
+      const tensorflow::RewriterConfig_CustomGraphOptimizer *config) override {
     return Status::OK();
   }
   bool UsesFunctionLibrary() const override { return false; }
-  void Feedback(Cluster* cluster, const GrapplerItem& item,
-                const GraphDef& optimized_graph, double result) override {}
-  Status Optimize(Cluster* cluster, const GrapplerItem& item,
-                  GraphDef* optimized_graph) override {
+  void Feedback(Cluster *cluster, const GrapplerItem &item,
+                const GraphDef &optimized_graph, double result) override {}
+  Status Optimize(Cluster *cluster, const GrapplerItem &item,
+                  GraphDef *optimized_graph) override {
     *optimized_graph = item.graph;
 
     bool changed = true;
@@ -32,13 +32,13 @@ class MusaLayoutOptimizer : public CustomGraphOptimizer {
       iteration++;
 
       for (int i = 0; i < optimized_graph->node_size(); ++i) {
-        NodeDef* node = optimized_graph->mutable_node(i);
+        NodeDef *node = optimized_graph->mutable_node(i);
 
         if (!MusaGraphUtils::IsMusaNCHWSupported(*node)) {
           continue;
         }
 
-        auto* attr = node->mutable_attr();
+        auto *attr = node->mutable_attr();
         bool is_already_nchw = (attr->count("data_format") &&
                                 (*attr)["data_format"].s() == "NCHW");
         if (is_already_nchw) continue;

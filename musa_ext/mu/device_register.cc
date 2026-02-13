@@ -8,19 +8,11 @@
 #include "tensorflow/core/framework/device_attributes.pb.h"
 #include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/public/session_options.h"
-
-// Must include this header file to get StreamExecutor
 #include "tensorflow/stream_executor/multi_platform_manager.h"
-
-// Define the device name constant
-extern "C" const char DEVICE_MTGPU[];
 
 namespace tensorflow {
 void ForceMusaOptimizationPassRegistration();
 }
-
-// Define the device name constant
-const char DEVICE_MTGPU[] = "MUSA";
 
 namespace tensorflow {
 namespace musa {
@@ -31,14 +23,8 @@ class MusaDeviceFactory : public DeviceFactory {
     int count = 0;
     musaError_t err = musaGetDeviceCount(&count);
     if (err != musaSuccess) {
-      fprintf(stderr, ">>>> [MUSA] ERROR: musaGetDeviceCount failed: %d\n",
-              err);
       return Status::OK();
     }
-
-    fprintf(stderr,
-            ">>>> [MUSA] DeviceFactory detected %d physical devices <<<<\n",
-            count);
 
     for (int i = 0; i < count; ++i) {
       devices->push_back(strings::StrCat("/physical_device:MUSA:", i));
@@ -54,11 +40,6 @@ class MusaDeviceFactory : public DeviceFactory {
       return errors::Internal("Failed to get MUSA device count");
     }
 
-    fprintf(stderr,
-            ">>>> [MUSA] DeviceFactory creating %d logical instances <<<<\n",
-            count);
-
-    // Get "MUSA" platform manager
     auto platform_status =
         ::stream_executor::MultiPlatformManager::PlatformWithName("MUSA");
     if (!platform_status.ok()) {
@@ -75,19 +56,14 @@ class MusaDeviceFactory : public DeviceFactory {
       attr.mutable_locality()->set_bus_id(i);
       attr.set_physical_device_desc(strings::StrCat("device: MUSA device ", i));
 
-      // Get Executor for current device
       auto executor_status = platform->ExecutorForDevice(i);
       if (!executor_status.ok()) {
         return executor_status.status();
       }
       auto* executor = executor_status.ValueOrDie();
 
-      // Dependency injection: pass executor to MusaDevice
       devices->push_back(std::unique_ptr<Device>(
           new MusaDevice(Env::Default(), attr, i, executor)));
-
-      fprintf(stderr,
-              ">>>> [MUSA] Logical Device /device:MUSA:%d created. <<<<\n", i);
     }
     return Status::OK();
   }
@@ -100,14 +76,8 @@ REGISTER_LOCAL_DEVICE_FACTORY("MUSA", MusaDeviceFactory, 210);
 
 extern "C" {
 void __attribute__((constructor)) OnMusaPluginLoad() {
-  fprintf(stderr,
-          "\n>>>> [MUSA] SUCCESS: MUSA Factory Object Registered via Global "
-          "Constructor! <<<<\n");
-
-  tensorflow::ForceMusaOptimizationPassRegistration();
-
-  fprintf(stderr,
-          ">>>> [MUSA] SUCCESS: MUSA Optimization Passes Activated! <<<<\n\n");
+  // fprintf(stderr, "\n>>>> [MUSA] SUCCESS: MUSA Factory Object Registered via
+  // Global Constructor! <<<<\n");
 }
 }
-extern "C" void ForceLinkMusaAmpOptimizer();
+// extern "C" void ForceLinkMusaAmpOptimizer();

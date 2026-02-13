@@ -61,7 +61,7 @@ class MusaPowOp : public MusaOpKernel {
                     mStatus::SUCCESS,
                 errors::Internal("SetNdInfo t_out failed"));
 
-    // 5. Execute POW
+    // 5. 执行 POW
     ::musa::dnn::Binary op;
     op.SetMode(::musa::dnn::Binary::Mode::POW);
 

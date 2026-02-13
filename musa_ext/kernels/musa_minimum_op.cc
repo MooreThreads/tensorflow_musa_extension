@@ -1,4 +1,3 @@
-/* Copyright @2020-2026 Moore Threads. All rights reserved. */
 #include <mudnn.h>
 
 #include "tensorflow/core/framework/op_kernel.h"
@@ -9,7 +8,7 @@ namespace tensorflow {
 namespace musa {
 
 template <typename T>
-class MusaMinimumOp : public MusaOpKernel {  // 继承 MusaOpKernel 以获取 format_
+class MusaMinimumOp : public MusaOpKernel {
  public:
   explicit MusaMinimumOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
@@ -17,33 +16,22 @@ class MusaMinimumOp : public MusaOpKernel {  // 继承 MusaOpKernel 以获取 fo
     const Tensor& in0 = ctx->input(0);
     const Tensor& in1 = ctx->input(1);
 
-    // 假设输入形状相同，如果涉及广播(Broadcasting)，muDNN 的 binary_op.Run
-    // 通常要求 mt_x, mt_y 和 mt_out 形状一致，除非你的 CreateMTensor 支持处理
-    // Stride。
     Tensor* out = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, in0.shape(), &out));
 
     if (out->NumElements() == 0) return;
 
-    // --- 步骤 1: 获取 muDNN 句柄 ---
     auto& handle = GetHandleByCtx(ctx);
 
-    // --- 步骤 2: 准备 muDNN 算子并设置为 MIN 模式 ---
     mBinary binary_op;
-    // 使用 BINARY_MODE::MIN，该定义通常在 utils_op.h 或 mudnn.h 中
     binary_op.SetMode(BINARY_MODE::MIN);
 
-    // --- 步骤 3: 创建 muDNN 张量描述符 ---
-    // 使用 utils_op.h 提供的 CreateMTensor 包装函数
     mTensor mt_in0 = CreateMTensor(in0, format_);
     mTensor mt_in1 = CreateMTensor(in1, format_);
     mTensor mt_out = CreateMTensor(*out, format_);
 
-    // --- 步骤 4: 执行 muDNN 计算 ---
-    // muDNN Binary Run 接口通常为: Run(handle, output, input_x, input_y)
     mStatus status = binary_op.Run(handle, mt_out, mt_in0, mt_in1);
 
-    // --- 步骤 5: 检查执行状态 ---
     OP_REQUIRES(
         ctx, status == mStatus::SUCCESS,
         errors::Internal("muDNN Minimum execution failed. Status code: ",
@@ -56,7 +44,6 @@ class MusaMinimumOp : public MusaOpKernel {  // 继承 MusaOpKernel 以获取 fo
 
 using namespace tensorflow;
 
-// 注册宏保持不变
 #define REGISTER_MUSA_MIN(type)                                       \
   REGISTER_KERNEL_BUILDER(                                            \
       Name("Minimum").Device(DEVICE_MTGPU).TypeConstraint<type>("T"), \

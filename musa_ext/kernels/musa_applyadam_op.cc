@@ -22,7 +22,6 @@ class MusaApplyAdamOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
-    // 1. 资源获取与严谨性检查
     Var* var = nullptr;
     Var* m = nullptr;
     Var* v = nullptr;
@@ -41,7 +40,6 @@ class MusaApplyAdamOp : public MusaOpKernel {
         errors::FailedPrecondition(
             "Adam variables (var/m/v) not initialized."));
 
-    // 2. 标量输入 (Host Memory)
     const T beta1_p = ctx->input(3).scalar<T>()();
     const T beta2_p = ctx->input(4).scalar<T>()();
     const T lr = ctx->input(5).scalar<T>()();
@@ -69,23 +67,12 @@ class MusaApplyAdamOp : public MusaOpKernel {
 
     ::musa::dnn::Binary b_op;
 
-    // b_op.SetAllowTF32(false);
-
     ::musa::dnn::Unary u_op;
 
-    // u_op.SetAllowTF32(false);
-
-    // 3. 数学公式：Alpha 计算
     double alpha_val = static_cast<double>(lr) *
                        std::sqrt(1.0 - static_cast<double>(beta2_p)) /
                        (1.0 - static_cast<double>(beta1_p));
 
-    // // 调试日志
-    // LOG(INFO) << ">>>>> [MUSA_DEBUG] Adam Alpha: " << alpha_val
-    //           << " num_outputs: " << ctx->num_outputs();
-
-    // 4. Adam 计算逻辑 (Manual Math)
-    // --- Step A: Update m ---
     mTensor t_b1, t_inv_b1;
     fill_scalar(beta1, m_t->shape(), &t_b1);
     fill_scalar(static_cast<T>(1.0) - beta1, grad.shape(), &t_inv_b1);
@@ -99,7 +86,6 @@ class MusaApplyAdamOp : public MusaOpKernel {
     b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
     b_op.Run(handle, t_m, t_m, t_g_scaled);
 
-    // --- Step B: Update v ---
     mTensor t_b2, t_inv_b2;
     fill_scalar(beta2, v_t->shape(), &t_b2);
     fill_scalar(static_cast<T>(1.0) - beta2, grad.shape(), &t_inv_b2);
@@ -119,7 +105,6 @@ class MusaApplyAdamOp : public MusaOpKernel {
     b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
     b_op.Run(handle, t_v, t_v, t_g2_scaled);
 
-    // --- Step C: Update var ---
     temp_storage.emplace_back();
     ctx->allocate_temp(DataTypeToEnum<T>::value, v_t->shape(),
                        &temp_storage.back());
@@ -139,14 +124,9 @@ class MusaApplyAdamOp : public MusaOpKernel {
     b_op.SetMode(::musa::dnn::Binary::Mode::SUB);
     b_op.Run(handle, t_var, t_var, t_sqrt_v);
 
-    // =================================================================
-    // 5. 【核心修复】强制适配 Wukong 输出依赖
-    // =================================================================
     if (IsRefType(ctx->input_dtype(0))) {
       ctx->forward_ref_input_to_ref_output(0, 0);
     } else {
-      // 这里的循环是解决 "Missing 0-th output" 的关键
-      // 即使 num_outputs 看起来是 0，只要图引擎需要，我们就尝试设置
       for (int i = 0; i < ctx->num_outputs(); ++i) {
         ctx->set_output(i, ctx->input(i));
       }
@@ -168,10 +148,7 @@ class MusaApplyAdamOp : public MusaOpKernel {
                               .HostMemory("beta1")       \
                               .HostMemory("beta2")       \
                               .HostMemory("epsilon"),    \
-                          MusaApplyAdamOp<T>);           \
-  //  REGISTER_KERNEL_BUILDER(Name("ResourceApplyAdam").Device(DEVICE_MTGPU).TypeConstraint<T>("T") \
-//      .HostMemory("beta1_power").HostMemory("beta2_power").HostMemory("lr") \
-  //      .HostMemory("beta1").HostMemory("beta2").HostMemory("epsilon"), MusaApplyAdamOp<T>);
+                          MusaApplyAdamOp<T>);
 
 REGISTER_MUSA(float);
 REGISTER_MUSA(double);

@@ -1,6 +1,3 @@
-/* Copyright @2020-2026 Moore Threads Technology Co., Ltd. All rights reserved.
- */
-
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/resource_mgr.h"
@@ -12,7 +9,6 @@ namespace musa {
 
 using Var = ::tensorflow::Var;
 
-// 1. MusaVarHandleOp - 创建变量句柄
 class MusaVarHandleOp : public OpKernel {
  public:
   explicit MusaVarHandleOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
@@ -32,7 +28,6 @@ class MusaVarHandleOp : public OpKernel {
   string shared_name_;
 };
 
-// 2. MusaAssignVariableOp - 变量赋值
 template <typename T>
 class MusaAssignVariableOp : public OpKernel {
  public:
@@ -40,7 +35,6 @@ class MusaAssignVariableOp : public OpKernel {
   void Compute(OpKernelContext* ctx) override {
     const Tensor& value = ctx->input(1);
 
-    // 如果运行时请求了输出（如初始化链），转发 Resource Handle
     if (ctx->num_outputs() > 0) {
       ctx->set_output(0, ctx->input(0));
     }
@@ -53,61 +47,60 @@ class MusaAssignVariableOp : public OpKernel {
                             }));
 
     mutex_lock lock(*var->mu());
-    *var->tensor() = value;  // 浅拷贝引用
+    *var->tensor() = value;
     var->is_initialized = true;
   }
 };
 
-// 3. MusaReadVariableOp - 强制日志调试版
 class MusaReadVariableOp : public OpKernel {
  public:
   explicit MusaReadVariableOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
     core::RefCountPtr<Var> var;
-    // 1. 获取 Handle
     const Tensor& handle_tensor = ctx->input(0);
     const ResourceHandle& handle = handle_tensor.flat<ResourceHandle>()(0);
 
-    // 2. 查找资源
+    // std::cerr << ">>>>> [MUSA_READ_LOG] 2. Handle Name: " << handle.name() <<
+    // ", Device: " << handle.device() << std::endl;
+
     Status s = LookupResource(ctx, handle, &var);
     if (!s.ok()) {
-      std::cerr << ">>>>> [MUSA_READ_LOG] ❌ LookupResource FAILED: "
-                << s.ToString() << std::endl;
+      //  std::cerr << ">>>>> [MUSA_READ_LOG] ❌ 3. LookupResource FAILED: " <<
+      //  s.ToString() << std::endl;
       ctx->CtxFailure(s);
       return;
     }
 
     tf_shared_lock lock(*var->mu());
 
-    // 3. 检查初始化
     if (!var->is_initialized) {
-      std::cerr << ">>>>> [MUSA_READ_LOG] ❌ Variable NOT Initialized!"
-                << std::endl;
+      //  std::cerr << ">>>>> [MUSA_READ_LOG] ❌ 4. Variable NOT Initialized!" <<
+      //  std::endl;
       ctx->CtxFailure(errors::FailedPrecondition("Variable not initialized."));
       return;
     }
 
     const Tensor& t = *var->tensor();
+    // std::cerr << ">>>>> [MUSA_READ_LOG] 5. Tensor Ready. DType: " <<
+    // DataTypeString(t.dtype())
+    //           << ", Shape: " << t.shape().DebugString() << std::endl;
 
-    // 4. 核心输出
     ctx->set_output(0, t);
 
+    //  std::cerr << ">>>>> [MUSA_READ_LOG] 6. set_output(0) SUCCESS. Done." <<
+    //  std::endl;
   }
 };
 
-// 注册：保持通用，不带 T 约束
-// 注册 ReadVariableOp
 REGISTER_KERNEL_BUILDER(
     Name("ReadVariableOp").Device("MUSA").HostMemory("resource"),
     MusaReadVariableOp);
 
-// 🌟 增加这一行别名注册，很多版本的 Adam 实际上在找这个名字
 REGISTER_KERNEL_BUILDER(
     Name("ResourceReadVariableOp").Device("MUSA").HostMemory("resource"),
     MusaReadVariableOp);
 
-// 4. MusaVarIsInitializedOp - 检查变量是否已初始化
 class MusaVarIsInitializedOp : public OpKernel {
  public:
   explicit MusaVarIsInitializedOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
@@ -121,7 +114,6 @@ class MusaVarIsInitializedOp : public OpKernel {
   }
 };
 
-// 5. MusaDestroyResourceOp - 销毁资源
 class MusaDestroyResourceOp : public OpKernel {
  public:
   explicit MusaDestroyResourceOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
@@ -129,8 +121,6 @@ class MusaDestroyResourceOp : public OpKernel {
     DeleteResource(ctx, HandleFromInput(ctx, 0));
   }
 };
-
-// --- 注册区 ---
 
 #define REGISTER_MUSA_VAR_MANAGEMENT(T)                    \
   REGISTER_KERNEL_BUILDER(Name("VarHandleOp")              \
@@ -142,18 +132,14 @@ class MusaDestroyResourceOp : public OpKernel {
                               .Device("MUSA")              \
                               .HostMemory("resource")      \
                               .TypeConstraint<T>("dtype"), \
-                          MusaAssignVariableOp<T>);        \
-  // REGISTER_KERNEL_BUILDER(Name("ReadVariableOp").Device("MUSA").HostMemory("resource").TypeConstraint<T>("dtype"),
-  // MusaReadVariableOp<T>);
+                          MusaAssignVariableOp<T>);
 
-// 注册常用类型
 REGISTER_MUSA_VAR_MANAGEMENT(float);
-REGISTER_MUSA_VAR_MANAGEMENT(double);  // 增加 double 支持
+REGISTER_MUSA_VAR_MANAGEMENT(double);
 REGISTER_MUSA_VAR_MANAGEMENT(Eigen::half);
 REGISTER_MUSA_VAR_MANAGEMENT(int32);
 REGISTER_MUSA_VAR_MANAGEMENT(int64);
 
-// 注册状态与销毁算子
 REGISTER_KERNEL_BUILDER(Name("VarIsInitializedOp")
                             .Device("MUSA")
                             .HostMemory("resource")

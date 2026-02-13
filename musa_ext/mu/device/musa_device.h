@@ -44,7 +44,7 @@ class MusaDeviceContext : public DeviceContext {
 class MusaDevice : public Device {
  public:
   MusaDevice(Env* env, const DeviceAttributes& attributes, int device_id,
-             ::stream_executor::StreamExecutor* executor);
+             ::stream_executor::StreamExecutor* executor);  // <--- 新增这个参数
   ~MusaDevice() override;
 
   const GpuDeviceInfo* tensorflow_gpu_device_info() const override {
@@ -57,7 +57,6 @@ class MusaDevice : public Device {
   musaStream_t GetStream() const { return stream_; }
   int get_device_id() const { return device_id_; }
 
-  // Dereference to return handle
   ::musa::dnn::Handle& mudnn_handle() { return *mudnn_handle_; }
   mublasHandle_t mublas_handle() { return mublas_handle_; }
 
@@ -73,7 +72,6 @@ class MusaDevice : public Device {
   Allocator* musa_allocator_;
   GpuDeviceInfo gpu_device_info_;
 
-  // Use smart pointer for lazy initialization
   std::unique_ptr<::musa::dnn::Handle> mudnn_handle_;
   mublasHandle_t mublas_handle_;
 };

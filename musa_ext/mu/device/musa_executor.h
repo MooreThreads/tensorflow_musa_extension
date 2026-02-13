@@ -32,10 +32,6 @@ class MusaExecutor : public internal::StreamExecutorInterface {
     return port::Status::OK();
   }
 
-  // ========================================================================
-  // 1. Factory Interface
-  // ========================================================================
-
   std::unique_ptr<internal::StreamInterface> GetStreamImplementation()
       override {
     musaStream_t h;
@@ -57,10 +53,6 @@ class MusaExecutor : public internal::StreamExecutorInterface {
     return nullptr;
   }
 
-  // ========================================================================
-  // 2. Memory Management Interface
-  // ========================================================================
-
   DeviceMemoryBase Allocate(uint64 size, int64 memory_space) override {
     return DeviceMemoryBase(nullptr, 0);
   }
@@ -80,13 +72,8 @@ class MusaExecutor : public internal::StreamExecutorInterface {
   void* HostMemoryAllocate(uint64 size) override { return nullptr; }
   void HostMemoryDeallocate(void* mem) override {}
 
-  // ========================================================================
-  // 3. Memory Copy (Synchronous)
-  // ========================================================================
-
   port::Status SynchronousMemZero(DeviceMemoryBase* location,
                                   uint64 size) override {
-    // Memset synchronous version, create a handle temporarily here
     mHandle h;
 
     return FromMusaStatus(
@@ -96,7 +83,6 @@ class MusaExecutor : public internal::StreamExecutorInterface {
   port::Status SynchronousMemSet(DeviceMemoryBase* location, int value,
                                  uint64 size) override {
     mHandle h;
-
     return FromMusaStatus(tensorflow::musa::Memset(
         h, location->opaque(), size, static_cast<uint8_t>(value)));
   }
@@ -124,11 +110,6 @@ class MusaExecutor : public internal::StreamExecutorInterface {
         gpu_dst->opaque(), gpu_src.opaque(), size));
   }
 
-  // ========================================================================
-  // 4. Memory Copy (Asynchronous)
-  // ========================================================================
-
-  // Get underlying musaStream_t from TF Stream
   musaStream_t GetMusaStream(Stream* stream) {
     auto* musa_stream_impl = static_cast<MusaStream*>(stream->implementation());
 
@@ -164,7 +145,7 @@ class MusaExecutor : public internal::StreamExecutorInterface {
   port::Status MemZero(Stream* stream, DeviceMemoryBase* location,
                        uint64 size) override {
     mHandle h;
-    h.SetStream(GetMusaStream(stream));  // Bind stream
+    h.SetStream(GetMusaStream(stream));
     return FromMusaStatus(
         tensorflow::musa::Memset(h, location->opaque(), size, 0));
   }
@@ -173,14 +154,10 @@ class MusaExecutor : public internal::StreamExecutorInterface {
   port::Status Memset32(Stream* stream, DeviceMemoryBase* location,
                         uint32 pattern, uint64 size) override {
     mHandle h;
-    h.SetStream(GetMusaStream(stream));  // Bind stream
+    h.SetStream(GetMusaStream(stream));
     return FromMusaStatus(
         tensorflow::musa::Memset32(h, location->opaque(), size, pattern));
   }
-
-  // ========================================================================
-  // 5. Other Interfaces
-  // ========================================================================
 
   port::Status BlockHostUntilDone(Stream* stream) override {
     internal::StreamInterface* implementation = stream->implementation();

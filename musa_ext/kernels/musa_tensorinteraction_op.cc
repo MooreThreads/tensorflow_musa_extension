@@ -16,7 +16,6 @@ class MusaInteractOp : public OpKernel {
   explicit MusaInteractOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
-    // fprintf(stderr, ">>> [MUSA_TRACE_AUTO] %s\n", name().c_str());
     const Tensor& input = ctx->input(0);
 
     OP_REQUIRES(
@@ -98,7 +97,6 @@ REGISTER_OP("MusaInteract")
           c->Dim(input_shape, 0);
       ::tensorflow::shape_inference::DimensionHandle n = c->Dim(input_shape, 1);
 
-      // Output shape: [Batch, N, N]
       c->set_output(0, c->MakeShape({batch, n, n}));
       return Status::OK();
     });

@@ -61,30 +61,21 @@ class MusaGatherOp : public MusaOpKernel {
 
     if (output->NumElements() == 0) return;
 
-    // ==========================================
-    // 🚀 使用自定义 MusaMemcpyD2H 进行越界检查
-    // ==========================================
     const int64_t limit = params.dim_size(axis);
     if (indices.NumElements() > 0) {
-      // 1. 在 CPU (Host) 上准备一个接收数据的 Tensor
       Tensor indices_cpu(indices.dtype(), indices.shape());
 
-      // 2. 获取原始指针
-      // 设备端 (Source): indices.flat<IndexT>().data()
-      // 主机端 (Destination): indices_cpu.flat<IndexT>().data()
       const void* d_ptr =
           static_cast<const void*>(indices.flat<IndexT>().data());
       void* h_ptr = static_cast<void*>(indices_cpu.flat<IndexT>().data());
       size_t bytes = indices.NumElements() * sizeof(IndexT);
 
-      // 3. 调用你的自定义函数
       mStatus m_stat = MusaMemcpyD2H(h_ptr, d_ptr, bytes);
 
       OP_REQUIRES(
           ctx, m_stat == mStatus::SUCCESS,
           errors::Internal("MUSA D2H Memcpy failed for indices check."));
 
-      // 4. 安全地在 CPU 上检查索引
       auto Tindices = indices_cpu.flat<IndexT>();
       for (int64_t i = 0; i < Tindices.size(); ++i) {
         if (Tindices(i) < 0 || Tindices(i) >= limit) {
@@ -95,7 +86,7 @@ class MusaGatherOp : public MusaOpKernel {
         }
       }
     }
-    // ==========================================
+
     auto& handle = GetHandleByCtx(ctx);
 
     mTensor t_params = CreateMTensor(params, format_);
@@ -114,7 +105,6 @@ class MusaGatherOp : public MusaOpKernel {
                 errors::Internal("MUSA muDNN Gather execution failed. Status: ",
                                  static_cast<int>(status)));
 
-    // ctx->set_output(0, *output);
     VLOG(0) << "MUSA DEBUG: GatherV2 executed successfully.";
   }
 };

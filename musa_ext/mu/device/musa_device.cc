@@ -13,19 +13,14 @@
 namespace tensorflow {
 namespace musa {
 
-// ============================================================
-// MusaDeviceContext Implementation
-// ============================================================
-
 MusaDeviceContext::MusaDeviceContext(
     musaStream_t stream, ::stream_executor::StreamExecutor* executor)
     : stream_handle_(stream) {
   implementation_ = new ::stream_executor::musa::MusaStream(stream);
 
-  // Pass in executor
   official_stream_ = new ::stream_executor::Stream(executor, implementation_);
 
-  // Initialize Stream
+  // 初始化 Stream
   official_stream_->Init();
 }
 
@@ -74,9 +69,9 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
   }
 
   if (bytes > 0) {
-    // Use synchronous copy
+    // 使用同步拷贝
     mStatus m_stat = MusaMemcpyD2H(dst, src, bytes);
-    musaDeviceSynchronize();  // Ensure copy completion
+    musaDeviceSynchronize();
 
     if (m_stat != mStatus::SUCCESS) {
       done(errors::Internal("MUSA D2H copy failed."));
@@ -86,22 +81,17 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
   done(Status::OK());
 }
 
-// ============================================================
-// MusaDevice Implementation
-// ============================================================
-
-// Parameters consistent with header file
 MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
                        int device_id,
                        ::stream_executor::StreamExecutor* executor)
     : Device(env, attributes), device_id_(device_id) {
-  // Switch card
+  // 切卡
   musaSetDevice(device_id_);
 
-  // Create stream
+  // 创建流
   musaStreamCreate(&stream_);
 
-  // Initialize muDNN
+  // 初始化 muDNN
   mudnn_handle_.reset(new ::musa::dnn::Handle());
   ::musa::dnn::Status s = mudnn_handle_->SetStream(stream_);
   if (s != ::musa::dnn::Status::SUCCESS) {
@@ -109,12 +99,12 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
               << " failed to bind muDNN handle!" << std::endl;
   }
 
-  // Initialize muBLAS
+  // 初始化 muBLAS
   mublasCreate(&mublas_handle_);
   mublasSetStream(mublas_handle_, stream_);
 
-  // Initialize Context
-  // Directly use executor from parameters
+  // 初始化 Context
+
   device_context_ = new MusaDeviceContext(stream_, executor);
   musa_allocator_ = new MusaRawAllocator(device_id_);
 
@@ -123,9 +113,6 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
   gpu_device_info_.gpu_id = device_id_;
 
   set_tensorflow_gpu_device_info(&gpu_device_info_);
-
-  std::cerr << ">>> [MUSA] Device " << device_id_ << " correctly initialized."
-            << std::endl;
 }
 
 MusaDevice::~MusaDevice() {

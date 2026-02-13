@@ -1,6 +1,3 @@
-/* Copyright @2020-2026 Moore Threads Technology Co., Ltd. All rights reserved.
- */
-
 #include <cmath>
 #include <iostream>
 #include <list>
@@ -16,9 +13,6 @@
 namespace tensorflow {
 namespace musa {
 
-// =================================================================
-// 🛠️ 辅助函数：Handle 透传
-// =================================================================
 void ForwardResourceHandle(OpKernelContext* ctx) {
   if (ctx->num_outputs() > 0) {
     if (ctx->input_dtype(0) == DT_RESOURCE) {
@@ -31,9 +25,6 @@ void ForwardResourceHandle(OpKernelContext* ctx) {
   }
 }
 
-// =================================================================
-// 1. 核心训练算子 (Adam)
-// =================================================================
 template <typename T>
 class MusaApplyAdamOp : public MusaOpKernel {
  public:
@@ -43,7 +34,6 @@ class MusaApplyAdamOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
-    // 1. 获取资源
     Var *var, *m, *v;
     OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 0), &var));
     OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 1), &m));
@@ -53,7 +43,6 @@ class MusaApplyAdamOp : public MusaOpKernel {
     OP_REQUIRES(ctx, var->tensor()->IsInitialized(),
                 errors::FailedPrecondition("Var not initialized"));
 
-    // 2. 准备计算资源
     auto& handle = GetHandleByCtx(ctx);
     std::list<Tensor> temps;
     ::musa::dnn::Binary b_op;
@@ -69,7 +58,6 @@ class MusaApplyAdamOp : public MusaOpKernel {
       return t;
     };
 
-    // 3. 获取参数 (Host Memory)
     float b1_p = ctx->input(3).scalar<float>()();
     float b2_p = ctx->input(4).scalar<float>()();
     float lr = ctx->input(5).scalar<float>()();
@@ -80,13 +68,11 @@ class MusaApplyAdamOp : public MusaOpKernel {
 
     double alpha = lr * std::sqrt(1.0 - b2_p) / (1.0 - b1_p);
 
-    // 4. 执行计算
     mTensor t_var = CreateMTensor(*(var->tensor()), format_);
     mTensor t_m = CreateMTensor(*(m->tensor()), format_);
     mTensor t_v = CreateMTensor(*(v->tensor()), format_);
     mTensor t_grad = CreateMTensor(grad, format_);
 
-    // Update m
     b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
     b_op.Run(handle, t_m, t_m, fill_t(b1, grad.shape()));
     mTensor t_g_sc = fill_t(1.0f - b1, grad.shape());
@@ -94,7 +80,6 @@ class MusaApplyAdamOp : public MusaOpKernel {
     b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
     b_op.Run(handle, t_m, t_m, t_g_sc);
 
-    // Update v
     b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
     b_op.Run(handle, t_v, t_v, fill_t(b2, grad.shape()));
     temps.emplace_back();
@@ -106,7 +91,6 @@ class MusaApplyAdamOp : public MusaOpKernel {
     b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
     b_op.Run(handle, t_v, t_v, t_g2_sc);
 
-    // Update var
     temps.emplace_back();
     ctx->allocate_temp(DT_FLOAT, grad.shape(), &temps.back());
     mTensor t_den = CreateMTensor(temps.back(), format_);
@@ -121,7 +105,6 @@ class MusaApplyAdamOp : public MusaOpKernel {
     b_op.SetMode(::musa::dnn::Binary::Mode::SUB);
     b_op.Run(handle, t_var, t_var, t_den);
 
-    // 5. 转发 Resource Handle
     ForwardResourceHandle(ctx);
   }
 
@@ -130,12 +113,6 @@ class MusaApplyAdamOp : public MusaOpKernel {
   bool use_nesterov_;
 };
 
-// =================================================================
-// 2. 注册区域 (注意：ReadVariableOp 已在 musa_resource_variable_op.cc
-// 注册，这里不要重复！)
-// =================================================================
-
-// 注册 Adam
 #define REGISTER_ADAM(T)                                 \
   REGISTER_KERNEL_BUILDER(Name("ResourceApplyAdam")      \
                               .Device(DEVICE_MTGPU)      \
@@ -154,8 +131,6 @@ REGISTER_ADAM(Eigen::half);
 REGISTER_ADAM(bfloat16);
 REGISTER_ADAM(int64);
 REGISTER_ADAM(int32);
-
-// 注意：这里删除了 REGISTER_READ_VAR 宏和调用，避免重复定义
 
 }  // namespace musa
 }  // namespace tensorflow

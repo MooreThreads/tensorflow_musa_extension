@@ -1,7 +1,7 @@
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
-#include "tensorflow/core/util/bcast.h"  // 必须引入广播工具类
+#include "tensorflow/core/util/bcast.h"
 #include "utils_op.h"
 
 namespace tensorflow {
@@ -16,7 +16,6 @@ class MusaGreaterOp : public MusaOpKernel {
     const Tensor& x = ctx->input(0);
     const Tensor& y = ctx->input(1);
 
-    // 1. 处理广播逻辑，计算输出形状
     BCast bcast(BCast::FromShape(x.shape()), BCast::FromShape(y.shape()));
     OP_REQUIRES(ctx, bcast.IsValid(),
                 errors::InvalidArgument("Incompatible shapes for Greater: ",
@@ -31,17 +30,13 @@ class MusaGreaterOp : public MusaOpKernel {
 
     auto& handle = GetHandleByCtx(ctx);
 
-    // 2. 创建 MUSA Tensor
-    // 注意：muDNN 的 Binary 算子通常能自动处理符合广播规则的输入
     mTensor mt_x = CreateMTensor(x);
     mTensor mt_y = CreateMTensor(y);
     mTensor mt_out = CreateMTensor(*output);
 
-    // 3. 配置并执行 Binary 算子
     mBinary op;
-    op.SetMode(::musa::dnn::Binary::Mode::GT);  // 设置为 Greater Than 模式
+    op.SetMode(::musa::dnn::Binary::Mode::GT);
 
-    // muDNN 底层会根据 mt_x, mt_y 和 mt_out 的 shape 自动进行广播计算
     auto status = op.Run(handle, mt_out, mt_x, mt_y);
 
     OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
@@ -50,7 +45,6 @@ class MusaGreaterOp : public MusaOpKernel {
   }
 };
 
-// 注册支持的类型
 #define REGISTER_MUSA_GREATER(TYPE)                             \
   REGISTER_KERNEL_BUILDER(                                      \
       Name("Greater").Device("MUSA").TypeConstraint<TYPE>("T"), \

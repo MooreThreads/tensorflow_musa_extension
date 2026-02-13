@@ -52,13 +52,35 @@ class MusaSqrtGradOp : public OpKernel {
     OP_REQUIRES(ctx, status_y == musaSuccess && status_dy == musaSuccess,
                 errors::Internal("MUSA SqrtGrad: Memcpy DeviceToHost failed"));
 
+    const double kSafeThreshold = 1e-9;
+
+    auto compute_safe_grad = [&](double val_y, double val_dy) -> double {
+      double res = 0.0;
+
+      if (std::abs(val_y) < kSafeThreshold || std::isnan(val_y) ||
+          std::isinf(val_y)) {
+        return 0.0;
+      }
+
+      if (std::isnan(val_dy) || std::isinf(val_dy)) {
+        return 0.0;
+      }
+
+      res = 0.5 * val_dy / val_y;
+
+      if (std::isnan(res) || std::isinf(res)) {
+        return 0.0;
+      }
+
+      return res;
+    };
+
     if (y.shape() == dy.shape()) {
       size_t n = h_y.size();
       for (size_t i = 0; i < n; ++i) {
         double val_y = static_cast<double>(h_y[i]);
         double val_dy = static_cast<double>(h_dy[i]);
-        double res = 0.5 * val_dy / val_y;
-        h_dx[i] = static_cast<T>(res);
+        h_dx[i] = static_cast<T>(compute_safe_grad(val_y, val_dy));
       }
     } else {
       TensorShape bcast_shape = BCast::ToShape(bcast.result_shape());
@@ -100,6 +122,8 @@ class MusaSqrtGradOp : public OpKernel {
 
       int64_t total_elements = bcast_shape.num_elements();
 
+      std::fill(h_dx.begin(), h_dx.end(), static_cast<T>(0));
+
       for (int64_t i = 0; i < total_elements; ++i) {
         int64_t temp = i;
         int64_t idx_y = 0;
@@ -110,7 +134,6 @@ class MusaSqrtGradOp : public OpKernel {
           int64_t dim_size = bcast_shape.dim_size(d);
           int64_t coord = temp % dim_size;
           temp /= dim_size;
-
           idx_y += coord * y_strides[d];
           idx_dy += coord * dy_strides[d];
           idx_dx += coord * dx_strides[d];
@@ -118,8 +141,8 @@ class MusaSqrtGradOp : public OpKernel {
 
         double val_y = static_cast<double>(h_y[idx_y]);
         double val_dy = static_cast<double>(h_dy[idx_dy]);
-        double grad_contribution = 0.5 * val_dy / val_y;
 
+        double grad_contribution = compute_safe_grad(val_y, val_dy);
         h_dx[idx_dx] += static_cast<T>(grad_contribution);
       }
     }

@@ -16,7 +16,7 @@ class MusaSquaredDifferenceOp : public MusaOpKernel {
     const Tensor& in0 = ctx->input(0);
     const Tensor& in1 = ctx->input(1);
 
-    // --- 广播形状计算逻辑 (参照 MusaAddOp) ---
+    // --- 广播形状计算逻辑  ---
     const int dims0 = in0.dims();
     const int dims1 = in1.dims();
     const int out_dims = std::max(dims0, dims1);

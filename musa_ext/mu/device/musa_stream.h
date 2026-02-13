@@ -3,7 +3,7 @@
 
 #include <musa_runtime.h>
 
-#include "tensorflow/stream_executor/platform/port.h"  // Ensure port is included
+#include "tensorflow/stream_executor/platform/port.h"
 #include "tensorflow/stream_executor/stream.h"
 #include "tensorflow/stream_executor/stream_executor_internal.h"
 
@@ -23,7 +23,6 @@ class MusaStream : public internal::StreamInterface {
     }
     return port::Status::OK();
   }
-  // ==============================================================
 
   void* GpuStreamHack() override { return (void*)musa_stream_; }
   void** GpuStreamMemberHack() override {

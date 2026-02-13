@@ -1,6 +1,3 @@
-/* Copyright @2020-2026 Moore Threads Technology Co., Ltd. All rights reserved.
- */
-
 #include <mudnn.h>
 #include <mudnn_tensor.h>
 
@@ -25,7 +22,6 @@ class MusaTileOp : public MusaOpKernel {
     const int input_dims = input.dims();
     const Tmultiples* m_data = multiples.flat<Tmultiples>().data();
 
-    // 1. 计算输出形状
     TensorShape output_shape;
     bool need_tile = false;
     for (int i = 0; i < input_dims; ++i) {
@@ -34,7 +30,6 @@ class MusaTileOp : public MusaOpKernel {
       if (m != 1) need_tile = true;
     }
 
-    // 处理标量或无需平铺的情况
     if (input_dims == 0 || !need_tile) {
       context->set_output(0, input);
       return;
@@ -44,12 +39,10 @@ class MusaTileOp : public MusaOpKernel {
     OP_REQUIRES_OK(context, context->allocate_output(0, output_shape, &output));
     if (output->NumElements() == 0) return;
 
-    // 2. MUSA 核心逻辑：使用 Permute + Stride 0 广播
     auto& h = GetHandleByCtx(context);
     auto in_mt = CreateMTensor(input);
     auto out_mt = CreateMTensor(*output);
 
-    // 计算逻辑步长 (Broadcasting Strides)
     std::vector<int64_t> b_dims;
     std::vector<int64_t> b_strides;
     int64_t stride = 1;
@@ -68,16 +61,12 @@ class MusaTileOp : public MusaOpKernel {
     MTOP_CHECK_OK(in_mt.SetNdInfo(input_dims, b_dims.data(), b_strides.data()),
                   "Tile SetNdInfo", context);
 
-    // 3. 执行物理平铺
     ::musa::dnn::Permute op;
     MTOP_CHECK_OK_RUN(op.Run(h, out_mt, in_mt), "Permute Run for Tile",
                       context);
   }
 };
 
-// =====================================================================
-// 4. 注册 6 种数据类型 (T) 及其对应的 2 种索引类型 (Tmultiples)
-// =====================================================================
 #define REGISTER_MUSA_TILE_ALL_TYPES(type)                         \
   REGISTER_KERNEL_BUILDER(Name("Tile")                             \
                               .Device(DEVICE_MTGPU)                \
@@ -92,7 +81,6 @@ class MusaTileOp : public MusaOpKernel {
                               .HostMemory("multiples"),            \
                           MusaTileOp<type, int64>);
 
-// 6 种核心类型：float, half, double, int32, int64, bool
 REGISTER_MUSA_TILE_ALL_TYPES(float);
 REGISTER_MUSA_TILE_ALL_TYPES(Eigen::half);
 REGISTER_MUSA_TILE_ALL_TYPES(double);

@@ -49,8 +49,6 @@ class MusaAddOp : public MusaOpKernel {
     }
 
     auto& handle = GetHandleByCtx(ctx);
-    // CreateMTensor automatically handles the type mapping for
-    // float/half/bfloat16
     mTensor t0 = CreateMTensor(in0, format_);
     mTensor t1 = CreateMTensor(in1, format_);
     mTensor t_out = CreateMTensor(*out, format_);

@@ -13,8 +13,6 @@ class MusaFloorModOp : public MusaOpKernel {
   explicit MusaFloorModOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
-    // fprintf(stderr, ">>> [MUSA_TRACE_AUTO] %s\n", name().c_str());
-
     const Tensor& in0 = ctx->input(0);
     const Tensor& in1 = ctx->input(1);
 

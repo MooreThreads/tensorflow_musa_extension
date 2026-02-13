@@ -51,11 +51,6 @@ class MusaAmpOptimizer : public CustomGraphOptimizer {
                   GraphDef* optimized_graph) override {
     *optimized_graph = item.graph;
 
-    fprintf(stderr, "\n========== MUSA AMP Optimizer Start ==========\n");
-    fprintf(stderr, "Original graph nodes: %d\n", optimized_graph->node_size());
-    fprintf(stderr, "Mode: %s\n",
-            amp_config_.target_dtype == DT_BFLOAT16 ? "BF16" : "FP16");
-
     std::unordered_map<string, bool> should_convert;
     AnalyzeGraphForAMP(*optimized_graph, should_convert);
 
@@ -82,11 +77,6 @@ class MusaAmpOptimizer : public CustomGraphOptimizer {
         converted_count++;
       }
     }
-
-    fprintf(stderr, "Converted %d nodes to %s\n", converted_count,
-            amp_config_.target_dtype == DT_BFLOAT16 ? "BF16" : "FP16");
-    fprintf(stderr, "Final graph nodes: %d\n", optimized_graph->node_size());
-    fprintf(stderr, "========== MUSA AMP Optimizer End ==========\n\n");
 
     return Status::OK();
   }
@@ -243,6 +233,7 @@ REGISTER_GRAPH_OPTIMIZER_AS(MusaAmpOptimizer, "musa_amp_optimizer");
 
 extern "C" {
 void __attribute__((constructor)) ForceMusaAmpOptimizerLoad() {
-  fprintf(stderr, "[MUSA AMP] Optimizer module loaded (Supports FP16/BF16)\n");
+  // fprintf(stderr, "[MUSA AMP] Optimizer module loaded (Supports
+  // FP16/BF16)\n");
 }
 }

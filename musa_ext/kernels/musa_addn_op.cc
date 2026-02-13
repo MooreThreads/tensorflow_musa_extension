@@ -12,8 +12,6 @@ class MusaAddNOp : public MusaOpKernel {
   explicit MusaAddNOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
-    // fprintf(stderr, ">>> [MUSA_TRACE_AUTO] %s\n", name().c_str());
-
     const int num_inputs = ctx->num_inputs();
     OP_REQUIRES(ctx, num_inputs >= 1,
                 errors::InvalidArgument("AddN requires at least one input."));

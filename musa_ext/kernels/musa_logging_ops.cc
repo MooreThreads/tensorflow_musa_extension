@@ -12,7 +12,6 @@
 namespace tensorflow {
 namespace musa {
 
-// 辅助函数
 std::string TensorToSummary(OpKernelContext* c, const Tensor& device_tensor,
                             int summarize) {
   Tensor cpu_tensor(device_tensor.dtype(), device_tensor.shape());
@@ -21,9 +20,6 @@ std::string TensorToSummary(OpKernelContext* c, const Tensor& device_tensor,
   return cpu_tensor.SummarizeValue(summarize);
 }
 
-// =============================================================================
-// 1. MusaPrintOp (对应老的 Identity "Print" 算子)
-// =============================================================================
 class MusaPrintOp : public OpKernel {
  public:
   explicit MusaPrintOp(OpKernelConstruction* c) : OpKernel(c) {
@@ -61,13 +57,9 @@ class MusaPrintOp : public OpKernel {
   int32 summarize_;
 };
 
-// =============================================================================
-// 2. MusaPrintV2Op (对应新的 tf.print "PrintV2" 算子)
-// =============================================================================
 class MusaPrintV2Op : public OpKernel {
  public:
   explicit MusaPrintV2Op(OpKernelConstruction* c) : OpKernel(c) {
-    // PrintV2 只有 output_stream 和 end 属性，没有 message/summarize
     OP_REQUIRES_OK(c, c->GetAttr("output_stream", &output_stream_));
     OP_REQUIRES_OK(c, c->GetAttr("end", &end_));
   }
@@ -77,7 +69,6 @@ class MusaPrintV2Op : public OpKernel {
 
     const Tensor& input = c->input(0);
 
-    // PrintV2 的输入通常已经是格式化好的 String Tensor
     Tensor cpu_tensor(input.dtype(), input.shape());
     MusaMemcpyD2H(const_cast<char*>(cpu_tensor.tensor_data().data()),
                   input.tensor_data().data(), input.TotalBytes());
@@ -85,10 +76,8 @@ class MusaPrintV2Op : public OpKernel {
     if (input.dtype() == DT_STRING) {
       auto flat = cpu_tensor.flat<tstring>();
       for (int i = 0; i < flat.size(); ++i) {
-        // 直接打印字符串内容
         std::cerr << flat(i);
       }
-      // 打印结尾符 (通常是换行)
       std::cerr << end_;
     } else {
       std::cerr << "MusaPrintV2Op: Unsupported input type." << std::endl;
@@ -100,9 +89,6 @@ class MusaPrintV2Op : public OpKernel {
   std::string end_;
 };
 
-// =============================================================================
-// 3. MusaStringFormatOp (字符串格式化)
-// =============================================================================
 class MusaStringFormatOp : public OpKernel {
  public:
   explicit MusaStringFormatOp(OpKernelConstruction* c) : OpKernel(c) {
@@ -146,7 +132,6 @@ class MusaStringFormatOp : public OpKernel {
   int32 summarize_;
 };
 
-// 注册
 REGISTER_KERNEL_BUILDER(Name("Print").Device("MUSA"), MusaPrintOp);
 REGISTER_KERNEL_BUILDER(Name("PrintV2").Device("MUSA"), MusaPrintV2Op);  // 新增
 REGISTER_KERNEL_BUILDER(Name("StringFormat").Device("MUSA"),

@@ -1,6 +1,3 @@
-/* Copyright @2020-2026 Moore Threads Technology Co., Ltd. All rights reserved.
- */
-
 #include <mudnn.h>
 
 #include <cmath>
@@ -24,14 +21,9 @@ class MusaResourceGatherOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* c) override {
-    LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: Enter Compute. batch_dims="
-              << batch_dims_;
-
     core::RefCountPtr<Var> v;
     Status s = LookupResource(c, HandleFromInput(c, 0), &v);
     if (!s.ok()) {
-      LOG(ERROR) << ">>>>> [MUSA_DEBUG] ResourceGather: LookupResource Failed: "
-                 << s.ToString();
       c->CtxFailure(s);
       return;
     }
@@ -39,10 +31,6 @@ class MusaResourceGatherOp : public MusaOpKernel {
     tf_shared_lock ml(*v->mu());
     const Tensor& params = *v->tensor();
     const Tensor& indices = c->input(1);
-
-    LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: Params Shape="
-              << params.shape().DebugString()
-              << ", Indices Shape=" << indices.shape().DebugString();
 
     OP_REQUIRES(
         c, TensorShapeUtils::IsVectorOrHigher(params.shape()),
@@ -59,33 +47,22 @@ class MusaResourceGatherOp : public MusaOpKernel {
     for (int i = batch_dims_ + 1; i < params.dims(); ++i)
       result_shape.AddDim(params.dim_size(i));
 
-    LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: Calculated Output Shape="
-              << result_shape.DebugString();
-
     Tensor* out = nullptr;
     s = c->allocate_output(0, result_shape, &out);
     if (!s.ok()) {
-      LOG(ERROR)
-          << ">>>>> [MUSA_DEBUG] ResourceGather: Allocate Output Failed: "
-          << s.ToString();
       c->CtxFailure(s);
       return;
     }
 
-    LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: Output Allocated. Ptr="
-              << out << ", NumElements=" << out->NumElements();
-
     if (out->NumElements() == 0) {
-      LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: Output is empty, "
-                   "returning early.";
+      //  LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: Output is empty,
+      //  returning early.";
       return;
     }
 
     if (indices.NumElements() > 0) {
       auto& h = GetHandleByCtx(c);
       mGatherX op;
-
-      LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: Invoking mGatherX...";
 
       MTOP_CHECK_OK(op.SetMode(mGatherX::Mode::GATHER), "SetMode", c);
       MTOP_CHECK_OK(op.SetAxis(static_cast<int>(batch_dims_)), "SetAxis", c);
@@ -96,16 +73,15 @@ class MusaResourceGatherOp : public MusaOpKernel {
 
       auto status = op.Run(h, out_mt, indices_mt, params_mt);
       if (status != ::musa::dnn::Status::SUCCESS) {
-        LOG(ERROR)
-            << ">>>>> [MUSA_DEBUG] ResourceGather: mGatherX Run Failed! Status="
-            << static_cast<int>(status);
+        //  LOG(ERROR) << ">>>>> [MUSA_DEBUG] ResourceGather: mGatherX Run
+        //  Failed! Status=" << static_cast<int>(status);
         c->CtxFailure(errors::Internal("mGatherX execution failed"));
         return;
       }
-      LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: mGatherX Success.";
+      //  LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: mGatherX Success.";
     } else {
-      LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: Indices empty, skipping "
-                   "Kernel.";
+      //  LOG(INFO) << ">>>>> [MUSA_DEBUG] ResourceGather: Indices empty,
+      //  skipping Kernel.";
     }
   }
 
@@ -134,10 +110,9 @@ class MusaResourceScatterAddOp : public MusaOpKernel {
       mScatterND op;
       MTOP_CHECK_OK(op.SetMode(mScatterND::Mode::ADD), "SetModeAdd", c);
 
-      // Key fix: Define missing indices_reshaped
       Tensor indices_reshaped;
       TensorShape indices_new_shape = indices.shape();
-      indices_new_shape.AddDim(1);  // Add a dimension to adapt to mScatterND
+      indices_new_shape.AddDim(1);
 
       if (!indices_reshaped
                .BitcastFrom(indices, indices.dtype(), indices_new_shape)
@@ -155,7 +130,6 @@ class MusaResourceScatterAddOp : public MusaOpKernel {
           "RunScatterND", c);
     }
 
-    // Solve the core issue of Missing 0-th output: Forward Handle
     if (c->num_outputs() > 0) {
       c->set_output(0, c->input(0));
     }
@@ -183,7 +157,6 @@ class MusaAssignUpdateVariableOp : public MusaOpKernel {
       MTOP_CHECK_OK_RUN(op.Run(h, out_mt, out_mt, in_mt), "RunBinaryUpdate", c);
     }
 
-    // Forward Handle to prevent tf.function errors
     if (c->num_outputs() > 0) {
       c->set_output(0, c->input(0));
     }
@@ -209,7 +182,6 @@ class MusaVariableShapeOp : public OpKernel {
   }
 };
 
-// ==================== 注册区 ====================
 #define REGISTER_MUSA_KERNELS(type)                               \
   REGISTER_KERNEL_BUILDER(Name("ResourceGather")                  \
                               .Device(DEVICE_MTGPU)               \

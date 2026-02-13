@@ -27,16 +27,12 @@ int MusaOptimizationPass::CountConsumers(Node* node) {
 Status MusaOptimizationPass::Run(const GraphOptimizationPassOptions& options) {
   static bool logged = false;
   if (!logged) {
-    fprintf(stderr,
-            ">>>>> [MUSA_DEBUG] Optimization Pass Loaded (MatMul+BiasAdd+Relu) "
-            "<<<<<\n");
     logged = true;
   }
 
   if (options.graph == nullptr) return Status::OK();
   Graph* graph = options.graph->get();
 
-  // Collect all BiasAdd nodes as potential fusion starting points
   std::vector<Node*> bias_add_nodes;
   for (Node* n : graph->op_nodes()) {
     if (n->type_string() == "BiasAdd") {
@@ -47,12 +43,10 @@ Status MusaOptimizationPass::Run(const GraphOptimizationPassOptions& options) {
   bool graph_changed = false;
 
   for (Node* bias_node : bias_add_nodes) {
-    // --- Check input 0: Must come from MatMul or Conv2D ---
     const Edge* edge_in0;
     if (!bias_node->input_edge(0, &edge_in0).ok()) continue;
     Node* matmul_node = edge_in0->src();
 
-    // --- Check input 1: Bias Tensor ---
     const Edge* edge_in_bias;
     if (!bias_node->input_edge(1, &edge_in_bias).ok()) continue;
     Node* bias_tensor_node = edge_in_bias->src();
@@ -63,16 +57,10 @@ Status MusaOptimizationPass::Run(const GraphOptimizationPassOptions& options) {
 
     if (!is_matmul && !is_conv) continue;
 
-    // If MatMul result is referenced in multiple places, cannot fuse BiasAdd
     if (CountConsumers(matmul_node) > 1) continue;
 
-    // =========================================================
-    // Look ahead one step to find Relu
-    // =========================================================
     Node* relu_node = nullptr;
 
-    // Only when BiasAdd has a single consumer, try to find Relu
-    // Prevent BiasAdd result from being used in branches
     if (CountConsumers(bias_node) == 1) {
       for (const Edge* e : bias_node->out_edges()) {
         if (!e->IsControlEdge() && e->dst()->type_string() == "Relu") {
@@ -82,20 +70,11 @@ Status MusaOptimizationPass::Run(const GraphOptimizationPassOptions& options) {
       }
     }
 
-    // Determine the final output source node:
-    // If Relu is fused, downstream consumers were originally connected to Relu
-    // If Relu is not fused, downstream consumers were originally connected to BiasAdd
     Node* final_output_source = (relu_node != nullptr) ? relu_node : bias_node;
 
-    // Print fusion plan
     std::string fuse_msg = matmul_node->name() + " + " + bias_node->name();
     if (relu_node) fuse_msg += " + " + relu_node->name();
 
-    //    fprintf(stderr, "[MUSA_FUSE] Fusing %s -> %s\n",
-    //          fuse_msg.c_str(),
-    //        (is_conv ? "_FusedConv2D" : "MusaFusedMatMul"));
-
-    // --- Prepare original inputs for MatMul ---
     const Edge* edge_mm_a;
     if (!matmul_node->input_edge(0, &edge_mm_a).ok()) continue;
     const Edge* edge_mm_b;
@@ -106,7 +85,6 @@ Status MusaOptimizationPass::Run(const GraphOptimizationPassOptions& options) {
     Node* node_b = edge_mm_b->src();
     int idx_b = edge_mm_b->src_output();
 
-    // --- Collect downstream consumers (from final_output_source) ---
     std::vector<std::pair<Node*, int>> consumers;
     for (const Edge* e : final_output_source->out_edges()) {
       if (!e->IsControlEdge()) {
@@ -114,9 +92,7 @@ Status MusaOptimizationPass::Run(const GraphOptimizationPassOptions& options) {
       }
     }
 
-    // --- Create new node definition ---
     NodeDef new_def;
-    // Use BiasAdd name as base to avoid naming conflicts
     new_def.set_name(bias_node->name());
     new_def.set_op(is_conv ? "_FusedConv2D" : "MusaFusedMatMul");
     new_def.set_device(bias_node->requested_device());
@@ -124,7 +100,6 @@ Status MusaOptimizationPass::Run(const GraphOptimizationPassOptions& options) {
     auto* attr = new_def.mutable_attr();
     const auto& mm_attrs = matmul_node->attrs();
 
-    // Copy MatMul attributes
     if (mm_attrs.Find("T")) (*attr)["T"] = *mm_attrs.Find("T");
     if (mm_attrs.Find("transpose_a"))
       (*attr)["transpose_a"] = *mm_attrs.Find("transpose_a");
@@ -137,25 +112,21 @@ Status MusaOptimizationPass::Run(const GraphOptimizationPassOptions& options) {
         (*attr)["padding"] = *mm_attrs.Find("padding");
     }
 
-    // --- Set fused_ops list ---
     auto* fused_ops_list = (*attr)["fused_ops"].mutable_list();
     fused_ops_list->add_s("BiasAdd");
     if (relu_node) {
-      fused_ops_list->add_s("Relu");  // If Relu is found, append it
+      fused_ops_list->add_s("Relu");
     }
 
     (*attr)["num_args"].set_i(1);
     (*attr)["epsilon"].set_f(0.0001f);
 
-    // --- Modify graph structure ---
-    // Remove old nodes
     graph->RemoveNode(bias_node);
     graph->RemoveNode(matmul_node);
     if (relu_node) {
       graph->RemoveNode(relu_node);
     }
 
-    // Add new node
     Status status;
     Node* new_node = graph->AddNode(new_def, &status);
     if (!status.ok()) {
@@ -164,12 +135,10 @@ Status MusaOptimizationPass::Run(const GraphOptimizationPassOptions& options) {
       continue;
     }
 
-    // Reconnect input edges
     graph->AddEdge(node_a, idx_a, new_node, 0);
     graph->AddEdge(node_b, idx_b, new_node, 1);
     graph->AddEdge(bias_tensor_node, bias_tensor_idx, new_node, 2);
 
-    // Reconnect output edges (connect to consumers that were originally connected to Relu or BiasAdd)
     for (auto& c : consumers) {
       graph->AddEdge(new_node, 0, c.first, c.second);
     }

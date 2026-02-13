@@ -50,11 +50,9 @@ class MusaRestoreV2Op : public OpKernel {
       const string& slice_spec = slices_flat(i);
       DataType dtype = dtypes_[i];
 
-      // 1. 获取完整 Shape
       TensorShape full_shape;
       OP_REQUIRES_OK(ctx, reader.LookupTensorShape(name, &full_shape));
 
-      // 2. 解析切片并计算目标 Shape
       TensorShape target_shape;
 
       TensorSlice slice(full_shape.dims());
@@ -85,14 +83,12 @@ class MusaRestoreV2Op : public OpKernel {
         target_shape = full_shape;
       }
 
-      // 3. 分配 MUSA 输出内存
       Tensor* output_tensor = nullptr;
       OP_REQUIRES_OK(ctx,
                      ctx->allocate_output(i, target_shape, &output_tensor));
 
       if (target_shape.num_elements() == 0) continue;
 
-      // 4. 分配 CPU 临时内存
       Tensor cpu_tensor;
       AllocatorAttributes cpu_alloc_attr;
       cpu_alloc_attr.set_on_host(true);
@@ -100,15 +96,12 @@ class MusaRestoreV2Op : public OpKernel {
       OP_REQUIRES_OK(ctx, ctx->allocate_temp(dtype, target_shape, &cpu_tensor,
                                              cpu_alloc_attr));
 
-      // 5. 读取数据
       if (is_slice) {
         OP_REQUIRES_OK(ctx, reader.LookupSlice(name, slice, &cpu_tensor));
       } else {
-        // 全量读取
         OP_REQUIRES_OK(ctx, reader.Lookup(name, &cpu_tensor));
       }
 
-      // 6. 内存拷贝 (直接拷贝，无需计算偏移)
       const void* src_ptr = cpu_tensor.data();
       void* dst_ptr = output_tensor->data();
       uint64 copy_size_bytes =
@@ -117,7 +110,6 @@ class MusaRestoreV2Op : public OpKernel {
       se::DeviceMemoryBase dst_mem(dst_ptr, copy_size_bytes);
       stream->ThenMemcpy(&dst_mem, src_ptr, copy_size_bytes);
 
-      // 7. 同步等待
       OP_REQUIRES_OK(ctx, stream->BlockHostUntilDone());
     }
   }

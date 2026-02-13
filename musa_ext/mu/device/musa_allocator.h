@@ -13,7 +13,6 @@ namespace musa {
 
 class MusaRawAllocator : public Allocator {
  public:
-  // Constructor
   explicit MusaRawAllocator(int device_id) : device_id_(device_id) {}
 
   ~MusaRawAllocator() override = default;
@@ -23,7 +22,6 @@ class MusaRawAllocator : public Allocator {
   void* AllocateRaw(size_t alignment, size_t num_bytes) override {
     if (num_bytes == 0) return nullptr;
 
-    // Switch to the physical card bound to the allocator
     musaSetDevice(device_id_);
 
     size_t target_alignment = std::max((size_t)256, alignment);
@@ -40,14 +38,12 @@ class MusaRawAllocator : public Allocator {
 
   void DeallocateRaw(void* ptr) override {
     if (ptr) {
-      // Context switching is also needed during deallocation
       musaSetDevice(device_id_);
       musaFree(ptr);
     }
   }
 
  private:
-  // Define member variable
   int device_id_;
 };
 

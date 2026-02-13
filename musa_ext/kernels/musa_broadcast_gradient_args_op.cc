@@ -38,11 +38,6 @@ class BroadcastGradientArgsOp : public OpKernel {
     Tensor* r0 = nullptr;
     Tensor* r1 = nullptr;
 
-    // The output indices are usually small, so we compute them on CPU
-    // and populate the output tensors.
-    // Since we enforce HostMemory in registration, these outputs will reside in
-    // host memory.
-
     const size_t len0 = bcast.grad_x_reduce_idx().size();
     const size_t len1 = bcast.grad_y_reduce_idx().size();
 
@@ -62,13 +57,6 @@ class BroadcastGradientArgsOp : public OpKernel {
     }
   }
 };
-
-// Register the kernel.
-// Important: BroadcastGradientArgs usually takes shape inputs (int32/int64) and
-// produces reduction indices (int32/int64). These are metadata operations. Even
-// if the Op is placed on MUSA, the inputs and outputs are shapes, so we
-// strictly use HostMemory to avoid unnecessary H2D and D2H copies for shape
-// logic.
 
 #define REGISTER_MUSA_BCAST_GRAD_ARGS(type)              \
   REGISTER_KERNEL_BUILDER(Name("BroadcastGradientArgs")  \

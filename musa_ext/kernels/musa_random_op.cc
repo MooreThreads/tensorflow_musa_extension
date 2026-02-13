@@ -1,21 +1,64 @@
-/* Copyright @2020-2026 Moore Threads Technology Co., Ltd. All rights reserved.
- */
-
-#include <limits>
-#include <random>
-
-#include "mu/device/musa_memcpy.h"
-#include "tensorflow/core/framework/bfloat16.h"
+#include "mu/device/musa_executor.h"
 #include "tensorflow/core/framework/op_kernel.h"
-#include "tensorflow/core/framework/register_types.h"
+#include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/framework/tensor_util.h"
-#include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
-#include "utils_op.h"
+#include "tensorflow/core/lib/random/philox_random.h"
+#include "tensorflow/core/lib/random/random_distributions.h"
 
 namespace tensorflow {
 namespace musa {
 
+using random::PhiloxRandom;
+using stream_executor::musa::FromMusaStatus;
+
 namespace {
+
+template <typename T>
+PHILOX_DEVICE_INLINE T Uint32ToFloatOfficial(uint32 x) {
+  const uint32 man = x & 0x7fffffu;
+  const uint32 exp = 127u << 23;
+  const uint32 val = exp | man;
+  float result;
+  std::memcpy(&result, &val, sizeof(val));
+  return static_cast<T>(result - 1.0f);
+}
+
+Status InternalGenerateKey(const Tensor& seed, PhiloxRandom::Key* out_key,
+                           PhiloxRandom::ResultType* out_counter) {
+  uint64 seed0;
+  uint64 seed1;
+
+  if (seed.dtype() == DT_INT32) {
+    const auto seed_vals = seed.flat<int32>();
+    seed0 = static_cast<uint64>(seed_vals(0));
+    seed1 = static_cast<uint64>(seed_vals(1));
+  } else if (seed.dtype() == DT_INT64) {
+    const auto seed_vals = seed.flat<int64>();
+    seed0 = static_cast<uint64>(seed_vals(0));
+    seed1 = static_cast<uint64>(seed_vals(1));
+  } else {
+    return errors::InvalidArgument("Invalid seed type");
+  }
+
+  (*out_key)[0] = 0x3ec8f720;
+  (*out_key)[1] = 0x02461e29;
+  (*out_counter)[0] = static_cast<uint32>(seed0);
+  (*out_counter)[1] = static_cast<uint32>(seed0 >> 32);
+  (*out_counter)[2] = static_cast<uint32>(seed1);
+  (*out_counter)[3] = static_cast<uint32>(seed1 >> 32);
+
+  const auto mix = random::PhiloxRandom(*out_counter, *out_key)();
+
+  (*out_key)[0] = mix[0];
+  (*out_key)[1] = mix[1];
+  (*out_counter)[0] = 0;
+  (*out_counter)[1] = 0;
+  (*out_counter)[2] = mix[2];
+  (*out_counter)[3] = mix[3];
+
+  return Status::OK();
+}
 
 template <typename T>
 class MusaRandomOp : public MusaOpKernel {
@@ -23,168 +66,71 @@ class MusaRandomOp : public MusaOpKernel {
   explicit MusaRandomOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
-    // fprintf(stderr, ">>> [MUSA_TRACE_AUTO] %s - Start\n", name().c_str());
+    const Tensor& shape_t = ctx->input(0);
+    const Tensor& seed_t = ctx->input(1);
 
-    const Tensor& shape_tensor = ctx->input(0);
-    TensorShape out_shape;
-    OP_REQUIRES_OK(ctx, tensor::MakeShape(shape_tensor, &out_shape));
+    TensorShape shape;
+    OP_REQUIRES_OK(ctx, tensorflow::tensor::MakeShape(shape_t, &shape));
 
     Tensor* output = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, out_shape, &output));
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, shape, &output));
+    int64 num_elements = output->NumElements();
+    if (num_elements == 0) return;
 
-    if (output->NumElements() == 0) return;
-
-    Tensor tmp_host_out;
+    Tensor tmp_host;
     AllocatorAttributes host_attr;
     host_attr.set_on_host(true);
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(output->dtype(), out_shape,
-                                           &tmp_host_out, host_attr));
+    OP_REQUIRES_OK(
+        ctx, ctx->allocate_temp(output->dtype(), shape, &tmp_host, host_attr));
+    T* cpu_ptr = tmp_host.flat<T>().data();
 
-    T* cpu_ptr = tmp_host_out.flat<T>().data();
-    std::random_device rd;
-    std::mt19937 gen(rd());
+    PhiloxRandom::Key key;
+    PhiloxRandom::ResultType counter;
 
-    if (name().find("UniformInt") != std::string::npos) {
-      T min_val = static_cast<T>(0);
-      T max_val = static_cast<T>(255);
-
-      // 根据 OpDef 提取输入
-      if (name().find("Stateless") != std::string::npos) {
-        // StatelessRandomUniformIntV2: 0:shape, 1:key, 2:counter, 3:alg,
-        // 4:minval, 5:maxval
-        if (ctx->num_inputs() >= 6) {
-          min_val = ctx->input(4).flat<T>()(0);
-          max_val = ctx->input(5).flat<T>()(0);
-        }
-      } else {
-        // RandomUniformInt: 0:shape, 1:minval, 2:maxval
-        if (ctx->num_inputs() >= 3) {
-          min_val = ctx->input(1).flat<T>()(0);
-          max_val = ctx->input(2).flat<T>()(0);
-        }
-      }
-
-      if (static_cast<float>(min_val) >= static_cast<float>(max_val)) {
-        ctx->CtxFailure(__FILE__, __LINE__,
-                        errors::InvalidArgument("minval must be < maxval"));
-        return;
-      }
-
-      using DistType =
-          typename std::conditional<std::is_integral<T>::value, T, int32>::type;
-      std::uniform_int_distribution<DistType> dist(
-          static_cast<DistType>(min_val), static_cast<DistType>(max_val) - 1);
-      for (int i = 0; i < output->NumElements(); ++i) {
-        cpu_ptr[i] = static_cast<T>(dist(gen));
-      }
-    } else if (name().find("Normal") != std::string::npos) {
-      std::normal_distribution<float> dist(0.0f, 1.0f);
-      for (int i = 0; i < output->NumElements(); ++i) {
-        cpu_ptr[i] = static_cast<T>(dist(gen));
-      }
+    if (name() == "StatelessRandomUniform") {
+      OP_REQUIRES_OK(ctx, InternalGenerateKey(seed_t, &key, &counter));
     } else {
-      std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-      for (int i = 0; i < output->NumElements(); ++i) {
-        cpu_ptr[i] = static_cast<T>(dist(gen));
+      const uint32* k_ptr = (const uint32*)ctx->input(1).tensor_data().data();
+      const uint32* c_ptr = (const uint32*)ctx->input(2).tensor_data().data();
+      std::memcpy(&key, k_ptr, 8);
+      std::memcpy(&counter, c_ptr, 16);
+    }
+
+    PhiloxRandom gen(counter, key);
+    for (int64 i = 0; i < num_elements; i += 4) {
+      auto samples = gen();
+      for (int j = 0; j < 4 && (i + j) < num_elements; ++j) {
+        cpu_ptr[i + j] = Uint32ToFloatOfficial<T>(samples[j]);
       }
     }
 
-    size_t total_bytes = output->NumElements() * sizeof(T);
-    mStatus status =
-        MusaMemcpyH2D(output->data(), tmp_host_out.data(), total_bytes);
-
-    OP_REQUIRES(ctx, status == mStatus::SUCCESS,
-                errors::Internal("MUSA Random H2D copy failed for ", name()));
-
+    mStatus s = tensorflow::musa::MusaMemcpyH2D(output->data(), tmp_host.data(),
+                                                num_elements * sizeof(T));
+    OP_REQUIRES_OK(ctx, FromMusaStatus(s));
     musaDeviceSynchronize();
-    // fprintf(stderr, ">>> [MUSA_TRACE_AUTO] %s - Success (%s)\n", name().c_str(),
-    //         DataTypeString(output->dtype()).c_str());
   }
 };
 
 }  // namespace
 
-#define REGISTER_MUSA_RANDOM_KERNELS(TYPE)                           \
-  REGISTER_KERNEL_BUILDER(Name("RandomUniform")                      \
-                              .Device("MUSA")                        \
-                              .HostMemory("shape")                   \
-                              .TypeConstraint<TYPE>("dtype"),        \
-                          MusaRandomOp<TYPE>);                       \
-                                                                     \
-  REGISTER_KERNEL_BUILDER(Name("RandomStandardNormal")               \
-                              .Device("MUSA")                        \
-                              .HostMemory("shape")                   \
-                              .TypeConstraint<TYPE>("dtype"),        \
-                          MusaRandomOp<TYPE>);                       \
-                                                                     \
-  REGISTER_KERNEL_BUILDER(Name("TruncatedNormal")                    \
-                              .Device("MUSA")                        \
-                              .HostMemory("shape")                   \
-                              .TypeConstraint<TYPE>("dtype"),        \
-                          MusaRandomOp<TYPE>);                       \
-                                                                     \
-  REGISTER_KERNEL_BUILDER(Name("StatelessRandomUniform")             \
-                              .Device("MUSA")                        \
-                              .HostMemory("shape")                   \
-                              .HostMemory("seed")                    \
-                              .TypeConstraint<TYPE>("dtype"),        \
-                          MusaRandomOp<TYPE>);                       \
-                                                                     \
-  REGISTER_KERNEL_BUILDER(Name("StatelessRandomUniformV2")           \
-                              .Device("MUSA")                        \
-                              .HostMemory("shape")                   \
-                              .HostMemory("key")                     \
-                              .HostMemory("counter")                 \
-                              .HostMemory("alg")                     \
-                              .TypeConstraint<TYPE>("dtype"),        \
-                          MusaRandomOp<TYPE>);                       \
-                                                                     \
-  REGISTER_KERNEL_BUILDER(Name("StatelessRandomNormalV2")            \
-                              .Device("MUSA")                        \
-                              .HostMemory("shape")                   \
-                              .HostMemory("key")                     \
-                              .HostMemory("counter")                 \
-                              .HostMemory("alg")                     \
-                              .TypeConstraint<TYPE>("dtype"),        \
-                          MusaRandomOp<TYPE>);                       \
-                                                                     \
-  REGISTER_KERNEL_BUILDER(Name("StatelessTruncatedNormalV2")         \
-                              .Device("MUSA")                        \
-                              .HostMemory("shape")                   \
-                              .HostMemory("key")                     \
-                              .HostMemory("counter")                 \
-                              .HostMemory("alg")                     \
-                              .TypeConstraint<TYPE>("dtype"),        \
-                          MusaRandomOp<TYPE>);                       \
-                                                                     \
-  REGISTER_KERNEL_BUILDER(Name("RandomUniformInt")                   \
-                              .Device("MUSA")                        \
-                              .HostMemory("shape")                   \
-                              .HostMemory("minval")                  \
-                              .HostMemory("maxval")                  \
-                              .TypeConstraint<TYPE>("Tout"),         \
-                          MusaRandomOp<TYPE>);                       \
-                                                                     \
-  REGISTER_KERNEL_BUILDER(Name("StatelessRandomUniformIntV2")        \
-                              .Device("MUSA")                        \
-                              .HostMemory("shape")                   \
-                              .HostMemory("key")                     \
-                              .HostMemory("counter")                 \
-                              .HostMemory("alg")                     \
-                              .HostMemory("minval")                  \
-                              .HostMemory("maxval")                  \
-                              .TypeConstraint<TYPE>("dtype"),        \
+#define REGISTER_MUSA_RANDOM(TYPE)                            \
+  REGISTER_KERNEL_BUILDER(Name("StatelessRandomUniform")      \
+                              .Device("MUSA")                 \
+                              .HostMemory("shape")            \
+                              .HostMemory("seed")             \
+                              .TypeConstraint<TYPE>("dtype"), \
+                          MusaRandomOp<TYPE>);                \
+  REGISTER_KERNEL_BUILDER(Name("StatelessRandomUniformV2")    \
+                              .Device("MUSA")                 \
+                              .HostMemory("shape")            \
+                              .HostMemory("key")              \
+                              .HostMemory("counter")          \
+                              .HostMemory("alg")              \
+                              .TypeConstraint<TYPE>("dtype"), \
                           MusaRandomOp<TYPE>);
 
-// 执行批量注册
-REGISTER_MUSA_RANDOM_KERNELS(float);
-REGISTER_MUSA_RANDOM_KERNELS(double);
-REGISTER_MUSA_RANDOM_KERNELS(Eigen::half);
-REGISTER_MUSA_RANDOM_KERNELS(Eigen::bfloat16);
-REGISTER_MUSA_RANDOM_KERNELS(int32);
-REGISTER_MUSA_RANDOM_KERNELS(int64);
-
-#undef REGISTER_MUSA_RANDOM_KERNELS
+REGISTER_MUSA_RANDOM(float);
+REGISTER_MUSA_RANDOM(double);
 
 }  // namespace musa
 }  // namespace tensorflow

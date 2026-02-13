@@ -1,7 +1,4 @@
-/* Copyright @2020-2026 Moore Threads Technology Co., Ltd. All rights reserved.
- */
-
-#include "tensorflow/core/framework/function.h"  // 👈 必须包含这个头文件
+#include "tensorflow/core/framework/function.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/resource_handle.h"
@@ -9,9 +6,6 @@
 namespace tensorflow {
 namespace musa {
 
-// =================================================================
-// 1. MusaArgOp: 从 CallFrame 中提取函数参数 (适配双指针语法)
-// =================================================================
 class MusaArgOp : public OpKernel {
  public:
   explicit MusaArgOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
@@ -24,13 +18,11 @@ class MusaArgOp : public OpKernel {
                 errors::Internal("MUSA _Arg: No call frame found."));
 
     const Tensor* val_ptr = nullptr;
-    // 👈 适配源码中的 GetArg(int, const Tensor**)
     Status s = frame->GetArg(index_, &val_ptr);
     OP_REQUIRES_OK(ctx, s);
     OP_REQUIRES(ctx, val_ptr != nullptr,
                 errors::Internal("MUSA _Arg: Retrieved null tensor pointer."));
 
-    // 将拿到的 Tensor 设置为输出
     ctx->set_output(0, *val_ptr);
   }
 
@@ -38,9 +30,6 @@ class MusaArgOp : public OpKernel {
   int index_;
 };
 
-// =================================================================
-// 2. MusaRetvalOp: 将结果存入 CallFrame 返回值
-// =================================================================
 class MusaRetvalOp : public OpKernel {
  public:
   explicit MusaRetvalOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
@@ -53,7 +42,6 @@ class MusaRetvalOp : public OpKernel {
     OP_REQUIRES(ctx, frame != nullptr,
                 errors::Internal("MUSA _Retval: No call frame found."));
 
-    // SetRetval 的签名是 (int, const Tensor&)，直接传即可
     Status s = frame->SetRetval(index_, input);
     OP_REQUIRES_OK(ctx, s);
   }
@@ -61,10 +49,6 @@ class MusaRetvalOp : public OpKernel {
  private:
   int index_;
 };
-
-// =================================================================
-// 3. 注册区
-// =================================================================
 
 #define REGISTER_MUSA_FUN_KERNELS(type)                                  \
   REGISTER_KERNEL_BUILDER(                                               \
@@ -79,7 +63,6 @@ REGISTER_MUSA_FUN_KERNELS(int32);
 REGISTER_MUSA_FUN_KERNELS(int64);
 REGISTER_MUSA_FUN_KERNELS(bool);
 
-// ResourceHandle 的注册
 REGISTER_KERNEL_BUILDER(Name("_Arg")
                             .Device("MUSA")
                             .HostMemory("output")

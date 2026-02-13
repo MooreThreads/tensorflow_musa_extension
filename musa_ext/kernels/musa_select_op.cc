@@ -1,6 +1,3 @@
-/* Copyright @2020-2026 Moore Threads Technology Co., Ltd. All rights reserved.
- */
-
 #include <mudnn.h>
 
 #include "tensorflow/core/framework/op_kernel.h"
@@ -48,7 +45,6 @@ class MusaSelectOp : public MusaOpKernel {
     const Tensor& then_t = ctx->input(1);
     const Tensor& else_t = ctx->input(2);
 
-    // 1. 先计算 Then 和 Else 的形状 (标准广播)
     BCast bcast_te(BCast::FromShape(then_t.shape()),
                    BCast::FromShape(else_t.shape()));
     if (!bcast_te.IsValid()) {
@@ -58,33 +54,25 @@ class MusaSelectOp : public MusaOpKernel {
     }
     TensorShape te_shape = BCast::ToShape(bcast_te.output_shape());
 
-    // =================================================================
-    // 2. 智能判定广播模式
-    // =================================================================
     bool use_legacy_broadcast = false;
     TensorShape output_shape;
 
-    // 尝试 A: 标准广播 (Numpy 规则，右对齐) -> 优先用于 test_select.py
     BCast bcast_final(BCast::FromShape(cond.shape()),
                       BCast::FromShape(te_shape));
 
     if (bcast_final.IsValid()) {
       output_shape = BCast::ToShape(bcast_final.output_shape());
-      use_legacy_broadcast = false;  // 标准模式
-    }
-    // 尝试 B: Legacy 广播 (TF CPU 特性，左对齐) -> 用于 graph_runner.py
-    // 条件: Cond是1维, Input是多维, 且 Cond[0] == Input[0]
-    else if (cond.dims() == 1 && te_shape.dims() > 1 &&
-             cond.dim_size(0) == te_shape.dim_size(0)) {
+      use_legacy_broadcast = false;
+    } else if (cond.dims() == 1 && te_shape.dims() > 1 &&
+               cond.dim_size(0) == te_shape.dim_size(0)) {
       output_shape = te_shape;
-      use_legacy_broadcast = true;  // 兼容模式
+      use_legacy_broadcast = true;
     } else {
       ctx->SetStatus(
           errors::InvalidArgument("Incompatible shapes: cond vs (then/else)"));
       return;
     }
 
-    // 3. 分配输出
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
     if (output->NumElements() == 0) return;
@@ -92,15 +80,9 @@ class MusaSelectOp : public MusaOpKernel {
     MusaDevice* device = reinterpret_cast<MusaDevice*>(ctx->device());
     auto& handle = device->mudnn_handle();
 
-    // =================================================================
-    // 4. 构建 mTensor
-    // =================================================================
     std::vector<std::vector<int64_t>> shape_storage;
     shape_storage.reserve(10);
 
-    // 通用构建器：支持两种广播模式
-    // is_cond: 是否是条件 Tensor
-    // force_left_align: 是否强制左对齐 (用于 Legacy 模式的 Cond)
     auto CreateMTensor = [&](const Tensor& input,
                              bool force_left_align = false) -> mTensor {
       mTensor mt;
@@ -117,7 +99,6 @@ class MusaSelectOp : public MusaOpKernel {
         t_dims[i] = output_shape.dim_size(i);
 
       int input_rank = input.dims();
-      // 计算自身紧密 stride
       std::vector<int64_t> dense_strides(input_rank, 1);
       if (input_rank > 0) {
         for (int i = input_rank - 2; i >= 0; --i)
@@ -125,15 +106,11 @@ class MusaSelectOp : public MusaOpKernel {
       }
 
       if (force_left_align) {
-        // --- 模式 B: 左对齐广播 (Cond [N] -> Out [N, C]) ---
-        // 假设 input 是 1 维，映射到 target 的第 0 维
         if (input_rank == 1) {
-          i_strides[0] = dense_strides[0];  // Batch 维度有步长
-          for (int i = 1; i < target_rank; ++i)
-            i_strides[i] = 0;  // 其他维度步长为0 (广播)
+          i_strides[0] = dense_strides[0];
+          for (int i = 1; i < target_rank; ++i) i_strides[i] = 0;
         }
       } else {
-        // --- 模式 A: 标准右对齐广播 (Numpy 规则) ---
         for (int i = 1; i <= target_rank; ++i) {
           int target_idx = target_rank - i;
           int input_idx = input_rank - i;
@@ -141,10 +118,10 @@ class MusaSelectOp : public MusaOpKernel {
             if (input.dim_size(input_idx) == t_dims[target_idx]) {
               i_strides[target_idx] = dense_strides[input_idx];
             } else {
-              i_strides[target_idx] = 0;  // 维度为1 -> 广播
+              i_strides[target_idx] = 0;
             }
           } else {
-            i_strides[target_idx] = 0;  // 维度缺失 -> 广播
+            i_strides[target_idx] = 0;
           }
         }
       }
@@ -156,15 +133,11 @@ class MusaSelectOp : public MusaOpKernel {
       return mt;
     };
 
-    // 构建输入 Tensor
-    // Cond: 如果启用 legacy 模式，则强制左对齐；否则走标准右对齐
     auto cond_mt = CreateMTensor(cond, use_legacy_broadcast);
 
-    // Then/Else: 总是尝试标准广播到 output_shape
     auto then_mt = CreateMTensor(then_t, false);
     auto else_mt = CreateMTensor(else_t, false);
 
-    // Output: 总是标准
     auto out_mt = CreateMTensor(*output, false);
 
     ::musa::dnn::Ternary op;

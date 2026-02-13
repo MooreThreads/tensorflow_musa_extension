@@ -29,11 +29,9 @@ class UnsortedSegmentSumOp : public OpKernel {
     const int64 N = segment_ids.NumElements();
     const int64 data_elements = data.NumElements();
 
-    // 1. 构建输出形状 (Output Shape)
     TensorShape output_shape;
     output_shape.AddDim(num_segments);
     TensorShape data_shape = data.shape();
-    // output_shape = [num_segments] + data_shape[segment_ids.dims():]
     for (int i = segment_ids.dims(); i < data_shape.dims(); ++i) {
       output_shape.AddDim(data_shape.dim_size(i));
     }
@@ -41,13 +39,10 @@ class UnsortedSegmentSumOp : public OpKernel {
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
 
-    // 2. 初始化输出为 0
     auto output_flat = output->flat_outer_dims<T>();
     output_flat.setZero();
 
-    // 3. 处理空输入情况 (修复除以零的 Bug)
     if (N == 0) {
-      // 如果 segment_ids 为空，则没有数据需要求和，直接返回全 0 的输出即可。
       return;
     }
 
@@ -62,7 +57,6 @@ class UnsortedSegmentSumOp : public OpKernel {
 
     for (int64 i = 0; i < N; ++i) {
       Tindex idx = segment_vec(i);
-      // 忽略越界的索引 (负数或超过 num_segments)
       if (idx < 0 || idx >= num_segments) {
         continue;
       }

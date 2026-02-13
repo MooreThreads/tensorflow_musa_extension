@@ -1,5 +1,3 @@
-/* Copyright @2020-2026 Moore Threads Technology Co. All rights reserved. */
-
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/types.h"
@@ -22,9 +20,6 @@ class MusaCastOp : public MusaOpKernel {
 
     if (inp.NumElements() == 0) return;
 
-    // 1. 准备 muDNN 张量描述符
-    // 注意：因为你修复了 GetType，所以当 external_src_dtype_ == DT_BOOL 时，
-    // in_mt 内部的描述符会正确设置为 mType::BOOL
     auto in_mt = CreateMTensor(inp);
     auto out_mt = CreateMTensor(*output);
 
@@ -35,8 +30,6 @@ class MusaCastOp : public MusaOpKernel {
     mHandle& h = GetHandleByCtx(ctx);
     ::musa::dnn::Unary op;
 
-    // 2. 设置 Cast 模式
-    // 对于相同类型的 Cast，使用 IDENTITY；不同类型使用 CAST
     mStatus m_status;
     if (external_src_dtype_ == external_dst_dtype_) {
       m_status = op.SetMode(::musa::dnn::Unary::Mode::IDENTITY);
@@ -47,8 +40,6 @@ class MusaCastOp : public MusaOpKernel {
     OP_REQUIRES(ctx, m_status == mStatus::SUCCESS,
                 errors::Internal("muDNN Unary SetMode failed in Cast"));
 
-    // 3. 执行 Cast
-    // 这里是“决战点”：muDNN 是否能处理 bool (1 byte) -> float (4 byte)
     m_status = op.Run(h, out_mt, in_mt);
 
     if (m_status != mStatus::SUCCESS) {
@@ -68,7 +59,6 @@ class MusaCastOp : public MusaOpKernel {
   DataType external_dst_dtype_;
 };
 
-// --- 广泛的类型注册 ---
 #define REGISTER_CAST_MUSA(SrcT, DstT)                       \
   REGISTER_KERNEL_BUILDER(Name("Cast")                       \
                               .Device(DEVICE_MTGPU)          \
@@ -76,7 +66,6 @@ class MusaCastOp : public MusaOpKernel {
                               .TypeConstraint<DstT>("DstT"), \
                           MusaCastOp);
 
-// 数值类型互转
 REGISTER_CAST_MUSA(float, int32);
 REGISTER_CAST_MUSA(int32, float);
 REGISTER_CAST_MUSA(float, int64);

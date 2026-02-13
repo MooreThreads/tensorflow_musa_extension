@@ -1,3 +1,4 @@
+#include <iostream>
 #include <vector>
 
 #include "tensorflow/core/framework/op.h"
@@ -19,7 +20,6 @@ class MusaLayerNormOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
-    // fprintf(stderr, ">>> [MUSA_TRACE_AUTO] %s\n", name().c_str());
     const Tensor& x = ctx->input(0);
     const Tensor& gamma = ctx->input(1);
     const Tensor& beta = ctx->input(2);

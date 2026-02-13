@@ -16,7 +16,6 @@ class MusaReshapeOp : public MusaOpKernel {
       : MusaOpKernel(context) {}
 
   void Compute(OpKernelContext* ctx) override {
-    // fprintf(stderr, ">>> [MUSA_TRACE_AUTO] %s\n", name().c_str());
     const Tensor& input = ctx->input(0);
     const Tensor& sizes = ctx->input(1);
 

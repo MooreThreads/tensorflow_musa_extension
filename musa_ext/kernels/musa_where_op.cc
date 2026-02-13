@@ -1,6 +1,3 @@
-/* Copyright @2020-2026 Moore Threads Technology Co., Ltd. All rights reserved.
- */
-
 #include <mudnn.h>
 
 #include "mu/device/musa_device.h"
@@ -20,7 +17,6 @@ class MusaWhereOp : public MusaOpKernel {
     const Tensor& input = ctx->input(0);
     int64_t rank = input.dims();
 
-    // 0. 空输入处理
     if (input.NumElements() == 0) {
       Tensor* output = nullptr;
       OP_REQUIRES_OK(ctx,
@@ -31,13 +27,11 @@ class MusaWhereOp : public MusaOpKernel {
     MusaDevice* musa_device = reinterpret_cast<MusaDevice*>(ctx->device());
     auto& h = musa_device->mudnn_handle();
 
-    // 1. 创建 Input mTensor (直接调用 utils)
     auto input_mt = CreateMTensor(input);
 
-    // 2. 准备 MemoryMaintainer (依然需要保持，因为这是 Where 算子的特殊性)
     size_t captured_size = 0;
     void* scratch_ptr = nullptr;
-    Tensor scratch_tensor_holder;  // 放在这里防止析构
+    Tensor scratch_tensor_holder;
 
     auto mm = musa_device->GetMemMaintainer(
         [ctx, &captured_size, &scratch_ptr,
@@ -53,19 +47,16 @@ class MusaWhereOp : public MusaOpKernel {
           return ::musa::dnn::MemoryHandler(scratch_ptr, [](void*) {});
         });
 
-    // 3. 运行 Nonzero
     ::musa::dnn::Nonzero op;
     ::musa::dnn::Tensor out_mt;
-    out_mt.SetType(mType::INT64);  // 输出索引固定为 INT64
+    out_mt.SetType(mType::INT64);
 
     auto status = op.Run(h, out_mt, input_mt, mm);
     OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
                 errors::Internal("MUSA Nonzero run failed"));
 
-    // 4. 同步以获取 size
     musaStreamSynchronize(h.GetStream());
 
-    // 5. 处理输出
     if (captured_size == 0) {
       Tensor* output = nullptr;
       OP_REQUIRES_OK(ctx,
@@ -80,7 +71,6 @@ class MusaWhereOp : public MusaOpKernel {
     Tensor* final_output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &final_output));
 
-    // 6. 拷贝数据
     auto dst_ptr = final_output->tensor_data().data();
     musaMemcpyAsync((void*)dst_ptr, scratch_ptr, captured_size,
                     musaMemcpyDeviceToDevice, h.GetStream());
