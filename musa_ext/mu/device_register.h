@@ -5,8 +5,7 @@
 #include "tensorflow/c/tf_status.h"
 
 extern const char NAME_MTGPU[];
-extern const char DEVICE_MTGPU[];
-
+#define DEVICE_MTGPU "MUSA"
 #ifdef __cplusplus
 extern "C" {
 #endif
