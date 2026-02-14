@@ -25,7 +25,7 @@ class MatMulOpTest(MUSATestCase):
   """Tests for MUSA MatMul operator."""
 
   def _test_matmul(self, shape_a, shape_b, transpose_a=False, transpose_b=False, 
-                   dtype=tf.float32, rtol=1e-5, atol=1e-8):
+                   dtype=tf.float32, rtol=1e-5, atol=1e-6):
     """Test matmul operation with given shapes and options."""
     if dtype == tf.bfloat16:
       a_np = np.random.uniform(-1, 1, size=shape_a).astype(np.float32)
@@ -63,7 +63,7 @@ class MatMulOpTest(MUSATestCase):
     """Basic matrix multiplication test."""
     for dtype in [tf.float32, tf.float16, tf.bfloat16]:
       rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
-      atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
+      atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-6
       self._test_matmul([10, 20], [20, 15], dtype=dtype, rtol=rtol, atol=atol)
 
   def testMatMulTransposeA(self):

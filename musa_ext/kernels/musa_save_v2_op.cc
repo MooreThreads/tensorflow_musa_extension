@@ -1,11 +1,11 @@
+#include "tensorflow/core/framework/bounds_check.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.h"
-#include "tensorflow/core/framework/bounds_check.h"
-#include "tensorflow/core/util/tensor_bundle/tensor_bundle.h"
-#include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/lib/core/status.h"
+#include "tensorflow/core/platform/env.h"
+#include "tensorflow/core/util/tensor_bundle/tensor_bundle.h"
 
 namespace tensorflow {
 namespace musa {
@@ -25,9 +25,11 @@ class MusaSaveV2Op : public OpKernel {
     OP_REQUIRES(ctx, prefix.NumElements() == 1,
                 errors::InvalidArgument("prefix must have 1 element"));
     OP_REQUIRES(ctx, tensor_names.NumElements() == num_tensors,
-                errors::InvalidArgument("tensor_names must have ", num_tensors, " elements"));
+                errors::InvalidArgument("tensor_names must have ", num_tensors,
+                                        " elements"));
     OP_REQUIRES(ctx, shape_and_slices.NumElements() == num_tensors,
-                errors::InvalidArgument("shape_and_slices must have ", num_tensors, " elements"));
+                errors::InvalidArgument("shape_and_slices must have ",
+                                        num_tensors, " elements"));
 
     const string& prefix_str = prefix.flat<tstring>()(0);
     const auto& names_flat = tensor_names.flat<tstring>();
@@ -59,8 +61,8 @@ REGISTER_KERNEL_BUILDER(Name("SaveV2")
                             .HostMemory("prefix")
                             .HostMemory("tensor_names")
                             .HostMemory("shape_and_slices")
-                            .HostMemory("tensors"), 
+                            .HostMemory("tensors"),
                         MusaSaveV2Op);
 
-} 
-} 
+}  // namespace musa
+}  // namespace tensorflow

@@ -1,0 +1,87 @@
+#!/bin/bash
+# Commit message format validation hook (open source friendly)
+# Validates that commit messages follow the conventional commits format,
+# but provides helpful guidance rather than strict enforcement
+
+set -e
+
+COMMIT_MSG_FILE=$1
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+echo "📝 Validating commit message format..."
+
+# Check if gitlint is available
+if command -v gitlint &> /dev/null; then
+    # Use existing .gitlint configuration if available
+    if [ -f ".gitlint" ]; then
+        if gitlint --config .gitlint --msg-filename "$COMMIT_MSG_FILE"; then
+            echo -e "${GREEN}✅ Commit message format is valid!${NC}"
+            exit 0
+        else
+            echo -e "${YELLOW}⚠️  Commit message format could be improved${NC}"
+            echo -e "${YELLOW}💡 Consider following conventional commits format for better changelog generation:${NC}"
+            echo -e "   feat: add new feature"
+            echo -e "   fix: fix a bug"
+            echo -e "   docs: update documentation"
+            echo -e "   style: code formatting changes"
+            echo -e "   refactor: code refactoring"
+            echo -e "   test: add or update tests"
+            echo -e "   chore: maintenance tasks"
+            echo -e ""
+            echo -e "   Format: <type>(<scope>): <description>"
+            echo -e "   Example: feat(add): implement MUSA Add operator"
+            echo ""
+            echo -e "${GREEN}✅ Proceeding with commit anyway (open source friendly)${NC}"
+            exit 0
+        fi
+    else
+        # No .gitlint config, just provide guidance
+        COMMIT_MSG=$(head -n1 "$COMMIT_MSG_FILE")
+        
+        # Skip validation for merge commits
+        if [[ "$COMMIT_MSG" == Merge* ]]; then
+            echo -e "${GREEN}✅ Merge commit - skipping validation${NC}"
+            exit 0
+        fi
+        
+        # Try to validate conventional commits format
+        if echo "$COMMIT_MSG" | grep -qE '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([^)]*\))?: .{1,72}$'; then
+            echo -e "${GREEN}✅ Commit message format is valid!${NC}"
+            exit 0
+        else
+            echo -e "${YELLOW}💡 Friendly suggestion: Consider using conventional commits format${NC}"
+            echo -e "   This helps with automated changelog generation and release notes."
+            echo -e ""
+            echo -e "   Supported types: build, chore, ci, docs, feat, fix, perf, refactor, revert, style, test"
+            echo -e "   Example: feat: add new op"
+            echo -e "   Example: fix(abs): handle empty tensor edge case"
+            echo ""
+            echo -e "${GREEN}✅ Proceeding with commit anyway${NC}"
+            exit 0
+        fi
+    fi
+else
+    # No gitlint available, just provide basic guidance
+    COMMIT_MSG=$(head -n1 "$COMMIT_MSG_FILE")
+    
+    # Skip validation for merge commits
+    if [[ "$COMMIT_MSG" == Merge* ]]; then
+        echo -e "${GREEN}✅ Merge commit - skipping validation${NC}"
+        exit 0
+    fi
+    
+    echo -e "${YELLOW}💡 Tip: Consider using conventional commits format for your commit message${NC}"
+    echo -e "   This helps maintain a clean and organized commit history."
+    echo -e ""
+    echo -e "   Format: <type>: <description>"
+    echo -e "   Example: feat: add MUSA support"
+    echo -e "   Example: fix: resolve compilation error"
+    echo ""
+    echo -e "${GREEN}✅ Proceeding with commit${NC}"
+    exit 0
+fi

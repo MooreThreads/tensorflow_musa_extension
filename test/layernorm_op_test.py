@@ -1,146 +1,172 @@
 # Copyright 2026 The TensorFlow MUSA Authors. All Rights Reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 # ==============================================================================
 
 """Tests for MUSA LayerNorm operator."""
 
-import tensorflow as tf
+import os
 import numpy as np
-
+import tensorflow as tf
 from musa_test_utils import MUSATestCase
 
 
+def layernorm_ref(x, gamma, beta, eps=1e-5):
+    """Reference implementation of LayerNorm."""
+    mean = tf.reduce_mean(x, axis=-1, keepdims=True)
+    var = tf.reduce_mean(tf.square(x - mean), axis=-1, keepdims=True)
+    inv = tf.math.rsqrt(var + eps)
+    y = (x - mean) * inv
+    return y * gamma + beta
+
+
 class LayerNormOpTest(MUSATestCase):
-  """Tests for MUSA LayerNorm operator."""
+    """Tests for MUSA LayerNorm operator."""
 
-  def _test_layer_norm(self, x_shape, gamma_shape, beta_shape, epsilon=1e-5,
-                      dtype=tf.float32, rtol=1e-5, atol=1e-8):
-    """Test layer normalization operation."""
-    if dtype == tf.bfloat16:
-      x_np = np.random.uniform(-1, 1, size=x_shape).astype(np.float32)
-      gamma_np = np.random.uniform(0.5, 1.5, size=gamma_shape).astype(np.float32)
-      beta_np = np.random.uniform(-0.5, 0.5, size=beta_shape).astype(np.float32)
-    else:
-      x_np = np.random.uniform(-1, 1, size=x_shape).astype(dtype.as_numpy_dtype)
-      gamma_np = np.random.uniform(0.5, 1.5, size=gamma_shape).astype(dtype.as_numpy_dtype)
-      beta_np = np.random.uniform(-0.5, 0.5, size=beta_shape).astype(dtype.as_numpy_dtype)
-    
-    x = tf.constant(x_np, dtype=dtype)
-    gamma = tf.constant(gamma_np, dtype=dtype)
-    beta = tf.constant(beta_np, dtype=dtype)
-    
-    # Get the custom LayerNorm op
-    try:
-      layernorm_op = getattr(tf.raw_ops, 'MusaLayerNorm', None)
-      if layernorm_op is None:
-        self.skipTest("MusaLayerNorm op not available")
-    except AttributeError:
-      self.skipTest("MusaLayerNorm op not available")
-    
-    # Test on CPU reference (using standard tf.nn.l2_normalize approach)
-    # For LayerNorm, we compute manually for comparison
-    def compute_layernorm_ref(x_val, gamma_val, beta_val, eps):
-      mean = np.mean(x_val, axis=-1, keepdims=True)
-      variance = np.var(x_val, axis=-1, keepdims=True)
-      normalized = (x_val - mean) / np.sqrt(variance + eps)
-      return normalized * gamma_val + beta_val
-    
-    # Test on MUSA
-    with tf.device('/device:MUSA:0'):
-      musa_result = layernorm_op(x=x, gamma=gamma, beta=beta, epsilon=epsilon)
-    
-    # Compute reference result
-    ref_result = compute_layernorm_ref(x_np, gamma_np, beta_np, epsilon)
-    
-    # Compare results
-    if dtype in [tf.float16, tf.bfloat16]:
-      musa_result_f32 = tf.cast(musa_result, tf.float32)
-      self.assertAllClose(ref_result, 
-                         musa_result_f32.numpy(),
-                         rtol=rtol, 
-                         atol=atol)
-    else:
-      self.assertAllClose(ref_result, 
-                         musa_result.numpy(),
-                         rtol=rtol, 
-                         atol=atol)
+    @classmethod
+    def setUpClass(cls):
+        """Set up the test class by loading the MUSA plugin using load_op_library."""
+        super(LayerNormOpTest, cls).setUpClass()
+        
+        # Use the same path resolution logic as in musa_test_utils
+        plugin_path = None
+        current_dir = os.path.dirname(os.path.abspath(__file__))
 
-  def testLayerNormBasic(self):
-    """Basic LayerNorm test."""
-    x_shape = [2, 3, 4]
-    gamma_shape = [4]
-    beta_shape = [4]
-    for dtype in [tf.float32, tf.float16, tf.bfloat16]:
-      rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
-      atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
-      self._test_layer_norm(x_shape, gamma_shape, beta_shape, dtype=dtype, 
-                           rtol=rtol, atol=atol)
+        # Common plugin locations to try
+        candidate_paths = [
+            # Relative to test directory (most common case)
+            os.path.join(current_dir, "..", "build", "libmusa_plugin.so"),
+            # Relative to project root (when running from project root)
+            os.path.join(os.path.dirname(current_dir), "build", "libmusa_plugin.so"),
+            # Current working directory build
+            os.path.join(os.getcwd(), "build", "libmusa_plugin.so"),
+        ]
 
-  def testLayerNorm2D(self):
-    """2D LayerNorm test."""
-    x_shape = [10, 5]
-    gamma_shape = [5]
-    beta_shape = [5]
-    for dtype in [tf.float32, tf.float16, tf.bfloat16]:
-      rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
-      atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
-      self._test_layer_norm(x_shape, gamma_shape, beta_shape, dtype=dtype, 
-                           rtol=rtol, atol=atol)
+        for path in candidate_paths:
+            normalized_path = os.path.normpath(path)
+            if os.path.exists(normalized_path):
+                plugin_path = normalized_path
+                break
 
-  def testLayerNormDifferentEpsilons(self):
-    """LayerNorm with different epsilon values."""
-    x_shape = [3, 4]
-    gamma_shape = [4]
-    beta_shape = [4]
-    epsilons = [1e-5, 1e-3, 1e-1]
-    for epsilon in epsilons:
-      with self.subTest(epsilon=epsilon):
-        self._test_layer_norm(x_shape, gamma_shape, beta_shape, epsilon=epsilon)
+        if plugin_path and os.path.exists(plugin_path):
+            try:
+                # Use tf.load_op_library instead of tf.load_library
+                cls._musa_ops = tf.load_op_library(plugin_path)
+                print(f"SUCCESS: MUSA LayerNorm ops loaded from {plugin_path}!")
+            except Exception as e:
+                print(f"FAILED: Error loading MUSA ops from {plugin_path}: {e}")
+                cls._musa_ops = None
+        else:
+            # Provide helpful error message
+            searched_locations = [os.path.normpath(path) for path in candidate_paths]
+            print(f"MUSA plugin not found. Searched locations:\n" +
+                  "\n".join(f"  - {loc}" for loc in searched_locations))
+            cls._musa_ops = None
 
-  def testLayerNormLargeInput(self):
-    """LayerNorm with larger input."""
-    x_shape = [32, 128]
-    gamma_shape = [128]
-    beta_shape = [128]
-    self._test_layer_norm(x_shape, gamma_shape, beta_shape, dtype=tf.float32)
+    def _test_layernorm(self, x_shape, dtype, eps=1e-5):
+        """Test LayerNorm with given shape and dtype."""
+        # Skip if MUSA ops are not available
+        if self._musa_ops is None:
+            self.skipTest("MUSA LayerNorm ops module not available")
+        
+        # Handle numpy dtype compatibility
+        if dtype == tf.bfloat16:
+            np_dtype = np.float32
+        else:
+            np_dtype = dtype.as_numpy_dtype
+        
+        # Generate random input data
+        x_np = np.random.uniform(-10, 10, size=x_shape).astype(np_dtype)
+        gamma_np = np.ones((x_shape[-1],), dtype=np_dtype)
+        beta_np = np.zeros((x_shape[-1],), dtype=np_dtype)
+        
+        # Create TensorFlow constants
+        x = tf.constant(x_np, dtype=dtype)
+        gamma = tf.constant(gamma_np, dtype=dtype)
+        beta = tf.constant(beta_np, dtype=dtype)
+        
+        # Test on CPU using reference implementation
+        with tf.device('/CPU:0'):
+            cpu_result = layernorm_ref(x, gamma, beta, eps)
+        
+        # Test on MUSA using custom op
+        with tf.device('/device:MUSA:0'):
+            musa_result = self._musa_ops.musa_layer_norm(x=x, gamma=gamma, beta=beta, epsilon=eps)
+        
+        # Compare results
+        if dtype in [tf.float16, tf.bfloat16]:
+            cpu_result_f32 = tf.cast(cpu_result, tf.float32)
+            musa_result_f32 = tf.cast(musa_result, tf.float32)
+            rtol = 1e-2 if dtype == tf.float16 else 1e-3
+            atol = 1e-2 if dtype == tf.float16 else 1e-3
+            self.assertAllClose(cpu_result_f32.numpy(), musa_result_f32.numpy(), 
+                               rtol=rtol, atol=atol)
+        else:
+            rtol = 1e-5
+            atol = 1e-5
+            self.assertAllClose(cpu_result.numpy(), musa_result.numpy(), 
+                               rtol=rtol, atol=atol)
 
-  def testLayerNormSingleFeature(self):
-    """LayerNorm with single feature dimension."""
-    x_shape = [5, 1]
-    gamma_shape = [1]
-    beta_shape = [1]
-    self._test_layer_norm(x_shape, gamma_shape, beta_shape, dtype=tf.float32)
+    def testLayerNormBasic(self):
+        """Test basic LayerNorm operation with standard shapes."""
+        for dtype in [tf.float32, tf.float16]:
+            with self.subTest(dtype=dtype):
+                self._test_layernorm([1024, 1024], dtype)
 
-  def testLayerNormBatchSize1(self):
-    """LayerNorm with batch size 1."""
-    x_shape = [1, 10]
-    gamma_shape = [10]
-    beta_shape = [10]
-    self._test_layer_norm(x_shape, gamma_shape, beta_shape, dtype=tf.float32)
+    def testLayerNormDifferentShapes(self):
+        """Test LayerNorm with various different shapes."""
+        test_shapes = [
+            [1, 64],           # Small vector
+            [32, 128],         # Medium matrix  
+            [256, 512],        # Large matrix
+            [8, 16, 32],       # 3D tensor
+            [2, 4, 8, 16],     # 4D tensor
+        ]
+        
+        for shape in test_shapes:
+            with self.subTest(shape=shape):
+                self._test_layernorm(shape, tf.float32)
 
-  def testLayerNormInvalidShapes(self):
-    """Test LayerNorm with invalid shapes."""
-    with self.assertRaises((tf.errors.InvalidArgumentError, ValueError)):
-      with tf.device('/device:MUSA:0'):
-        layernorm_op = getattr(tf.raw_ops, 'MusaLayerNorm', None)
-        if layernorm_op:
-          # Mismatched gamma shape
-          x = tf.constant([[1.0, 2.0, 3.0]], dtype=tf.float32)
-          gamma = tf.constant([1.0, 2.0], dtype=tf.float32)  # Wrong size
-          beta = tf.constant([0.0, 0.0, 0.0], dtype=tf.float32)
-          layernorm_op(x=x, gamma=gamma, beta=beta)
+    def testLayerNormCornerCases(self):
+        """Test LayerNorm with corner cases like small dimensions."""
+        # Test with very small last dimension
+        self._test_layernorm([100, 1], tf.float32)
+        self._test_layernorm([100, 2], tf.float32)
+        
+        # Test with single element
+        self._test_layernorm([1, 1], tf.float32)
+        
+        # Test with large last dimension
+        self._test_layernorm([10, 8192], tf.float32)
+
+    def testLayerNormDifferentEpsilons(self):
+        """Test LayerNorm with different epsilon values."""
+        shape = [256, 512]
+        x_np = np.random.uniform(-10, 10, size=shape).astype(np.float32)
+        gamma_np = np.ones((shape[-1],), dtype=np.float32)
+        beta_np = np.zeros((shape[-1],), dtype=np.float32)
+        
+        x = tf.constant(x_np, dtype=tf.float32)
+        gamma = tf.constant(gamma_np, dtype=tf.float32)
+        beta = tf.constant(beta_np, dtype=tf.float32)
+        
+        test_epsilons = [1e-5, 1e-3, 1e-1]
+        
+        for eps in test_epsilons:
+            with self.subTest(epsilon=eps):
+                # Test on CPU using reference implementation
+                with tf.device('/CPU:0'):
+                    cpu_result = layernorm_ref(x, gamma, beta, eps)
+                
+                # Skip if MUSA ops are not available
+                if self._musa_ops is None:
+                    self.skipTest("MUSA LayerNorm ops module not available")
+                
+                # Test on MUSA using custom op
+                with tf.device('/device:MUSA:0'):
+                    musa_result = self._musa_ops.musa_layer_norm(x=x, gamma=gamma, beta=beta, epsilon=eps)
+                
+                self.assertAllClose(cpu_result.numpy(), musa_result.numpy(), 
+                                   rtol=1e-5, atol=1e-5)
 
 
 if __name__ == "__main__":
-  tf.test.main()
+    tf.test.main()

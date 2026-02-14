@@ -1,0 +1,40 @@
+#!/bin/bash
+# Branch protection pre-push hook
+# Prevents direct pushes to protected branches (master, main, develop)
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Protected branches pattern
+PROTECTED_BRANCHES="^(master|main|develop)$"
+
+echo "🔍 Checking branch protection..."
+
+# Get the current branch being pushed
+while read local_ref local_sha remote_ref remote_sha
+do
+    # Extract branch name from ref (remove refs/heads/ prefix)
+    if [[ "$remote_ref" == refs/heads/* ]]; then
+        branch_name="${remote_ref#refs/heads/}"
+
+        # Check if branch is protected
+        if [[ "$branch_name" =~ $PROTECTED_BRANCHES ]]; then
+            echo -e "${RED}❌ ERROR: Direct push to protected branch '$branch_name' is not allowed!${NC}"
+            echo -e "${YELLOW}💡 Please follow the correct workflow:${NC}"
+            echo -e "   1. Create a feature branch: git checkout -b feature/your-feature-name"
+            echo -e "   2. Make your changes and commit"
+            echo -e "   3. Push your feature branch: git push origin feature/your-feature-name"
+            echo -e "   4. Create a Merge Request/Pull Request through GitLab/GitHub"
+            echo ""
+            exit 1
+        fi
+    fi
+done
+
+echo -e "${GREEN}✅ Branch protection check passed!${NC}"
+exit 0

@@ -12,12 +12,41 @@ TensorFlow MUSA Extension 是一个高性能的 TensorFlow 插件，专为摩尔
 
 ## 快速开始
 
+### 目录结构
+
+```
+tensorflow_musa_extension/
+├── CMakeLists.txt          # CMake 构建配置
+├── build.sh                # 构建脚本
+├── .clang-format           # 代码格式化配置
+├── .pre-commit-config.yaml # pre-commit 钩子配置
+├── .gitlab-ci.yml          # CI/CD 配置
+├── musa_ext/               # 核心源码目录
+│   ├── kernels/            # MUSA 内核实现
+│   ├── mu/                 # MUSA 设备和优化器实现
+│   └── utils/              # 工具函数
+└── test/                   # 测试用例
+    ├── musa_test_utils.py  # 测试工具
+    └── *_test.py           # 各算子测试文件
+```
+
 ### 环境要求
 
-- TensorFlow 2.x
-- 摩尔线程 MUSA 驱动和 SDK
-- CMake 3.15+
-- GCC/G++ 7.0+
+- **构建工具**:
+  - CMake (版本 >= 3.10)
+  - Make
+- **MUSA SDK**:
+  - MUSA Runtime (>= 1.0)
+  - muBLAS 库
+  - muDNN 库
+  - 默认安装路径: `/usr/local/musa`
+- **Python 依赖**
+  - Python: >= 3.7
+  - TensorFlow: == 2.4.4
+  - NumPy: >= 1.19.0
+- **开发工具**:
+  - pre-commit >= 3.0.0
+  - pytest >= 6.0.0
 
 ### 安装
 
@@ -63,34 +92,6 @@ tf.load_library("./build/libmusa_plugin.so")
 ```python
 import tensorflow as tf
 tf.load_library("/path/to/tensorflow_musa_extension/build/libmusa_plugin.so")
-```
-
-## 目录结构
-
-```
-tensorflow_musa_extension/
-├── tensorflow_musa/          # 核心实现目录
-│   ├── kernels/             # 算子实现
-│   │   ├── musa_*_op.cc     # 各类算子的具体实现
-│   │   └── utils_op.h       # 算子工具函数
-│   ├── mu/                  # MUSA 设备核心组件
-│   │   ├── device/          # 设备底层实现
-│   │   │   ├── musa_device.h    # 设备注册和管理
-│   │   │   ├── musa_allocator.h # 内存分配器
-│   │   │   ├── musa_memcpy.h    # 内存拷贝操作
-│   │   │   └── musa_stream.h    # 流式处理支持
-│   │   ├── optimizer/       # 图优化模块
-│   │   │   ├── musa_layout_optimizer.cc  # Layout 自动优化
-│   │   │   ├── musa_remapper_optimizer.cc # 算子融合优化
-│   │   │   └── musa_amp_optimizer.cc     # 自动混合精度优化
-│   │   ├── device_register.cc   # 设备注册逻辑
-│   │   └── kernel_register.cc   # 算子注册逻辑
-│   └── utils/               # 工具函数
-│       └── logging.h        # 日志工具
-├── test/                    # 功能测试脚本
-│   └── test_*.py            # 各算子的单元测试
-├── build.sh                 # 自动化构建脚本
-└── README.md                # 项目文档
 ```
 
 ## 测试

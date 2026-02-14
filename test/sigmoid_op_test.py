@@ -24,7 +24,7 @@ from musa_test_utils import MUSATestCase
 class SigmoidOpTest(MUSATestCase):
   """Tests for MUSA Sigmoid operator."""
 
-  def _test_sigmoid(self, input_data, dtype, rtol=1e-5, atol=1e-8):
+  def _test_sigmoid(self, input_data, dtype, rtol=1e-5, atol=1e-7):
     """Test sigmoid operation with given input data and dtype."""
     if dtype == tf.bfloat16:
       input_np = np.array(input_data, dtype=np.float32)

@@ -1,19 +1,17 @@
 #ifndef MUSA_PLUGIN_SRC_KERNELS_UTILS_H_
 #define MUSA_PLUGIN_SRC_KERNELS_UTILS_H_
 
+#include <mudnn.h>
+
 #include <vector>
-#include "tensorflow/core/framework/tensor.h"
-#include "tensorflow/core/framework/op_kernel.h"
 
 #include "mu/device/musa_device.h"
-#include <mudnn.h>
 #include "mu/kernel_register.h"
+#include "tensorflow/core/framework/op_kernel.h"
+#include "tensorflow/core/framework/tensor.h"
 #define DEVICE_MTGPU "MUSA"
 namespace tensorflow {
 namespace musa {
-	
-
-
 
 using mHandle = ::musa::dnn::Handle;
 using mTensor = ::musa::dnn::Tensor;
@@ -66,26 +64,22 @@ class MusaOpKernel : public OpKernel {
   }
 
  protected:
-  mFormat format_; 
+  mFormat format_;
 };
 
 MusaDevice* GetDeviceByCtx(tensorflow::OpKernelContext* context);
 
-// 在 utils_op.h 中
-inline ::musa::dnn::Handle& GetHandleByCtx(tensorflow::OpKernelContext* context) {
-    auto* musa_device = static_cast<MusaDevice*>(context->device());
-    int device_id = musa_device->get_device_id();
-    
-    // 【核心保底】每次获取 Handle 时，强行校准当前线程的物理设备 ID
-    // 解决 TensorFlow 线程池随机分配导致的 Context 不匹配问题
-    musaSetDevice(device_id); 
-    
-    return musa_device->mudnn_handle();
+inline ::musa::dnn::Handle& GetHandleByCtx(
+    tensorflow::OpKernelContext* context) {
+  auto* musa_device = static_cast<MusaDevice*>(context->device());
+  int device_id = musa_device->get_device_id();
+
+  musaSetDevice(device_id);
+
+  return musa_device->mudnn_handle();
 }
 
 }  // namespace musa
 }  // namespace tensorflow
 
-#endif // MUSA_PLUGIN_SRC_KERNELS_UTILS_H_
-
-
+#endif  // MUSA_PLUGIN_SRC_KERNELS_UTILS_H_

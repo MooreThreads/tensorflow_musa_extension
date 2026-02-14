@@ -28,25 +28,23 @@ class BroadcastGradientArgsOp : public OpKernel {
     BCast bcast(BCast::FromShape(shape0), BCast::FromShape(shape1));
 
     if (!bcast.IsValid()) {
-      ctx->SetStatus(errors::InvalidArgument(
-          "Incompatible shapes: [", s0.SummarizeValue(10), "] vs. [",
-          s1.SummarizeValue(10), "]"));
+      ctx->SetStatus(errors::InvalidArgument("Incompatible shapes: [",
+                                             s0.SummarizeValue(10), "] vs. [",
+                                             s1.SummarizeValue(10), "]"));
       return;
     }
 
     // Allocate outputs
     Tensor* r0 = nullptr;
     Tensor* r1 = nullptr;
-    
-    // The output indices are usually small, so we compute them on CPU 
-    // and populate the output tensors.
-    // Since we enforce HostMemory in registration, these outputs will reside in host memory.
-    
+
     const size_t len0 = bcast.grad_x_reduce_idx().size();
     const size_t len1 = bcast.grad_y_reduce_idx().size();
 
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, TensorShape({static_cast<int64_t>(len0)}), &r0));
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(1, TensorShape({static_cast<int64_t>(len1)}), &r1));
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(
+                            0, TensorShape({static_cast<int64_t>(len0)}), &r0));
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(
+                            1, TensorShape({static_cast<int64_t>(len1)}), &r1));
 
     auto r0_vec = r0->vec<T>();
     auto r1_vec = r1->vec<T>();
@@ -60,20 +58,14 @@ class BroadcastGradientArgsOp : public OpKernel {
   }
 };
 
-// Register the kernel.
-// Important: BroadcastGradientArgs usually takes shape inputs (int32/int64) and produces 
-// reduction indices (int32/int64). These are metadata operations. 
-// Even if the Op is placed on MUSA, the inputs and outputs are shapes, so we strictly 
-// use HostMemory to avoid unnecessary H2D and D2H copies for shape logic.
-
-#define REGISTER_MUSA_BCAST_GRAD_ARGS(type)                            \
-  REGISTER_KERNEL_BUILDER(Name("BroadcastGradientArgs")                \
-                              .Device("MUSA")                          \
-                              .TypeConstraint<type>("T")               \
-                              .HostMemory("s0")                        \
-                              .HostMemory("s1")                        \
-                              .HostMemory("r0")                        \
-                              .HostMemory("r1"),                       \
+#define REGISTER_MUSA_BCAST_GRAD_ARGS(type)              \
+  REGISTER_KERNEL_BUILDER(Name("BroadcastGradientArgs")  \
+                              .Device("MUSA")            \
+                              .TypeConstraint<type>("T") \
+                              .HostMemory("s0")          \
+                              .HostMemory("s1")          \
+                              .HostMemory("r0")          \
+                              .HostMemory("r1"),         \
                           BroadcastGradientArgsOp<type>)
 
 REGISTER_MUSA_BCAST_GRAD_ARGS(int32);
@@ -81,5 +73,5 @@ REGISTER_MUSA_BCAST_GRAD_ARGS(int64);
 
 #undef REGISTER_MUSA_BCAST_GRAD_ARGS
 
-} // namespace musa
-} // namespace tensorflow
+}  // namespace musa
+}  // namespace tensorflow

@@ -1,16 +1,14 @@
+#include "tensorflow/core/framework/bounds_check.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_slice.h"
 #include "tensorflow/core/framework/types.h"
-#include "tensorflow/core/framework/bounds_check.h"
-#include "tensorflow/core/util/tensor_bundle/tensor_bundle.h"
-#include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/lib/core/status.h"
-#include "tensorflow/core/platform/stream_executor.h" 
-
-
+#include "tensorflow/core/platform/env.h"
+#include "tensorflow/core/platform/stream_executor.h"
 #include "tensorflow/core/util/saved_tensor_slice_util.h"
+#include "tensorflow/core/util/tensor_bundle/tensor_bundle.h"
 
 namespace tensorflow {
 namespace musa {
@@ -35,7 +33,8 @@ class MusaRestoreV2Op : public OpKernel {
 
     int num_tensors = tensor_names.NumElements();
     OP_REQUIRES(ctx, shape_and_slices.NumElements() == num_tensors,
-                errors::InvalidArgument("shape_and_slices must match tensor_names size"));
+                errors::InvalidArgument(
+                    "shape_and_slices must match tensor_names size"));
     OP_REQUIRES(ctx, dtypes_.size() == num_tensors,
                 errors::InvalidArgument("dtypes must match tensor_names size"));
 
@@ -43,18 +42,17 @@ class MusaRestoreV2Op : public OpKernel {
     OP_REQUIRES_OK(ctx, reader.status());
 
     auto* stream = ctx->op_device_context()->stream();
-    OP_REQUIRES(ctx, stream != nullptr, errors::Internal("No MUSA stream available"));
+    OP_REQUIRES(ctx, stream != nullptr,
+                errors::Internal("No MUSA stream available"));
 
     for (int i = 0; i < num_tensors; ++i) {
       const string& name = names_flat(i);
       const string& slice_spec = slices_flat(i);
       DataType dtype = dtypes_[i];
 
-      // 1. 获取完整 Shape
       TensorShape full_shape;
       OP_REQUIRES_OK(ctx, reader.LookupTensorShape(name, &full_shape));
 
-      // 2. 解析切片并计算目标 Shape
       TensorShape target_shape;
 
       TensorSlice slice(full_shape.dims());
@@ -64,18 +62,20 @@ class MusaRestoreV2Op : public OpKernel {
         TensorShape parsed_shape;
         TensorSlice parsed_slice;
         TensorShape parsed_shape_slice;
-        
-   
-        Status s = checkpoint::ParseShapeAndSlice(slice_spec, &parsed_shape, &parsed_slice, &parsed_shape_slice);
-        
+
+        Status s = checkpoint::ParseShapeAndSlice(
+            slice_spec, &parsed_shape, &parsed_slice, &parsed_shape_slice);
+
         if (s.ok()) {
-            slice = parsed_slice;
-            if (parsed_shape.dims() > 0 && parsed_shape != full_shape) {
-                 OP_REQUIRES(ctx, false, errors::InvalidArgument(
-                     "Shape in shape_and_slice spec does not match the shape in the checkpoint file."));
-            }
+          slice = parsed_slice;
+          if (parsed_shape.dims() > 0 && parsed_shape != full_shape) {
+            OP_REQUIRES(ctx, false,
+                        errors::InvalidArgument(
+                            "Shape in shape_and_slice spec does not match the "
+                            "shape in the checkpoint file."));
+          }
         } else {
-            OP_REQUIRES_OK(ctx, TensorSlice::Parse(slice_spec, &slice));
+          OP_REQUIRES_OK(ctx, TensorSlice::Parse(slice_spec, &slice));
         }
 
         OP_REQUIRES_OK(ctx, slice.SliceTensorShape(full_shape, &target_shape));
@@ -83,37 +83,33 @@ class MusaRestoreV2Op : public OpKernel {
         target_shape = full_shape;
       }
 
-      // 3. 分配 MUSA 输出内存
       Tensor* output_tensor = nullptr;
-      OP_REQUIRES_OK(ctx, ctx->allocate_output(i, target_shape, &output_tensor));
+      OP_REQUIRES_OK(ctx,
+                     ctx->allocate_output(i, target_shape, &output_tensor));
 
       if (target_shape.num_elements() == 0) continue;
 
-      // 4. 分配 CPU 临时内存 
       Tensor cpu_tensor;
       AllocatorAttributes cpu_alloc_attr;
       cpu_alloc_attr.set_on_host(true);
-      cpu_alloc_attr.set_gpu_compatible(true); 
-      OP_REQUIRES_OK(ctx, ctx->allocate_temp(dtype, target_shape, &cpu_tensor, cpu_alloc_attr));
+      cpu_alloc_attr.set_gpu_compatible(true);
+      OP_REQUIRES_OK(ctx, ctx->allocate_temp(dtype, target_shape, &cpu_tensor,
+                                             cpu_alloc_attr));
 
-      // 5. 读取数据
       if (is_slice) {
-          
-          OP_REQUIRES_OK(ctx, reader.LookupSlice(name, slice, &cpu_tensor));
+        OP_REQUIRES_OK(ctx, reader.LookupSlice(name, slice, &cpu_tensor));
       } else {
-          // 全量读取
-          OP_REQUIRES_OK(ctx, reader.Lookup(name, &cpu_tensor));
+        OP_REQUIRES_OK(ctx, reader.Lookup(name, &cpu_tensor));
       }
 
-      // 6. 内存拷贝 (直接拷贝，无需计算偏移)
       const void* src_ptr = cpu_tensor.data();
       void* dst_ptr = output_tensor->data();
-      uint64 copy_size_bytes = target_shape.num_elements() * DataTypeSize(dtype);
-      
+      uint64 copy_size_bytes =
+          target_shape.num_elements() * DataTypeSize(dtype);
+
       se::DeviceMemoryBase dst_mem(dst_ptr, copy_size_bytes);
       stream->ThenMemcpy(&dst_mem, src_ptr, copy_size_bytes);
 
-      // 7. 同步等待
       OP_REQUIRES_OK(ctx, stream->BlockHostUntilDone());
     }
   }
@@ -129,5 +125,5 @@ REGISTER_KERNEL_BUILDER(Name("RestoreV2")
                             .HostMemory("shape_and_slices"),
                         MusaRestoreV2Op);
 
-} // namespace musa
-} // namespace tensorflow
+}  // namespace musa
+}  // namespace tensorflow

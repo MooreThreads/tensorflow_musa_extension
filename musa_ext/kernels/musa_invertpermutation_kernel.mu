@@ -1,5 +1,3 @@
-// musa_invert_permutation_kernel.mu
-
 namespace tensorflow {
 namespace musa {
 
@@ -14,7 +12,6 @@ __global__ void InvertPermutationKernel(
     }
 }
 
-// --- Launcher 函数（在 .mu 中定义）---
 template <typename T>
 void MusaInvertPermutationKernelLauncher(
     const void* perm, void* inv_perm, int64_t n, musaStream_t stream) {

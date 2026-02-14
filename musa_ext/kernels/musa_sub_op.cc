@@ -1,7 +1,6 @@
-/* Copyright @2020-2026 Moore Threads Technology Co., Ltd. All rights reserved. */
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
-#include "tensorflow/core/util/bcast.h" // 引入广播辅助类
+#include "tensorflow/core/util/bcast.h"
 #include "utils_op.h"
 
 namespace tensorflow {
@@ -16,21 +15,22 @@ class MusaSubOp : public MusaOpKernel {
     const Tensor& in0 = ctx->input(0);
     const Tensor& in1 = ctx->input(1);
 
-    // --- 1. 使用 Add 中那套成熟的广播形状计算逻辑 ---
     const int dims0 = in0.dims();
     const int dims1 = in1.dims();
     const int out_dims = std::max(dims0, dims1);
     TensorShape output_shape;
 
     for (int i = 0; i < out_dims; ++i) {
-        int d0 = (i < out_dims - dims0) ? 1 : in0.dim_size(i - (out_dims - dims0));
-        int d1 = (i < out_dims - dims1) ? 1 : in1.dim_size(i - (out_dims - dims1));
-        if (d0 == d1 || d0 == 1 || d1 == 1) {
-            output_shape.AddDim(std::max(d0, d1));
-        } else {
-            ctx->CtxFailure(errors::InvalidArgument("Incompatible shapes"));
-            return;
-        }
+      int d0 =
+          (i < out_dims - dims0) ? 1 : in0.dim_size(i - (out_dims - dims0));
+      int d1 =
+          (i < out_dims - dims1) ? 1 : in1.dim_size(i - (out_dims - dims1));
+      if (d0 == d1 || d0 == 1 || d1 == 1) {
+        output_shape.AddDim(std::max(d0, d1));
+      } else {
+        ctx->CtxFailure(errors::InvalidArgument("Incompatible shapes"));
+        return;
+      }
     }
 
     Tensor* out = nullptr;
@@ -39,37 +39,33 @@ class MusaSubOp : public MusaOpKernel {
 
     auto& handle = GetHandleByCtx(ctx);
 
-    // --- 2. 保持 CreateMTensor 简单调用 ---
     mTensor t0 = CreateMTensor(in0);
     mTensor t1 = CreateMTensor(in1);
     mTensor t_out = CreateMTensor(*out);
 
-    // --- 3. 唯二的区别：Mode 设为 SUB ---
     ::musa::dnn::Binary op;
-    op.SetMode(::musa::dnn::Binary::Mode::SUB); 
+    op.SetMode(::musa::dnn::Binary::Mode::SUB);
 
     auto status = op.Run(handle, t_out, t0, t1);
     OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
                 errors::Internal("MUSA Sub execution failed."));
-}
+  }
 };
 
-// --- 注册算子 ---
-// 减法在 TF 中通常有 Sub 和 SubV2 两个名称
-#define REGISTER_MUSA_SUB(TYPE)                                               \
-  REGISTER_KERNEL_BUILDER(                                                    \
-      Name("Sub").Device(DEVICE_MTGPU).TypeConstraint<TYPE>("T"), MusaSubOp<TYPE>); \
-  REGISTER_KERNEL_BUILDER(                                                    \
-      Name("SubV2").Device(DEVICE_MTGPU).TypeConstraint<TYPE>("T"), MusaSubOp<TYPE>);
+#define REGISTER_MUSA_SUB(TYPE)                                     \
+  REGISTER_KERNEL_BUILDER(                                          \
+      Name("Sub").Device(DEVICE_MTGPU).TypeConstraint<TYPE>("T"),   \
+      MusaSubOp<TYPE>);                                             \
+  REGISTER_KERNEL_BUILDER(                                          \
+      Name("SubV2").Device(DEVICE_MTGPU).TypeConstraint<TYPE>("T"), \
+      MusaSubOp<TYPE>);
 
 REGISTER_MUSA_SUB(float);
 REGISTER_MUSA_SUB(int32);
 REGISTER_MUSA_SUB(int64);
-REGISTER_MUSA_SUB(Eigen::half);     // FP16
-REGISTER_MUSA_SUB(bfloat16);        // BF16
+REGISTER_MUSA_SUB(Eigen::half);  // FP16
+REGISTER_MUSA_SUB(bfloat16);     // BF16
 REGISTER_MUSA_SUB(double);
 
-} // namespace musa
-} // namespace tensorflow
-
-
+}  // namespace musa
+}  // namespace tensorflow

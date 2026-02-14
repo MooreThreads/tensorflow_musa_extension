@@ -1,6 +1,6 @@
+#include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
-#include "tensorflow/core/framework/bfloat16.h"
 #include "utils_op.h"
 
 namespace tensorflow {
@@ -9,21 +9,24 @@ namespace musa {
 template <typename T>
 class MusaSquaredDifferenceOp : public MusaOpKernel {
  public:
-  explicit MusaSquaredDifferenceOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
+  explicit MusaSquaredDifferenceOp(OpKernelConstruction* ctx)
+      : MusaOpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
     const Tensor& in0 = ctx->input(0);
     const Tensor& in1 = ctx->input(1);
 
-    // --- 广播形状计算逻辑 (参照 MusaAddOp) ---
+    // --- 广播形状计算逻辑  ---
     const int dims0 = in0.dims();
     const int dims1 = in1.dims();
     const int out_dims = std::max(dims0, dims1);
     TensorShape output_shape;
 
     for (int i = 0; i < out_dims; ++i) {
-      int d0 = (i < out_dims - dims0) ? 1 : in0.dim_size(i - (out_dims - dims0));
-      int d1 = (i < out_dims - dims1) ? 1 : in1.dim_size(i - (out_dims - dims1));
+      int d0 =
+          (i < out_dims - dims0) ? 1 : in0.dim_size(i - (out_dims - dims0));
+      int d1 =
+          (i < out_dims - dims1) ? 1 : in1.dim_size(i - (out_dims - dims1));
 
       if (d0 == d1) {
         output_shape.AddDim(d0);
@@ -32,9 +35,9 @@ class MusaSquaredDifferenceOp : public MusaOpKernel {
       } else if (d1 == 1) {
         output_shape.AddDim(d0);
       } else {
-        ctx->CtxFailure(errors::InvalidArgument("Incompatible shapes: ",
-                                                in0.shape().DebugString(), " and ",
-                                                in1.shape().DebugString()));
+        ctx->CtxFailure(errors::InvalidArgument(
+            "Incompatible shapes: ", in0.shape().DebugString(), " and ",
+            in1.shape().DebugString()));
         return;
       }
     }
@@ -43,7 +46,8 @@ class MusaSquaredDifferenceOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &out));
 
     // 判空处理
-    if (in0.NumElements() == 0 || in1.NumElements() == 0 || output_shape.num_elements() == 0) {
+    if (in0.NumElements() == 0 || in1.NumElements() == 0 ||
+        output_shape.num_elements() == 0) {
       return;
     }
 
@@ -54,7 +58,7 @@ class MusaSquaredDifferenceOp : public MusaOpKernel {
     mTensor t_out = CreateMTensor(*out, format_);
 
     // --- MUSA 逻辑: (in0 - in1)^2 ---
-    
+
     // 第一步: SUB
     ::musa::dnn::Binary binary_op;
     binary_op.SetMode(::musa::dnn::Binary::Mode::SUB);
@@ -72,9 +76,9 @@ class MusaSquaredDifferenceOp : public MusaOpKernel {
 };
 
 // 注册算子
-#define REGISTER_MUSA_SQUARED_DIFF(TYPE)                                     \
-  REGISTER_KERNEL_BUILDER(                                                   \
-      Name("SquaredDifference").Device("MUSA").TypeConstraint<TYPE>("T"),    \
+#define REGISTER_MUSA_SQUARED_DIFF(TYPE)                                  \
+  REGISTER_KERNEL_BUILDER(                                                \
+      Name("SquaredDifference").Device("MUSA").TypeConstraint<TYPE>("T"), \
       MusaSquaredDifferenceOp<TYPE>);
 
 REGISTER_MUSA_SQUARED_DIFF(float);
@@ -83,5 +87,5 @@ REGISTER_MUSA_SQUARED_DIFF(int64);
 REGISTER_MUSA_SQUARED_DIFF(Eigen::half);
 REGISTER_MUSA_SQUARED_DIFF(bfloat16);
 
-} // namespace musa
-} // namespace tensorflow
+}  // namespace musa
+}  // namespace tensorflow

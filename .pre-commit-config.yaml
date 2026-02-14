@@ -1,7 +1,36 @@
 repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      # Essential security and quality checks
+      - id: check-merge-conflict     # Check for merge conflict markers
+      - id: detect-private-key       # Detects private keys
+      
+      # Basic code formatting (essential for consistency)
+      - id: end-of-file-fixer        # Makes sure files end in a newline and only a newline
+      - id: trailing-whitespace      # Trims trailing whitespace
+
+      # Line endings - allow both CRLF and LF to be friendly to Windows contributors
+      - id: mixed-line-ending        # Ensures consistent line endings
+        args: [--fix=no]             # Don't auto-fix, let Git handle it
+
+  - repo: https://github.com/jorisroovers/gitlint
+    rev: v0.19.1
+    hooks:
+      # Keep commit message validation but make it less strict
+      # This will run in CI as well, so local enforcement is optional
+      - id: gitlint
+        name: Check commit message format
+        entry: gitlint --config .gitlint
+        description: "Check that commit message follows conventional commit format"
+        stages: [commit-msg]
+        verbose: true  # Show what's being checked
+
   - repo: https://github.com/pre-commit/mirrors-clang-format
     rev: v18.1.8  # 根据你安装的 clang-format 版本调整
     hooks:
       - id: clang-format
         types_or: [c++, c]
         args: [-style=file, -i]
+        # Only run on files that are actually modified
+        pass_filenames: true

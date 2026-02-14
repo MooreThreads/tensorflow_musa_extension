@@ -13,7 +13,7 @@ class MusaOptimizationPass : public GraphOptimizationPass {
   ~MusaOptimizationPass() override = default;
 
   Status Run(const GraphOptimizationPassOptions& options) override;
-  
+
  private:
   Node* FindNode(Graph* graph, const std::string& name);
   int CountConsumers(Node* node);

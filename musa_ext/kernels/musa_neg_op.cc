@@ -1,13 +1,14 @@
+#include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
-#include "tensorflow/core/framework/bfloat16.h"
 #include "utils_op.h"
 
 namespace tensorflow {
 namespace musa {
 
 template <typename T>
-void MusaNegKernelLauncher(const void* in, void* out, int size, musaStream_t stream);
+void MusaNegKernelLauncher(const void* in, void* out, int size,
+                           musaStream_t stream);
 
 template <typename T>
 class MusaNegOp : public MusaOpKernel {
@@ -25,20 +26,15 @@ class MusaNegOp : public MusaOpKernel {
     auto& handle = GetHandleByCtx(ctx);
     musaStream_t stream = (musaStream_t)handle.GetStream();
 
-    MusaNegKernelLauncher<T>(
-        input.tensor_data().data(),
-        const_cast<char*>(output->tensor_data().data()),
-        input.NumElements(),
-        stream
-    );
+    MusaNegKernelLauncher<T>(input.tensor_data().data(),
+                             const_cast<char*>(output->tensor_data().data()),
+                             input.NumElements(), stream);
   }
 };
 
-#define REGISTER_MUSA_NEG(TYPE)                                \
-  REGISTER_KERNEL_BUILDER(Name("Neg")                          \
-                              .Device("MUSA")                  \
-                              .TypeConstraint<TYPE>("T"),      \
-                          MusaNegOp<TYPE>)
+#define REGISTER_MUSA_NEG(TYPE) \
+  REGISTER_KERNEL_BUILDER(      \
+      Name("Neg").Device("MUSA").TypeConstraint<TYPE>("T"), MusaNegOp<TYPE>)
 
 REGISTER_MUSA_NEG(float);
 REGISTER_MUSA_NEG(double);
@@ -49,6 +45,5 @@ REGISTER_MUSA_NEG(bfloat16);
 
 #undef REGISTER_MUSA_NEG
 
-} // namespace musa
-} // namespace tensorflow
-
+}  // namespace musa
+}  // namespace tensorflow

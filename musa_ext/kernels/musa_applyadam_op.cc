@@ -1,13 +1,14 @@
+#include <cmath>
+#include <list>
+
+#include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/resource_mgr.h"
 #include "tensorflow/core/framework/resource_var.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.h"
-#include "tensorflow/core/framework/bfloat16.h"
 #include "utils_op.h"
-#include <cmath>
-#include <list>
 
 namespace tensorflow {
 namespace musa {
@@ -21,8 +22,9 @@ class MusaApplyAdamOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
-    // 1. 资源获取与严谨性检查
-    Var* var = nullptr; Var* m = nullptr; Var* v = nullptr;
+    Var* var = nullptr;
+    Var* m = nullptr;
+    Var* v = nullptr;
     OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 0), &var));
     OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 1), &m));
     OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 2), &v));
@@ -32,12 +34,14 @@ class MusaApplyAdamOp : public MusaOpKernel {
     Tensor* m_t = m->tensor();
     Tensor* v_t = v->tensor();
 
-    OP_REQUIRES(ctx, var_t->IsInitialized() && m_t->IsInitialized() && v_t->IsInitialized(),
-                errors::FailedPrecondition("Adam variables (var/m/v) not initialized."));
+    OP_REQUIRES(
+        ctx,
+        var_t->IsInitialized() && m_t->IsInitialized() && v_t->IsInitialized(),
+        errors::FailedPrecondition(
+            "Adam variables (var/m/v) not initialized."));
 
-    // 2. 标量输入 (Host Memory)
-    const T beta1_p = ctx->input(3).scalar<T>()(); 
-    const T beta2_p = ctx->input(4).scalar<T>()(); 
+    const T beta1_p = ctx->input(3).scalar<T>()();
+    const T beta2_p = ctx->input(4).scalar<T>()();
     const T lr = ctx->input(5).scalar<T>()();
     const T beta1 = ctx->input(6).scalar<T>()();
     const T beta2 = ctx->input(7).scalar<T>()();
@@ -45,7 +49,7 @@ class MusaApplyAdamOp : public MusaOpKernel {
     const Tensor& grad = ctx->input(9);
 
     auto& handle = GetHandleByCtx(ctx);
-    std::list<Tensor> temp_storage; 
+    std::list<Tensor> temp_storage;
 
     mTensor t_var = CreateMTensor(*var_t, format_);
     mTensor t_m = CreateMTensor(*m_t, format_);
@@ -53,91 +57,79 @@ class MusaApplyAdamOp : public MusaOpKernel {
     mTensor t_grad = CreateMTensor(grad, format_);
 
     auto fill_scalar = [&](T val, const TensorShape& shape, mTensor* out) {
-        temp_storage.emplace_back();
-        ctx->allocate_temp(DataTypeToEnum<T>::value, shape, &temp_storage.back());
-        *out = CreateMTensor(temp_storage.back(), format_);
-        ::musa::dnn::Fill f; 
-        f.SetValue(static_cast<float>(val));
-        return f.Run(handle, *out);
+      temp_storage.emplace_back();
+      ctx->allocate_temp(DataTypeToEnum<T>::value, shape, &temp_storage.back());
+      *out = CreateMTensor(temp_storage.back(), format_);
+      ::musa::dnn::Fill f;
+      f.SetValue(static_cast<float>(val));
+      return f.Run(handle, *out);
     };
 
     ::musa::dnn::Binary b_op;
 
-    //b_op.SetAllowTF32(false); 
-
     ::musa::dnn::Unary u_op;
- 
-    // u_op.SetAllowTF32(false);
 
-    // 3. 数学公式：Alpha 计算
-    double alpha_val = static_cast<double>(lr) * std::sqrt(1.0 - static_cast<double>(beta2_p)) / 
-                        (1.0 - static_cast<double>(beta1_p));
-    
-    // 调试日志
-    LOG(INFO) << ">>>>> [MUSA_DEBUG] Adam Alpha: " << alpha_val 
-              << " num_outputs: " << ctx->num_outputs();
+    double alpha_val = static_cast<double>(lr) *
+                       std::sqrt(1.0 - static_cast<double>(beta2_p)) /
+                       (1.0 - static_cast<double>(beta1_p));
 
-    // 4. Adam 计算逻辑 (Manual Math)
-    // --- Step A: Update m ---
     mTensor t_b1, t_inv_b1;
     fill_scalar(beta1, m_t->shape(), &t_b1);
     fill_scalar(static_cast<T>(1.0) - beta1, grad.shape(), &t_inv_b1);
     b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    b_op.Run(handle, t_m, t_m, t_b1); 
+    b_op.Run(handle, t_m, t_m, t_b1);
     temp_storage.emplace_back();
-    ctx->allocate_temp(DataTypeToEnum<T>::value, grad.shape(), &temp_storage.back());
+    ctx->allocate_temp(DataTypeToEnum<T>::value, grad.shape(),
+                       &temp_storage.back());
     mTensor t_g_scaled = CreateMTensor(temp_storage.back(), format_);
-    b_op.Run(handle, t_g_scaled, t_grad, t_inv_b1); 
+    b_op.Run(handle, t_g_scaled, t_grad, t_inv_b1);
     b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    b_op.Run(handle, t_m, t_m, t_g_scaled); 
+    b_op.Run(handle, t_m, t_m, t_g_scaled);
 
-    // --- Step B: Update v ---
     mTensor t_b2, t_inv_b2;
     fill_scalar(beta2, v_t->shape(), &t_b2);
     fill_scalar(static_cast<T>(1.0) - beta2, grad.shape(), &t_inv_b2);
     b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    b_op.Run(handle, t_v, t_v, t_b2); 
+    b_op.Run(handle, t_v, t_v, t_b2);
     temp_storage.emplace_back();
-    ctx->allocate_temp(DataTypeToEnum<T>::value, grad.shape(), &temp_storage.back());
+    ctx->allocate_temp(DataTypeToEnum<T>::value, grad.shape(),
+                       &temp_storage.back());
     mTensor t_g2 = CreateMTensor(temp_storage.back(), format_);
-    b_op.Run(handle, t_g2, t_grad, t_grad);; 
+    b_op.Run(handle, t_g2, t_grad, t_grad);
+    ;
     temp_storage.emplace_back();
-    ctx->allocate_temp(DataTypeToEnum<T>::value, grad.shape(), &temp_storage.back());
+    ctx->allocate_temp(DataTypeToEnum<T>::value, grad.shape(),
+                       &temp_storage.back());
     mTensor t_g2_scaled = CreateMTensor(temp_storage.back(), format_);
-    b_op.Run(handle, t_g2_scaled, t_g2, t_inv_b2); 
+    b_op.Run(handle, t_g2_scaled, t_g2, t_inv_b2);
     b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    b_op.Run(handle, t_v, t_v, t_g2_scaled); 
+    b_op.Run(handle, t_v, t_v, t_g2_scaled);
 
-    // --- Step C: Update var ---
     temp_storage.emplace_back();
-    ctx->allocate_temp(DataTypeToEnum<T>::value, v_t->shape(), &temp_storage.back());
+    ctx->allocate_temp(DataTypeToEnum<T>::value, v_t->shape(),
+                       &temp_storage.back());
     mTensor t_sqrt_v = CreateMTensor(temp_storage.back(), format_);
     u_op.SetMode(::musa::dnn::Unary::Mode::SQRT);
-    u_op.Run(handle, t_sqrt_v, t_v); 
+    u_op.Run(handle, t_sqrt_v, t_v);
     mTensor t_eps;
     fill_scalar(epsilon, v_t->shape(), &t_eps);
     b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    b_op.Run(handle, t_sqrt_v, t_sqrt_v, t_eps); 
+    b_op.Run(handle, t_sqrt_v, t_sqrt_v, t_eps);
     b_op.SetMode(::musa::dnn::Binary::Mode::DIV);
-    b_op.Run(handle, t_sqrt_v, t_m, t_sqrt_v); 
+    b_op.Run(handle, t_sqrt_v, t_m, t_sqrt_v);
     mTensor t_alpha;
     fill_scalar(static_cast<T>(alpha_val), var_t->shape(), &t_alpha);
     b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    b_op.Run(handle, t_sqrt_v, t_sqrt_v, t_alpha); 
+    b_op.Run(handle, t_sqrt_v, t_sqrt_v, t_alpha);
     b_op.SetMode(::musa::dnn::Binary::Mode::SUB);
-    b_op.Run(handle, t_var, t_var, t_sqrt_v); 
+    b_op.Run(handle, t_var, t_var, t_sqrt_v);
 
-    // =================================================================
-    // 5. 【核心修复】强制适配 Wukong 输出依赖
-    // =================================================================
     if (IsRefType(ctx->input_dtype(0))) {
-        ctx->forward_ref_input_to_ref_output(0, 0);
+      ctx->forward_ref_input_to_ref_output(0, 0);
     } else {
-        // 这里的循环是解决 "Missing 0-th output" 的关键
-        // 即使 num_outputs 看起来是 0，只要图引擎需要，我们就尝试设置
-        for (int i = 0; i < ctx->num_outputs(); ++i) {
-            ctx->set_output(i, ctx->input(i)); 
-        }
+      for (int i = 0; i < ctx->num_outputs(); ++i) {
+        ctx->set_output(i, ctx->input(i));
+      }
     }
   }
 
@@ -146,18 +138,22 @@ class MusaApplyAdamOp : public MusaOpKernel {
   bool use_nesterov_;
 };
 
-#define REGISTER_MUSA(T) \
-  REGISTER_KERNEL_BUILDER(Name("ApplyAdam").Device(DEVICE_MTGPU).TypeConstraint<T>("T") \
-      .HostMemory("beta1_power").HostMemory("beta2_power").HostMemory("lr") \
-      .HostMemory("beta1").HostMemory("beta2").HostMemory("epsilon"), MusaApplyAdamOp<T>); \
-//  REGISTER_KERNEL_BUILDER(Name("ResourceApplyAdam").Device(DEVICE_MTGPU).TypeConstraint<T>("T") \
-//      .HostMemory("beta1_power").HostMemory("beta2_power").HostMemory("lr") \
-  //      .HostMemory("beta1").HostMemory("beta2").HostMemory("epsilon"), MusaApplyAdamOp<T>);
+#define REGISTER_MUSA(T)                                 \
+  REGISTER_KERNEL_BUILDER(Name("ApplyAdam")              \
+                              .Device(DEVICE_MTGPU)      \
+                              .TypeConstraint<T>("T")    \
+                              .HostMemory("beta1_power") \
+                              .HostMemory("beta2_power") \
+                              .HostMemory("lr")          \
+                              .HostMemory("beta1")       \
+                              .HostMemory("beta2")       \
+                              .HostMemory("epsilon"),    \
+                          MusaApplyAdamOp<T>);
 
 REGISTER_MUSA(float);
 REGISTER_MUSA(double);
 REGISTER_MUSA(Eigen::half);
 REGISTER_MUSA(bfloat16);
 
-} // namespace musa
-} // namespace tensorflow
+}  // namespace musa
+}  // namespace tensorflow

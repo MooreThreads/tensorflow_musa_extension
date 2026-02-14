@@ -2,25 +2,30 @@
 #define TENSORFLOW_MUSA_MU1_DEVICE_MUSA_DEVICE_H_
 
 #pragma once
-#include <mudnn.h>
 #include <mublas.h>
+#include <mudnn.h>
 #include <musa_runtime.h>
+
 #include <memory>
+
+#include "mudnn_base.h"
+#include "musa_stream.h"
 #include "tensorflow/core/framework/device.h"
 #include "tensorflow/core/framework/device_base.h"
 #include "tensorflow/stream_executor/stream.h"
-#include "musa_stream.h"
-#include "mudnn_base.h" 
 
 namespace tensorflow {
 namespace musa {
 
 class MusaDeviceContext : public DeviceContext {
  public:
-  explicit MusaDeviceContext(musaStream_t stream, ::stream_executor::StreamExecutor* executor);
+  explicit MusaDeviceContext(musaStream_t stream,
+                             ::stream_executor::StreamExecutor* executor);
   ~MusaDeviceContext() override;
 
-  ::stream_executor::Stream* stream() const override { return official_stream_; }
+  ::stream_executor::Stream* stream() const override {
+    return official_stream_;
+  }
 
   void CopyCPUTensorToDevice(const Tensor* cpu_tensor, Device* device,
                              Tensor* device_tensor, StatusCallback done,
@@ -39,10 +44,12 @@ class MusaDeviceContext : public DeviceContext {
 class MusaDevice : public Device {
  public:
   MusaDevice(Env* env, const DeviceAttributes& attributes, int device_id,
-             ::stream_executor::StreamExecutor* executor); 
+             ::stream_executor::StreamExecutor* executor);  // <--- 新增这个参数
   ~MusaDevice() override;
 
-  const GpuDeviceInfo* tensorflow_gpu_device_info() const override { return &gpu_device_info_; }
+  const GpuDeviceInfo* tensorflow_gpu_device_info() const override {
+    return &gpu_device_info_;
+  }
   Status TryGetDeviceContext(DeviceContext** out_context) override;
   Allocator* GetAllocator(AllocatorAttributes attr) override;
   Status Sync() override;
@@ -50,13 +57,12 @@ class MusaDevice : public Device {
   musaStream_t GetStream() const { return stream_; }
   int get_device_id() const { return device_id_; }
 
-  // 解引用返回句柄
   ::musa::dnn::Handle& mudnn_handle() { return *mudnn_handle_; }
   mublasHandle_t mublas_handle() { return mublas_handle_; }
 
   ::musa::dnn::MemoryMaintainer GetMemMaintainer(
       std::function<::musa::dnn::MemoryHandler(size_t)> func) {
-    return func; 
+    return func;
   }
 
  private:
@@ -66,12 +72,11 @@ class MusaDevice : public Device {
   Allocator* musa_allocator_;
   GpuDeviceInfo gpu_device_info_;
 
-  // 使用智能指针以延迟初始化
   std::unique_ptr<::musa::dnn::Handle> mudnn_handle_;
   mublasHandle_t mublas_handle_;
 };
 
-} // namespace musa
-} // namespace tensorflow
+}  // namespace musa
+}  // namespace tensorflow
 
 #endif

@@ -1,9 +1,9 @@
+#include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/public/version.h"
-#include "utils_op.h" 
-#include "mu/device/musa_memcpy.h"
+#include "utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -15,8 +15,9 @@ class MusaConstOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("value", &proto));
     OP_REQUIRES(ctx, cpu_tensor_.FromProto(*proto),
                 errors::InvalidArgument("Unparseable tensor proto"));
-    OP_REQUIRES(ctx, cpu_tensor_.dtype() == ctx->output_type(0),
-                errors::InvalidArgument("Type mismatch between value and output"));
+    OP_REQUIRES(
+        ctx, cpu_tensor_.dtype() == ctx->output_type(0),
+        errors::InvalidArgument("Type mismatch between value and output"));
   }
 
   void Compute(OpKernelContext* ctx) override {
@@ -29,22 +30,22 @@ class MusaConstOp : public OpKernel {
     const void* src_ptr = cpu_tensor_.tensor_data().data();
     size_t total_bytes = cpu_tensor_.TotalBytes();
 
-    musaError_t err = musaMemcpyAsync(dst_ptr, src_ptr, total_bytes, 
-                                      musaMemcpyHostToDevice, 
-                                      (musaStream_t)handle.GetStream());
+    musaError_t err =
+        musaMemcpyAsync(dst_ptr, src_ptr, total_bytes, musaMemcpyHostToDevice,
+                        (musaStream_t)handle.GetStream());
     OP_REQUIRES(ctx, err == musaSuccess,
-                errors::Internal("MUSA Const H2D Memcpy failed: ", musaGetErrorString(err)));
+                errors::Internal("MUSA Const H2D Memcpy failed: ",
+                                 musaGetErrorString(err)));
   }
 
  private:
   Tensor cpu_tensor_;
 };
 
-#define REGISTER_MUSA_CONST(type)                                     \
-  REGISTER_KERNEL_BUILDER(Name("Const")                               \
-                          .Device(DEVICE_MTGPU)                       \
-                          .TypeConstraint<type>("dtype"),             \
-                          MusaConstOp);
+#define REGISTER_MUSA_CONST(type)                                       \
+  REGISTER_KERNEL_BUILDER(                                              \
+      Name("Const").Device(DEVICE_MTGPU).TypeConstraint<type>("dtype"), \
+      MusaConstOp);
 
 REGISTER_MUSA_CONST(float);
 REGISTER_MUSA_CONST(double);
@@ -64,5 +65,5 @@ REGISTER_MUSA_CONST(std::complex<double>);
 
 #undef REGISTER_MUSA_CONST
 
-} // namespace musa
-} // namespace tensorflow
+}  // namespace musa
+}  // namespace tensorflow

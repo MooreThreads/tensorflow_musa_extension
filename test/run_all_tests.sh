@@ -27,6 +27,6 @@ if [ ! -f "$TEST_DIR/../build/libmusa_plugin.so" ]; then
 fi
 
 # Run all tests using the custom test runner in quiet mode
-python "$TEST_DIR/test_runner.py" --quiet
+python3 "$TEST_DIR/test_runner.py" --quiet
 
 echo "All tests completed!"

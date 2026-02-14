@@ -1,8 +1,8 @@
 #ifndef TENSORFLOW_MUSA_MU_KERNEL_REGISTER_H_
 #define TENSORFLOW_MUSA_MU_KERNEL_REGISTER_H_
 
-#include "./device_register.h"
 #include "../kernels/utils_op.h"
+#include "./device_register.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #ifdef MUSA_PROFILE
 static std::mutex op_lock_;
@@ -16,13 +16,12 @@ static std::mutex op_lock_;
             absl::string_view(OpKernel::name()),                     \
             absl::string_view(kernel_label));                        \
         return tensorflow::profiler::TraceMeEncode(                  \
-            kernel_label,                                            \
-            {{"tf_op", tf_op},                                       \
-             {"group_id", 0},                                        \
-             {"is_eager", 0},                                        \
-             {"context_id", "$$1"},                                  \
-             {"correlation_id", correlation_id++},                   \
-             {"kernel_details", "kernel_details"}});                 \
+            kernel_label, {{"tf_op", tf_op},                         \
+                           {"group_id", 0},                          \
+                           {"is_eager", 0},                          \
+                           {"context_id", "$$1"},                    \
+                           {"correlation_id", correlation_id++},     \
+                           {"kernel_details", "kernel_details"}});   \
       },                                                             \
       3);
 #else
@@ -53,25 +52,18 @@ class MusaAnnotatedTraceMe {
     }                                                                      \
   }
 
-  #define MTOP_CHECK_OK(status, str, context)                              \
+#define MTOP_CHECK_OK(status, str, context)                              \
   if (mStatus::SUCCESS != status) {                                      \
     OP_REQUIRES_OK(context, errors::Internal("mtdnn ", str, " error!")); \
   }
 
-} // namespace musa
-} // namespace tensorflow
+}  // namespace musa
+}  // namespace tensorflow
 
-
-
-
-
-#define MUSA_KERNEL_REGISTER(name) \
-  static void musaKernelReg_##name(); \
-  static bool musa_kernel_registered_##name = \
+#define MUSA_KERNEL_REGISTER(name)                                 \
+  static void musaKernelReg_##name();                              \
+  static bool musa_kernel_registered_##name =                      \
       ::tensorflow::musa::musaKernelRegFunc(musaKernelReg_##name); \
   static void musaKernelReg_##name()
 
-#endif // TENSORFLOW_MUSA_MU_KERNEL_REGISTER_H_
-
-
-
+#endif  // TENSORFLOW_MUSA_MU_KERNEL_REGISTER_H_

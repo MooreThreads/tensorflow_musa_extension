@@ -1,11 +1,11 @@
-#include "tensorflow/stream_executor/platform.h"
-#include "tensorflow/stream_executor/multi_platform_manager.h"
-#include "tensorflow/stream_executor/lib/error.h"
-#include "tensorflow/stream_executor/stream_executor_internal.h"
-#include "tensorflow/stream_executor/executor_cache.h"
-
-#include "musa_executor.h" 
 #include <musa_runtime.h>
+
+#include "musa_executor.h"
+#include "tensorflow/stream_executor/executor_cache.h"
+#include "tensorflow/stream_executor/lib/error.h"
+#include "tensorflow/stream_executor/multi_platform_manager.h"
+#include "tensorflow/stream_executor/platform.h"
+#include "tensorflow/stream_executor/stream_executor_internal.h"
 
 namespace stream_executor {
 namespace musa {
@@ -26,8 +26,8 @@ class MusaPlatform : public Platform {
     return count;
   }
 
-
-  port::StatusOr<std::unique_ptr<DeviceDescription>> DescriptionForDevice(int ordinal) const override {
+  port::StatusOr<std::unique_ptr<DeviceDescription>> DescriptionForDevice(
+      int ordinal) const override {
     internal::DeviceDescriptionBuilder builder;
     builder.set_name("MUSA Device");
     builder.set_platform_version("1.0");
@@ -56,20 +56,20 @@ class MusaPlatform : public Platform {
         config, [&]() { return GetUncachedExecutor(config); });
   }
 
-  void RegisterTraceListener(std::unique_ptr<TraceListener> listener) override {}
+  void RegisterTraceListener(std::unique_ptr<TraceListener> listener) override {
+  }
   void UnregisterTraceListener(TraceListener* listener) override {}
 
  private:
   port::StatusOr<std::unique_ptr<StreamExecutor>> GetUncachedExecutor(
       const StreamExecutorConfig& config) {
-    
     auto executor = std::make_unique<MusaExecutor>(config.plugin_config);
-    
+
     auto init_status = executor->Init(config.ordinal, config.device_options);
     if (!init_status.ok()) {
-      return port::Status(port::error::INTERNAL,
-                          "Failed to initialize MUSA executor: " +
-                              init_status.ToString());
+      return port::Status(
+          port::error::INTERNAL,
+          "Failed to initialize MUSA executor: " + init_status.ToString());
     }
 
     return std::make_unique<StreamExecutor>(this, std::move(executor),
@@ -85,7 +85,8 @@ static void InitializeMusaPlatform() {
   TF_CHECK_OK(MultiPlatformManager::RegisterPlatform(std::move(platform)));
 }
 
-} // namespace musa
-} // namespace stream_executor
+}  // namespace musa
+}  // namespace stream_executor
 
-REGISTER_MODULE_INITIALIZER(musa_platform, stream_executor::musa::InitializeMusaPlatform());
+REGISTER_MODULE_INITIALIZER(musa_platform,
+                            stream_executor::musa::InitializeMusaPlatform());

@@ -1,10 +1,10 @@
-#include "utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/core/status.h"
+#include "utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -19,8 +19,8 @@ struct is_any<T, First> : std::is_same<T, First> {};
 
 template <typename T, typename First, typename... Rest>
 struct is_any<T, First, Rest...>
-    : std::integral_constant<
-          bool, std::is_same<T, First>::value || is_any<T, Rest...>::value> {};
+    : std::integral_constant<bool, std::is_same<T, First>::value ||
+                                       is_any<T, Rest...>::value> {};
 
 template <typename T>
 Status MusaFillCall(Tensor* out, T value, OpKernelContext* context) {
@@ -28,7 +28,8 @@ Status MusaFillCall(Tensor* out, T value, OpKernelContext* context) {
   mHandle& h = GetHandleByCtx(context);
   auto out_mt = CreateMTensor(*out);
 
-  if (is_any<T, int8, int16, int, int64, uint8, uint16, uint32, uint64, bool>::value) {
+  if (is_any<T, int8, int16, int, int64, uint8, uint16, uint32, uint64,
+             bool>::value) {
     if (mStatus::SUCCESS != op.SetValue(static_cast<int64_t>(value))) {
       return errors::Internal("mtdnn set value (int) error!");
     }
@@ -75,18 +76,17 @@ class MusaFillOp : public MusaOpKernel {
 
     auto dims_vec = Tdims.flat<Index>();
     TensorShape shape;
-    OP_REQUIRES_OK(
-        context,
-        TensorShapeUtils::MakeShape(reinterpret_cast<const Index*>(dims_vec.data()),
-                                    dims_vec.size(), &shape));
-    
+    OP_REQUIRES_OK(context, TensorShapeUtils::MakeShape(
+                                reinterpret_cast<const Index*>(dims_vec.data()),
+                                dims_vec.size(), &shape));
+
     Tensor* out = nullptr;
     OP_REQUIRES_OK(context, context->allocate_output(0, shape, &out));
 
     if (shape.num_elements() == 0) return;
 
-    OP_REQUIRES_OK(context,
-                   MusaFillCall(out, static_cast<T*>(Tvalue.data())[0], context));
+    OP_REQUIRES_OK(
+        context, MusaFillCall(out, static_cast<T*>(Tvalue.data())[0], context));
   }
 };
 
@@ -118,4 +118,3 @@ REGISTER_FILL_KERNEL(bool);
 
 }  // namespace musa
 }  // namespace tensorflow
-
