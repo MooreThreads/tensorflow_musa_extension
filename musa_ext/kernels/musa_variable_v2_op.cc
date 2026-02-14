@@ -27,13 +27,11 @@ class MusaVariableV2Op : public OpKernel {
     // Create or lookup the Var resource by (container, shared_name).
     Var* var = nullptr;
     OP_REQUIRES_OK(
-        ctx,
-        ctx->resource_manager()->LookupOrCreate<Var>(
-            container_, shared_name_, &var,
-            [dtype](Var** ptr) -> Status {
-              *ptr = new Var(dtype);
-              return Status::OK();
-            }));
+        ctx, ctx->resource_manager()->LookupOrCreate<Var>(
+                 container_, shared_name_, &var, [dtype](Var** ptr) -> Status {
+                   *ptr = new Var(dtype);
+                   return Status::OK();
+                 }));
 
     core::ScopedUnref unref(var);
 
@@ -47,17 +45,17 @@ class MusaVariableV2Op : public OpKernel {
         var->is_initialized = false;  // VariableV2 itself does not initialize.
       } else {
         // Validate dtype/shape consistency if the variable already exists.
-        OP_REQUIRES(ctx, var->tensor()->dtype() == dtype,
-                    errors::InvalidArgument(
-                        "VariableV2 dtype mismatch. Existing: ",
-                        DataTypeString(var->tensor()->dtype()),
-                        ", requested: ", DataTypeString(dtype)));
+        OP_REQUIRES(
+            ctx, var->tensor()->dtype() == dtype,
+            errors::InvalidArgument("VariableV2 dtype mismatch. Existing: ",
+                                    DataTypeString(var->tensor()->dtype()),
+                                    ", requested: ", DataTypeString(dtype)));
 
-        OP_REQUIRES(ctx, var->tensor()->shape() == shape_,
-                    errors::InvalidArgument(
-                        "VariableV2 shape mismatch. Existing: ",
-                        var->tensor()->shape().DebugString(),
-                        ", requested: ", shape_.DebugString()));
+        OP_REQUIRES(
+            ctx, var->tensor()->shape() == shape_,
+            errors::InvalidArgument("VariableV2 shape mismatch. Existing: ",
+                                    var->tensor()->shape().DebugString(),
+                                    ", requested: ", shape_.DebugString()));
       }
     }
 
@@ -67,16 +65,15 @@ class MusaVariableV2Op : public OpKernel {
   }
 
  private:
-    string container_;
-    string shared_name_;
-    TensorShape shape_;
+  string container_;
+  string shared_name_;
+  TensorShape shape_;
 };
 
-#define REGISTER_MUSA_VARIABLE_V2(T)                                      \
-  REGISTER_KERNEL_BUILDER(Name("VariableV2")                              \
-                              .Device("MUSA")                            \
-                              .TypeConstraint<T>("dtype"),               \
-                          MusaVariableV2Op<T>);
+#define REGISTER_MUSA_VARIABLE_V2(T)                                \
+  REGISTER_KERNEL_BUILDER(                                          \
+      Name("VariableV2").Device("MUSA").TypeConstraint<T>("dtype"), \
+      MusaVariableV2Op<T>);
 
 REGISTER_MUSA_VARIABLE_V2(float);
 REGISTER_MUSA_VARIABLE_V2(double);

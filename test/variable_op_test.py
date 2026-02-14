@@ -1,17 +1,18 @@
-# Copyright 2026 The TensorFlow MUSA Authors. All Rights Reserved.
+#Copyright 2026 The TensorFlow MUSA Authors.All Rights Reserved.
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+#Licensed under the Apache License, Version 2.0(the "License");
+#you may not use this file except in compliance with the License.
+#You may obtain a copy of the License at
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+#http:  // www.apache.org/licenses/LICENSE-2.0
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-# ==============================================================================
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+#== == == == == == == == == == == == == == == == == == == == == == == == == == \
+    == == == == == == == == == == == == ==
 """Tests for MUSA VariableV2 operator."""
 
 import numpy as np
@@ -28,13 +29,13 @@ class VariableV2OpTest(MUSATestCase):
     np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
 
     if np_dtype in [np.int32, np.int64]:
-      # Keep small range to avoid overflow surprises.
+#Keep small range to avoid overflow surprises.
       return np.random.randint(-10, 10, size=shape).astype(np_dtype)
 
     if dtype == tf.float16:
       return np.random.uniform(-1, 1, size=shape).astype(np.float16)
     if dtype == tf.bfloat16:
-      # bfloat16 typically fed as float32 and cast by TF.
+#bfloat16 typically fed as float32 and cast by TF.
       return np.random.uniform(-1, 1, size=shape).astype(np.float32)
 
     return np.random.uniform(-1, 1, size=shape).astype(np_dtype)
@@ -70,7 +71,7 @@ class VariableV2OpTest(MUSATestCase):
             validate_shape=validate_shape,
             use_locking=use_locking)
 
-        # Ensure assign happens before reading variable value.
+#Ensure assign happens before reading variable value.
         out = tf.identity(assign)
 
     with tf.compat.v1.Session(graph=g) as sess:
@@ -134,7 +135,7 @@ class VariableV2OpTest(MUSATestCase):
     var_shape = [2, 3]
     value_np = self._make_value_np([3, 2], dtype)
 
-    # CPU should raise
+#CPU should raise
     with self.assertRaises((ValueError,tf.errors.InvalidArgumentError)):
       _ = self._run_variablev2_assign_read(
           device="/CPU:0",
@@ -143,7 +144,7 @@ class VariableV2OpTest(MUSATestCase):
           dtype=dtype,
           validate_shape=True)
 
-    # MUSA should raise
+#MUSA should raise
     with self.assertRaises((ValueError,tf.errors.InvalidArgumentError)):
       _ = self._run_variablev2_assign_read(
           device="/device:MUSA:0",
@@ -173,7 +174,7 @@ class VariableV2OpTest(MUSATestCase):
         dtype=dtype,
         validate_shape=False)
 
-    # Values should match and output shape should follow value.
+#Values should match and output shape should follow value.
     self.assertEqual(list(cpu_out.shape), value_shape)
     self.assertEqual(list(musa_out.shape), value_shape)
     self.assertAllClose(cpu_out, musa_out, rtol=1e-5, atol=1e-8)
