@@ -40,19 +40,19 @@ class RandomStandardNormalTest(MUSATestCase):
                 val = result.numpy()
                 self.assertGreater(np.abs(np.mean(val)), 0)  # 非全零
 
-    # def test_float_types(self):
-    #     """测试不同浮点类型支持"""
-    #     for dtype, tol in [(tf.float16, 0.3), (tf.float32, 0.1), (tf.float64, 0.1)]:
-    #         shape = [10000]
-    #         with tf.device('/device:MUSA:0'):
-    #             result = tf.random.normal(shape, dtype=dtype)
+    def test_float_types(self):
+        """测试不同浮点类型支持"""
+        for dtype, tol in [(tf.float16, 0.3), (tf.float32, 0.1), (tf.float64, 0.1)]:
+            shape = [10000]
+            with tf.device('/device:MUSA:0'):
+                result = tf.random.normal(shape, dtype=dtype)
             
-    #         self.assertEqual(result.dtype, dtype)
-    #         val = result.numpy().astype(np.float32)  # 转为float32便于统计
+            self.assertEqual(result.dtype, dtype)
+            val = result.numpy().astype(np.float32)  # 转为float32便于统计
             
-    #         # 验证分布特性（float16精度较低，放宽容差）
-    #         self.assertAlmostEqual(np.mean(val), 0.0, delta=tol)
-    #         self.assertAlmostEqual(np.std(val), 1.0, delta=tol)
+            # 验证分布特性（float16精度较低，放宽容差）
+            self.assertAlmostEqual(np.mean(val), 0.0, delta=tol)
+            self.assertAlmostEqual(np.std(val), 1.0, delta=tol)
 
     def test_randomness(self):
         """验证两次调用结果不同（随机性）"""

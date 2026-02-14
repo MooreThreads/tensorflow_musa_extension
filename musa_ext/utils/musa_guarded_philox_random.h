@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <limits>
 #include <mutex>
+#include <type_traits>
 #include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
 
 // #if defined(__CUDACC__) || defined(__MUSA__)
@@ -17,11 +18,6 @@
 
 namespace tensorflow {
 namespace random {
-
-template <typename U>
-MUSA_HOST_DEVICE U ConvertValue(double value) {
-  return static_cast<U>(value);
-}
 
 class PhiloxRandom {
  public:
@@ -61,21 +57,23 @@ class PhiloxRandom {
   uint64_t counter_;
 };
 
-template <typename Generator, typename T>
+template <typename Generator>
 class NormalDistribution {
  public:
   static constexpr int kResultElementCount = Generator::kResultElementCount;
 
-  MUSA_HOST_DEVICE NormalDistribution(T mean = T(0), T stddev = T(1))
+  MUSA_HOST_DEVICE NormalDistribution(double mean = 0.0, double stddev = 1.0)
       : mean_(mean), stddev_(stddev) {
     static_assert(kResultElementCount % 2 == 0,
                   "NormalDistribution requires an even result count");
   }
 
   struct Result {
-    T values[kResultElementCount];
-    MUSA_HOST_DEVICE T& operator[](int index) { return values[index]; }
-    MUSA_HOST_DEVICE const T& operator[](int index) const { return values[index]; }
+    double values[kResultElementCount];
+    MUSA_HOST_DEVICE double& operator[](int index) { return values[index]; }
+    MUSA_HOST_DEVICE const double& operator[](int index) const {
+      return values[index];
+    }
   };
 
   MUSA_HOST_DEVICE Result operator()(Generator* generator) const {
@@ -97,10 +95,6 @@ class NormalDistribution {
                     (static_cast<double>(value) + 0.5) * kInv);
   }
 
-  MUSA_HOST_DEVICE static T Convert(double value) {
-    return ConvertValue<T>(value);
-  }
-
   MUSA_HOST_DEVICE void FillResult(Result& result,
                                    const uint32_t raw[kResultElementCount]) const {
     const double base = static_cast<double>(mean_);
@@ -110,30 +104,29 @@ class NormalDistribution {
       const double v = Uniform(raw[pair * 2 + 1]);
       const double radius = std::sqrt(-2.0 * std::log(u));
       const double angle = kTwoPi * v;
-        result[pair * 2] =
-          Convert(base + scale * (radius * std::cos(angle)));
-        result[pair * 2 + 1] =
-          Convert(base + scale * (radius * std::sin(angle)));
+      
+      result[pair * 2] = base + scale * (radius * std::cos(angle));
+      result[pair * 2 + 1] = base + scale * (radius * std::sin(angle));
     }
   }
 
-  T mean_;
-  T stddev_;
+  double mean_;
+  double stddev_;
 };
 
-template <typename Generator, typename T>
+template <typename Generator>
 class TruncatedNormalDistribution {
  public:
   static constexpr int kResultElementCount =
-      NormalDistribution<Generator, T>::kResultElementCount;
+      NormalDistribution<Generator>::kResultElementCount;
 
-  using Result = typename NormalDistribution<Generator, T>::Result;
+  using Result = typename NormalDistribution<Generator>::Result;
 
-  MUSA_HOST_DEVICE TruncatedNormalDistribution(T mean = T(0), T stddev = T(1),
-                                              T truncation = static_cast<T>(2))
+  MUSA_HOST_DEVICE TruncatedNormalDistribution(double mean = 0.0, double stddev = 1.0,
+                                              double truncation = 2.0)
       : normal_(mean, stddev),
-        center_(static_cast<double>(mean)),
-        limit_(std::fabs(static_cast<double>(truncation))) {}
+        center_(mean),
+        limit_(std::fabs(truncation)) {}
 
   MUSA_HOST_DEVICE Result operator()(Generator* generator) const {
     Result result;
@@ -142,9 +135,9 @@ class TruncatedNormalDistribution {
       auto candidate = normal_(generator);
       for (int i = 0; i < kResultElementCount && filled < kResultElementCount;
            ++i) {
-        double value = static_cast<double>(candidate[i]);
+        const double value = candidate[i];
         if (std::fabs(value - center_) <= limit_) {
-          result[filled++] = candidate[i];
+          result[filled++] = value;
         }
       }
     }
@@ -152,7 +145,7 @@ class TruncatedNormalDistribution {
   }
 
  private:
-  NormalDistribution<Generator, T> normal_;
+  NormalDistribution<Generator> normal_;
   double center_;
   double limit_;
 };

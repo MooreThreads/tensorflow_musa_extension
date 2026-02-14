@@ -64,22 +64,22 @@ class TruncatedNormalTest(MUSATestCase):
                 self.assertTrue(np.all(val >= -2.0))
                 self.assertTrue(np.all(val <= 2.0))
 
-    # def test_float_types(self):
-    #     """测试不同浮点类型支持"""
-    #     for dtype, tol in [(tf.float16, 0.3), (tf.float32, 0.15), (tf.float64, 0.1)]:
-    #         shape = [10000]
-    #         with tf.device('/device:MUSA:0'):
-    #             result = tf.random.truncated_normal(shape, mean=0.0, stddev=1.0, dtype=dtype)
+    def test_float_types(self):
+        """测试不同浮点类型支持"""
+        for dtype, tol in [(tf.float16, 0.3), (tf.float32, 0.15), (tf.float64, 0.1)]:
+            shape = [10000]
+            with tf.device('/device:MUSA:0'):
+                result = tf.random.truncated_normal(shape, mean=0.0, stddev=1.0, dtype=dtype)
             
-    #         self.assertEqual(result.dtype, dtype)
-    #         val = result.numpy().astype(np.float32)
+            self.assertEqual(result.dtype, dtype)
+            val = result.numpy().astype(np.float32)
             
-    #         # 验证截断范围
-    #         self.assertGreaterEqual(np.min(val), -2.0)
-    #         self.assertLessEqual(np.max(val), 2.0)
+            # 验证截断范围
+            self.assertGreaterEqual(np.min(val), -2.0)
+            self.assertLessEqual(np.max(val), 2.0)
             
-    #         # 验证均值接近0（精度根据类型调整）
-    #         self.assertAlmostEqual(np.mean(val), 0.0, delta=tol)
+            # 验证均值接近0（精度根据类型调整）
+            self.assertAlmostEqual(np.mean(val), 0.0, delta=tol)
 
     def test_randomness(self):
         """验证两次调用结果不同（随机性）"""
