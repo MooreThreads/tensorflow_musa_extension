@@ -8,9 +8,6 @@
 #include "tensorflow/stream_executor/stream.h"
 #include <iostream>
 
-// =============================================================================
-// 1. 全局前向声明
-// =============================================================================
 extern void LaunchRandomUniform_float(void* stream, int64_t n, uint64_t seed, float* output);
 extern void LaunchRandomUniform_double(void* stream, int64_t n, uint64_t seed, double* output);
 
@@ -23,7 +20,6 @@ extern void LaunchTruncatedNormal_double(void* stream, int64_t n, uint64_t seed,
 extern void LaunchRandomUniformInt_int(void* stream, int64_t n, uint64_t seed, int minval, int maxval, int* output);
 extern void LaunchRandomUniformInt_int64_t(void* stream, int64_t n, uint64_t seed, int64_t minval, int64_t maxval, int64_t* output);
 
-// 声明 MUSA Runtime API
 extern "C" {
     typedef int musaError_t;
     musaError_t musaStreamSynchronize(void* stream);
@@ -33,10 +29,6 @@ extern "C" {
 
 namespace tensorflow {
 namespace musa {
-
-// =============================================================================
-// 2. 辅助工具
-// =============================================================================
 
 template <typename T> struct LauncherTrait;
 
@@ -57,29 +49,20 @@ uint64 GetPhiloxSeed(GuardedPhiloxRandom& guarded_philox, int64 num_elements) {
     return (static_cast<uint64>(samples[0]) << 32) | samples[1];
 }
 
-// [关键修改] 强制返回 nullptr (Stream 0)
 void* GetMusaStreamHandle(OpKernelContext* ctx) {
-    // 之前的 GpuStreamMemberHack() 返回了无效句柄导致 "invalid resource handle"。
-    // 我们强制使用 MUSA 默认流 (Default Stream, 0)。
-    // 虽然这会序列化部分操作，但能保证算子正确执行，是解决 ABI 兼容问题的最稳妥方案。
     return nullptr; 
 }
 
-// 辅助：执行 Launch 并同步检查错误
 template <typename Func, typename... Args>
 void LaunchAndCheck(OpKernelContext* ctx, const char* name, Func func, void* stream, Args... args) {
-    // 1. 执行 Kernel
     func(stream, args...);
     
-    // 2. 检查 Launch 是否立刻产生错误
     musaError_t err = musaGetLastError();
     if (err != 0) {
         std::cerr << "KERNEL LAUNCH ERROR (Pre-Sync): " << name << " : " << musaGetErrorString(err) << std::endl;
         OP_REQUIRES(ctx, err == 0, errors::Internal("Kernel Launch Failed (Pre-Sync): ", name, ": ", musaGetErrorString(err)));
     }
 
-    // 3. 强制同步流，捕获执行期错误 (调试用，生产环境可移除以提升性能)
-    // 使用 nullptr (默认流) 时，这里会等待默认流完成
     musaError_t sync_err = musaStreamSynchronize(stream);
     
     if (sync_err != 0) {
@@ -88,11 +71,6 @@ void LaunchAndCheck(OpKernelContext* ctx, const char* name, Func func, void* str
     }
 }
 
-// =============================================================================
-// 3. OpKernel 实现
-// =============================================================================
-
-// --- RandomUniform ---
 template <typename T>
 class MusaRandomUniformOp : public OpKernel {
  public:
@@ -117,7 +95,6 @@ class MusaRandomUniformOp : public OpKernel {
   GuardedPhiloxRandom guarded_philox_;
 };
 
-// --- RandomStandardNormal ---
 template <typename T>
 class MusaRandomStandardNormalOp : public OpKernel {
  public:
@@ -142,7 +119,6 @@ class MusaRandomStandardNormalOp : public OpKernel {
   GuardedPhiloxRandom guarded_philox_;
 };
 
-// --- TruncatedNormal ---
 template <typename T>
 class MusaTruncatedNormalOp : public OpKernel {
  public:
@@ -167,7 +143,6 @@ class MusaTruncatedNormalOp : public OpKernel {
   GuardedPhiloxRandom guarded_philox_;
 };
 
-// --- RandomUniformInt ---
 template <typename T>
 class MusaRandomUniformIntOp : public OpKernel {
  public:
@@ -203,7 +178,6 @@ class MusaRandomUniformIntOp : public OpKernel {
   GuardedPhiloxRandom guarded_philox_;
 };
 
-// 注册 Kernels (保持不变)
 #define REGISTER_MUSA_UNIFORM(TYPE) \
   REGISTER_KERNEL_BUILDER(Name("RandomUniform").Device("MUSA").HostMemory("shape") \
                               .TypeConstraint<int32>("T").TypeConstraint<TYPE>("dtype"), \
