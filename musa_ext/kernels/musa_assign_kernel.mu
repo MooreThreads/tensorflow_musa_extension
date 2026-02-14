@@ -3,8 +3,8 @@
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wignored-pragmas"
-#include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/framework/bfloat16.h"
+#include "tensorflow/core/framework/types.h"
 #include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
 #pragma GCC diagnostic pop
 
@@ -12,8 +12,7 @@ namespace tensorflow {
 namespace musa {
 
 template <typename T>
-__global__ void AssignCopyKernel(const T* __restrict__ src,
-                                 T* __restrict__ dst,
+__global__ void AssignCopyKernel(const T* __restrict__ src, T* __restrict__ dst,
                                  int64_t n) {
   int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i < n) dst[i] = src[i];
@@ -28,10 +27,14 @@ void LaunchAssignCopy(const T* src, T* dst, int64_t n, musaStream_t stream) {
 }
 
 // 显式实例化（只覆盖你注册的 4 个类型）
-template void LaunchAssignCopy<float>(const float*, float*, int64_t, musaStream_t);
-template void LaunchAssignCopy<double>(const double*, double*, int64_t, musaStream_t);
-template void LaunchAssignCopy<Eigen::half>(const Eigen::half*, Eigen::half*, int64_t, musaStream_t);
-template void LaunchAssignCopy<bfloat16>(const bfloat16*, bfloat16*, int64_t, musaStream_t);
+template void LaunchAssignCopy<float>(const float*, float*, int64_t,
+                                      musaStream_t);
+template void LaunchAssignCopy<double>(const double*, double*, int64_t,
+                                       musaStream_t);
+template void LaunchAssignCopy<Eigen::half>(const Eigen::half*, Eigen::half*,
+                                            int64_t, musaStream_t);
+template void LaunchAssignCopy<bfloat16>(const bfloat16*, bfloat16*, int64_t,
+                                         musaStream_t);
 
 }  // namespace musa
 }  // namespace tensorflow

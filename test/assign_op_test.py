@@ -1,18 +1,19 @@
-# assign_op_test.py
-# Copyright 2026 The TensorFlow MUSA Authors. All Rights Reserved.
+#assign_op_test.py
+#Copyright 2026 The TensorFlow MUSA Authors.All Rights Reserved.
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+#Licensed under the Apache License, Version 2.0(the "License");
+#you may not use this file except in compliance with the License.
+#You may obtain a copy of the License at
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+#http:  // www.apache.org/licenses/LICENSE-2.0
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-# ==============================================================================
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+#== == == == == == == == == == == == == == == == == == == == == == == == == == \
+    == == == == == == == == == == == == ==
 
 """Tests for MUSA Assign operator (Ref-variable tf.raw_ops.Assign)."""
 
@@ -33,12 +34,12 @@ class AssignOpTest(MUSATestCase):
     """
     g = tf.Graph()
     with g.as_default():
-      # Put constants into the graph
+#Put constants into the graph
       ref_init = tf.constant(ref_init_np, dtype=dtype)
       value = tf.constant(value_np, dtype=dtype)
 
-      # Create RefVariable (NOT ResourceVariable)
-      # This is critical: Assign(ref, value) expects ref tensor from a Variable node.
+#Create RefVariable(NOT ResourceVariable)
+#This is critical : Assign(ref, value) expects ref tensor from a Variable node.
       ref_var = tf.compat.v1.Variable(ref_init, use_resource=False, trainable=False)
 
       assign_out = tf.raw_ops.Assign(
@@ -49,7 +50,7 @@ class AssignOpTest(MUSATestCase):
 
       init_op = tf.compat.v1.global_variables_initializer()
 
-      # Run
+#Run
       with tf.compat.v1.Session(graph=g) as sess:
         sess.run(init_op)
         out_np = sess.run(assign_out)
@@ -62,7 +63,7 @@ class AssignOpTest(MUSATestCase):
     """Test Assign operation with given shapes and dtype."""
     np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
 
-    # Generate ref init and value
+#Generate ref init and value
     if np_dtype in [np.int32, np.int64]:
       ref_init_np = np.random.randint(-10, 10, size=ref_shape).astype(np_dtype)
       value_np = np.random.randint(-10, 10, size=value_shape).astype(np_dtype)
@@ -70,12 +71,12 @@ class AssignOpTest(MUSATestCase):
       ref_init_np = np.random.uniform(-1, 1, size=ref_shape).astype(np_dtype)
       value_np = np.random.uniform(-1, 1, size=value_shape).astype(np_dtype)
 
-    # Create TensorFlow constants for inputs (to match addn style)
+#Create TensorFlow constants for inputs(to match addn style)
     ref_init_tf = tf.constant(ref_init_np, dtype=dtype)
     value_tf = tf.constant(value_np, dtype=dtype)
 
-    # Wrapper: must accept eager tensors (from _compare_cpu_musa_results),
-    # run graph-mode Assign inside, and return an eager Tensor.
+#Wrapper : must accept eager tensors(from _compare_cpu_musa_results),
+#run graph - mode Assign inside, and return an eager Tensor.
     def assign_wrapper(ref_init_t, value_t):
       out_np = self._run_assign_in_graph(
           ref_init_t.numpy(),
@@ -97,20 +98,20 @@ class AssignOpTest(MUSATestCase):
 
     def run_on_device(device):
       with tf.device(device):
-        # 直接跑 wrapper（里面用 graph+session）
+#直接跑 wrapper（里面用 graph + session）
         _ = self._run_assign_in_graph(
             ref_init_np, value_np, dtype=dtype,
             validate_shape=validate_shape, use_locking=use_locking)
 
-    # CPU should raise
+#CPU should raise
     with self.assertRaises((ValueError,tf.errors.InvalidArgumentError)):
       run_on_device('/CPU:0')
 
-    # MUSA should raise
+#MUSA should raise
     with self.assertRaises((ValueError,tf.errors.InvalidArgumentError)):
       run_on_device('/device:MUSA:0')
 
-  # -------------------- Tests --------------------
+#-- -- -- -- -- -- -- -- -- -- Tests -- -- -- -- -- -- -- -- -- --
 
   def testAssign1D(self):
     """Test Assign with 1D tensor."""
@@ -141,7 +142,7 @@ class AssignOpTest(MUSATestCase):
     for dtype in [tf.float32, tf.float16, tf.bfloat16, tf.float64]:
       rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
       atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
-      # ref shape != value shape
+#ref shape != value shape
       self._test_assign([2, 3], [3, 2], dtype, validate_shape=False, use_locking=True,
                         rtol=rtol, atol=atol)
 

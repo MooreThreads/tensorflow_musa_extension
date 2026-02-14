@@ -1,13 +1,12 @@
 // musa_assign_op.cc
+#include "mu/device/musa_device.h"
+#include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/platform/types.h"
-#include "tensorflow/core/framework/bfloat16.h"
-
-#include "utils_op.h"             
-#include "mu/device/musa_device.h" 
+#include "utils_op.h"
 namespace tensorflow {
 namespace musa {
 
@@ -34,7 +33,8 @@ class MusaAssignOp : public MusaOpKernel {
     ctx->forward_ref_input_to_ref_output(0, 0);
 
     // use_locking=True => 让 TF 内部帮你加锁，所以 lock_held=false
-    // use_locking=False => 不加锁，lock_held=true（表示“锁已经持有”，TF 不再加锁）
+    // use_locking=False => 不加锁，lock_held=true（表示“锁已经持有”，TF
+    // 不再加锁）
     const bool lock_held = !use_locking_;
 
     // mutable_input 用于获取/修改 ref tensor
@@ -46,19 +46,21 @@ class MusaAssignOp : public MusaOpKernel {
 
     // validate_shape=True：如果 ref 已初始化，则必须同 shape
     if (validate_shape_ && ref_initialized) {
-      OP_REQUIRES(ctx, same_shape,
-                  errors::InvalidArgument(
-                      "Assign requires shapes to match when validate_shape=true. "
-                      "ref shape: ",
-                      ref_tensor.shape().DebugString(), ", value shape: ",
-                      value.shape().DebugString()));
+      OP_REQUIRES(
+          ctx, same_shape,
+          errors::InvalidArgument(
+              "Assign requires shapes to match when validate_shape=true. "
+              "ref shape: ",
+              ref_tensor.shape().DebugString(),
+              ", value shape: ", value.shape().DebugString()));
     }
 
     // 如果 ref 未初始化，或者 validate_shape=false 且 shape 不同：允许 ref 变形
     // 对 ref 变量的正确做法是分配新 Tensor 并 replace_ref_input
     if (!ref_initialized || (!validate_shape_ && !same_shape)) {
       Tensor new_ref;
-      OP_REQUIRES_OK(ctx, ctx->allocate_temp(value.dtype(), value.shape(), &new_ref));
+      OP_REQUIRES_OK(
+          ctx, ctx->allocate_temp(value.dtype(), value.shape(), &new_ref));
       ctx->replace_ref_input(0, new_ref, lock_held);
 
       // replace 之后重新拿到 ref_tensor（指向新 buffer）
@@ -66,7 +68,8 @@ class MusaAssignOp : public MusaOpKernel {
     }
 
     OP_REQUIRES(ctx, ref_tensor.NumElements() == value.NumElements(),
-                errors::Internal("Assign: element count mismatch after shape handling."));
+                errors::Internal(
+                    "Assign: element count mismatch after shape handling."));
 
     const int64_t n = value.NumElements();
     if (n == 0) return;
@@ -87,9 +90,9 @@ class MusaAssignOp : public MusaOpKernel {
 
 // ---------------- Register ----------------
 // Assign 的 TypeConstraint 是 "T"
-#define REGISTER_MUSA_ASSIGN(TYPE)                                             \
-  REGISTER_KERNEL_BUILDER(                                                     \
-      Name("Assign").Device(DEVICE_MTGPU).TypeConstraint<TYPE>("T"),           \
+#define REGISTER_MUSA_ASSIGN(TYPE)                                   \
+  REGISTER_KERNEL_BUILDER(                                           \
+      Name("Assign").Device(DEVICE_MTGPU).TypeConstraint<TYPE>("T"), \
       MusaAssignOp<TYPE>)
 
 // 你之前 AddN 测试/实现里用到的 4 种类型为主
