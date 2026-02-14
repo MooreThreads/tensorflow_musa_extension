@@ -1,17 +1,18 @@
-# Copyright 2026 The TensorFlow MUSA Authors. All Rights Reserved.
+#Copyright 2026 The TensorFlow MUSA Authors.All Rights Reserved.
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+#Licensed under the Apache License, Version 2.0(the "License");
+#you may not use this file except in compliance with the License.
+#You may obtain a copy of the License at
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+#http:  // www.apache.org/licenses/LICENSE-2.0
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-# ==============================================================================
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+#== == == == == == == == == == == == == == == == == == == == == == == == == == \
+    == == == == == == == == == == == == ==
 
 """Tests for MUSA IsNan operator.
 
@@ -43,7 +44,7 @@ class IsNanOpTest(MUSATestCase):
         x_np.flat[1] = -np.inf
 
     if inject_nan and x_np.size > 0:
-      # Put NaNs in deterministic positions
+#Put NaNs in deterministic positions
       x_np.flat[0] = np.nan
       x_np.flat[x_np.size // 2] = np.nan
       x_np.flat[-1] = np.nan
@@ -56,14 +57,16 @@ class IsNanOpTest(MUSATestCase):
                             fill_value=fill_value, include_inf=include_inf)
     x_tf = tf.constant(x_np, dtype=dtype)
 
-    # Numeric proxy so musa_test_utils._compare_cpu_musa_results can use assertAllClose.
-    # (IsNan's real output is bool; bool comparison is done below.)
+#Numeric proxy so \
+    musa_test_utils._compare_cpu_musa_results can use assertAllClose.
+#(IsNan's real output is bool; bool comparison is done below.)
     def isnan_proxy(x):
       return tf.cast(tf.math.is_nan(x), tf.float32)
 
     self._compare_cpu_musa_results(isnan_proxy, [x_tf], dtype, rtol=0.0, atol=0.0)
 
-    # Also validate the true output dtype/shape and exact bool equality CPU vs MUSA.
+#Also validate the true output dtype / \
+    shape and exact bool equality CPU vs MUSA.
     with tf.device("/CPU:0"):
       cpu_bool = tf.math.is_nan(x_tf)
     with tf.device("/device:MUSA:0"):
@@ -99,7 +102,7 @@ class IsNanOpTest(MUSATestCase):
   def testIsNanAllNaNs(self):
     """All NaNs should yield all True."""
     for dtype in [tf.bfloat16, tf.float16, tf.float32, tf.float64]:
-      # For float16/bf16, np.nan is representable; TF will carry NaN.
+#For float16 / bf16, np.nan is representable; TF will carry NaN.
       self._test_isnan([128], dtype, inject_nan=False, fill_value=np.nan)
 
   def testIsNanWithInfs(self):
@@ -111,7 +114,8 @@ class IsNanOpTest(MUSATestCase):
     """IsNan should reject non-floating types per TF op definition."""
     for dtype in [tf.int32, tf.int64]:
       x = tf.constant([1, 2, 3], dtype=dtype)
-      # Depending on TF eager tracing path, TypeError or InvalidArgumentError may occur.
+#Depending on TF eager tracing path, \
+    TypeError or InvalidArgumentError may occur.
       with self.assertRaises((TypeError, tf.errors.InvalidArgumentError)):
         with tf.device("/device:MUSA:0"):
           _ = tf.math.is_nan(x)

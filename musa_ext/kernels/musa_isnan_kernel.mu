@@ -1,11 +1,11 @@
-#include <musa_runtime.h>
-#include <musa_fp16.h>
 #include <math.h>
+#include <musa_fp16.h>
+#include <musa_runtime.h>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wignored-pragmas"
-#include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/framework/bfloat16.h"
+#include "tensorflow/core/framework/types.h"
 #include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
 #pragma GCC diagnostic pop
 
@@ -28,7 +28,8 @@ __device__ __forceinline__ float LoadFloat(const bfloat16* p) {
   return res;
 }
 
-// --------- isnan 判定（float/double 直接用 isnan；half/bf16 转 float） ---------
+// --------- isnan 判定（float/double 直接用 isnan；half/bf16 转 float）
+// ---------
 __device__ __forceinline__ bool IsNanValue(float v) { return isnan(v); }
 __device__ __forceinline__ bool IsNanValue(double v) { return isnan(v); }
 
@@ -43,7 +44,8 @@ __global__ void IsNanKernel(const T* input, bool* output, int n) {
 
 // --------- 特化：Eigen::half ---------
 template <>
-__global__ void IsNanKernel<Eigen::half>(const Eigen::half* input, bool* output, int n) {
+__global__ void IsNanKernel<Eigen::half>(const Eigen::half* input, bool* output,
+                                         int n) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < n) {
     float v = LoadFloat(&input[idx]);
@@ -53,7 +55,8 @@ __global__ void IsNanKernel<Eigen::half>(const Eigen::half* input, bool* output,
 
 // --------- 特化：bfloat16 ---------
 template <>
-__global__ void IsNanKernel<bfloat16>(const bfloat16* input, bool* output, int n) {
+__global__ void IsNanKernel<bfloat16>(const bfloat16* input, bool* output,
+                                      int n) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < n) {
     float v = LoadFloat(&input[idx]);
@@ -79,7 +82,8 @@ void LaunchIsNan(const T* input, bool* output, int n, musaStream_t stream) {
 // 显式实例化
 template void LaunchIsNan<float>(const float*, bool*, int, musaStream_t);
 template void LaunchIsNan<double>(const double*, bool*, int, musaStream_t);
-template void LaunchIsNan<Eigen::half>(const Eigen::half*, bool*, int, musaStream_t);
+template void LaunchIsNan<Eigen::half>(const Eigen::half*, bool*, int,
+                                       musaStream_t);
 template void LaunchIsNan<bfloat16>(const bfloat16*, bool*, int, musaStream_t);
 
 }  // namespace musa
