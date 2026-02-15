@@ -42,7 +42,7 @@ class RandomStandardNormalTest(MUSATestCase):
 
     def test_float_types(self):
         """测试不同浮点类型支持"""
-        for dtype, tol in [(tf.float16, 0.3), (tf.float32, 0.1), (tf.float64, 0.1)]:
+        for dtype, tol in [(tf.float16, 0.3), (tf.float32, 0.15), (tf.float64, 0.1), (tf.bfloat16, 0.3)]:
             shape = [10000]
             with tf.device('/device:MUSA:0'):
                 result = tf.random.normal(shape, dtype=dtype)

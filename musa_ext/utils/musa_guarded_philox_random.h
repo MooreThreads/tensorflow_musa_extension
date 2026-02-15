@@ -115,24 +115,26 @@ class NormalDistribution {
 };
 
 template <typename Generator>
-class TruncatedNormalDistribution {
+class TruncatedNormalDistribution : public NormalDistribution<Generator> {
  public:
-  static constexpr int kResultElementCount =
-      NormalDistribution<Generator>::kResultElementCount;
-
-  using Result = typename NormalDistribution<Generator>::Result;
+  using Base = NormalDistribution<Generator>;
+  using Result = typename Base::Result;
+  using Base::kResultElementCount;
 
   MUSA_HOST_DEVICE TruncatedNormalDistribution(double mean = 0.0, double stddev = 1.0,
                                               double truncation = 2.0)
-      : normal_(mean, stddev),
+      : Base(mean, stddev),
         center_(mean),
-        limit_(std::fabs(truncation)) {}
+        limit_(std::fabs(truncation) * stddev) {}
 
   MUSA_HOST_DEVICE Result operator()(Generator* generator) const {
     Result result;
     int filled = 0;
-    while (filled < kResultElementCount) {
-      auto candidate = normal_(generator);
+    constexpr int kMaxIterations = 100;  // Prevent infinite loop
+    int iterations = 0;
+    
+    while (filled < kResultElementCount && iterations < kMaxIterations) {
+      auto candidate = Base::operator()(generator);
       for (int i = 0; i < kResultElementCount && filled < kResultElementCount;
            ++i) {
         const double value = candidate[i];
@@ -140,14 +142,20 @@ class TruncatedNormalDistribution {
           result[filled++] = value;
         }
       }
+      ++iterations;
     }
+    
+    // Fill remaining with boundary values if max iterations reached
+    while (filled < kResultElementCount) {
+      result[filled++] = center_;
+    }
+    
     return result;
   }
 
  private:
-  NormalDistribution<Generator> normal_;
   double center_;
-  double limit_;
+  double limit_;  // Already scaled by stddev
 };
 
 }  // namespace random
