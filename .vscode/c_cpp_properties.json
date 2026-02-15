@@ -1,0 +1,19 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "/usr/local/musa-4.3.5/include/**",
+                "/usr/local/python38/lib/python3.8/site-packages/tensorflow/**"
+                
+            ],
+            "defines": [],
+            "compilerPath": "/usr/local/musa-4.3.5/bin/clang-14",
+            "cStandard": "c17",
+            "cppStandard": "c++14",
+            "intelliSenseMode": "linux-clang-x64"
+        }
+    ],
+    "version": 4
+}
