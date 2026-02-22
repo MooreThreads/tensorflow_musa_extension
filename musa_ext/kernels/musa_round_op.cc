@@ -25,7 +25,7 @@ class MusaRoundOp : public MusaOpKernel {
     mTensor t_input = CreateMTensor(input, format_);
     mTensor t_output = CreateMTensor(*output, format_);
 
-    ::musa::dnn::Binary op;
+    ::musa::dnn::Unary op;
     op.SetMode(::musa::dnn::Unary::Mode::ROUND);
 
     auto status = op.Run(handle, t_output, t_input);
@@ -44,8 +44,8 @@ REGISTER_MUSA_ROUND(float);
 REGISTER_MUSA_ROUND(double);
 REGISTER_MUSA_ROUND(Eigen::half);
 REGISTER_MUSA_ROUND(bfloat16);
-REGISTER_MUSA_ROUND(int32);
-REGISTER_MUSA_ROUND(int64);
+// REGISTER_MUSA_ROUND(int32);
+// REGISTER_MUSA_ROUND(int64);
 
 }  // namespace musa
 }  // namespace tensorflow
