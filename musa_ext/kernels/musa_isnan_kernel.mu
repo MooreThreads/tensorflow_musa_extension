@@ -2,7 +2,6 @@
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wignored-pragmas"
-#include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
 #pragma GCC diagnostic pop
 
 namespace tensorflow {
