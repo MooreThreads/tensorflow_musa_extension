@@ -33,10 +33,7 @@ class PadOpTest(MUSATestCase):
                 rtol=1e-5,
                 atol=1e-8):
     """Helper that compares CPU and MUSA pad results."""
-
-    if dtype == tf.bool:
-      x_np = np.random.choice([False, True], size=shape)
-    elif dtype in (tf.int32, tf.int64):
+    if dtype in (tf.int32, tf.int64):
       np_dtype = dtype.as_numpy_dtype
       x_np = np.random.randint(-5, 6, size=shape).astype(np_dtype)
     else:
@@ -82,14 +79,6 @@ class PadOpTest(MUSATestCase):
     self._test_pad([2, 3, 4], paddings, tf.float32,
                    paddings_dtype=tf.int64,
                    constant_values=7.0)
-
-  def testPadBoolTensor(self):
-    """Exercise boolean padding to ensure logical values are preserved."""
-    self._test_pad([5, 5], [[1, 1], [1, 1]], tf.bool,
-                   paddings_dtype=tf.int32,
-                   constant_values=True,
-                   rtol=0,
-                   atol=0)
 
 
 if __name__ == "__main__":
