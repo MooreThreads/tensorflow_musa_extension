@@ -4,8 +4,10 @@
 #include <musa_runtime.h>
 
 #include <algorithm>
+#include <limits>
 #include <string>
 
+#include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/framework/allocator.h"
 
 namespace tensorflow {
@@ -25,12 +27,29 @@ class MusaRawAllocator : public Allocator {
     musaSetDevice(device_id_);
 
     size_t target_alignment = std::max((size_t)256, alignment);
+
+    // Check for overflow before calculation
+    if (num_bytes > std::numeric_limits<size_t>::max() - target_alignment) {
+      LOG(ERROR) << "MUSA allocator: allocation size overflow: " << num_bytes;
+      return nullptr;
+    }
+
     size_t alloc_bytes = (num_bytes + target_alignment - 1) / target_alignment *
                          target_alignment;
+
+    // Check for overflow after adding padding
+    if (alloc_bytes > std::numeric_limits<size_t>::max() - 256) {
+      LOG(ERROR) << "MUSA allocator: allocation size overflow after padding: "
+                 << alloc_bytes;
+      return nullptr;
+    }
     alloc_bytes += 256;
 
     void* ptr = nullptr;
-    if (musaMalloc(&ptr, alloc_bytes) != musaSuccess) {
+    musaError_t err = musaMalloc(&ptr, alloc_bytes);
+    if (err != musaSuccess) {
+      LOG(ERROR) << "MUSA allocator: musaMalloc failed: "
+                 << musaGetErrorString(err) << " size: " << alloc_bytes;
       return nullptr;
     }
     return ptr;
@@ -39,7 +58,11 @@ class MusaRawAllocator : public Allocator {
   void DeallocateRaw(void* ptr) override {
     if (ptr) {
       musaSetDevice(device_id_);
-      musaFree(ptr);
+      musaError_t err = musaFree(ptr);
+      if (err != musaSuccess) {
+        LOG(ERROR) << "MUSA allocator: musaFree failed: "
+                   << musaGetErrorString(err);
+      }
     }
   }
 

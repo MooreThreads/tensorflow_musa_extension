@@ -42,13 +42,24 @@ mType GetType(DataType t) {
 }
 }  // namespace
 
+// Helper function to convert musaError_t to mStatus (mudnn Status)
+static inline mStatus FromMusaError(musaError_t err) {
+  if (err == musaSuccess) return mStatus::SUCCESS;
+  // mudnn Status doesn't have OUT_OF_MEMORY, use INTERNAL_ERROR for all errors
+  return mStatus::INTERNAL_ERROR;
+}
+
 mStatus MusaFree(void* ptr) {
-  if (ptr) musaFree(ptr);
+  if (ptr) {
+    musaError_t err = musaFree(ptr);
+    return FromMusaError(err);
+  }
   return mStatus::SUCCESS;
 }
+
 mStatus MusaAllocate(size_t size, void** ptr) {
-  musaMalloc(ptr, size);
-  return mStatus::SUCCESS;
+  musaError_t err = musaMalloc(ptr, size);
+  return FromMusaError(err);
 }
 
 mTensor CreateMTensor(const Tensor& t, mFormat format) {

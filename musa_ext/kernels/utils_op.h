@@ -109,6 +109,12 @@ inline ::musa::dnn::Handle& GetHandleByCtx(
   return musa_device->mudnn_handle();
 }
 
+inline musaStream_t GetMusaStreamByCtx(tensorflow::OpKernelContext* context) {
+  auto* musa_device = static_cast<MusaDevice*>(context->device());
+  if (!musa_device) return nullptr;
+  return musa_device->GetStream();
+}
+
 }  // namespace musa
 }  // namespace tensorflow
 

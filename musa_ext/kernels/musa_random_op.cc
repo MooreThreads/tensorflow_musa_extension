@@ -104,10 +104,13 @@ class MusaRandomOp : public MusaOpKernel {
       }
     }
 
-    mStatus s = tensorflow::musa::MusaMemcpyH2D(output->data(), tmp_host.data(),
-                                                num_elements * sizeof(T));
+    // Use async memcpy with the kernel's stream for better concurrency
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
+    mStatus s = tensorflow::musa::MusaMemcpyAsyncH2D(
+        output->data(), tmp_host.data(), num_elements * sizeof(T), stream);
     OP_REQUIRES_OK(ctx, FromMusaStatus(s));
-    musaDeviceSynchronize();
+    // Synchronize only the current stream, not all streams on the device
+    musaStreamSynchronize(stream);
   }
 };
 

@@ -4,6 +4,8 @@
 #include <cmath>
 #include <vector>
 
+#include "kernels/utils_op.h"
+#include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor_shape.h"
@@ -62,12 +64,19 @@ class MusaRangeOp : public OpKernel {
     }
 
     auto device_ptr = output->flat<T>().data();
-    auto status = musaMemcpy(device_ptr, host_data.data(), size * sizeof(T),
-                             musaMemcpyHostToDevice);
 
-    OP_REQUIRES(ctx, status == musaSuccess,
-                errors::Internal("MusaRangeOp: musaMemcpy failed. Error code: ",
-                                 static_cast<int>(status)));
+    // Use async memcpy with stream for better concurrency
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
+    mStatus status = MusaMemcpyAsyncH2D(device_ptr, host_data.data(),
+                                        size * sizeof(T), stream);
+
+    OP_REQUIRES(ctx, status == mStatus::SUCCESS,
+                errors::Internal("MusaRangeOp: MusaMemcpyAsyncH2D failed"));
+
+    // Synchronize only the current stream
+    if (stream) {
+      musaStreamSynchronize(stream);
+    }
   }
 };
 
