@@ -68,8 +68,8 @@ class MusaPadOp : public MusaOpKernel {
     TensorShape output_shape;
     typename TTypes<Tpadding>::ConstMatrix paddings_matrix =
         paddings.matrix<Tpadding>();
-    std::vector<int> pad_pairs;
-    pad_pairs.reserve(dims * 2);
+    std::vector<std::pair<int, int>> pad_pairs_per_dim;
+    pad_pairs_per_dim.reserve(dims);
     for (int d = 0; d < dims; ++d) {
       const int64_t before = static_cast<int64_t>(paddings_matrix(d, 0));
       const int64_t after = static_cast<int64_t>(paddings_matrix(d, 1));
@@ -82,12 +82,23 @@ class MusaPadOp : public MusaOpKernel {
                   errors::InvalidArgument(
                       "Paddings must fit in int32 for MUSA: ", before, " ",
                       after));
-      pad_pairs.push_back(static_cast<int>(before));
-      pad_pairs.push_back(static_cast<int>(after));
+      pad_pairs_per_dim.emplace_back(static_cast<int>(before),
+                                     static_cast<int>(after));
       const int64_t size_d = input.dim_size(d);
       OP_REQUIRES_OK(
           context,
           output_shape.AddDimWithStatus(before + size_d + after));
+    }
+
+    // !!!
+    // muDNN Pad expects padding pairs ordered from the innermost dimension
+    // outward (reverse TensorFlow's dimension order).
+    // !!!
+    std::vector<int> pad_pairs;
+    pad_pairs.reserve(dims * 2);
+    for (int d = dims - 1; d >= 0; --d) {
+      pad_pairs.push_back(pad_pairs_per_dim[d].first);
+      pad_pairs.push_back(pad_pairs_per_dim[d].second);
     }
 
     Tensor* output = nullptr;
@@ -100,19 +111,18 @@ class MusaPadOp : public MusaOpKernel {
     auto& handle = GetHandleByCtx(context);
 
     mPad pad_op;
-    MTOP_CHECK_OK(pad_op.SetMode(mPad::Mode::CONSTANT), "SetMode", context);
-    MTOP_CHECK_OK(SetPadValue(pad_op, pad_value), "SetValue", context);
+    pad_op.SetMode(mPad::Mode::CONSTANT);
+    SetPadValue(pad_op, pad_value);
     if (!pad_pairs.empty()) {
-      MTOP_CHECK_OK(pad_op.SetPaddingInfo(static_cast<int>(pad_pairs.size()),
-                                          pad_pairs.data()),
-                    "SetPaddingInfo", context);
+      pad_op.SetPaddingInfo(static_cast<int>(pad_pairs.size()),
+                           pad_pairs.data());
     } else {
-      MTOP_CHECK_OK(pad_op.SetPaddingInfo(0, nullptr), "SetPaddingInfo",
-                    context);
+      pad_op.SetPaddingInfo(0, nullptr);
     }
 
-    MTOP_CHECK_OK_RUN(pad_op.Run(handle, out_mt, in_mt), "Pad Run",
-                      context);
+    auto status = pad_op.Run(handle, out_mt, in_mt);
+    OP_REQUIRES(context, status == ::musa::dnn::Status::SUCCESS,
+                errors::Internal("MUSA Pad execution failed."));
   }
 };
 
