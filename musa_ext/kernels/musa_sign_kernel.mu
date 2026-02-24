@@ -4,7 +4,7 @@
 #pragma GCC diagnostic ignored "-Wignored-pragmas"
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/framework/bfloat16.h"
-#include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
+//#include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
 #pragma GCC diagnostic pop
 
 namespace tensorflow
