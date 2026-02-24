@@ -19,13 +19,11 @@ class MusaSwitchOp : public MusaOpKernel {
                                         pred.shape().DebugString()));
 
     const bool pred_value = pred.scalar<bool>()();
-
-    if (pred_value) {
-      // Forward input to true branch; false branch stays dead.
-      context->set_output(1, input);
+    int port = (pred_value) ? 1 : 0;
+    if (context->input_is_ref(0)) {
+      context->forward_ref_input_to_ref_output(0, port);
     } else {
-      // Forward input to false branch; true branch stays dead.
-      context->set_output(0, input);
+      context->set_output(port, context->input(0));
     }
   }
 };  // class MusaSwitchOp
