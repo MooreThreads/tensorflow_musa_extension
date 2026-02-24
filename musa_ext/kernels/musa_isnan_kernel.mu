@@ -14,6 +14,13 @@ __device__ __forceinline__ bool DeviceIsNan(T v) {
   return v != v;
 }
 
+template <>
+__device__ __forceinline__ bool DeviceIsNan<Eigen::half>(Eigen::half v) {
+  // IEEE 754 binary16: exp=0x1F and frac!=0 means NaN.
+  const uint16_t bits = *reinterpret_cast<const uint16_t*>(&v);
+  return ((bits & 0x7C00u) == 0x7C00u) && ((bits & 0x03FFu) != 0);
+}
+
 template <typename T>
 __global__ void IsNanKernel(const T* input, bool* output, int n) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
