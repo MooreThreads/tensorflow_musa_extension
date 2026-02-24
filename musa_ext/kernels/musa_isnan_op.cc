@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <limits>
 
 #include "tensorflow/core/framework/op_kernel.h"
@@ -11,6 +12,24 @@ namespace musa {
 template <typename T>
 // Launches the device kernel that computes y[i] = is_nan(x[i]).
 void LaunchIsNan(const T* input, bool* output, int n, musaStream_t stream);
+void LaunchIsNanHalf(const uint16_t* input, bool* output, int n,
+                     musaStream_t stream);
+
+template <typename T>
+struct IsNanLaunchHelper {
+  static void Run(const T* input, bool* output, int n, musaStream_t stream) {
+    LaunchIsNan<T>(input, output, n, stream);
+  }
+};
+
+template <>
+struct IsNanLaunchHelper<Eigen::half> {
+  static void Run(const Eigen::half* input, bool* output, int n,
+                  musaStream_t stream) {
+    LaunchIsNanHalf(reinterpret_cast<const uint16_t*>(input), output, n,
+                    stream);
+  }
+};
 
 template <typename T>
 class MusaIsNanOp : public MusaOpKernel {
@@ -35,8 +54,8 @@ class MusaIsNanOp : public MusaOpKernel {
     auto& handle = GetHandleByCtx(ctx);
     musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 
-    LaunchIsNan<T>(input.flat<T>().data(), output->flat<bool>().data(),
-                   static_cast<int>(num_elements), stream);
+    IsNanLaunchHelper<T>::Run(input.flat<T>().data(), output->flat<bool>().data(),
+                              static_cast<int>(num_elements), stream);
   }
 };
 

@@ -1,8 +1,5 @@
 #include <musa_runtime.h>
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wignored-pragmas"
-#pragma GCC diagnostic pop
+#include <stdint.h>
 
 namespace tensorflow {
 namespace musa {
@@ -14,10 +11,9 @@ __device__ __forceinline__ bool DeviceIsNan(T v) {
 }
 
 template <>
-__device__ __forceinline__ bool DeviceIsNan<Eigen::half>(Eigen::half v) {
+__device__ __forceinline__ bool DeviceIsNan<uint16_t>(uint16_t v) {
   // IEEE 754 binary16: exp=0x1F and frac!=0 means NaN.
-  const uint16_t bits = *reinterpret_cast<const uint16_t*>(&v);
-  return ((bits & 0x7C00u) == 0x7C00u) && ((bits & 0x03FFu) != 0);
+  return ((v & 0x7C00u) == 0x7C00u) && ((v & 0x03FFu) != 0);
 }
 
 template <typename T>
@@ -37,8 +33,12 @@ void LaunchIsNan(const T* input, bool* output, int n, musaStream_t stream) {
   IsNanKernel<T><<<grid_size, block_size, 0, stream>>>(input, output, n);
 }
 
-template void LaunchIsNan<Eigen::half>(const Eigen::half*, bool*, int,
-                                       musaStream_t);
+void LaunchIsNanHalf(const uint16_t* input, bool* output, int n,
+                     musaStream_t stream) {
+  LaunchIsNan<uint16_t>(input, output, n, stream);
+}
+
+template void LaunchIsNan<uint16_t>(const uint16_t*, bool*, int, musaStream_t);
 template void LaunchIsNan<float>(const float*, bool*, int, musaStream_t);
 template void LaunchIsNan<double>(const double*, bool*, int, musaStream_t);
 
