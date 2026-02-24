@@ -10,6 +10,36 @@
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/tensor.h"
 #define DEVICE_MTGPU "MUSA"
+
+// 统一的错误处理宏
+#define MTOP_CHECK_MTDNN_STATUS_RET(status) \
+  do {                                      \
+    if ((status) != ::musa::dnn::Status::SUCCESS) { \
+      return static_cast<mStatus>(1);       \
+    }                                       \
+  } while (0)
+
+#define MTOP_CHECK_OK(status, op_name, ctx)                      \
+  do {                                                           \
+    if ((status) != ::musa::dnn::Status::SUCCESS) {              \
+      (ctx)->CtxFailure(errors::Internal(                        \
+          "MUSA ", (op_name), " failed. Status: ",               \
+          static_cast<int>(status)));                            \
+      return;                                                    \
+    }                                                            \
+  } while (0)
+
+#define MTOP_CHECK_OK_RUN(status, op_name, ctx)                  \
+  do {                                                           \
+    auto _status = (status);                                     \
+    if (_status != ::musa::dnn::Status::SUCCESS) {               \
+      (ctx)->CtxFailure(errors::Internal(                        \
+          "MUSA ", (op_name), " failed. Status: ",               \
+          static_cast<int>(_status)));                           \
+      return;                                                    \
+    }                                                            \
+  } while (0)
+
 namespace tensorflow {
 namespace musa {
 

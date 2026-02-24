@@ -26,7 +26,12 @@ MusaDeviceContext::MusaDeviceContext(
 
 MusaDeviceContext::~MusaDeviceContext() {
   if (official_stream_) {
+    // 等待所有异步操作完成
+    official_stream_->BlockHostUntilDone().IgnoreError();
     delete official_stream_;
+  }
+  if (implementation_) {
+    delete implementation_;
   }
 }
 
@@ -104,7 +109,6 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
   mublasSetStream(mublas_handle_, stream_);
 
   // 初始化 Context
-
   device_context_ = new MusaDeviceContext(stream_, executor);
   musa_allocator_ = new MusaRawAllocator(device_id_);
 

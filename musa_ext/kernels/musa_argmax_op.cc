@@ -1,19 +1,17 @@
-#include <musa_runtime_api.h>
-
-#include <algorithm>
-#include <vector>
+#include <mudnn.h>
 
 #include "tensorflow/core/framework/bounds_check.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.h"
+#include "utils_op.h"
 
 namespace tensorflow {
 namespace musa {
 
 template <typename T, typename Tidx>
-class MusaArgMaxOp : public OpKernel {
+class MusaArgMaxOp : public MusaOpKernel {
  public:
   explicit MusaArgMaxOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
 
@@ -53,45 +51,29 @@ class MusaArgMaxOp : public OpKernel {
 
     if (output_shape.num_elements() == 0) return;
 
-    size_t input_bytes = input.NumElements() * sizeof(T);
-    std::vector<T> h_input(input.NumElements());
-    auto status = musaMemcpy(h_input.data(), input.flat<T>().data(),
-                             input_bytes, musaMemcpyDeviceToHost);
-    OP_REQUIRES(ctx, status == musaSuccess,
-                errors::Internal("MusaArgMax: Memcpy D2H failed"));
-
-    std::vector<Tidx> h_output(output->NumElements());
-
-    int64_t outer_size = 1;
-    for (int i = 0; i < axis; ++i) outer_size *= input.dim_size(i);
-    int64_t inner_size = 1;
-    for (int i = axis + 1; i < input_dims; ++i) inner_size *= input.dim_size(i);
-
-    for (int64_t o = 0; o < outer_size; ++o) {
-      for (int64_t i = 0; i < inner_size; ++i) {
-        float max_val = -1e30;
-        Tidx max_idx = 0;
-
-        for (int64_t a = 0; a < axis_size; ++a) {
-          int64_t input_idx = o * (axis_size * inner_size) + a * inner_size + i;
-
-          float val = static_cast<float>(h_input[input_idx]);
-
-          if (a == 0 || val > max_val) {
-            max_val = val;
-            max_idx = static_cast<Tidx>(a);
-          }
-        }
-
-        h_output[o * inner_size + i] = max_idx;
-      }
-    }
-
-    size_t output_bytes = output->NumElements() * sizeof(Tidx);
-    status = musaMemcpy(output->flat<Tidx>().data(), h_output.data(),
-                        output_bytes, musaMemcpyHostToDevice);
-    OP_REQUIRES(ctx, status == musaSuccess,
-                errors::Internal("MusaArgMax: Memcpy H2D failed"));
+    // 使用 muDNN TopK 实现 ArgMax
+    auto& handle = GetHandleByCtx(ctx);
+    
+    // 创建输入和输出的 mTensor
+    mTensor input_mt = CreateMTensor(input, format_);
+    mTensor output_mt = CreateMTensor(*output, format_);
+    
+    // muDNN TopK 需要额外的值输出，但我们只需要索引
+    Tensor temp_values;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(input.dtype(), output_shape, &temp_values));
+    mTensor values_mt = CreateMTensor(temp_values, format_);
+    
+    // 配置 TopK 算子
+    ::musa::dnn::TopK topk_op;
+    topk_op.SetK(1);  // 只需要最大值的索引
+    topk_op.SetAxis(static_cast<int>(axis));
+    topk_op.SetLargest(true);
+    
+    // 执行 TopK 操作
+    auto status = topk_op.Run(handle, values_mt, output_mt, input_mt);
+    
+    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
+                errors::Internal("MUSA ArgMax execution failed. Status: ", static_cast<int>(status)));
   }
 };
 
