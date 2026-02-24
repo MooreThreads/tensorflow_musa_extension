@@ -105,7 +105,7 @@ class MusaGatherOp : public MusaOpKernel {
                 errors::Internal("MUSA muDNN Gather execution failed. Status: ",
                                  static_cast<int>(status)));
 
-    VLOG(0) << "MUSA DEBUG: GatherV2 executed successfully.";
+#VLOG(0) << "MUSA DEBUG: GatherV2 executed successfully.";
   }
 };
 
