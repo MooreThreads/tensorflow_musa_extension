@@ -2,7 +2,6 @@
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor_util.h"
-// #include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
 #include "../utils/musa_guarded_philox_random.h"
 #include "mu/device/musa_memcpy.h"
 #include "utils_op.h"
