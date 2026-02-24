@@ -3,6 +3,8 @@
 
 """Tests for MUSA IsNan operator."""
 
+import os
+
 import numpy as np
 import tensorflow as tf
 
@@ -11,6 +13,16 @@ from musa_test_utils import MUSATestCase
 
 class IsNanOpTest(MUSATestCase):
   """Tests for MUSA IsNan operator."""
+
+  @classmethod
+  def setUpClass(cls):
+    # Keep plugin loading/device checks from MUSATestCase.
+    super(IsNanOpTest, cls).setUpClass()
+    # Model-level behavior: allow fallback and print device placement logs.
+    tf.config.set_soft_device_placement(True)
+    # Can be disabled by setting MUSA_LOG_DEVICE_PLACEMENT=0.
+    tf.debugging.set_log_device_placement(
+        os.environ.get("MUSA_LOG_DEVICE_PLACEMENT", "1") == "1")
 
   def _compare_cpu_musa_isnan(self, x):
     # Compare TF CPU reference vs. MUSA plugin result exactly (bool output).
