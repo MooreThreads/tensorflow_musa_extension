@@ -1,5 +1,6 @@
 #include <mudnn.h>
 
+#include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/lib/core/errors.h"
@@ -47,27 +48,13 @@ class MusaExpandDimsOp : public MusaOpKernel {
 
     if (input.NumElements() == 0) return;
 
-    auto in_mt = CreateMTensor(input);
-    auto out_mt = CreateMTensor(*output);
-
     auto& h = GetHandleByCtx(context);
-    ::musa::dnn::Permute op;
-
-    std::vector<int64_t> m_dims;
-    for (int i = 0; i < input_dims; ++i) {
-      m_dims.push_back(static_cast<int64_t>(input.dim_size(i)));
-    }
-
-    if (m_dims.empty()) {
-      m_dims.push_back(1);
-    }
-
-    MTOP_CHECK_OK(
-        out_mt.SetNdInfo(static_cast<int>(m_dims.size()), m_dims.data()),
-        "SetNdInfo for ExpandDims", context);
-
-    MTOP_CHECK_OK_RUN(op.Run(h, out_mt, in_mt), "Permute Run for ExpandDims",
-                      context);
+    musaStream_t stream = reinterpret_cast<musaStream_t>(h.GetStream());
+    mStatus copy_status = MusaMemcpyAsyncD2D(
+        const_cast<char*>(output->tensor_data().data()),
+        input.tensor_data().data(), input.TotalBytes(), stream);
+    OP_REQUIRES(context, copy_status == mStatus::SUCCESS,
+                errors::Internal("MUSA ExpandDims: memory copy failed."));
   }
 };
 
