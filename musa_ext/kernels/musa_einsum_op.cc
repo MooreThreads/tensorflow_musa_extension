@@ -1,12 +1,7 @@
-#ifndef TENSORFLOW_CORE_KERNELS_LINALG_EINSUM_OP_IMPL_H_
-#define TENSORFLOW_CORE_KERNELS_LINALG_EINSUM_OP_IMPL_H_
-
-// #define EIGEN_USE_THREADS
-// #if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
-// #define EIGEN_USE_GPU
-// #endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
-
 #include "musa_einsum_op.h"
+
+#include <functional>
+#include <memory>
 
 #include "../utils/musa_einsum_op_util.h"
 #include "absl/container/flat_hash_map.h"
@@ -20,10 +15,6 @@
 #include "tensorflow/core/profiler/lib/traceme.h"
 #include "tensorflow/core/util/matmul_bcast.h"
 #include "utils_op.h"
-
-// #if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
-// #include "tensorflow/core/kernels/reduction_ops_common_gpu.h"
-// #endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 
 namespace tensorflow {
 namespace musa {
@@ -373,22 +364,62 @@ struct EinsumHelper {
     TF_RETURN_IF_ERROR(
         output_shape.AddDimWithStatus(reshape[EinsumDimensionType::kContract]));
 
-    if (reshape[EinsumDimensionType::kReduce] ==
-        1) {  // No need to actually reduce.
+    if (reshape[EinsumDimensionType::kReduce] == 1) {  // No need to reduce.
       return CopyFrom(input_deduped, output_shape, output);
     }
     TF_RETURN_IF_ERROR(
         ctx->allocate_temp(DataTypeToEnum<T>::value, output_shape, output));
-    using Reducer = Eigen::internal::SumReducer<T>;
-    using Index = typename TTypes<T>::Tensor::Index;
-    // Reduce along the last axis (i.e axis 1) of the rank-2 Tensor.
+    const int64_t reduce_size = reshape[kReduce];
     const int64_t output_size = reshape[kBroadcasting] * reshape[kBatch] *
                                 reshape[kFree] * reshape[kContract];
-    // functor::ReduceFunctor<Device, Reducer>::Reduce(
-    //     ctx, output->shaped<T, 1>({output_size}),
-    //     const_cast<const Tensor&>(input_deduped)
-    //         .shaped<T, 2>({output_size, reshape[kReduce]}),
-    //     Eigen::array<Index, 1>({1}), Reducer());
+
+    TensorShape input_flatten_shape;
+    TF_RETURN_IF_ERROR(input_flatten_shape.AddDimWithStatus(output_size));
+    TF_RETURN_IF_ERROR(input_flatten_shape.AddDimWithStatus(reduce_size));
+    Tensor input_flattened;
+    if (!input_flattened
+             .BitcastFrom(input_deduped, input_deduped.dtype(),
+                          input_flatten_shape)
+             .ok()) {
+      return errors::Internal("Failed to reshape Einsum input for reduce");
+    }
+
+    TensorShape output_flatten_shape;
+    TF_RETURN_IF_ERROR(output_flatten_shape.AddDimWithStatus(output_size));
+    Tensor output_flattened;
+    if (!output_flattened
+             .BitcastFrom(*output, output->dtype(), output_flatten_shape)
+             .ok()) {
+      return errors::Internal("Failed to reshape Einsum output for reduce");
+    }
+
+    auto input_mt = CreateMTensor(input_flattened);
+    auto output_mt = CreateMTensor(output_flattened);
+
+    auto& handle = GetHandleByCtx(ctx);
+    mReduce op;
+    op.SetMode(::musa::dnn::Reduce::Mode::ADD);
+    int reduce_dims[] = {1};
+    op.SetDim(1, reduce_dims);
+
+    tensorflow::Allocator* tf_allocator =
+        ctx->device()->GetAllocator(tensorflow::AllocatorAttributes());
+    auto alloc_func =
+        [tf_allocator](
+            size_t size) -> std::unique_ptr<void, std::function<void(void*)>> {
+      void* ptr = tf_allocator->AllocateRaw(256, size);
+      std::function<void(void*)> deleter = [tf_allocator](void* p) {
+        if (p) tf_allocator->DeallocateRaw(p);
+      };
+      return std::unique_ptr<void, std::function<void(void*)>>(ptr, deleter);
+    };
+    ::musa::dnn::MemoryMaintainer mm(alloc_func);
+
+    auto status = op.Run(handle, output_mt, input_mt, mm);
+    if (status != ::musa::dnn::Status::SUCCESS) {
+      return errors::Internal("MUSA Reduce (sum) execution failed. Status: ",
+                              static_cast<int>(status));
+    }
     return Status::OK();
   }
 
@@ -442,12 +473,19 @@ struct EinsumHelper {
     TF_RETURN_IF_ERROR(
         ReshapeToRank3(*output, bcast.output_batch_size(), &output_reshaped));
 
-    // -------- THIS SHOULD BE REPLACED BY MUSA BATCHMATMUL FUNCTOR --------
-    // LaunchBatchMatMul<Device, T>::Launch(ctx, lhs, rhs, /*adj_x=*/false,
-    //                                      /*adj_y=*/false, trans_x, trans_y,
-    //                                      /*grad_x=*/false, /*grad_y=*/false,
-    //                                      bcast, &output_reshaped);
-    // ----------------------------------------------------------------------
+    auto& handle = GetHandleByCtx(ctx);
+    mBatchMatMul op;
+    op.SetTranspose(trans_x, trans_y);
+    op.SetAlpha(1.0);
+    op.SetBeta(0.0);
+    auto lhs_mt = CreateMTensor(lhs);
+    auto rhs_mt = CreateMTensor(rhs);
+    auto out_mt = CreateMTensor(output_reshaped);
+    auto status = op.Run(handle, out_mt, lhs_mt, rhs_mt);
+    if (status != ::musa::dnn::Status::SUCCESS) {
+      return errors::Internal("MUSA BatchMatMul execution failed. Status: ",
+                              static_cast<int>(status));
+    }
     return Status::OK();
   }
 };
@@ -601,45 +639,7 @@ class MusaEinsumOp : public MusaOpKernel {
   LabelCounts output_label_counts_;
   gtl::InlinedVector<bool, 2> input_has_ellipsis_;
   bool output_has_ellipsis_ = false;
-};
-
-#if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
-// Forward declarations of the functor specializations for GPU.
-namespace functor {
-#define DECLARE_GPU_SPEC(T, N)                                      \
-  template <>                                                       \
-  void StrideFunctor<GPUDevice, T, N>::operator()(                  \
-      const GPUDevice& d, typename TTypes<T, N>::ConstTensor input, \
-      const Eigen::DSizes<Eigen::DenseIndex, N>& strides,           \
-      typename TTypes<T, N>::Tensor output);                        \
-  extern template struct StrideFunctor<GPUDevice, T, N>;            \
-  template <>                                                       \
-  void InflateFunctor<GPUDevice, T, N>::operator()(                 \
-      const GPUDevice& d, typename TTypes<T, N>::ConstTensor input, \
-      const Eigen::DSizes<Eigen::DenseIndex, N>& strides,           \
-      typename TTypes<T, N>::Tensor output);                        \
-  extern template struct InflateFunctor<GPUDevice, T, N>;
-
-#define DECLARE_GPU_SPECS(T) \
-  DECLARE_GPU_SPEC(T, 1);    \
-  DECLARE_GPU_SPEC(T, 2);    \
-  DECLARE_GPU_SPEC(T, 3);    \
-  DECLARE_GPU_SPEC(T, 4);    \
-  DECLARE_GPU_SPEC(T, 5);    \
-  DECLARE_GPU_SPEC(T, 6);
-
-TF_CALL_GPU_NUMBER_TYPES(DECLARE_GPU_SPECS);
-// TODO(rocm): Enable once complex types are supported.
-#if GOOGLE_CUDA
-DECLARE_GPU_SPECS(complex64);
-DECLARE_GPU_SPECS(complex128);
-#endif
-#undef DECLARE_GPU_SPEC
-#undef DECLARE_GPU_SPECS
-}  // namespace functor
-#endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
+};  // class MusaEinsumOp
 
 }  // namespace musa
 }  // namespace tensorflow
-
-#endif  // TENSORFLOW_CORE_KERNELS_LINALG_EINSUM_OP_IMPL_H_
