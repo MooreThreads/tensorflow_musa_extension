@@ -26,12 +26,19 @@ void MusaDiagPartkernelLauncher(musaStream_t stream, uint64_t size, const T* in,
   MusaDiagPartKernel<T><<<grid_size, block_size, 0, stream>>>(size, in, out);
 }
 
-template void MusaDiagPartkernelLauncher<float>(musaStream_t, uint64_t, const float*, float*);
-template void MusaDiagPartkernelLauncher<double>(musaStream_t, uint64_t, const double*, double*);
-template void MusaDiagPartkernelLauncher<int32>(musaStream_t, uint64_t, const int*, int*);
-template void MusaDiagPartkernelLauncher<int64>(musaStream_t, uint64_t, const int64*, int64*);
-template void MusaDiagPartkernelLauncher<Eigen::half>(musaStream_t, uint64_t, const Eigen::half*, Eigen::half*);
-template void MusaDiagPartkernelLauncher<Eigen::bfloat16>(musaStream_t, uint64_t, const Eigen::bfloat16*, Eigen::bfloat16*);
+template void MusaDiagPartkernelLauncher<float>(musaStream_t, uint64_t,
+                                                const float*, float*);
+template void MusaDiagPartkernelLauncher<double>(musaStream_t, uint64_t,
+                                                 const double*, double*);
+template void MusaDiagPartkernelLauncher<int32>(musaStream_t, uint64_t,
+                                                const int*, int*);
+template void MusaDiagPartkernelLauncher<int64>(musaStream_t, uint64_t,
+                                                const int64*, int64*);
+template void MusaDiagPartkernelLauncher<Eigen::half>(musaStream_t, uint64_t,
+                                                      const Eigen::half*,
+                                                      Eigen::half*);
+template void MusaDiagPartkernelLauncher<Eigen::bfloat16>(
+    musaStream_t, uint64_t, const Eigen::bfloat16*, Eigen::bfloat16*);
 
 }  // namespace musa
 }  // namespace tensorflow

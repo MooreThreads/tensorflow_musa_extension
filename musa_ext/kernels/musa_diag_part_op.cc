@@ -1,5 +1,5 @@
-#include "utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
+#include "utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -52,11 +52,10 @@ class MusaDiagPartOp : public MusaOpKernel {
   }
 };  // class MusaDiagPartOp
 
-#define REGISTER_MUSA_DIAG_PART(TYPE) \
-  REGISTER_KERNEL_BUILDER(Name("DiagPart")         \
-                              .Device("MUSA")      \
-                              .TypeConstraint<TYPE>("T"), \
-                          MusaDiagPartOp<TYPE>)
+#define REGISTER_MUSA_DIAG_PART(TYPE)                            \
+  REGISTER_KERNEL_BUILDER(                                       \
+      Name("DiagPart").Device("MUSA").TypeConstraint<TYPE>("T"), \
+      MusaDiagPartOp<TYPE>)
 
 REGISTER_MUSA_DIAG_PART(float);
 REGISTER_MUSA_DIAG_PART(double);
