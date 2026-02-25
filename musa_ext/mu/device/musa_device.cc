@@ -53,8 +53,16 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
       done(errors::Internal("MUSA H2D async copy init failed."));
       return;
     }
-    // Wait for this specific stream to complete
-    musaStreamSynchronize(stream_handle_);
+    // NOTE: This is a blocking copy operation. We synchronize here to ensure
+    // the data is fully transferred before the caller proceeds. This is
+    // required for correctness in TF's memory model where CPU tensor data
+    // may be reused/freed after this callback.
+    // TODO: Consider using event-based synchronization for better concurrency.
+    musaError_t sync_err = musaStreamSynchronize(stream_handle_);
+    if (sync_err != musaSuccess) {
+      done(errors::Internal("MUSA H2D stream sync failed."));
+      return;
+    }
   }
   done(Status::OK());
 }
@@ -82,8 +90,16 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
       done(errors::Internal("MUSA D2H async copy init failed."));
       return;
     }
-    // Wait for this specific stream to complete
-    musaStreamSynchronize(stream_handle_);
+    // NOTE: This is a blocking copy operation. We synchronize here to ensure
+    // the data is fully transferred before the caller proceeds. This is
+    // required for correctness in TF's memory model where device tensor data
+    // may be reused/freed after this callback.
+    // TODO: Consider using event-based synchronization for better concurrency.
+    musaError_t sync_err = musaStreamSynchronize(stream_handle_);
+    if (sync_err != musaSuccess) {
+      done(errors::Internal("MUSA D2H stream sync failed."));
+      return;
+    }
   }
   done(Status::OK());
 }
@@ -101,6 +117,9 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
     std::cerr << ">>> [MUSA] ERROR: Device " << device_id_
               << " failed to create stream: " << musaGetErrorString(stream_err)
               << std::endl;
+    stream_ = nullptr;
+    device_context_ = nullptr;
+    musa_allocator_ = nullptr;
     return;
   }
 
@@ -109,7 +128,8 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
   ::musa::dnn::Status s = mudnn_handle_->SetStream(stream_);
   if (s != ::musa::dnn::Status::SUCCESS) {
     std::cerr << ">>> [MUSA] ERROR: Device " << device_id_
-              << " failed to bind muDNN handle!" << std::endl;
+              << " failed to bind muDNN handle! Error code: "
+              << static_cast<int>(s) << std::endl;
     mudnn_handle_.reset();
   }
 
@@ -117,7 +137,8 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
   mublasStatus_t blas_err = mublasCreate(&mublas_handle_);
   if (blas_err != MUBLAS_STATUS_SUCCESS) {
     std::cerr << ">>> [MUSA] ERROR: Device " << device_id_
-              << " failed to create muBLAS handle!" << std::endl;
+              << " failed to create muBLAS handle! Error code: "
+              << static_cast<int>(blas_err) << std::endl;
     mublas_handle_ = nullptr;
   } else {
     mublasSetStream(mublas_handle_, stream_);
@@ -145,7 +166,9 @@ MusaDevice::~MusaDevice() {
   if (musa_allocator_) {
     delete musa_allocator_;
   }
-  musaStreamDestroy(stream_);
+  if (stream_) {
+    musaStreamDestroy(stream_);
+  }
 }
 
 Allocator* MusaDevice::GetAllocator(AllocatorAttributes attr) {

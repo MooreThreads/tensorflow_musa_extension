@@ -63,7 +63,13 @@ class MusaExecutor : public internal::StreamExecutorInterface {
   }
 
   void Deallocate(DeviceMemoryBase* mem) override {
-    // musaFree(mem->opaque());
+    if (mem && mem->opaque()) {
+      musaSetDevice(device_ordinal_);
+      musaError_t err = musaFree(mem->opaque());
+      if (err != musaSuccess) {
+        LOG(ERROR) << "MUSA Deallocate failed: " << musaGetErrorString(err);
+      }
+    }
   }
 
   bool HostMemoryRegister(void* mem, uint64 size) override { return true; }
