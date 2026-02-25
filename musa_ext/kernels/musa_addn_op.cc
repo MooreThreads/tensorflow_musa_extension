@@ -124,14 +124,14 @@ class MusaAddNOp : public MusaOpKernel {
 // Launcher function getters - specialized for each type
 // ============================================================================
 
-#define DEFINE_ADDN_LAUNCHER_GETTER(T, launcher, input_cast, output_cast) \
-  template <> \
+#define DEFINE_ADDN_LAUNCHER_GETTER(T, launcher, input_cast, output_cast)       \
+  template <>                                                                   \
   void (*MusaAddNOp<T>::GetLauncher())(const T**, T*, int, int, musaStream_t) { \
-    return [](const T** inputs, T* output, int num_inputs, int size, \
-              musaStream_t stream) { \
-      launcher(input_cast(inputs), output_cast(output), \
-               num_inputs, size, stream); \
-    }; \
+    return [](const T** inputs, T* output, int num_inputs, int size,            \
+              musaStream_t stream) {                                            \
+      launcher(input_cast(inputs), output_cast(output),                         \
+               num_inputs, size, stream);                                       \
+    };                                                                          \
   }
 
 // Float and double - direct casts

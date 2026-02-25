@@ -4,7 +4,6 @@
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/util/matmul_bcast.h"
-#include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
 #include "utils_op.h"
 
 #define ENABLE_MUSA_DEBUG 0

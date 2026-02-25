@@ -157,9 +157,8 @@ class CustomTestResult(unittest.TextTestResult):
 
     def addSuccess(self, test):
         super().addSuccess(test)
-        self.test_results.append(('PASS', str(test), None))
-        if self.show_progress and self.progress_bar:
-            self.progress_bar.update(test._testMethodName, 'PASS')
+        # Count successes without storing to save memory
+        self.progress_bar.update(test._testMethodName, 'PASS') if self.show_progress and self.progress_bar else None
 
     def addError(self, test, err):
         super().addError(test, err)
@@ -213,7 +212,11 @@ from prettytable import PrettyTable
 def create_pretty_summary(result, elapsed_time):
     """Create a beautiful summary using prettytable."""
     total = result.testsRun
-    passed = len([r for r in result.test_results if r[0] == 'PASS'])
+    # Get pass count from progress bar if available, otherwise from test_results
+    if hasattr(result, 'progress_bar') and result.progress_bar:
+        passed = result.progress_bar.status_counts.get('PASS', 0)
+    else:
+        passed = len([r for r in result.test_results if r[0] == 'PASS'])
     failed = len(result.failures)
     errors = len(result.errors)
     skipped = len(result.skipped)

@@ -44,6 +44,7 @@ tensorflow_musa_extension/
   - Python: >= 3.7
   - TensorFlow: == 2.4.4
   - NumPy: >= 1.19.0
+  - pettytable: >= 3.0.0
 - **开发工具**:
   - pre-commit >= 3.0.0
   - pytest >= 6.0.0

@@ -2,18 +2,49 @@
 
 #include <algorithm>
 #include <cmath>
-#include <vector>
 
 #include "kernels/utils_op.h"
-#include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/platform/macros.h"
 
+// ============================================================================
+// MUSA Range custom kernel launcher declarations from musa_range_kernel.mu
+// ============================================================================
+
+extern "C" {
+void LaunchRangeKernelFloat(float* output, float start, float delta, int size,
+                            musaStream_t stream);
+void LaunchRangeKernelDouble(double* output, double start, double delta,
+                             int size, musaStream_t stream);
+void LaunchRangeKernelInt32(int* output, int start, int delta, int size,
+                            musaStream_t stream);
+void LaunchRangeKernelInt64(long long* output, long long start, long long delta,
+                            int size, musaStream_t stream);
+}
+
 namespace tensorflow {
 namespace musa {
+
+// Optimized Range implementation using custom MUSA kernel
+//
+// PERFORMANCE COMPARISON:
+//
+// Original (host computation + H2D copy):
+//   - Host loop to generate values
+//   - Host memory allocation (std::vector)
+//   - H2D memory transfer (PCIe bottleneck)
+//   - Host stream synchronization
+//
+// Optimized (device kernel):
+//   - Single kernel launch
+//   - No host memory allocation
+//   - No H2D transfer
+//   - Fully parallel on device
+//
+// EXPECTED SPEEDUP: 5-10x (eliminates PCIe transfer)
 
 template <typename T>
 class MusaRangeOp : public OpKernel {
@@ -56,29 +87,38 @@ class MusaRangeOp : public OpKernel {
 
     if (size == 0) return;
 
-    std::vector<T> host_data(size);
-    T val = start;
-    for (int64 i = 0; i < size; ++i) {
-      host_data[i] = val;
-      val += delta;
-    }
-
+    // OPTIMIZED: Launch custom kernel to generate values on device
     auto device_ptr = output->flat<T>().data();
-
-    // Use async memcpy with stream for better concurrency
     musaStream_t stream = GetMusaStreamByCtx(ctx);
-    mStatus status = MusaMemcpyAsyncH2D(device_ptr, host_data.data(),
-                                        size * sizeof(T), stream);
 
-    OP_REQUIRES(ctx, status == mStatus::SUCCESS,
-                errors::Internal("MusaRangeOp: MusaMemcpyAsyncH2D failed"));
-
-    // Synchronize only the current stream
-    if (stream) {
-      musaStreamSynchronize(stream);
-    }
+    LaunchRangeKernel(ctx, device_ptr, start, delta, static_cast<int>(size),
+                      stream);
   }
+
+ private:
+  // Helper to call the correct launcher function for each type
+  void LaunchRangeKernel(OpKernelContext* ctx, T* output, T start, T delta,
+                         int size, musaStream_t stream);
 };
+
+// ============================================================================
+// Template specializations using macro to reduce boilerplate
+// ============================================================================
+
+#define DEFINE_RANGE_SPECIALIZATION(T, launcher)                          \
+  template <>                                                             \
+  void MusaRangeOp<T>::LaunchRangeKernel(OpKernelContext* ctx, T* output, \
+                                         T start, T delta, int size,      \
+                                         musaStream_t stream) {           \
+    launcher(output, start, delta, size, stream);                         \
+  }
+
+DEFINE_RANGE_SPECIALIZATION(float, LaunchRangeKernelFloat)
+DEFINE_RANGE_SPECIALIZATION(double, LaunchRangeKernelDouble)
+DEFINE_RANGE_SPECIALIZATION(int32, LaunchRangeKernelInt32)
+DEFINE_RANGE_SPECIALIZATION(int64, LaunchRangeKernelInt64)
+
+#undef DEFINE_RANGE_SPECIALIZATION
 
 #define REGISTER_RANGE(T)                                 \
   REGISTER_KERNEL_BUILDER(Name("Range")                   \
