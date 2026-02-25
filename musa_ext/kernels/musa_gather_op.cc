@@ -103,8 +103,6 @@ class MusaGatherOp : public MusaOpKernel {
     OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
                 errors::Internal("MUSA muDNN Gather execution failed. Status: ",
                                  static_cast<int>(status)));
-
-    VLOG(0) << "MUSA DEBUG: GatherV2 executed successfully.";
   }
 };
 
