@@ -3,6 +3,8 @@
 
 #include <mudnn.h>
 
+#include <musa_runtime.h>
+
 namespace tensorflow {
 namespace musa {
 
@@ -13,6 +15,13 @@ using mStatus = ::musa::dnn::Status;
 mStatus Memset(mHandle& h, void* device_dst, uint64_t size, uint8_t pattern);
 
 mStatus Memset32(mHandle& h, void* device_dst, uint64_t size, uint32_t pattern);
+
+// Async versions that take a stream parameter
+mStatus MemsetAsync(void* device_dst, uint8_t pattern, uint64_t size,
+                    musaStream_t stream);
+
+mStatus Memset32Async(void* device_dst, uint32_t pattern, uint64_t size,
+                      musaStream_t stream);
 
 }  // namespace musa
 }  // namespace tensorflow

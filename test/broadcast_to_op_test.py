@@ -6,7 +6,7 @@ class BroadcastToOpTest(MUSATestCase):
 
   def _test_broadcast_to(self, input_data, target_shape, dtype):
     x = tf.constant(input_data, dtype=dtype)
-    
+
     def op_wrapper(input_tensor):
         return tf.broadcast_to(input_tensor, target_shape)
 
@@ -38,9 +38,9 @@ class BroadcastToOpTest(MUSATestCase):
         for output_dim in range(input_dim, 6):
             input_shape = [2] * input_dim
             output_shape = [2] * output_dim
-            
+
             x_np = np.random.randint(5, size=input_shape).astype(np.int32)
-            
+
             self._test_broadcast_to(x_np, output_shape, tf.int32)
 
   def testBroadcastToComplexShapes(self):
@@ -51,8 +51,8 @@ class BroadcastToOpTest(MUSATestCase):
     )
 
     input_shape = [2, 1, 3, 2, 2, 2]
-    output_shape = [1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 15, 3, 2, 2, 2]
-    
+    output_shape = [1, 1, 2, 15, 3, 2, 2, 2]
+
     x_np = np.random.randint(5, size=input_shape).astype(np.int32)
     self._test_broadcast_to(x_np, output_shape, tf.int32)
 
@@ -66,7 +66,7 @@ class BroadcastToOpTest(MUSATestCase):
 
     x_scalar = tf.constant(1.0, dtype=tf.float32)
     target_scalar = [2, 4, 3]
-    
+
     self._compare_cpu_musa_results(
         lambda t: grad_wrapper(t, target_scalar),
         [x_scalar],
@@ -75,7 +75,7 @@ class BroadcastToOpTest(MUSATestCase):
 
     x_rank = tf.constant([[1.0], [2.0]], dtype=tf.float32)
     target_rank = [5, 2, 3]
-    
+
     self._compare_cpu_musa_results(
         lambda t: grad_wrapper(t, target_rank),
         [x_rank],

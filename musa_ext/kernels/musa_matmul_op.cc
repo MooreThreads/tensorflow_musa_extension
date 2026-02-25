@@ -1,6 +1,8 @@
 #include <mudnn.h>
 #include <mudnn_xmma.h>
 
+#include <cstdlib>
+
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/common_shape_fns.h"
 #include "tensorflow/core/framework/op.h"
@@ -45,6 +47,14 @@ class MusaMatMulOp : public MusaOpKernel {
     bool adj_y = false;
     if (ctx->GetAttr("adj_x", &adj_x).ok()) trans_a_ = adj_x;
     if (ctx->GetAttr("adj_y", &adj_y).ok()) trans_b_ = adj_y;
+
+    // TF32 is disabled by default for better precision
+    // Can be enabled via MUSA_ENABLE_TF32=1 environment variable
+    tf32_enabled_ = false;  // Default to false for precision
+    const char* tf32_env = std::getenv("MUSA_ENABLE_TF32");
+    if (tf32_env && std::atoi(tf32_env) == 1) {
+      tf32_enabled_ = true;
+    }
   }
 
   void Compute(OpKernelContext* ctx) override {
@@ -80,7 +90,7 @@ class MusaMatMulOp : public MusaOpKernel {
     if (out->NumElements() == 0) return;
 
     auto& handle = GetHandleByCtx(ctx);
-    handle.SetAllowTF32(false);
+    handle.SetAllowTF32(tf32_enabled_);  // Use TF32 setting from constructor
     mTensor mt_a = CreateMTensor(in0);
     mTensor mt_b = CreateMTensor(in1);
     mTensor mt_out = CreateMTensor(*out);
@@ -130,6 +140,7 @@ class MusaMatMulOp : public MusaOpKernel {
  private:
   bool trans_a_ = false;
   bool trans_b_ = false;
+  bool tf32_enabled_ = false;  // TF32 acceleration enabled by default
 };
 
 #define REGISTER_MUSA_MATMUL_ALL(TYPE)                                    \

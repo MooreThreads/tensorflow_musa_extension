@@ -1,6 +1,6 @@
 # TensorFlow MUSA Extension
 
-TensorFlow MUSA Extension is a high-performance TensorFlow plugin specifically designed for Moore Threads MUSA GPU architecture. This extension provides native MUSA kernel implementations to deliver full GPU acceleration support for TensorFlow, maximizing the computational performance of Moore Threads' full-featured GPUs.
+TensorFlow MUSA Extension is a high-performance TensorFlow plugin specifically designed for Moore Threads (Moore Threads) MUSA GPU architecture. This extension provides native MUSA kernel implementations to deliver full GPU acceleration support for TensorFlow, maximizing the computational performance of Moore Threads' full-featured GPUs.
 
 ## Features
 
@@ -12,12 +12,42 @@ TensorFlow MUSA Extension is a high-performance TensorFlow plugin specifically d
 
 ## Quick Start
 
+### Directory Structure
+
+```
+tensorflow_musa_extension/
+├── CMakeLists.txt          # CMake build configuration
+├── build.sh                # Build script
+├── .clang-format           # Code formatting configuration
+├── .pre-commit-config.yaml # pre-commit hook configuration
+├── .gitlab-ci.yml          # CI/CD configuration
+├── musa_ext/               # Core source directory
+│   ├── kernels/            # MUSA kernel implementations
+│   ├── mu/                 # MUSA device and optimizer implementations
+│   └── utils/              # Utility functions
+└── test/                   # Test cases
+    ├── musa_test_utils.py  # Test utilities
+    └── *_test.py           # Individual operator test files
+```
+
 ### Prerequisites
 
-- TensorFlow 2.x
-- Moore Threads MUSA Driver and SDK
-- CMake 3.15+
-- GCC/G++ 7.0+
+- **Build Tools**:
+  - CMake (version >= 3.10)
+  - Make
+- **MUSA SDK**:
+  - MUSA Runtime (>= 1.0)
+  - muBLAS Library
+  - muDNN Library
+  - Default installation path: `/usr/local/musa`
+- **Python Dependencies**:
+  - Python: >= 3.7
+  - TensorFlow: == 2.4.4
+  - NumPy: >= 1.19.0
+  - prettytable: >= 3.0.0
+- **Development Tools**:
+  - pre-commit >= 3.0.0
+  - pytest >= 6.0.0
 
 ### Installation
 
@@ -63,34 +93,6 @@ After successful compilation, load the plugin in your TensorFlow application:
 ```python
 import tensorflow as tf
 tf.load_library("/path/to/tensorflow_musa_extension/build/libmusa_plugin.so")
-```
-
-## Directory Structure
-
-```
-tensorflow_musa_extension/
-├── tensorflow_musa/          # Core implementation directory
-│   ├── kernels/             # Operator implementations
-│   │   ├── musa_*_op.cc     # Specific implementations of various operators
-│   │   └── utils_op.h       # Operator utility functions
-│   ├── mu/                  # MUSA device core components
-│   │   ├── device/          # Device low-level implementations
-│   │   │   ├── musa_device.h    # Device registration and management
-│   │   │   ├── musa_allocator.h # Memory allocator
-│   │   │   ├── musa_memcpy.h    # Memory copy operations
-│   │   │   └── musa_stream.h    # Stream processing support
-│   │   ├── optimizer/       # Graph optimization modules
-│   │   │   ├── musa_layout_optimizer.cc  # Layout automatic optimization
-│   │   │   ├── musa_remapper_optimizer.cc # Operator fusion optimization
-│   │   │   └── musa_amp_optimizer.cc     # Automatic Mixed Precision optimization
-│   │   ├── device_register.cc   # Device registration logic
-│   │   └── kernel_register.cc   # Operator registration logic
-│   └── utils/               # Utility functions
-│       └── logging.h        # Logging utilities
-├── test/                    # Functional test scripts
-│   └── test_*.py            # Unit tests for individual operators
-├── build.sh                 # Automated build script
-└── README.en.md             # Project documentation
 ```
 
 ## Testing
@@ -141,6 +143,6 @@ Contributions for new operator implementations or optimizations are welcome! Con
 
 This project is licensed under Apache 2.0.
 
-## Support
+## Technical Support
 
 For issues or questions, please submit an Issue or contact the project maintainers.
