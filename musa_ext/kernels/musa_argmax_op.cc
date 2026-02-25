@@ -53,10 +53,8 @@ class MusaArgMaxOp : public MusaOpKernel {
 
     if (output_shape.num_elements() == 0) return;
 
-    // 使用 muDNN TopK 实现 ArgMax
     auto& handle = GetHandleByCtx(ctx);
-    
-    // 创建输入和输出的 mTensor
+
     mTensor input_mt = CreateMTensor(input, format_);
     mTensor output_mt = CreateMTensor(*output, format_);
 
@@ -83,7 +81,7 @@ class MusaArgMaxOp : public MusaOpKernel {
     };
     ::musa::dnn::MemoryMaintainer maintainer = mem_allocator;
     auto status = topk_op.Run(handle, values_mt, output_mt, input_mt, maintainer);
-    
+
     OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
                 errors::Internal("MUSA ArgMax execution failed. Status: ", static_cast<int>(status)));
   }
