@@ -12,7 +12,7 @@
 namespace tensorflow {
 namespace musa {
 
-// --------- 工具：half / bfloat16 转 float ---------
+
 __device__ __forceinline__ float LoadFloat(const float* p) { return *p; }
 
 __device__ __forceinline__ float LoadFloat(const Eigen::half* p) {
@@ -28,12 +28,11 @@ __device__ __forceinline__ float LoadFloat(const bfloat16* p) {
   return res;
 }
 
-// --------- isnan 判定（float/double 直接用 isnan；half/bf16 转 float）
-// ---------
+
 __device__ __forceinline__ bool IsNanValue(float v) { return isnan(v); }
 __device__ __forceinline__ bool IsNanValue(double v) { return isnan(v); }
 
-// --------- Kernel：通用模板（float/double）---------
+
 template <typename T>
 __global__ void IsNanKernel(const T* input, bool* output, int n) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -42,7 +41,7 @@ __global__ void IsNanKernel(const T* input, bool* output, int n) {
   }
 }
 
-// --------- 特化：Eigen::half ---------
+
 template <>
 __global__ void IsNanKernel<Eigen::half>(const Eigen::half* input, bool* output,
                                          int n) {
@@ -53,7 +52,7 @@ __global__ void IsNanKernel<Eigen::half>(const Eigen::half* input, bool* output,
   }
 }
 
-// --------- 特化：bfloat16 ---------
+
 template <>
 __global__ void IsNanKernel<bfloat16>(const bfloat16* input, bool* output,
                                       int n) {
@@ -74,12 +73,12 @@ void LaunchIsNan(const T* input, bool* output, int n, musaStream_t stream) {
 
   IsNanKernel<T><<<blocks, threads, 0, stream>>>(input, output, n);
 
-  // kernel 启动错误检查（和你 AddN 风格一致：错误在上层处理也行）
+  
   musaError_t err = musaGetLastError();
   (void)err;
 }
 
-// 显式实例化
+
 template void LaunchIsNan<float>(const float*, bool*, int, musaStream_t);
 template void LaunchIsNan<double>(const double*, bool*, int, musaStream_t);
 template void LaunchIsNan<Eigen::half>(const Eigen::half*, bool*, int,

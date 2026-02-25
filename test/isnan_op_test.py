@@ -12,7 +12,6 @@
 #See the License for the specific language governing permissions and
 #limitations under the License.
 #== == == == == == == == == == == == == == == == == == == == == == == == == == \
-    == == == == == == == == == == == == ==
 
 """Tests for MUSA IsNan operator.
 
@@ -57,16 +56,12 @@ class IsNanOpTest(MUSATestCase):
                             fill_value=fill_value, include_inf=include_inf)
     x_tf = tf.constant(x_np, dtype=dtype)
 
-#Numeric proxy so \
-    musa_test_utils._compare_cpu_musa_results can use assertAllClose.
-#(IsNan's real output is bool; bool comparison is done below.)
     def isnan_proxy(x):
       return tf.cast(tf.math.is_nan(x), tf.float32)
 
     self._compare_cpu_musa_results(isnan_proxy, [x_tf], dtype, rtol=0.0, atol=0.0)
 
-#Also validate the true output dtype / \
-    shape and exact bool equality CPU vs MUSA.
+
     with tf.device("/CPU:0"):
       cpu_bool = tf.math.is_nan(x_tf)
     with tf.device("/device:MUSA:0"):
@@ -114,8 +109,7 @@ class IsNanOpTest(MUSATestCase):
     """IsNan should reject non-floating types per TF op definition."""
     for dtype in [tf.int32, tf.int64]:
       x = tf.constant([1, 2, 3], dtype=dtype)
-#Depending on TF eager tracing path, \
-    TypeError or InvalidArgumentError may occur.
+
       with self.assertRaises((TypeError, tf.errors.InvalidArgumentError)):
         with tf.device("/device:MUSA:0"):
           _ = tf.math.is_nan(x)

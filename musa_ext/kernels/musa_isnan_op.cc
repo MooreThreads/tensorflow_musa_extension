@@ -4,7 +4,6 @@
 #include "tensorflow/core/framework/register_types.h"
 #include "utils_op.h"
 
-// 声明 kernel 启动函数
 namespace tensorflow {
 namespace musa {
 template <typename T>
@@ -29,7 +28,6 @@ class MusaIsNanOp : public MusaOpKernel {
     const int64_t n64 = y->NumElements();
     if (n64 == 0) return;
 
-    // TF Tensor 的 NumElements() 是 int64，这里 kernel 用 int
     OP_REQUIRES(ctx,
                 n64 <= static_cast<int64_t>(std::numeric_limits<int>::max()),
                 errors::InvalidArgument(
@@ -47,7 +45,6 @@ class MusaIsNanOp : public MusaOpKernel {
   }
 };
 
-// 只注册 MUSA 设备上的 kernel；Op 本体（REGISTER_OP）由 TF Core 提供
 #define REGISTER_MUSA_ISNAN(TYPE)                                   \
   REGISTER_KERNEL_BUILDER(                                          \
       Name("IsNan").Device(DEVICE_MTGPU).TypeConstraint<TYPE>("T"), \
