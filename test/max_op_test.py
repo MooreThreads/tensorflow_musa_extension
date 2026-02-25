@@ -88,7 +88,7 @@ class MaxOpTest(MUSATestCase):
     dtype = tf.float32
     self._test_max(shape, dtype, axis=0)
     self._test_max(shape, dtype, axis=None)
-
+  
 
 if __name__ == "__main__":
   tf.test.main()

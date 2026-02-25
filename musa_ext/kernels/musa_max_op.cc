@@ -81,7 +81,7 @@ class MusaMaxOp : public MusaOpKernel {
         musa_output_shape.AddDim(input.dim_size(d));
       }
     }
-
+   
     Tensor* out = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &out));
     if (out->NumElements() == 0) return;

@@ -48,7 +48,7 @@ void MusaNegKernelLauncher(const void* in, void* out, int size, musaStream_t str
   NegKernel<T><<<grid_size, block_size, 0, stream>>>(
       static_cast<const T*>(in), static_cast<T*>(out), size);
 }
-
+  
 template void MusaNegKernelLauncher<float>(const void*, void*, int, musaStream_t);
 template void MusaNegKernelLauncher<double>(const void*, void*, int, musaStream_t);
 template void MusaNegKernelLauncher<int>(const void*, void*, int, musaStream_t);
