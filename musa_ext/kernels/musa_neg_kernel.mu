@@ -1,11 +1,10 @@
 #include <musa_runtime.h>
-#include <stdint.h> 
+#include <stdint.h>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wignored-pragmas"
 
 #include "tensorflow/core/framework/bfloat16.h"
-#include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
 
 #pragma GCC diagnostic pop
 

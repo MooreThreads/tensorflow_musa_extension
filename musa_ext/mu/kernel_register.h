@@ -40,22 +40,8 @@ class MusaAnnotatedTraceMe {
   explicit MusaAnnotatedTraceMe(Args&&... args) {}
 };
 
-#define MTOP_CHECK_LOG(status, str)             \
-  if (::musa::dnn::Status::SUCCESS != status) { \
-    LOG(ERROR) << "mudnn " << str << " faied!"; \
-  }
-#define MTOP_CHECK_OK_RUN(status, str, context)                            \
-  {                                                                        \
-    MUSA_PROFILE_OP                                                        \
-    if (mStatus::SUCCESS != status) {                                      \
-      OP_REQUIRES_OK(context, errors::Internal("mtdnn ", str, " error!")); \
-    }                                                                      \
-  }
-
-#define MTOP_CHECK_OK(status, str, context)                              \
-  if (mStatus::SUCCESS != status) {                                      \
-    OP_REQUIRES_OK(context, errors::Internal("mtdnn ", str, " error!")); \
-  }
+// Note: MTOP_CHECK_OK and MTOP_CHECK_OK_RUN are defined in utils_op.h
+// Use those macros for consistency across the codebase
 
 }  // namespace musa
 }  // namespace tensorflow

@@ -4,6 +4,8 @@
 #include <cmath>
 #include <vector>
 
+#include "kernels/utils_op.h"
+#include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
@@ -44,13 +46,18 @@ class MusaSqrtGradOp : public OpKernel {
     std::vector<T> h_dy(dy.NumElements());
     std::vector<T> h_dx(dx->NumElements(), static_cast<T>(0));
 
-    auto status_y = musaMemcpy(h_y.data(), y.flat<T>().data(), y_bytes,
-                               musaMemcpyDeviceToHost);
-    auto status_dy = musaMemcpy(h_dy.data(), dy.flat<T>().data(), dy_bytes,
-                                musaMemcpyDeviceToHost);
+    // Use async memcpy with stream for D2H copies
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
+    mStatus status_y = MusaMemcpyAsyncD2H(h_y.data(), y.flat<T>().data(),
+                                          y_bytes, stream);
+    mStatus status_dy = MusaMemcpyAsyncD2H(h_dy.data(), dy.flat<T>().data(),
+                                           dy_bytes, stream);
 
-    OP_REQUIRES(ctx, status_y == musaSuccess && status_dy == musaSuccess,
+    OP_REQUIRES(ctx, status_y == mStatus::SUCCESS && status_dy == mStatus::SUCCESS,
                 errors::Internal("MUSA SqrtGrad: Memcpy DeviceToHost failed"));
+
+    // Synchronize stream before CPU computation
+    musaStreamSynchronize(stream);
 
     const double kSafeThreshold = 1e-9;
 
@@ -147,10 +154,14 @@ class MusaSqrtGradOp : public OpKernel {
       }
     }
 
-    auto status_dx = musaMemcpy(dx->flat<T>().data(), h_dx.data(), dx_bytes,
-                                musaMemcpyHostToDevice);
-    OP_REQUIRES(ctx, status_dx == musaSuccess,
+    // Use async memcpy with stream for H2D copy
+    mStatus status_dx = MusaMemcpyAsyncH2D(dx->flat<T>().data(), h_dx.data(),
+                                           dx_bytes, stream);
+    OP_REQUIRES(ctx, status_dx == mStatus::SUCCESS,
                 errors::Internal("MUSA SqrtGrad: Memcpy HostToDevice failed"));
+
+    // Synchronize stream to ensure copy completes
+    musaStreamSynchronize(stream);
   }
 };
 

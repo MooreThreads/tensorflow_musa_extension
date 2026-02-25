@@ -35,7 +35,7 @@ class SizeOpTest(MUSATestCase):
         ]
 
         for np_data, desc in test_cases:
-            print(f"Testing {desc}...")
+            # print(f"Testing {desc}...")
             self._compare_cpu_musa_results(
                 tf.size,
                 [tf.constant(np_data)],
@@ -46,14 +46,14 @@ class SizeOpTest(MUSATestCase):
         """测试不同输入数据类型的 Size 计算 (对应原 test_size_different_dtypes)"""
         # 基础数据形状
         np_data = np.array([[1, 2], [3, 4]])
-        
+
         # 待测类型列表
         dtypes_to_test = [tf.float32, tf.float64, tf.int32, tf.int64, tf.float16]
 
         for dtype in dtypes_to_test:
             # 构造对应类型的输入 Tensor
             input_tensor = tf.constant(np_data, dtype=dtype)
-            
+
             self._compare_cpu_musa_results(
                 tf.size,
                 [input_tensor],
@@ -87,7 +87,7 @@ class SizeOpTest(MUSATestCase):
 
     def testSizeEdgeCases(self):
         """测试边界情况：标量、空张量等 (对应原 test_size_edge_cases)"""
-        
+
         # 1. 标量 (Scalar) -> Size 应为 1
         self._compare_cpu_musa_results(
             tf.size,

@@ -25,19 +25,19 @@ class LogicOpsTest(MUSATestCase):
   def testLogicalOr(self):
     x_np = np.random.choice([True, False], size=[1024])
     y_np = np.random.choice([True, False], size=[1024])
-    
+
     x = tf.constant(x_np)
     y = tf.constant(y_np)
-    
+
     self._compare_cpu_musa_results(tf.logical_or, [x, y], tf.bool)
 
   def testLogicalOrBroadcasting(self):
     x_np = np.random.choice([True, False], size=[64, 1])
     y_np = np.random.choice([True, False], size=[64, 128])
-    
+
     x = tf.constant(x_np)
     y = tf.constant(y_np)
-    
+
     self._compare_cpu_musa_results(tf.logical_or, [x, y], tf.bool)
 
   def testEqualFloat16(self):
@@ -45,10 +45,10 @@ class LogicOpsTest(MUSATestCase):
     x_np = np.random.randn(*shape).astype(np.float16)
     y_np = x_np.copy()
     y_np[0, 0] += 1.0
-    
+
     x = tf.constant(x_np, dtype=tf.float16)
     y = tf.constant(y_np, dtype=tf.float16)
-    
+
     self._compare_cpu_musa_results(tf.equal, [x, y], tf.float16)
 
   def testEqualBFloat16(self):
@@ -57,17 +57,17 @@ class LogicOpsTest(MUSATestCase):
     try:
       shape = [16]
       x_np = np.random.randn(*shape).astype(np.float32)
-      
+
       x = tf.constant(x_np, dtype=tf.bfloat16)
       y = tf.constant(x_np, dtype=tf.bfloat16)
-      
+
       # Try to run the operation on MUSA device
       with tf.device('/device:MUSA:0'):
         _ = tf.equal(x, y)
-      
+
       # If it works, run the full comparison test
       self._compare_cpu_musa_results(tf.equal, [x, y], tf.bfloat16)
-      
+
     except (tf.errors.InternalError, tf.errors.UnimplementedError) as e:
       if "muDNN Comparison Run failed" in str(e) or "not supported" in str(e):
         self.skipTest(f"MUSA does not support bfloat16 comparison operations: {e}")

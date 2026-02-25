@@ -26,7 +26,11 @@ MusaDeviceContext::MusaDeviceContext(
 
 MusaDeviceContext::~MusaDeviceContext() {
   if (official_stream_) {
+    // Wait for all async operations to complete
+    official_stream_->BlockHostUntilDone().IgnoreError();
     delete official_stream_;
+    // Note: official_stream_ owns implementation_, so we don't delete it separately
+    // to avoid double-free
   }
 }
 
@@ -43,9 +47,20 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
   size_t bytes = cpu_tensor->TotalBytes();
 
   if (bytes > 0) {
-    musaError_t err = musaMemcpy(dst, src, bytes, musaMemcpyHostToDevice);
-    if (err != musaSuccess) {
-      done(errors::Internal("MUSA H2D copy failed: ", musaGetErrorString(err)));
+    // Use async memcpy with the stream for better concurrency
+    mStatus m_stat = MusaMemcpyAsyncH2D(dst, src, bytes, stream_handle_);
+    if (m_stat != mStatus::SUCCESS) {
+      done(errors::Internal("MUSA H2D async copy init failed."));
+      return;
+    }
+    // NOTE: This is a blocking copy operation. We synchronize here to ensure
+    // the data is fully transferred before the caller proceeds. This is
+    // required for correctness in TF's memory model where CPU tensor data
+    // may be reused/freed after this callback.
+    // TODO: Consider using event-based synchronization for better concurrency.
+    musaError_t sync_err = musaStreamSynchronize(stream_handle_);
+    if (sync_err != musaSuccess) {
+      done(errors::Internal("MUSA H2D stream sync failed."));
       return;
     }
   }
@@ -69,12 +84,20 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
   }
 
   if (bytes > 0) {
-    // 使用同步拷贝
-    mStatus m_stat = MusaMemcpyD2H(dst, src, bytes);
-    musaDeviceSynchronize();
-
+    // Use async memcpy with the stream for better concurrency
+    mStatus m_stat = MusaMemcpyAsyncD2H(dst, src, bytes, stream_handle_);
     if (m_stat != mStatus::SUCCESS) {
-      done(errors::Internal("MUSA D2H copy failed."));
+      done(errors::Internal("MUSA D2H async copy init failed."));
+      return;
+    }
+    // NOTE: This is a blocking copy operation. We synchronize here to ensure
+    // the data is fully transferred before the caller proceeds. This is
+    // required for correctness in TF's memory model where device tensor data
+    // may be reused/freed after this callback.
+    // TODO: Consider using event-based synchronization for better concurrency.
+    musaError_t sync_err = musaStreamSynchronize(stream_handle_);
+    if (sync_err != musaSuccess) {
+      done(errors::Internal("MUSA D2H stream sync failed."));
       return;
     }
   }
@@ -85,26 +108,43 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
                        int device_id,
                        ::stream_executor::StreamExecutor* executor)
     : Device(env, attributes), device_id_(device_id) {
-  // 切卡
+  // Set device
   musaSetDevice(device_id_);
 
-  // 创建流
-  musaStreamCreate(&stream_);
+  // Create stream
+  musaError_t stream_err = musaStreamCreate(&stream_);
+  if (stream_err != musaSuccess) {
+    std::cerr << ">>> [MUSA] ERROR: Device " << device_id_
+              << " failed to create stream: " << musaGetErrorString(stream_err)
+              << std::endl;
+    stream_ = nullptr;
+    device_context_ = nullptr;
+    musa_allocator_ = nullptr;
+    return;
+  }
 
-  // 初始化 muDNN
+  // Initialize muDNN handle
   mudnn_handle_.reset(new ::musa::dnn::Handle());
   ::musa::dnn::Status s = mudnn_handle_->SetStream(stream_);
   if (s != ::musa::dnn::Status::SUCCESS) {
     std::cerr << ">>> [MUSA] ERROR: Device " << device_id_
-              << " failed to bind muDNN handle!" << std::endl;
+              << " failed to bind muDNN handle! Error code: "
+              << static_cast<int>(s) << std::endl;
+    mudnn_handle_.reset();
   }
 
-  // 初始化 muBLAS
-  mublasCreate(&mublas_handle_);
-  mublasSetStream(mublas_handle_, stream_);
+  // Initialize muBLAS handle
+  mublasStatus_t blas_err = mublasCreate(&mublas_handle_);
+  if (blas_err != MUBLAS_STATUS_SUCCESS) {
+    std::cerr << ">>> [MUSA] ERROR: Device " << device_id_
+              << " failed to create muBLAS handle! Error code: "
+              << static_cast<int>(blas_err) << std::endl;
+    mublas_handle_ = nullptr;
+  } else {
+    mublasSetStream(mublas_handle_, stream_);
+  }
 
-  // 初始化 Context
-
+  // Initialize Context
   device_context_ = new MusaDeviceContext(stream_, executor);
   musa_allocator_ = new MusaRawAllocator(device_id_);
 
@@ -126,7 +166,9 @@ MusaDevice::~MusaDevice() {
   if (musa_allocator_) {
     delete musa_allocator_;
   }
-  musaStreamDestroy(stream_);
+  if (stream_) {
+    musaStreamDestroy(stream_);
+  }
 }
 
 Allocator* MusaDevice::GetAllocator(AllocatorAttributes attr) {
