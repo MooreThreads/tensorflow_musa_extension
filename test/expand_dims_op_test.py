@@ -30,7 +30,11 @@ class ExpandDimsOpTest(MUSATestCase):
         elif dtype == np.bool_:
             x_np = np.random.choice([True, False], size=input_shape)
         else:  # float types
-            x_np = np.random.randn(*input_shape).astype(dtype)
+            if len(input_shape) == 0:
+                # Handle scalar input
+                x_np = np.array(np.random.randn()).astype(dtype)
+            else:
+                x_np = np.random.randn(*input_shape).astype(dtype)
 
         # Handle bfloat16 dtype conversion
         tf_dtype = tf.bfloat16 if dtype == tf.bfloat16.as_numpy_dtype else dtype
@@ -47,13 +51,13 @@ class ExpandDimsOpTest(MUSATestCase):
     def testExpandDimsBasicCases(self):
         """Test various basic cases for expand_dims."""
         basic_cases = [
-            ([10], 0, "Float32 (Wide侧常用)"),
+            ([10], 0, "Float32 (Wide 侧常用)"),
             ([10], 1, "末尾增加维度"),
             ([10], -1, "负索引末尾"),
             ([3, 5], 1, "中间增加维度"),
             ([2, 3, 4], 0, "开头增加维度"),
             ([2, 3, 4], 3, "4D 扩展"),
-            ([100, 256], -2, "Deep侧 Embedding 常用"),
+            ([100, 256], -2, "Deep 侧 Embedding 常用"),
         ]
 
         for shape, axis, desc in basic_cases:
@@ -73,6 +77,45 @@ class ExpandDimsOpTest(MUSATestCase):
         for name, dtype in dtypes_to_test.items():
             with self.subTest(data_type=name):
                 self._test_expand_dims([5, 5], 0, dtype)
+
+    def testExpandDimsEdgeCases(self):
+        """Test expand_dims with edge cases."""
+        # Scalar input (0-D tensor)
+        with self.subTest(description="Scalar input, axis=0"):
+            self._test_expand_dims([], 0, np.float32)
+
+        # Large tensor
+        with self.subTest(description="Large tensor 128x128"):
+            self._test_expand_dims([128, 128], 0, np.float32)
+
+        with self.subTest(description="Large tensor, axis=-1"):
+            self._test_expand_dims([128, 128], -1, np.float32)
+
+        # 5D tensor
+        with self.subTest(description="5D tensor"):
+            self._test_expand_dims([2, 3, 4, 5, 6], 2, np.float32)
+
+        # uint8 type (common in image processing)
+        with self.subTest(description="uint8 type"):
+            self._test_expand_dims([10, 10], 1, np.uint8)
+
+        # float64 type
+        with self.subTest(description="float64 type"):
+            self._test_expand_dims([5, 5], 0, np.float64)
+
+    def testExpandDimsNegativeAxes(self):
+        """Test expand_dims with various negative axis values."""
+        negative_axis_cases = [
+            ([2, 3, 4], -1, "3D, axis=-1"),
+            ([2, 3, 4], -2, "3D, axis=-2"),
+            ([2, 3, 4], -3, "3D, axis=-3"),
+            ([2, 3, 4], -4, "3D, axis=-4 (start)"),
+            ([10, 20, 30, 40], -2, "4D, axis=-2"),
+        ]
+
+        for shape, axis, desc in negative_axis_cases:
+            with self.subTest(description=desc):
+                self._test_expand_dims(shape, axis, np.float32)
 
 
 if __name__ == "__main__":

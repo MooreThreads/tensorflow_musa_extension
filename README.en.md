@@ -1,6 +1,6 @@
 # TensorFlow MUSA Extension
 
-TensorFlow MUSA Extension is a high-performance TensorFlow plugin specifically designed for Moore Threads (Moore Threads) MUSA GPU architecture. This extension provides native MUSA kernel implementations to deliver full GPU acceleration support for TensorFlow, maximizing the computational performance of Moore Threads' full-featured GPUs.
+TensorFlow MUSA Extension is a high-performance TensorFlow plugin specifically designed for Moore Threads MUSA GPU architecture. This extension provides native MUSA kernel implementations to deliver full GPU acceleration support for TensorFlow, maximizing the computational performance of Moore Threads' full-featured GPUs.
 
 ## Features
 
