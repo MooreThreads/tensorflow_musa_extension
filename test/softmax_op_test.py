@@ -24,12 +24,12 @@ class SoftmaxOpTest(MUSATestCase):
 
     def _test_softmax_common(self, shape, dtype, axis=-1, log=False, rtol=1e-5, atol=1e-8):
         """Helper to test softmax/log_softmax using _compare_cpu_musa_results."""
-        print(f"Testing shape={shape}, dtype={dtype}, axis={axis}, log={log}")
-        
+        # print(f"Testing shape={shape}, dtype={dtype}, axis={axis}, log={log}")
+
         # Prepare input data
         np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
         input_np = np.random.randn(*shape).astype(np_dtype)
-        
+
         # Determine which op to test
         op_func = tf.nn.log_softmax if log else tf.nn.softmax
 

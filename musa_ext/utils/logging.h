@@ -22,13 +22,8 @@
     return ::musa::dnn::Status::INTERNAL_ERROR;  \
   }
 
-#define MTOP_CHECK_MTDNN_STATUS_RET(statement)                             \
-  {                                                                        \
-    ::musa::dnn::Status _status = (statement);                             \
-    if (_status != ::musa::dnn::Status::SUCCESS) {                         \
-      LOG(ERROR) << "[MUDNN ERROR] Status: " << static_cast<int>(_status); \
-      return _status;                                                      \
-    }                                                                      \
-  }
+// Note: MTOP_CHECK_LOG, MTOP_CHECK_OK, MTOP_CHECK_OK_RUN, and
+// MTOP_CHECK_MTDNN_STATUS_RET are defined in kernels/utils_op.h
+// Use those for consistency across the codebase
 
 #endif  // MUSA_PLUGIN_SRC_UTILS_LOGGING_H_

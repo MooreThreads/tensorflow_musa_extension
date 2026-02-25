@@ -533,7 +533,7 @@ class BitwiseAndOpTest(MUSATestCase):
     self._test_bitwise_and_with_values(a_np, b_np, tf.uint8, expected)
 
   def testBroadcastSelfWithDifferentShape(self):
-    """相同数据但不同 shape 的广播: [3, 1]&[1, 3] (outer product style)."""
+    """相同数据但不同 shape 的广播: [3, 1] & [1, 3] (outer product style)."""
     np_dtype = np.int32
     vals = np.array([0xFF, 0x0F, 0xF0], dtype=np_dtype)
     a_np = vals.reshape(3, 1)
@@ -544,4 +544,3 @@ class BitwiseAndOpTest(MUSATestCase):
 
 if __name__ == "__main__":
   tf.test.main()
-  

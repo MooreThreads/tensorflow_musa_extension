@@ -22,7 +22,6 @@ class MusaVarHandleOp : public OpKernel {
         MakeResourceHandle<Var>(ctx, container_, shared_name_);
     out->flat<ResourceHandle>()(0) = handle;
   }
-
  private:
   string container_;
   string shared_name_;

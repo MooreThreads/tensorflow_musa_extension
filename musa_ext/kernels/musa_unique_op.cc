@@ -77,9 +77,15 @@ class MusaUniqueOp : public MusaOpKernel {
                 errors::Internal("MUSA muDNN Unique execution failed. Status: ",
                                  (int)status));
 
+    // Use async memcpy with stream for D2H copy
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
     std::vector<OutIdxT> host_counts(num_elements);
-    musaMemcpy(host_counts.data(), tmp_counts.flat<OutIdxT>().data(),
-               counts_bytes, musaMemcpyDeviceToHost);
+    mStatus memcpy_status = MusaMemcpyAsyncD2H(host_counts.data(),
+                                                tmp_counts.flat<OutIdxT>().data(),
+                                                counts_bytes, stream);
+    OP_REQUIRES(ctx, memcpy_status == mStatus::SUCCESS,
+                errors::Internal("MUSA Unique: MusaMemcpyAsyncD2H failed"));
+    musaStreamSynchronize(stream);
 
     int64_t unique_count = 0;
     for (int64_t i = 0; i < num_elements; ++i) {
@@ -96,8 +102,13 @@ class MusaUniqueOp : public MusaOpKernel {
 
     if (unique_count > 0) {
       size_t data_bytes = unique_count * sizeof(T);
-      musaMemcpy(out_values->flat<T>().data(), temp_out_values.flat<T>().data(),
-                 data_bytes, musaMemcpyDeviceToDevice);
+      // Use async D2D memcpy
+      mStatus d2d_status = MusaMemcpyAsyncD2D(
+          out_values->flat<T>().data(), temp_out_values.flat<T>().data(),
+          data_bytes, stream);
+      OP_REQUIRES(ctx, d2d_status == mStatus::SUCCESS,
+                  errors::Internal("MUSA Unique: MusaMemcpyAsyncD2D failed"));
+      musaStreamSynchronize(stream);
     }
   }
 };

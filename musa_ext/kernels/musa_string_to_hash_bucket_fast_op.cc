@@ -1,5 +1,7 @@
 #include <musa_runtime.h>
 
+#include "kernels/utils_op.h"
+#include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/shape_inference.h"
@@ -40,12 +42,18 @@ class MusaStringToHashBucketFastOp : public OpKernel {
 
     int64* device_ptr = output_tensor->flat<int64>().data();
 
-    musaError_t err = musaMemcpy(device_ptr, host_output.data(),
-                                 N * sizeof(int64), musaMemcpyHostToDevice);
+    // Use async memcpy with stream for better concurrency
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
+    mStatus status = MusaMemcpyAsyncH2D(device_ptr, host_output.data(),
+                                        N * sizeof(int64), stream);
 
-    OP_REQUIRES(
-        ctx, err == musaSuccess,
-        errors::Internal("MUSA memcpy failed: ", musaGetErrorString(err)));
+    OP_REQUIRES(ctx, status == mStatus::SUCCESS,
+                errors::Internal("MUSA StringToHashBucketFast: memcpy failed"));
+
+    // Synchronize only the current stream
+    if (stream) {
+      musaStreamSynchronize(stream);
+    }
   }
 
  private:
