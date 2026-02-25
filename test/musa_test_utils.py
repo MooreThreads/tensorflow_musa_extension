@@ -46,7 +46,7 @@ def load_musa_plugin():
   if plugin_path and os.path.exists(plugin_path):
     try:
       tf.load_library(plugin_path)
-      print(f"SUCCESS: MUSA plugin loaded from {plugin_path}!")
+      # print(f"SUCCESS: MUSA plugin loaded from {plugin_path}!")
     except Exception as e:
       print(f"FAILED: Error loading plugin from {plugin_path}: {e}")
       raise

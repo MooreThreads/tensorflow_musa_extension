@@ -4,7 +4,6 @@
 #pragma GCC diagnostic ignored "-Wignored-pragmas"
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/framework/bfloat16.h"
-#include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
 #pragma GCC diagnostic pop
 
 namespace tensorflow {
@@ -42,9 +41,9 @@ __global__ void ErfKernel(const T* src, T* dst, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
         float val = LoadFloat(&src[i]);
-        
+
         float res = erff(val);
-        
+
         StoreFloat(&dst[i], res);
     }
 }

@@ -8,7 +8,6 @@
 #include <limits>
 #include <mutex>
 #include <type_traits>
-#include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
 
 // #if defined(__CUDACC__) || defined(__MUSA__)
 #define MUSA_HOST_DEVICE __host__ __device__
@@ -104,7 +103,7 @@ class NormalDistribution {
       const double v = Uniform(raw[pair * 2 + 1]);
       const double radius = std::sqrt(-2.0 * std::log(u));
       const double angle = kTwoPi * v;
-      
+
       result[pair * 2] = base + scale * (radius * std::cos(angle));
       result[pair * 2 + 1] = base + scale * (radius * std::sin(angle));
     }
@@ -132,7 +131,7 @@ class TruncatedNormalDistribution : public NormalDistribution<Generator> {
     int filled = 0;
     constexpr int kMaxIterations = 100;  // Prevent infinite loop
     int iterations = 0;
-    
+
     while (filled < kResultElementCount && iterations < kMaxIterations) {
       auto candidate = Base::operator()(generator);
       for (int i = 0; i < kResultElementCount && filled < kResultElementCount;
@@ -144,12 +143,12 @@ class TruncatedNormalDistribution : public NormalDistribution<Generator> {
       }
       ++iterations;
     }
-    
+
     // Fill remaining with boundary values if max iterations reached
     while (filled < kResultElementCount) {
       result[filled++] = center_;
     }
-    
+
     return result;
   }
 
