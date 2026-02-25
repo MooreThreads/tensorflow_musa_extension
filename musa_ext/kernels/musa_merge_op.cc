@@ -39,8 +39,8 @@ class MusaMergeOp : public MusaOpKernel {
   }
 };  // class MusaMergeOp
 
-#define REGISTER_MUSA_MERGE(type)                                       \
-  REGISTER_KERNEL_BUILDER(                                              \
+#define REGISTER_MUSA_MERGE(type)                                   \
+  REGISTER_KERNEL_BUILDER(                                          \
       Name("Merge").Device(DEVICE_MTGPU).TypeConstraint<type>("T"), \
       MusaMergeOp<type>);
 
