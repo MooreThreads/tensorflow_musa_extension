@@ -544,3 +544,4 @@ class BitwiseAndOpTest(MUSATestCase):
 
 if __name__ == "__main__":
   tf.test.main()
+  
