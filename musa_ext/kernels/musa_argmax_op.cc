@@ -60,30 +60,35 @@ class MusaArgMaxOp : public MusaOpKernel {
 
     // muDNN TopK needs an extra values output, but we only need indices
     Tensor temp_values;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(input.dtype(), output_shape, &temp_values));
+    OP_REQUIRES_OK(
+        ctx, ctx->allocate_temp(input.dtype(), output_shape, &temp_values));
     mTensor values_mt = CreateMTensor(temp_values, format_);
 
     // Configure TopK operator
     ::musa::dnn::TopK topk_op;
-    topk_op.SetK(1);  // Only need the max value's index
+    topk_op.SetK(1);                         // Only need the max value's index
     topk_op.SetDim(static_cast<int>(axis));  // Use SetDim instead of SetAxis
     topk_op.SetLargest(true);
 
     // Execute TopK operation
     std::list<Tensor> workspace_tensors;
-    auto mem_allocator = [&workspace_tensors, ctx](size_t size) -> ::musa::dnn::MemoryHandler {
+    auto mem_allocator = [&workspace_tensors,
+                          ctx](size_t size) -> ::musa::dnn::MemoryHandler {
       workspace_tensors.emplace_back();
       Tensor& temp = workspace_tensors.back();
-      Status s = ctx->allocate_temp(DT_UINT8, TensorShape({static_cast<int64_t>(size)}), &temp);
+      Status s = ctx->allocate_temp(
+          DT_UINT8, TensorShape({static_cast<int64_t>(size)}), &temp);
       if (!s.ok()) return nullptr;
       void* raw_ptr = static_cast<void*>(temp.flat<uint8_t>().data());
       return ::musa::dnn::MemoryHandler(raw_ptr, [](void* p) {});
     };
     ::musa::dnn::MemoryMaintainer maintainer = mem_allocator;
-    auto status = topk_op.Run(handle, values_mt, output_mt, input_mt, maintainer);
+    auto status =
+        topk_op.Run(handle, values_mt, output_mt, input_mt, maintainer);
 
     OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
-                errors::Internal("MUSA ArgMax execution failed. Status: ", static_cast<int>(status)));
+                errors::Internal("MUSA ArgMax execution failed. Status: ",
+                                 static_cast<int>(status)));
   }
 };
 

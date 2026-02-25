@@ -48,12 +48,11 @@ class MusaMatMulOp : public MusaOpKernel {
     if (ctx->GetAttr("adj_x", &adj_x).ok()) trans_a_ = adj_x;
     if (ctx->GetAttr("adj_y", &adj_y).ok()) trans_b_ = adj_y;
 
-    // Enable TF32 by default for better performance on supported hardware
-    // Can be disabled via MUSA_DISABLE_TF32=1 environment variable
-    tf32_enabled_ = true;
-    const char* tf32_env = std::getenv("MUSA_DISABLE_TF32");
-    if (tf32_env && std::atoi(tf32_env) == 1) {
-      tf32_enabled_ = false;
+    // Enable TF32 for better performance on supported hardware
+    // Can be enabled via MUSA_DISABLE_TF32=1 environment variable
+    const char* tf32_env = std::getenv("MUSA_ENABLE_TF32");
+    if (std::atoi(tf32_env) == 1) {
+      tf32_enabled_ = true;
     }
   }
 
@@ -140,7 +139,7 @@ class MusaMatMulOp : public MusaOpKernel {
  private:
   bool trans_a_ = false;
   bool trans_b_ = false;
-  bool tf32_enabled_ = true;  // TF32 acceleration enabled by default
+  bool tf32_enabled_ = false;  // TF32 acceleration enabled by default
 };
 
 #define REGISTER_MUSA_MATMUL_ALL(TYPE)                                    \
