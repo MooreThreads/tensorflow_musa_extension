@@ -254,85 +254,64 @@ struct EinsumHelper {
     for (int64_t dim : output_shape_dims) {
       TF_RETURN_IF_ERROR(output_shape.AddDimWithStatus(dim));
     }
-    auto to_int64 = [](const ShapeVec& dims) {
-      gtl::InlinedVector<int64, 8> converted;
-      converted.reserve(dims.size());
-      for (int64_t dim : dims) {
-        converted.push_back(static_cast<int64>(dim));
-      }
-      return converted;
-    };
-    const auto reshape_int64 = to_int64(reshape);
-    const auto strided_int64 = to_int64(strided_shape);
-    const auto strides_int64 = to_int64(strides);
     TF_RETURN_IF_ERROR(
         ctx->allocate_temp(DataTypeToEnum<T>::value, output_shape, output));
 
     const int rank = reshape.size();
     if (rank == 0) return Status::OK();
 
-    auto compute_dense_strides = [](const std::vector<int64_t>& dims) {
-      std::vector<int64_t> dense_strides(dims.size(), 1);
+    auto compute_dense_strides = [](const ShapeVec& dims) {
+      ShapeVec dense_strides(dims.size(), 1);
       for (int i = static_cast<int>(dims.size()) - 2; i >= 0; --i) {
         dense_strides[i] = dense_strides[i + 1] * dims[i + 1];
       }
       return dense_strides;
     };
 
-    std::vector<int64_t> reshape_dims(reshape_int64.begin(),
-                                      reshape_int64.end());
-    std::vector<int64_t> strided_dims(strided_int64.begin(),
-                                      strided_int64.end());
-    std::vector<int64_t> step_dims(strides_int64.begin(), strides_int64.end());
-
-    const auto reshape_dense = compute_dense_strides(reshape_dims);
-    const auto strided_dense = compute_dense_strides(strided_dims);
-
-    std::vector<T> h_input(input.NumElements());
-    std::vector<T> h_output(output->NumElements(), static_cast<T>(0));
-
-    musaStream_t stream = GetMusaStreamByCtx(ctx);
-    mStatus d2h_status =
-        MusaMemcpyAsyncD2H(h_input.data(), input.flat<T>().data(),
-                           input.NumElements() * sizeof(T), stream);
-    if (d2h_status != mStatus::SUCCESS) {
-      return errors::Internal("Einsum StrideOrInflate D2H memcpy failed");
+    const auto inflated_dense = compute_dense_strides(inflated_shape);
+    ShapeVec diagonal_strides;
+    diagonal_strides.reserve(rank);
+    int inflated_axis = 0;
+    for (int label : labels) {
+      const int count = label_counts[label];
+      int64_t diagonal_stride = 0;
+      for (int i = 0; i < count; ++i) {
+        diagonal_stride += inflated_dense[inflated_axis + i];
+      }
+      diagonal_strides.push_back(diagonal_stride);
+      inflated_axis += count;
     }
-    musaStreamSynchronize(stream);
+
+    std::vector<int64_t> strided_dims_vec(strided_shape.begin(),
+                                          strided_shape.end());
+    std::vector<int64_t> diagonal_strides_vec(diagonal_strides.begin(),
+                                              diagonal_strides.end());
+
+    auto& handle = GetHandleByCtx(ctx);
+    auto input_mt = CreateMTensor(input);
+    auto output_mt = CreateMTensor(*output);
 
     if (should_inflate) {
-      for (int64_t linear = 0; linear < static_cast<int64_t>(h_input.size());
-           ++linear) {
-        int64_t remain = linear;
-        int64_t out_linear = 0;
-        for (int axis = 0; axis < rank; ++axis) {
-          const int64_t coord = remain / strided_dense[axis];
-          remain %= strided_dense[axis];
-          out_linear += (coord * step_dims[axis]) * reshape_dense[axis];
-        }
-        h_output[out_linear] = h_input[linear];
-      }
+      SetZeroFunctor<T> set_zero;
+      set_zero(ctx, output);
+      output_mt.SetNdInfo(rank, strided_dims_vec.data(),
+                          diagonal_strides_vec.data());
     } else {
-      for (int64_t linear = 0; linear < static_cast<int64_t>(h_output.size());
-           ++linear) {
-        int64_t remain = linear;
-        int64_t in_linear = 0;
-        for (int axis = 0; axis < rank; ++axis) {
-          const int64_t coord = remain / strided_dense[axis];
-          remain %= strided_dense[axis];
-          in_linear += (coord * step_dims[axis]) * reshape_dense[axis];
-        }
-        h_output[linear] = h_input[in_linear];
-      }
+      input_mt.SetNdInfo(rank, strided_dims_vec.data(),
+                         diagonal_strides_vec.data());
     }
 
-    mStatus h2d_status =
-        MusaMemcpyAsyncH2D(output->flat<T>().data(), h_output.data(),
-                           output->NumElements() * sizeof(T), stream);
-    if (h2d_status != mStatus::SUCCESS) {
-      return errors::Internal("Einsum StrideOrInflate H2D memcpy failed");
+    ::musa::dnn::Unary op;
+    auto status = op.SetMode(::musa::dnn::Unary::Mode::IDENTITY);
+    if (status != ::musa::dnn::Status::SUCCESS) {
+      return errors::Internal("Einsum StrideOrInflate SetMode failed. Status: ",
+                              static_cast<int>(status));
     }
-    musaStreamSynchronize(stream);
+    status = op.Run(handle, output_mt, input_mt);
+    if (status != ::musa::dnn::Status::SUCCESS) {
+      return errors::Internal("Einsum StrideOrInflate Run failed. Status: ",
+                              static_cast<int>(status));
+    }
     return Status::OK();
   }
 
