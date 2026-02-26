@@ -2,7 +2,6 @@
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
-#include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
 #include "utils_op.h"
 namespace tensorflow {
 namespace musa {

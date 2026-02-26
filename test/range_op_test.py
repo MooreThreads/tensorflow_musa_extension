@@ -9,7 +9,7 @@ class RangeOpTest(MUSATestCase):
   def _test_range(self, start, limit, delta, dtype, rtol=1e-5, atol=1e-8):
     def range_func(start_tensor, limit_tensor, delta_tensor):
       return tf.range(start_tensor, limit_tensor, delta_tensor, dtype=dtype)
-    
+
     if dtype.is_floating:
       start_tensor = tf.constant(float(start), dtype=dtype)
       limit_tensor = tf.constant(float(limit), dtype=dtype)
@@ -18,7 +18,7 @@ class RangeOpTest(MUSATestCase):
       start_tensor = tf.constant(int(start), dtype=dtype)
       limit_tensor = tf.constant(int(limit), dtype=dtype)
       delta_tensor = tf.constant(int(delta), dtype=dtype)
-    
+
     self._compare_cpu_musa_results(range_func, [start_tensor, limit_tensor, delta_tensor], dtype, rtol=rtol, atol=atol)
 
   def testRangeFloat32(self):
@@ -59,7 +59,9 @@ class RangeOpTest(MUSATestCase):
 
   def testRangeLargeRange(self):
     self._test_range(0, 10000, 1, tf.int32, rtol=0, atol=0)
-    self._test_range(0, 1000, 0.1, tf.float32)
+    # Float32 range uses parallel computation on MUSA vs sequential on CPU
+    # This causes small floating point differences, so use appropriate tolerance
+    self._test_range(0, 1000, 0.1, tf.float32, rtol=1e-4, atol=1e-4)
 
 
 if __name__ == "__main__":

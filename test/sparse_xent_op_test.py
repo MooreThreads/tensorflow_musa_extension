@@ -28,7 +28,7 @@ class SparseXentOpTest(MUSATestCase):
   def _test_sparse_xent(self, shape, dtype, label_dtype=tf.int32, rtol=1e-4, atol=1e-4):
     """Test sparse xent operation with given shape and dtypes."""
     batch_size, num_classes = shape
-    
+
     # Prepare Data
     np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
     np_label_dtype = label_dtype.as_numpy_dtype
@@ -47,10 +47,10 @@ class SparseXentOpTest(MUSATestCase):
         return gen_nn_ops.sparse_softmax_cross_entropy_with_logits(l_in, t_in).backprop
 
     # Compare Results
-    print(f"  Testing Loss component for shape {shape}...")
+    # print(f"  Testing Loss component for shape {shape}...")
     self._compare_cpu_musa_results(op_loss, [logits, labels], dtype, rtol=rtol, atol=atol)
-    
-    print(f"  Testing Gradient component for shape {shape}...")
+
+    # print(f"  Testing Gradient component for shape {shape}...")
     self._compare_cpu_musa_results(op_grad, [logits, labels], dtype, rtol=rtol, atol=atol)
 
   def testSparseXentBasic(self):
@@ -59,7 +59,7 @@ class SparseXentOpTest(MUSATestCase):
     for dtype in [tf.float32, tf.float16, tf.bfloat16]:
       rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-4
       atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-4
-      
+
       self._test_sparse_xent(shape, dtype, rtol=rtol, atol=atol)
 
   def testSparseXentLarge(self):
@@ -68,7 +68,7 @@ class SparseXentOpTest(MUSATestCase):
     for dtype in [tf.float32, tf.float16]:
       rtol = 1e-2 if dtype == tf.float16 else 1e-4
       atol = 1e-2 if dtype == tf.float16 else 1e-4
-      
+
       self._test_sparse_xent(shape, dtype, rtol=rtol, atol=atol)
 
   def testLabelInt64(self):

@@ -63,7 +63,13 @@ class MusaExecutor : public internal::StreamExecutorInterface {
   }
 
   void Deallocate(DeviceMemoryBase* mem) override {
-    // musaFree(mem->opaque());
+    if (mem && mem->opaque()) {
+      musaSetDevice(device_ordinal_);
+      musaError_t err = musaFree(mem->opaque());
+      if (err != musaSuccess) {
+        LOG(ERROR) << "MUSA Deallocate failed: " << musaGetErrorString(err);
+      }
+    }
   }
 
   bool HostMemoryRegister(void* mem, uint64 size) override { return true; }
@@ -201,19 +207,59 @@ class MusaExecutor : public internal::StreamExecutorInterface {
   }
 
   port::Status AllocateEvent(Event* event) override {
+    auto* musa_event = static_cast<MusaEvent*>(event->implementation());
+    if (!musa_event) {
+      return port::Status(port::error::INTERNAL, "Invalid event implementation");
+    }
+    if (!musa_event->Init()) {
+      return port::Status(port::error::INTERNAL, "Failed to initialize MUSA event");
+    }
     return port::Status::OK();
   }
+
   port::Status DeallocateEvent(Event* event) override {
+    auto* musa_event = static_cast<MusaEvent*>(event->implementation());
+    if (musa_event && musa_event->handle()) {
+      musaEventDestroy(musa_event->handle());
+    }
     return port::Status::OK();
   }
+
   port::Status RecordEvent(Stream* stream, Event* event) override {
+    auto* musa_event = static_cast<MusaEvent*>(event->implementation());
+    if (!musa_event || !musa_event->handle()) {
+      return port::Status(port::error::INTERNAL, "Invalid event");
+    }
+    musaStream_t mstream = GetMusaStream(stream);
+    musaError_t err = musaEventRecord(musa_event->handle(), mstream);
+    if (err != musaSuccess) {
+      return port::Status(port::error::INTERNAL, "musaEventRecord failed");
+    }
     return port::Status::OK();
   }
+
   port::Status WaitForEvent(Stream* stream, Event* event) override {
+    auto* musa_event = static_cast<MusaEvent*>(event->implementation());
+    if (!musa_event || !musa_event->handle()) {
+      return port::Status(port::error::INTERNAL, "Invalid event");
+    }
+    musaStream_t mstream = GetMusaStream(stream);
+    musaError_t err = musaStreamWaitEvent(mstream, musa_event->handle(), 0);
+    if (err != musaSuccess) {
+      return port::Status(port::error::INTERNAL, "musaStreamWaitEvent failed");
+    }
     return port::Status::OK();
   }
+
   Event::Status PollForEventStatus(Event* event) override {
-    return Event::Status::kComplete;
+    auto* musa_event = static_cast<MusaEvent*>(event->implementation());
+    if (!musa_event || !musa_event->handle()) {
+      return Event::Status::kError;
+    }
+    musaError_t err = musaEventQuery(musa_event->handle());
+    if (err == musaSuccess) return Event::Status::kComplete;
+    if (err == musaErrorNotReady) return Event::Status::kPending;
+    return Event::Status::kError;
   }
 
  private:

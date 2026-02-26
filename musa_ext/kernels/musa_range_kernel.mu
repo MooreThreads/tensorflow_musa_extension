@@ -1,41 +1,58 @@
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wignored-pragmas"
-#include "tensorflow/core/framework/bfloat16.h"
-#include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
-#pragma GCC diagnostic pop
+// MUSA Range Custom Kernel
+// Generates a sequence of values on device (no host computation)
+// 
+// Copyright 2026 The TensorFlow MUSA Authors. All Rights Reserved.
+// Licensed under the Apache License, Version 2.0.
 
-namespace tensorflow {
-namespace musa {
+#include <musa_runtime.h>
 
-template <typename T>
-__device__ __forceinline__ T ComputeRangeValue(T start, T delta, int64_t idx) {
-  return start + static_cast<T>(idx) * delta;
-}
+extern "C" {
 
-template <typename T>
-__global__ void RangeKernel(const T start, const T delta, const int64_t size, T* out) {
-  int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+// Float kernel
+__global__ void RangeKernelFloat(float* output, float start, float delta, int size) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < size) {
-    out[idx] = ComputeRangeValue(start, delta, idx);  // ← 现在可以了
+    output[idx] = start + static_cast<float>(idx) * delta;
   }
 }
 
-template <typename T>
-void MusaRangeKernelLauncher(const T start, const T delta, const int64_t size, void* out, musaStream_t stream) {
-  if (size == 0) return;
-
-  constexpr int block_size = 256;
-  const int grid_size = static_cast<int>((size + block_size - 1) / block_size);
-
-  RangeKernel<T><<<grid_size, block_size, 0, stream>>>(
-      start, delta, size, static_cast<T*>(out));
+// Double kernel
+__global__ void RangeKernelDouble(double* output, double start, double delta, int size) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < size) {
+    output[idx] = start + static_cast<double>(idx) * delta;
+  }
 }
 
-template void MusaRangeKernelLauncher<float>(const float, const float, const int64_t, void*, musaStream_t);
-template void MusaRangeKernelLauncher<double>(const double, const double, const int64_t, void*, musaStream_t);
-template void MusaRangeKernelLauncher<int>(const int, const int, const int64_t, void*, musaStream_t);          // int32
-template void MusaRangeKernelLauncher<long long>(const long long, const long long, const int64_t, void*, musaStream_t); // int64
+// Int32 kernel
+__global__ void RangeKernelInt32(int* output, int start, int delta, int size) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < size) {
+    output[idx] = start + idx * delta;
+  }
+}
 
-}  // namespace musa
-}  // namespace tensorflow
+// Int64 kernel
+__global__ void RangeKernelInt64(long long* output, long long start, long long delta, int size) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < size) {
+    output[idx] = start + static_cast<long long>(idx) * delta;
+  }
+}
 
+// Launcher functions
+#define DEFINE_RANGE_LAUNCHER(name, kernel, T) \
+  void name(T* output, T start, T delta, int size, musaStream_t stream) { \
+    const int threads_per_block = 256; \
+    const int blocks = (size + threads_per_block - 1) / threads_per_block; \
+    kernel<<<blocks, threads_per_block, 0, stream>>>(output, start, delta, size); \
+  }
+
+DEFINE_RANGE_LAUNCHER(LaunchRangeKernelFloat, RangeKernelFloat, float)
+DEFINE_RANGE_LAUNCHER(LaunchRangeKernelDouble, RangeKernelDouble, double)
+DEFINE_RANGE_LAUNCHER(LaunchRangeKernelInt32, RangeKernelInt32, int)
+DEFINE_RANGE_LAUNCHER(LaunchRangeKernelInt64, RangeKernelInt64, long long)
+
+#undef DEFINE_RANGE_LAUNCHER
+
+}  // extern "C"

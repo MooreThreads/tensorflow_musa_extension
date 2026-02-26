@@ -1,5 +1,6 @@
 #include "utils_op.h"
 
+#include "mu/kernel_register.h"
 #include "tensorflow/core/common_runtime/device_mgr.h"
 #include "tensorflow/core/framework/device_attributes.pb.h"
 
@@ -42,13 +43,24 @@ mType GetType(DataType t) {
 }
 }  // namespace
 
+// Helper function to convert musaError_t to mStatus (mudnn Status)
+static inline mStatus FromMusaError(musaError_t err) {
+  if (err == musaSuccess) return mStatus::SUCCESS;
+  // mudnn Status doesn't have OUT_OF_MEMORY, use INTERNAL_ERROR for all errors
+  return mStatus::INTERNAL_ERROR;
+}
+
 mStatus MusaFree(void* ptr) {
-  if (ptr) musaFree(ptr);
+  if (ptr) {
+    musaError_t err = musaFree(ptr);
+    return FromMusaError(err);
+  }
   return mStatus::SUCCESS;
 }
+
 mStatus MusaAllocate(size_t size, void** ptr) {
-  musaMalloc(ptr, size);
-  return mStatus::SUCCESS;
+  musaError_t err = musaMalloc(ptr, size);
+  return FromMusaError(err);
 }
 
 mTensor CreateMTensor(const Tensor& t, mFormat format) {
@@ -75,13 +87,15 @@ mTensor CreateMTensor(const Tensor& t, mFormat format) {
 
 mTensor CreateMTensor(const Tensor& t) {
   mTensor rst;
-  MTOP_CHECK_LOG(rst.SetAddr(t.data()), "SetAddr");
-  MTOP_CHECK_LOG(rst.SetType(GetType(t.dtype())), "SetType");
+  CHECK(rst.SetAddr(t.data()) == ::musa::dnn::Status::SUCCESS)
+      << "SetAddr failed";
+  CHECK(rst.SetType(GetType(t.dtype())) == ::musa::dnn::Status::SUCCESS)
+      << "SetType failed";
   auto dims_int = t.shape().dim_sizes();
-  MTOP_CHECK_LOG(
-      rst.SetNdInfo(static_cast<int>(dims_int.size()),
-                    reinterpret_cast<const int64_t*>(dims_int.data())),
-      "SetNdInfo");
+  CHECK(rst.SetNdInfo(static_cast<int>(dims_int.size()),
+                      reinterpret_cast<const int64_t*>(dims_int.data())) ==
+        ::musa::dnn::Status::SUCCESS)
+      << "SetNdInfo failed";
   return rst;
 }
 
