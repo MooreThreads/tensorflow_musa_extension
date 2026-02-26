@@ -524,10 +524,8 @@ struct EinsumHelper {
     int reduce_dims[] = {1};
     op.SetDim(1, reduce_dims);
 
-    // ------- TODO: Not sure if this would work in MUSA env -------
     tensorflow::Allocator* tf_allocator =
         ctx->device()->GetAllocator(tensorflow::AllocatorAttributes());
-    // -------------------------------------------------------------
     auto alloc_func =
         [tf_allocator](
             size_t size) -> std::unique_ptr<void, std::function<void(void*)>> {
@@ -596,10 +594,6 @@ struct EinsumHelper {
     Tensor output_reshaped;
     TF_RETURN_IF_ERROR(
         ReshapeToRank3(*output, bcast.output_batch_size(), &output_reshaped));
-    // LaunchBatchMatMul<Device, T>::Launch(ctx, lhs, rhs, /*adj_x=*/false,
-    //                                      /*adj_y=*/false, trans_x, trans_y,
-    //                                      /*grad_x=*/false, /*grad_y=*/false,
-    //                                      bcast, &output_reshaped);
     return BMatMul<T>(ctx, lhs, rhs, trans_x, trans_y, &output_reshaped);
   }
 };
