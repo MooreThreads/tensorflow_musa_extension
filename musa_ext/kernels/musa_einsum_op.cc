@@ -8,6 +8,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_split.h"
 #include "musa_fill_functor.h"
+#include "musa_transpose_functor.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/lib/gtl/array_slice.h"
@@ -151,7 +152,7 @@ struct EinsumHelper {
   }
 
   // Permutes the labels according to the given permutation.
-  static void PermuteLabels(const std::vector<int>& permutation,
+  static void PermuteLabels(const std::vector<int64_t>& permutation,
                             Labels* labels) {
     Labels permuted_labels(labels->size());
     for (int i = 0; i < labels->size(); ++i) {
@@ -172,7 +173,7 @@ struct EinsumHelper {
   // Returns whether transposing would be a no-op; whether input has rank < 2 or
   // the permutation is the identity permutation.
   static bool ShouldTranspose(const TensorShape& input_shape,
-                              const std::vector<int>& permutation) {
+                              const std::vector<int64_t>& permutation) {
     if (input_shape.dims() < 2) return false;
     for (int i = 0; i < permutation.size(); ++i) {
       if (permutation[i] != i) return true;
@@ -184,7 +185,7 @@ struct EinsumHelper {
   // if transposing is not necessary.
   template <typename T>
   static Status TransposeOperand(OpKernelContext* ctx, const Tensor& input,
-                                 const std::vector<int>& permutation,
+                                 const std::vector<int64_t>& permutation,
                                  Tensor* output) {
     if (!ShouldTranspose(input.shape(), permutation)) {
       return CopyFrom(input, input.shape(), output);
@@ -201,10 +202,7 @@ struct EinsumHelper {
     }
     TF_RETURN_IF_ERROR(
         ctx->allocate_temp(DataTypeToEnum<T>::value, transposed_shape, output));
-    // ------- TODO: Replace with valid MUSA implementation -------
-    // const Device& device = ctx->eigen_device<Device>();
-    // TF_RETURN_IF_ERROR(DoTranspose(device, input, permutation, output));
-    // ------------------------------------------------------------
+    DoTranspose(ctx, input, permutation, output);
     return Status::OK();
   }
 
@@ -327,7 +325,7 @@ struct EinsumHelper {
     // Find the permutation to transpose the input dimensions in the order of
     // EinsumDimensionType; i.e. batch, free, contract and reduce dimensions.
     // This makes it more convenient to invoke Reduce/Contract operations.
-    std::vector<int> permutation(input.dims());
+    std::vector<int64_t> permutation(input.dims());
     absl::c_iota(permutation, 0);
     Tensor input_transposed;
     // Check if we can avoid the transpose. We need to flip the adj_x (or adj_y)
@@ -618,7 +616,7 @@ class MusaEinsumOp : public MusaOpKernel {
     // E.g. if result labels are [0, 0, 1] and output is [0, l, 0] then the
     // permutation should be [0, 2, 1]. We also use the fact that repeated
     // labels in the result are adjacent to each other.
-    std::vector<int> output_permutation(output_labels.size());
+    std::vector<int64_t> output_permutation(output_labels.size());
     std::vector<int> label_to_position(num_labels, -1);
     for (int i = 0; i < result_labels.size(); ++i) {
       // Remember the position of only the leftmost result label.
