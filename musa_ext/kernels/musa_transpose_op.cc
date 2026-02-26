@@ -2,7 +2,6 @@
 
 #include <vector>
 
-#include "musa_transpose_functor.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"

@@ -8,7 +8,6 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_split.h"
 #include "musa_fill_functor.h"
-#include "musa_transpose_functor.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/lib/gtl/array_slice.h"
@@ -21,6 +20,9 @@
 
 namespace tensorflow {
 namespace musa {
+
+void DoTranspose(OpKernelContext* ctx, const Tensor& input,
+                 const std::vector<int64_t>& permutation, Tensor* output);
 
 using ShapeVec = gtl::InlinedVector<int64_t, 8>;
 using Labels = gtl::InlinedVector<int, 8>;
@@ -317,6 +319,91 @@ struct EinsumHelper {
   }
 
   template <typename T>
+  static Status BMatMul(OpKernelContext* ctx, TensorShape out_shape,
+                        Tensor& lhs, const Tensor& rhs, bool trans_a,
+                        bool trans_b, Tensor* output) {
+    const Tensor& in0 = lhs;
+    const Tensor& in1 = rhs;
+
+    int64 d0 = in0.dim_size(in0.dims() - 2);
+    int64 d1 = in0.dim_size(in0.dims() - 1);
+    int64 d2 = in1.dim_size(in1.dims() - 2);
+    int64 d3 = in1.dim_size(in1.dims() - 1);
+
+    int64 m = trans_a ? d1 : d0;
+    int64 k = trans_a ? d0 : d1;
+    int64 n = trans_b ? d2 : d3;
+    int64 k_check = trans_b ? d3 : d2;
+
+    if (k != k_check) {
+      return errors::InvalidArgument(
+          "Matrix size-incompatible: In[0] mismatch In[1]");
+    }
+
+    out_shape.AddDim(m);
+    out_shape.AddDim(n);
+
+    // output is not allocated yet, we need to allocate it here.
+    // The problem description says "output" is a pointer.
+    // Usually helper functions allocate their output.
+    TF_RETURN_IF_ERROR(
+        ctx->allocate_temp(DataTypeToEnum<T>::value, out_shape, output));
+
+    if (output->NumElements() == 0) return Status::OK();
+
+    auto& handle = GetHandleByCtx(ctx);
+    // Use TF32 setting if needed, but here we can just default or use env like
+    // matmul op. Since this is a static method, we don't have access to member
+    // tf32_enabled_. Let's check environment variable again or just assume
+    // default precision. For now, let's keep it simple and consistent with
+    // standard usage.
+
+    mTensor mt_a = CreateMTensor(in0);
+    mTensor mt_b = CreateMTensor(in1);
+    mTensor mt_out = CreateMTensor(*output);
+
+    auto FixToBatchFormat = [](mTensor& mt, const Tensor& t) {
+      if (t.dims() == 2) {
+        int64_t rows = t.dim_size(0);
+        int64_t cols = t.dim_size(1);
+        mt.SetNdInfo({1, rows, cols}, {rows * cols, cols, 1});
+      }
+    };
+
+    ::musa::dnn::Status status;
+
+    if (in0.dims() == 2 && in1.dims() == 2) {
+      mMatMul op;
+      op.SetTranspose(trans_a, trans_b);
+      op.SetAlpha(1.0);
+      op.SetBeta(0.0);
+
+      status = op.Run(handle, mt_out, mt_a, mt_b);
+      if (status != ::musa::dnn::Status::SUCCESS) {
+        return errors::Internal(
+            "MUSA MatMul (2D High Precision) execution failed. Status: ",
+            (int)status);
+      }
+    } else {
+      mBatchMatMul op;
+      op.SetTranspose(trans_a, trans_b);
+      op.SetAlpha(1.0);
+      op.SetBeta(0.0);
+
+      FixToBatchFormat(mt_a, in0);
+      FixToBatchFormat(mt_b, in1);
+      FixToBatchFormat(mt_out, *output);
+
+      status = op.Run(handle, mt_out, mt_a, mt_b);
+      if (status != ::musa::dnn::Status::SUCCESS) {
+        return errors::Internal("MUSA BatchMatMul execution failed. Status: ",
+                                (int)status);
+      }
+    }
+    return Status::OK();
+  }
+
+  template <typename T>
   static Status ReduceOperand(
       OpKernelContext* ctx, const Tensor& input,
       const std::vector<EinsumDimensionType>& label_types,
@@ -490,21 +577,12 @@ struct EinsumHelper {
     Tensor output_reshaped;
     TF_RETURN_IF_ERROR(
         ReshapeToRank3(*output, bcast.output_batch_size(), &output_reshaped));
-
-    auto& handle = GetHandleByCtx(ctx);
-    mBatchMatMul op;
-    op.SetTranspose(trans_x, trans_y);
-    op.SetAlpha(1.0);
-    op.SetBeta(0.0);
-    auto lhs_mt = CreateMTensor(lhs);
-    auto rhs_mt = CreateMTensor(rhs);
-    auto out_mt = CreateMTensor(output_reshaped);
-    auto status = op.Run(handle, out_mt, lhs_mt, rhs_mt);
-    if (status != ::musa::dnn::Status::SUCCESS) {
-      return errors::Internal("MUSA BatchMatMul execution failed. Status: ",
-                              static_cast<int>(status));
-    }
-    return Status::OK();
+    // LaunchBatchMatMul<Device, T>::Launch(ctx, lhs, rhs, /*adj_x=*/false,
+    //                                      /*adj_y=*/false, trans_x, trans_y,
+    //                                      /*grad_x=*/false, /*grad_y=*/false,
+    //                                      bcast, &output_reshaped);
+    return BMatMul<T>(ctx, output_shape, lhs, rhs, trans_x, trans_y,
+                      &output_reshaped);
   }
 };
 
