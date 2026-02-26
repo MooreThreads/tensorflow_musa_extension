@@ -12,11 +12,14 @@
 namespace tensorflow {
 namespace musa {
 
-template <typename Device, typename T>
+template <typename T>
+Status MusaFillCall(Tensor* out, T value, OpKernelContext* context);
+
+template <typename T>
 struct SetZeroFunctor {
   // Computes on device "d": out = out.setZero(),
-  void operator()(const Device& d, typename TTypes<T>::Flat out) {
-    out.device(d) = out.constant(T(0));
+  void operator()(OpKernelContext* ctx, Tensor* out) {
+    MusaFillCall(out, T(0), ctx);
   }
 };
 

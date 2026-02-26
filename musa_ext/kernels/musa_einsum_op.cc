@@ -3,12 +3,14 @@
 #include <functional>
 #include <memory>
 
+#include "../mu/device/musa_device.h"
 #include "../utils/musa_einsum_op_util.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_split.h"
 #include "musa_fill_functor.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/core/status.h"
+#include "tensorflow/core/lib/gtl/array_slice.h"
 #include "tensorflow/core/lib/gtl/inlined_vector.h"
 #include "tensorflow/core/lib/math/math_util.h"
 #include "tensorflow/core/platform/types.h"
@@ -180,7 +182,7 @@ struct EinsumHelper {
 
   // Transpose the input given a permutation. Returns a reference to the input
   // if transposing is not necessary.
-  template <typename Device, typename T>
+  template <typename T>
   static Status TransposeOperand(OpKernelContext* ctx, const Tensor& input,
                                  const std::vector<int>& permutation,
                                  Tensor* output) {
@@ -199,14 +201,16 @@ struct EinsumHelper {
     }
     TF_RETURN_IF_ERROR(
         ctx->allocate_temp(DataTypeToEnum<T>::value, transposed_shape, output));
-    const Device& device = ctx->eigen_device<Device>();
-    TF_RETURN_IF_ERROR(DoTranspose(device, input, permutation, output));
+    // ------- TODO: Replace with valid MUSA implementation -------
+    // const Device& device = ctx->eigen_device<Device>();
+    // TF_RETURN_IF_ERROR(DoTranspose(device, input, permutation, output));
+    // ------------------------------------------------------------
     return Status::OK();
   }
 
   // If there are repeated labels in either the input or output, then this
   // strides the input (e.g. iii->i) or inflates it (e.g. i->iii), respectively.
-  template <typename Device, typename T>
+  template <typename T>
   static Status StrideOrInflate(OpKernelContext* ctx, const Tensor& input,
                                 const Labels& labels,
                                 const LabelCounts& label_counts,
@@ -243,27 +247,41 @@ struct EinsumHelper {
       strides.push_back(stride);
     }
 
-    TensorShape output_shape =
-        TensorShape(should_inflate ? inflated_shape : strided_shape);
+    const ShapeVec& output_shape_dims =
+        should_inflate ? inflated_shape : strided_shape;
+    TensorShape output_shape;
+    for (int64_t dim : output_shape_dims) {
+      TF_RETURN_IF_ERROR(output_shape.AddDimWithStatus(dim));
+    }
+    auto to_int64 = [](const ShapeVec& dims) {
+      gtl::InlinedVector<int64, 8> converted;
+      converted.reserve(dims.size());
+      for (int64_t dim : dims) {
+        converted.push_back(static_cast<int64>(dim));
+      }
+      return converted;
+    };
+    const auto reshape_int64 = to_int64(reshape);
+    const auto strided_int64 = to_int64(strided_shape);
+    const auto strides_int64 = to_int64(strides);
+    const gtl::ArraySlice<int64> reshape_slice(reshape_int64);
+    const gtl::ArraySlice<int64> strided_slice(strided_int64);
+    const TensorShape strides_shape{gtl::ArraySlice<int64>(strides_int64)};
     TF_RETURN_IF_ERROR(
         ctx->allocate_temp(DataTypeToEnum<T>::value, output_shape, output));
-    const Device& device = ctx->eigen_device<Device>();
     switch (reshape.size()) {
-#define NDIMS_CASE(N)                                                         \
-  case N: {                                                                   \
-    if (should_inflate) {                                                     \
-      auto output_map = output->shaped<T, N>(reshape);                        \
-      auto input_map = input.shaped<T, N>(strided_shape);                     \
-      InflateFunctor<Device, T, N>()(device, input_map,                       \
-                                     TensorShape(strides).AsEigenDSizes<N>(), \
-                                     output_map);                             \
-    } else {                                                                  \
-      auto input_map = input.shaped<T, N>(reshape);                           \
-      auto output_map = output->shaped<T, N>(strided_shape);                  \
-      StrideFunctor<Device, T, N>()(device, input_map,                        \
-                                    TensorShape(strides).AsEigenDSizes<N>(),  \
-                                    output_map);                              \
-    }                                                                         \
+#define NDIMS_CASE(N)                                                     \
+  case N: {                                                               \
+    const auto strides_dsizes = strides_shape.AsEigenDSizes<N>();         \
+    if (should_inflate) {                                                 \
+      auto output_map = output->shaped<T, N>(reshape_slice);              \
+      auto input_map = input.shaped<T, N>(strided_slice);                 \
+      InflateFunctor<T, N>()(ctx, input_map, strides_dsizes, output_map); \
+    } else {                                                              \
+      auto input_map = input.shaped<T, N>(reshape_slice);                 \
+      auto output_map = output->shaped<T, N>(strided_slice);              \
+      StrideFunctor<T, N>()(ctx, input_map, strides_dsizes, output_map);  \
+    }                                                                     \
   } break;
       NDIMS_CASE(1);
       NDIMS_CASE(2);
@@ -300,7 +318,7 @@ struct EinsumHelper {
     return true;
   }
 
-  template <typename Device, typename T>
+  template <typename T>
   static Status ReduceOperand(
       OpKernelContext* ctx, const Tensor& input,
       const std::vector<EinsumDimensionType>& label_types,
@@ -326,16 +344,16 @@ struct EinsumHelper {
       });
     }
     // Transpose the input so that EinsumDimensionTypes are in order.
-    TF_RETURN_IF_ERROR(TransposeOperand<Device, T>(ctx, input, permutation,
-                                                   &input_transposed));
+    TF_RETURN_IF_ERROR(
+        TransposeOperand<T>(ctx, input, permutation, &input_transposed));
     PermuteLabels(permutation, labels);
 
     // Take the generalized diagonal for dimensions with repeated axis labels.
     Tensor input_deduped;
     labels->erase(std::unique(labels->begin(), labels->end()), labels->end());
     TF_RETURN_IF_ERROR(
-        StrideOrInflate<Device, T>(ctx, input_transposed, *labels, label_counts,
-                                   false /* should_inflate */, &input_deduped));
+        StrideOrInflate<T>(ctx, input_transposed, *labels, label_counts,
+                           false /* should_inflate */, &input_deduped));
 
     // Reshape denotes the rank-5 shape [broadcast, batch, free, contract,
     // reduce] where we've compacted the dimensions of each EinsumDimensionType.
@@ -402,8 +420,10 @@ struct EinsumHelper {
     int reduce_dims[] = {1};
     op.SetDim(1, reduce_dims);
 
+    // ------- TODO: Not sure if this would work in MUSA env -------
     tensorflow::Allocator* tf_allocator =
         ctx->device()->GetAllocator(tensorflow::AllocatorAttributes());
+    // -------------------------------------------------------------
     auto alloc_func =
         [tf_allocator](
             size_t size) -> std::unique_ptr<void, std::function<void(void*)>> {
@@ -435,7 +455,7 @@ struct EinsumHelper {
   // Contracts the inputs along the last axis (or the second last if the
   // corresponding value of swap_free_and_contract is true). The batch
   // dimensions are broadcast to the output shape.
-  template <typename Device, typename T>
+  template <typename T>
   static Status ContractOperands(OpKernelContext* ctx,
                                  absl::Span<const Tensor> inputs,
                                  absl::Span<const bool> swap_free_and_contract,
@@ -465,8 +485,8 @@ struct EinsumHelper {
     TF_RETURN_IF_ERROR(
         ctx->allocate_temp(DataTypeToEnum<T>::value, output_shape, output));
     if (lhs.NumElements() == 0 || rhs.NumElements() == 0) {
-      SetZeroFunctor<Device, T> set_zero;
-      set_zero(ctx->eigen_device<Device>(), output->flat<T>());
+      SetZeroFunctor<T> set_zero;
+      set_zero(ctx, output);
       return Status::OK();
     }
     Tensor output_reshaped;
@@ -490,7 +510,7 @@ struct EinsumHelper {
   }
 };
 
-template <typename Device, typename T>
+template <typename T>
 class MusaEinsumOp : public MusaOpKernel {
  public:
   explicit MusaEinsumOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {
@@ -530,7 +550,7 @@ class MusaEinsumOp : public MusaOpKernel {
     gtl::InlinedVector<bool, 2> swap_free_and_contract(num_inputs);
     for (int i = 0; i < num_inputs; ++i) {
       OP_REQUIRES_OK(ctx,
-                     EinsumHelper::ReduceOperand<Device, T>(
+                     EinsumHelper::ReduceOperand<T>(
                          ctx, inputs[i], label_types, input_label_counts[i],
                          &input_labels[i], &free_labels[i],
                          &swap_free_and_contract[i], &inputs_reduced[i]));
@@ -540,7 +560,7 @@ class MusaEinsumOp : public MusaOpKernel {
     // contraction. If num_inputs is 1, the reduced input is simply forwarded to
     // the output.
     Tensor contraction_output_reshaped;
-    OP_REQUIRES_OK(ctx, EinsumHelper::ContractOperands<Device, T>(
+    OP_REQUIRES_OK(ctx, EinsumHelper::ContractOperands<T>(
                             ctx, inputs_reduced, swap_free_and_contract,
                             &contraction_output_reshaped));
 
@@ -580,7 +600,7 @@ class MusaEinsumOp : public MusaOpKernel {
     // may arise while computing gradient of a regular Einsum).
     Tensor output_inflated;
     OP_REQUIRES_OK(
-        ctx, EinsumHelper::StrideOrInflate<Device, T>(
+        ctx, EinsumHelper::StrideOrInflate<T>(
                  ctx, contraction_output, result_labels, output_label_counts,
                  true /* should_inflate */, &output_inflated));
     if (output_inflated.dims() > contraction_output.dims()) {
@@ -612,7 +632,7 @@ class MusaEinsumOp : public MusaOpKernel {
       label_to_position[output_labels[i]] += 1;
     }
     Tensor output;
-    OP_REQUIRES_OK(ctx, EinsumHelper::TransposeOperand<Device, T>(
+    OP_REQUIRES_OK(ctx, EinsumHelper::TransposeOperand<T>(
                             ctx, output_inflated, output_permutation, &output));
     ctx->set_output(0, output);
   }
@@ -640,6 +660,18 @@ class MusaEinsumOp : public MusaOpKernel {
   gtl::InlinedVector<bool, 2> input_has_ellipsis_;
   bool output_has_ellipsis_ = false;
 };  // class MusaEinsumOp
+
+#define REGISTER_MUSA_EINSUM(TYPE)                             \
+  REGISTER_KERNEL_BUILDER(                                     \
+      Name("Einsum").Device("MUSA").TypeConstraint<TYPE>("T"), \
+      MusaEinsumOp<TYPE>);
+
+REGISTER_MUSA_EINSUM(float);
+REGISTER_MUSA_EINSUM(double);
+REGISTER_MUSA_EINSUM(int32);
+REGISTER_MUSA_EINSUM(int64);
+REGISTER_MUSA_EINSUM(Eigen::half);
+REGISTER_MUSA_EINSUM(bfloat16);
 
 }  // namespace musa
 }  // namespace tensorflow

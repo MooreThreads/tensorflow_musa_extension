@@ -22,6 +22,8 @@ struct is_any<T, First, Rest...>
     : std::integral_constant<bool, std::is_same<T, First>::value ||
                                        is_any<T, Rest...>::value> {};
 
+}  // namespace
+
 template <typename T>
 Status MusaFillCall(Tensor* out, T value, OpKernelContext* context) {
   mFill op;
@@ -47,8 +49,6 @@ Status MusaFillCall(Tensor* out, T value, OpKernelContext* context) {
 
   return Status::OK();
 }
-
-}  // namespace
 
 template <typename T, typename Index>
 class MusaFillOp : public MusaOpKernel {
