@@ -7,6 +7,7 @@
 #include "../utils/musa_einsum_op_util.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_split.h"
+#include "mu/device/musa_memcpy.h"
 #include "musa_fill_functor.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/core/status.h"
@@ -264,37 +265,74 @@ struct EinsumHelper {
     const auto reshape_int64 = to_int64(reshape);
     const auto strided_int64 = to_int64(strided_shape);
     const auto strides_int64 = to_int64(strides);
-    const gtl::ArraySlice<int64> reshape_slice(reshape_int64);
-    const gtl::ArraySlice<int64> strided_slice(strided_int64);
-    const TensorShape strides_shape{gtl::ArraySlice<int64>(strides_int64)};
     TF_RETURN_IF_ERROR(
         ctx->allocate_temp(DataTypeToEnum<T>::value, output_shape, output));
-    switch (reshape.size()) {
-#define NDIMS_CASE(N)                                                     \
-  case N: {                                                               \
-    const auto strides_dsizes = strides_shape.AsEigenDSizes<N>();         \
-    if (should_inflate) {                                                 \
-      auto output_map = output->shaped<T, N>(reshape_slice);              \
-      auto input_map = input.shaped<T, N>(strided_slice);                 \
-      InflateFunctor<T, N>()(ctx, input_map, strides_dsizes, output_map); \
-    } else {                                                              \
-      auto input_map = input.shaped<T, N>(reshape_slice);                 \
-      auto output_map = output->shaped<T, N>(strided_slice);              \
-      StrideFunctor<T, N>()(ctx, input_map, strides_dsizes, output_map);  \
-    }                                                                     \
-  } break;
-      NDIMS_CASE(1);
-      NDIMS_CASE(2);
-      NDIMS_CASE(3);
-      NDIMS_CASE(4);
-      NDIMS_CASE(5);
-      NDIMS_CASE(6);
-      default:
-        return errors::Unimplemented(
-            "Unsupported rank: ", reshape.size(),
-            " while handling repeated indices. Up to rank 6 is supported.");
-#undef NDIMS_CASE
+
+    const int rank = reshape.size();
+    if (rank == 0) return Status::OK();
+
+    auto compute_dense_strides = [](const std::vector<int64_t>& dims) {
+      std::vector<int64_t> dense_strides(dims.size(), 1);
+      for (int i = static_cast<int>(dims.size()) - 2; i >= 0; --i) {
+        dense_strides[i] = dense_strides[i + 1] * dims[i + 1];
+      }
+      return dense_strides;
+    };
+
+    std::vector<int64_t> reshape_dims(reshape_int64.begin(),
+                                      reshape_int64.end());
+    std::vector<int64_t> strided_dims(strided_int64.begin(),
+                                      strided_int64.end());
+    std::vector<int64_t> step_dims(strides_int64.begin(), strides_int64.end());
+
+    const auto reshape_dense = compute_dense_strides(reshape_dims);
+    const auto strided_dense = compute_dense_strides(strided_dims);
+
+    std::vector<T> h_input(input.NumElements());
+    std::vector<T> h_output(output->NumElements(), static_cast<T>(0));
+
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
+    mStatus d2h_status =
+        MusaMemcpyAsyncD2H(h_input.data(), input.flat<T>().data(),
+                           input.NumElements() * sizeof(T), stream);
+    if (d2h_status != mStatus::SUCCESS) {
+      return errors::Internal("Einsum StrideOrInflate D2H memcpy failed");
     }
+    musaStreamSynchronize(stream);
+
+    if (should_inflate) {
+      for (int64_t linear = 0; linear < static_cast<int64_t>(h_input.size());
+           ++linear) {
+        int64_t remain = linear;
+        int64_t out_linear = 0;
+        for (int axis = 0; axis < rank; ++axis) {
+          const int64_t coord = remain / strided_dense[axis];
+          remain %= strided_dense[axis];
+          out_linear += (coord * step_dims[axis]) * reshape_dense[axis];
+        }
+        h_output[out_linear] = h_input[linear];
+      }
+    } else {
+      for (int64_t linear = 0; linear < static_cast<int64_t>(h_output.size());
+           ++linear) {
+        int64_t remain = linear;
+        int64_t in_linear = 0;
+        for (int axis = 0; axis < rank; ++axis) {
+          const int64_t coord = remain / strided_dense[axis];
+          remain %= strided_dense[axis];
+          in_linear += (coord * step_dims[axis]) * reshape_dense[axis];
+        }
+        h_output[linear] = h_input[in_linear];
+      }
+    }
+
+    mStatus h2d_status =
+        MusaMemcpyAsyncH2D(output->flat<T>().data(), h_output.data(),
+                           output->NumElements() * sizeof(T), stream);
+    if (h2d_status != mStatus::SUCCESS) {
+      return errors::Internal("Einsum StrideOrInflate H2D memcpy failed");
+    }
+    musaStreamSynchronize(stream);
     return Status::OK();
   }
 
@@ -319,9 +357,8 @@ struct EinsumHelper {
   }
 
   template <typename T>
-  static Status BMatMul(OpKernelContext* ctx, TensorShape out_shape,
-                        Tensor& lhs, const Tensor& rhs, bool trans_a,
-                        bool trans_b, Tensor* output) {
+  static Status BMatMul(OpKernelContext* ctx, Tensor& lhs, const Tensor& rhs,
+                        bool trans_a, bool trans_b, Tensor* output) {
     const Tensor& in0 = lhs;
     const Tensor& in1 = rhs;
 
@@ -340,18 +377,21 @@ struct EinsumHelper {
           "Matrix size-incompatible: In[0] mismatch In[1]");
     }
 
-    out_shape.AddDim(m);
-    out_shape.AddDim(n);
-
-    // output is not allocated yet, we need to allocate it here.
-    // The problem description says "output" is a pointer.
-    // Usually helper functions allocate their output.
-    TF_RETURN_IF_ERROR(
-        ctx->allocate_temp(DataTypeToEnum<T>::value, out_shape, output));
+    if (output->dims() < 2) {
+      return errors::Internal(
+          "Einsum output tensor rank must be at least 2, got ", output->dims());
+    }
+    if (output->dim_size(output->dims() - 2) != m ||
+        output->dim_size(output->dims() - 1) != n) {
+      return errors::Internal(
+          "Einsum output tensor shape mismatch, expected tail [", m, ", ", n,
+          "], got ", output->shape().DebugString());
+    }
 
     if (output->NumElements() == 0) return Status::OK();
 
     auto& handle = GetHandleByCtx(ctx);
+    handle.SetAllowTF32(false);
     // Use TF32 setting if needed, but here we can just default or use env like
     // matmul op. Since this is a static method, we don't have access to member
     // tf32_enabled_. Let's check environment variable again or just assume
@@ -581,8 +621,7 @@ struct EinsumHelper {
     //                                      /*adj_y=*/false, trans_x, trans_y,
     //                                      /*grad_x=*/false, /*grad_y=*/false,
     //                                      bcast, &output_reshaped);
-    return BMatMul<T>(ctx, output_shape, lhs, rhs, trans_x, trans_y,
-                      &output_reshaped);
+    return BMatMul<T>(ctx, lhs, rhs, trans_x, trans_y, &output_reshaped);
   }
 };
 

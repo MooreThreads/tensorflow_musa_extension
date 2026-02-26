@@ -79,8 +79,8 @@ class EinsumOpTest(MUSATestCase):
   def testMultipleSummations(self):
     """Multiple contraction indices with more than two inputs."""
     equation = "abc,acd,db->bd"
-    shapes = [(3, 4, 5), (4, 5, 6), (6, 3)]
-    for dtype in [tf.float32]:
+    shapes = [(3, 4, 5), (3, 5, 6), (6, 4)]
+    for dtype in [tf.float32, tf.float16, tf.bfloat16]:
       self._test_einsum(equation, shapes, dtype)
 
 
