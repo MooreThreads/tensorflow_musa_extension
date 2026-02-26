@@ -157,6 +157,6 @@ REGISTER_MUSA_MAX(int32);
 REGISTER_MUSA_MAX(int64);
 
 #undef REGISTER_MUSA_MAX
-
+ 
 }  // namespace musa
 }  // namespace tensorflow
