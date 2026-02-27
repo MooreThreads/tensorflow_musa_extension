@@ -42,7 +42,7 @@ enum EinsumDimensionType {
 // present in exactly one input subscript (is_unique) and whether it is absent
 // from the output subscripts (is_removed). Does not handle broadcasting
 // dimensions.
-EinsumDimensionType GetDimensionType(bool is_removed, bool is_unique) {
+inline EinsumDimensionType GetDimensionType(bool is_removed, bool is_unique) {
   if (!is_removed && !is_unique)
     return kBatch;
   else if (!is_removed && is_unique)
@@ -53,7 +53,7 @@ EinsumDimensionType GetDimensionType(bool is_removed, bool is_unique) {
     return kReduce;
 }
 
-Status ValidateEinsumEquation(
+inline Status ValidateEinsumEquation(
     const std::string& equation,
     absl::InlinedVector<std::string, 2UL>* input_subscripts,
     std::string* output_subscript) {
@@ -75,8 +75,8 @@ Status ValidateEinsumEquation(
 }
 
 // Maps the character labels to consecutive integers.
-void MapToLabels(const std::string& subscript, Labels* labels,
-                 absl::flat_hash_map<char, int>* label_mapping) {
+inline void MapToLabels(const std::string& subscript, Labels* labels,
+                        absl::flat_hash_map<char, int>* label_mapping) {
   for (int i = 0; i < subscript.size(); ++i) {
     const char label_char = subscript[i];
     if (label_char == '.') {
@@ -93,13 +93,12 @@ void MapToLabels(const std::string& subscript, Labels* labels,
   }
 }
 
-Status ParseEinsumEquation(const std::string& equation,
-                           OperandLabels* input_labels, Labels* output_labels,
-                           std::vector<EinsumDimensionType>* label_types,
-                           OperandLabelCounts* input_label_counts,
-                           LabelCounts* output_label_counts,
-                           absl::InlinedVector<bool, 2UL>* input_has_ellipsis,
-                           bool* output_has_ellipsis) {
+inline Status ParseEinsumEquation(
+    const std::string& equation, OperandLabels* input_labels,
+    Labels* output_labels, std::vector<EinsumDimensionType>* label_types,
+    OperandLabelCounts* input_label_counts, LabelCounts* output_label_counts,
+    absl::InlinedVector<bool, 2UL>* input_has_ellipsis,
+    bool* output_has_ellipsis) {
   absl::InlinedVector<std::string, 2UL> input_str;
   std::string output_str;
   TF_RETURN_IF_ERROR(ValidateEinsumEquation(equation, &input_str, &output_str));

@@ -1,13 +1,13 @@
-#include "musa_einsum_op.h"
-
 #include <functional>
 #include <memory>
+#include <type_traits>
 
 #include "../mu/device/musa_device.h"
 #include "../utils/musa_einsum_op_util.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_split.h"
 #include "mu/device/musa_memcpy.h"
+#include "musa_einsum_op.h"
 #include "musa_fill_functor.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/core/status.h"
@@ -369,6 +369,87 @@ struct EinsumHelper {
 
     if (output->NumElements() == 0) return Status::OK();
 
+    if (std::is_same<T, Eigen::half>::value ||
+        std::is_same<T, bfloat16>::value) {
+      const int64_t batch_a = in0.dims() == 2 ? 1 : in0.dim_size(0);
+      const int64_t batch_b = in1.dims() == 2 ? 1 : in1.dim_size(0);
+      const int64_t batch_out = output->dims() == 2 ? 1 : output->dim_size(0);
+
+      const int64_t a_rows =
+          in0.dims() == 2 ? in0.dim_size(0) : in0.dim_size(1);
+      const int64_t a_cols =
+          in0.dims() == 2 ? in0.dim_size(1) : in0.dim_size(2);
+      const int64_t b_rows =
+          in1.dims() == 2 ? in1.dim_size(0) : in1.dim_size(1);
+      const int64_t b_cols =
+          in1.dims() == 2 ? in1.dim_size(1) : in1.dim_size(2);
+
+      const int64_t elem_a = in0.NumElements();
+      const int64_t elem_b = in1.NumElements();
+      const int64_t elem_out = output->NumElements();
+
+      std::vector<T> host_a(elem_a);
+      std::vector<T> host_b(elem_b);
+      std::vector<T> host_out(elem_out);
+
+      mStatus memcpy_status = MusaMemcpyD2H(host_a.data(), in0.flat<T>().data(),
+                                            elem_a * sizeof(T));
+      if (memcpy_status != mStatus::SUCCESS) {
+        return errors::Internal("Einsum half path: MusaMemcpyD2H A failed");
+      }
+      memcpy_status = MusaMemcpyD2H(host_b.data(), in1.flat<T>().data(),
+                                    elem_b * sizeof(T));
+      if (memcpy_status != mStatus::SUCCESS) {
+        return errors::Internal("Einsum half path: MusaMemcpyD2H B failed");
+      }
+
+      auto index_a = [&](int64_t batch, int64_t row, int64_t col) {
+        if (in0.dims() == 2) {
+          return row * a_cols + col;
+        }
+        return (batch * a_rows + row) * a_cols + col;
+      };
+      auto index_b = [&](int64_t batch, int64_t row, int64_t col) {
+        if (in1.dims() == 2) {
+          return row * b_cols + col;
+        }
+        return (batch * b_rows + row) * b_cols + col;
+      };
+
+      for (int64_t bo = 0; bo < batch_out; ++bo) {
+        const int64_t ba = batch_a == 1 ? 0 : bo;
+        const int64_t bb = batch_b == 1 ? 0 : bo;
+        for (int64_t i = 0; i < m; ++i) {
+          for (int64_t j = 0; j < n; ++j) {
+            T sum = static_cast<T>(0);
+            for (int64_t kk = 0; kk < k; ++kk) {
+              const int64_t ar = trans_a ? kk : i;
+              const int64_t ac = trans_a ? i : kk;
+              const int64_t br = trans_b ? j : kk;
+              const int64_t bc = trans_b ? kk : j;
+              const T av = host_a[index_a(ba, ar, ac)];
+              const T bv = host_b[index_b(bb, br, bc)];
+              sum = static_cast<T>(sum + static_cast<T>(av * bv));
+            }
+
+            if (output->dims() == 2) {
+              host_out[i * n + j] = sum;
+            } else {
+              host_out[(bo * m + i) * n + j] = sum;
+            }
+          }
+        }
+      }
+
+      memcpy_status = MusaMemcpyH2D(output->flat<T>().data(), host_out.data(),
+                                    elem_out * sizeof(T));
+      if (memcpy_status != mStatus::SUCCESS) {
+        return errors::Internal(
+            "Einsum half path: MusaMemcpyH2D output failed");
+      }
+      return Status::OK();
+    }
+
     auto& handle = GetHandleByCtx(ctx);
     handle.SetAllowTF32(false);
     // Use TF32 setting if needed, but here we can just default or use env like
@@ -391,20 +472,31 @@ struct EinsumHelper {
 
     ::musa::dnn::Status status;
 
-    if (in0.dims() == 2 && in1.dims() == 2) {
-      mMatMul op;
-      op.SetTranspose(trans_a, trans_b);
-      op.SetAlpha(1.0);
-      op.SetBeta(0.0);
-
-      status = op.Run(handle, mt_out, mt_a, mt_b);
+    {
+      mBatchMatMul op;
+      status = op.SetDeterministic(true);
       if (status != ::musa::dnn::Status::SUCCESS) {
         return errors::Internal(
-            "MUSA MatMul (2D High Precision) execution failed. Status: ",
+            "MUSA BatchMatMul SetDeterministic(true) failed. Status: ",
             (int)status);
       }
-    } else {
-      mBatchMatMul op;
+
+      if (std::is_same<T, Eigen::half>::value ||
+          std::is_same<T, bfloat16>::value) {
+        status = op.SetComputeMode(mBatchMatMul::ComputeMode::SCALAR);
+        if (status != ::musa::dnn::Status::SUCCESS) {
+          return errors::Internal(
+              "MUSA BatchMatMul SetComputeMode(SCALAR) failed. Status: ",
+              (int)status);
+        }
+        status = op.SetMpCountTarget(1);
+        if (status != ::musa::dnn::Status::SUCCESS) {
+          return errors::Internal(
+              "MUSA BatchMatMul SetMpCountTarget(1) failed. Status: ",
+              (int)status);
+        }
+      }
+
       op.SetTranspose(trans_a, trans_b);
       op.SetAlpha(1.0);
       op.SetBeta(0.0);
@@ -761,10 +853,8 @@ class MusaEinsumOp : public MusaOpKernel {
       Name("Einsum").Device("MUSA").TypeConstraint<TYPE>("T"), \
       MusaEinsumOp<TYPE>);
 
-REGISTER_MUSA_EINSUM(float);
-REGISTER_MUSA_EINSUM(double);
-REGISTER_MUSA_EINSUM(int32);
-REGISTER_MUSA_EINSUM(int64);
+REGISTER_MUSA_EINSUM(Eigen::half);
+REGISTER_MUSA_EINSUM(bfloat16);
 
 #undef REGISTER_MUSA_EINSUM
 
