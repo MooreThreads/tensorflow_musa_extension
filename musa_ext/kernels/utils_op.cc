@@ -111,9 +111,17 @@ mFormat GetMusaFormat(OpKernelConstruction* ctx) {
 
 MusaDevice* GetDeviceByCtx(tensorflow::OpKernelContext* context) {
   DeviceBase* device_base = context->device();
+  if (!device_base) {
+    LOG(ERROR) << "GetDeviceByCtx: device_base is null";
+    return nullptr;
+  }
   MusaDevice* musa_device = reinterpret_cast<MusaDevice*>(device_base);
-  if (!musa_device) return nullptr;
-  musaSetDevice(musa_device->get_device_id());
+  if (!musa_device) {
+    LOG(ERROR) << "GetDeviceByCtx: musa_device is null";
+    return nullptr;
+  }
+  // Note: musaSetDevice is called in GetHandleByCtx with caching
+  // We skip it here to avoid redundant calls
   return musa_device;
 }
 

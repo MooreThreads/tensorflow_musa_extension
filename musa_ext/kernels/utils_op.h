@@ -97,12 +97,28 @@ class MusaOpKernel : public OpKernel {
 
 MusaDevice* GetDeviceByCtx(tensorflow::OpKernelContext* context);
 
+// Thread-local cache for current device to avoid redundant musaSetDevice calls
+inline musaError_t CachedMusaSetDevice(int device_id) {
+  static thread_local int cached_device_id = -1;
+  if (device_id != cached_device_id) {
+    musaError_t err = musaSetDevice(device_id);
+    if (err == musaSuccess) {
+      cached_device_id = device_id;
+    }
+    return err;
+  }
+  return musaSuccess;
+}
+
 inline ::musa::dnn::Handle& GetHandleByCtx(
     tensorflow::OpKernelContext* context) {
   auto* musa_device = static_cast<MusaDevice*>(context->device());
   int device_id = musa_device->get_device_id();
 
-  musaSetDevice(device_id);
+  musaError_t err = CachedMusaSetDevice(device_id);
+  if (err != musaSuccess) {
+    LOG(ERROR) << "musaSetDevice failed: " << musaGetErrorString(err);
+  }
 
   return musa_device->mudnn_handle();
 }

@@ -107,8 +107,7 @@ class MusaStridedSliceOp : public OpKernel {
                   "ConfigDimStride", context);
 
     MTOP_CHECK_OK_RUN(op.Run(h, out_mt, in_mt), "RunOp", context);
-
-    musaStreamSynchronize(reinterpret_cast<musaStream_t>(h.GetStream()));
+    // Note: No explicit sync needed - TF's dependency tracking handles it
   }
 
  private:

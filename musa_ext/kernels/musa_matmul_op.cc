@@ -50,11 +50,12 @@ class MusaMatMulOp : public MusaOpKernel {
 
     // TF32 is disabled by default for better precision
     // Can be enabled via MUSA_ENABLE_TF32=1 environment variable
-    tf32_enabled_ = false;  // Default to false for precision
-    const char* tf32_env = std::getenv("MUSA_ENABLE_TF32");
-    if (tf32_env && std::atoi(tf32_env) == 1) {
-      tf32_enabled_ = true;
-    }
+    // Use static initialization to cache environment variable lookup
+    static bool tf32_enabled_global = []() {
+      const char* tf32_env = std::getenv("MUSA_ENABLE_TF32");
+      return (tf32_env && std::atoi(tf32_env) == 1);
+    }();
+    tf32_enabled_ = tf32_enabled_global;
   }
 
   void Compute(OpKernelContext* ctx) override {
