@@ -184,6 +184,32 @@ struct EinsumHelper {
     return false;
   }
 
+  static Status CastTensor(OpKernelContext* ctx, const Tensor& input,
+                           DataType dst_dtype, Tensor* output) {
+    if (input.dtype() == dst_dtype) {
+      return CopyFrom(input, input.shape(), output);
+    }
+
+    TF_RETURN_IF_ERROR(ctx->allocate_temp(dst_dtype, input.shape(), output));
+    if (input.NumElements() == 0) return Status::OK();
+
+    auto input_mt = CreateMTensor(input);
+    auto output_mt = CreateMTensor(*output);
+
+    ::musa::dnn::Unary op;
+    auto status = op.SetMode(::musa::dnn::Unary::Mode::CAST);
+    if (status != ::musa::dnn::Status::SUCCESS) {
+      return errors::Internal("Einsum CastTensor SetMode failed. Status: ",
+                              static_cast<int>(status));
+    }
+    status = op.Run(GetHandleByCtx(ctx), output_mt, input_mt);
+    if (status != ::musa::dnn::Status::SUCCESS) {
+      return errors::Internal("Einsum CastTensor Run failed. Status: ",
+                              static_cast<int>(status));
+    }
+    return Status::OK();
+  }
+
   // Transpose the input given a permutation. Returns a reference to the input
   // if transposing is not necessary.
   template <typename T>
@@ -677,6 +703,23 @@ struct EinsumHelper {
     return BMatMul<T>(ctx, lhs, rhs, trans_x, trans_y, &output_reshaped);
   }
 };
+
+template <>
+Status EinsumHelper::ReduceOperand<bfloat16>(
+    OpKernelContext* ctx, const Tensor& input,
+    const std::vector<EinsumDimensionType>& label_types,
+    const LabelCounts& label_counts, Labels* labels, Labels* free_labels,
+    bool* swap_free_and_contract, Tensor* output) {
+  Tensor input_fp32;
+  TF_RETURN_IF_ERROR(CastTensor(ctx, input, DT_FLOAT, &input_fp32));
+
+  Tensor output_fp32;
+  TF_RETURN_IF_ERROR(
+      ReduceOperand<float>(ctx, input_fp32, label_types, label_counts, labels,
+                           free_labels, swap_free_and_contract, &output_fp32));
+
+  return CastTensor(ctx, output_fp32, DataTypeToEnum<bfloat16>::value, output);
+}
 
 template <typename T>
 class MusaEinsumOp : public MusaOpKernel {
