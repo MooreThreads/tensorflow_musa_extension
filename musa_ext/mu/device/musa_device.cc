@@ -29,8 +29,8 @@ MusaDeviceContext::~MusaDeviceContext() {
     // Wait for all async operations to complete
     official_stream_->BlockHostUntilDone().IgnoreError();
     delete official_stream_;
-    // Note: official_stream_ owns implementation_, so we don't delete it separately
-    // to avoid double-free
+    // Note: official_stream_ owns implementation_, so we don't delete it
+    // separately to avoid double-free
   }
 }
 
@@ -49,14 +49,15 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
   if (bytes > 0) {
     // Optimization: For small transfers, use synchronous copy which is often
     // faster than async + sync due to lower overhead.
-    // For large transfers, use async without immediate sync for better pipelining.
+    // For large transfers, use async without immediate sync for better
+    // pipelining.
     constexpr size_t kSmallTransferThreshold = 65536;  // 64KB
-    
+
     if (bytes <= kSmallTransferThreshold) {
       // Synchronous copy for small transfers
       musaError_t err = musaMemcpy(dst, src, bytes, musaMemcpyHostToDevice);
       if (err != musaSuccess) {
-        done(errors::Internal("MUSA H2D sync copy failed: ", 
+        done(errors::Internal("MUSA H2D sync copy failed: ",
                               musaGetErrorString(err)));
         return;
       }
@@ -67,7 +68,7 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
         done(errors::Internal("MUSA H2D async copy init failed."));
         return;
       }
-      
+
       // Only synchronize if explicitly requested
       if (sync_dst_compute) {
         musaError_t sync_err = musaStreamSynchronize(stream_handle_);
@@ -77,7 +78,8 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
           return;
         }
       }
-      // Otherwise, let TensorFlow's stream dependency tracking handle synchronization
+      // Otherwise, let TensorFlow's stream dependency tracking handle
+      // synchronization
     }
   }
   done(Status::OK());
@@ -102,9 +104,10 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
   if (bytes > 0) {
     // Optimization: For small transfers, use synchronous copy which is often
     // faster than async + sync due to lower overhead.
-    // For large transfers, use async without immediate sync for better pipelining.
+    // For large transfers, use async without immediate sync for better
+    // pipelining.
     constexpr size_t kSmallTransferThreshold = 65536;  // 64KB
-    
+
     if (bytes <= kSmallTransferThreshold) {
       // Synchronous copy for small transfers
       musaError_t err = musaMemcpy(dst, src, bytes, musaMemcpyDeviceToHost);
@@ -120,9 +123,9 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
         done(errors::Internal("MUSA D2H async copy init failed."));
         return;
       }
-      // For D2H, we typically need to ensure completion for CPU-side consumption.
-      // Use lazy sync - TensorFlow's dependency tracking will ensure proper ordering.
-      // Only sync if the caller explicitly requests it.
+      // For D2H, we typically need to ensure completion for CPU-side
+      // consumption. Use lazy sync - TensorFlow's dependency tracking will
+      // ensure proper ordering. Only sync if the caller explicitly requests it.
     }
   }
   done(Status::OK());
@@ -170,7 +173,7 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
 
   // Initialize Context
   device_context_ = new MusaDeviceContext(stream_, executor);
-  
+
   // Use BFC allocator for better performance with memory pooling
   musa_allocator_ = new MusaBFCAllocator(device_id_);
 

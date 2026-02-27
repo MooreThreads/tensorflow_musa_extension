@@ -41,14 +41,10 @@ namespace {
 constexpr char kMusaDeviceType[] = "MUSA";
 
 // Tri-state configuration for optimizers
-enum class TriState {
-  kDefault = 0,
-  kOff = 1,
-  kOn = 2
-};
+enum class TriState { kDefault = 0, kOff = 1, kOn = 2 };
 
-// Optimizer configurations - controls interaction with TensorFlow built-in optimizers
-// Based on TF Modular Graph C API TP_OptimizerConfigs
+// Optimizer configurations - controls interaction with TensorFlow built-in
+// optimizers Based on TF Modular Graph C API TP_OptimizerConfigs
 struct MusaOptimizerConfigs {
   TriState disable_model_pruning = TriState::kDefault;
   TriState implementation_selector = TriState::kDefault;
@@ -58,7 +54,8 @@ struct MusaOptimizerConfigs {
   TriState debug_stripper = TriState::kDefault;
   TriState constant_folding = TriState::kDefault;
   TriState shape_optimization = TriState::kDefault;
-  TriState auto_mixed_precision = TriState::kOff;  // MUSA handles AMP internally
+  TriState auto_mixed_precision =
+      TriState::kOff;  // MUSA handles AMP internally
   TriState pin_to_host_optimization = TriState::kDefault;
   TriState layout_optimizer = TriState::kOff;  // MUSA handles layout internally
   TriState remapping = TriState::kDefault;
@@ -72,17 +69,35 @@ struct MusaOptimizerConfigs {
 // MUSA AMP Configuration
 class MusaAmpConfig {
  public:
-  std::unordered_set<string> fp16_compute_ops = {
-      "MatMul", "BatchMatMul", "BatchMatMulV2", "Conv2D",
-      "Conv2DBackpropInput", "Conv2DBackpropFilter",
-      "DepthwiseConv2dNative", "Conv3D", "FusedBatchNorm",
-      "FusedBatchNormV2", "FusedBatchNormV3"};
+  std::unordered_set<string> fp16_compute_ops = {"MatMul",
+                                                 "BatchMatMul",
+                                                 "BatchMatMulV2",
+                                                 "Conv2D",
+                                                 "Conv2DBackpropInput",
+                                                 "Conv2DBackpropFilter",
+                                                 "DepthwiseConv2dNative",
+                                                 "Conv3D",
+                                                 "FusedBatchNorm",
+                                                 "FusedBatchNormV2",
+                                                 "FusedBatchNormV3"};
 
   std::unordered_set<string> fp32_keep_ops = {
-      "Softmax", "LogSoftmax", "SoftmaxCrossEntropyWithLogits",
-      "SparseSoftmaxCrossEntropyWithLogits", "SigmoidCrossEntropyWithLogits",
-      "Mean", "Sum", "Prod", "L2Loss", "Norm", "Exp", "Log", "Sqrt",
-      "Rsqrt", "Reciprocal", "Square"};
+      "Softmax",
+      "LogSoftmax",
+      "SoftmaxCrossEntropyWithLogits",
+      "SparseSoftmaxCrossEntropyWithLogits",
+      "SigmoidCrossEntropyWithLogits",
+      "Mean",
+      "Sum",
+      "Prod",
+      "L2Loss",
+      "Norm",
+      "Exp",
+      "Log",
+      "Sqrt",
+      "Rsqrt",
+      "Reciprocal",
+      "Square"};
 
   std::unordered_set<string> conditional_ops = {
       "Add", "AddV2", "Sub", "Mul", "Div", "BiasAdd", "BiasAddGrad"};
@@ -194,8 +209,8 @@ class MusaGraphUtils {
 
   static bool kLayoutSensitiveOps(const NodeDef& node) {
     static const std::unordered_set<string> sensitive_ops = {
-        "Conv2D", "DepthwiseConv2dNative", "MaxPool",
-        "AvgPool", "FusedBatchNorm", "FusedBatchNormV3"};
+        "Conv2D",  "DepthwiseConv2dNative", "MaxPool",
+        "AvgPool", "FusedBatchNorm",        "FusedBatchNormV3"};
     return sensitive_ops.count(node.op()) > 0;
   }
 
@@ -264,11 +279,12 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
 
     // Skip optimization if graph doesn't contain MUSA nodes
     if (!GraphHasMusaNodes(*optimized_graph)) {
-      VLOG(2) << "MusaGraphOptimizer: No MUSA nodes found, skipping optimization";
+      VLOG(2)
+          << "MusaGraphOptimizer: No MUSA nodes found, skipping optimization";
       return Status::OK();
     }
 
-    VLOG(1) << "MusaGraphOptimizer: Optimizing graph with " 
+    VLOG(1) << "MusaGraphOptimizer: Optimizing graph with "
             << optimized_graph->node_size() << " nodes";
 
     // Step 1: Layout optimization (NHWC -> NCHW)
@@ -303,7 +319,7 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
     bool changed = true;
     int iteration = 0;
     const int kMaxIterations = 5;
-    
+
     while (changed && iteration < kMaxIterations) {
       changed = false;
       iteration++;

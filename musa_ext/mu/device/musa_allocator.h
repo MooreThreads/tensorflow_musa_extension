@@ -5,17 +5,17 @@
 
 #include <algorithm>
 #include <limits>
-#include <string>
-#include <vector>
 #include <map>
-#include <unordered_map>
-#include <mutex>
 #include <memory>
+#include <mutex>
 #include <queue>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
+#include "tensorflow/core/framework/allocator.h"
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/platform/mutex.h"
-#include "tensorflow/core/framework/allocator.h"
 
 namespace tensorflow {
 namespace musa {
@@ -41,31 +41,31 @@ class MusaBFCAllocator : public Allocator {
   static constexpr size_t kMinAllocationSize = 256;
   static constexpr size_t kMaxPoolSize = 1ULL << 30;  // 1GB max per pool
   static constexpr size_t kAllocationAlignment = 256;
-  
+
   // Round up to alignment
   size_t RoundedBytes(size_t bytes) const;
-  
+
   // Get size class for allocation
   size_t GetSizeClass(size_t bytes) const;
 
   int device_id_;
   size_t pool_bytes_;
   size_t allocated_bytes_;
-  
+
   // Protects all mutable state
   mutable mutex mu_;
-  
+
   // Pool for each size class
   // Key: size class (rounded allocation size)
   // Value: queue of available pointers
   std::unordered_map<size_t, std::queue<void*>> pools_;
-  
+
   // Track which size class each allocated pointer belongs to
   std::unordered_map<void*, size_t> allocated_sizes_;
-  
+
   // Track original MUSA allocations for cleanup
   std::vector<void*> musa_allocations_;
-  
+
   // Statistics
   size_t num_allocs_ = 0;
   size_t num_deallocs_ = 0;
