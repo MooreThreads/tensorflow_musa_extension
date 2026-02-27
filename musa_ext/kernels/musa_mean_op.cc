@@ -1,9 +1,7 @@
 #include <mudnn.h>
 
 #include <functional>
-#include <iostream>
 #include <memory>
-#include <vector>
 
 #include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/bounds_check.h"
@@ -111,14 +109,13 @@ class MusaMeanOp : public MusaOpKernel {
         [tf_allocator](
             size_t size) -> std::unique_ptr<void, std::function<void(void*)>> {
       void* ptr = tf_allocator->AllocateRaw(256, size);
-      std::function<void(void*)> deleter = [tf_allocator](void* p) {
-        if (p) tf_allocator->DeallocateRaw(p);
-      };
-      return std::unique_ptr<void, std::function<void(void*)>>(ptr, deleter);
+      return std::unique_ptr<void, std::function<void(void*)>>(
+          ptr, [tf_allocator](void* p) {
+            if (p) tf_allocator->DeallocateRaw(p);
+          });
     };
 
     ::musa::dnn::MemoryMaintainer mm(alloc_func);
-
     auto status = op.Run(handle, t_out, t_in, mm);
 
     OP_REQUIRES(

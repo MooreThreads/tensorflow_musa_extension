@@ -57,9 +57,15 @@ class MusaConcatOp : public MusaOpKernel {
 
     if (non_empty_indices.size() == 1) {
       const Tensor& src = ctx->input(non_empty_indices[0]);
-      musaMemcpyAsync(const_cast<char*>(output->tensor_data().data()),
-                      src.tensor_data().data(), src.TotalBytes(),
-                      musaMemcpyDeviceToDevice, stream);
+      musaError_t err =
+          musaMemcpyAsync(const_cast<char*>(output->tensor_data().data()),
+                          src.tensor_data().data(), src.TotalBytes(),
+                          musaMemcpyDeviceToDevice, stream);
+      if (err != musaSuccess) {
+        ctx->CtxFailure(errors::Internal("musaMemcpyAsync failed: ",
+                                         musaGetErrorString(err)));
+        return;
+      }
       return;
     }
 

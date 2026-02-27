@@ -9,6 +9,7 @@
 #include <memory>
 
 #include "mudnn_base.h"
+#include "musa_allocator.h"
 #include "musa_stream.h"
 #include "tensorflow/core/framework/device.h"
 #include "tensorflow/core/framework/device_base.h"
