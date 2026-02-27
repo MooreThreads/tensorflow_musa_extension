@@ -12,6 +12,7 @@ namespace musa {
 
 using Var = ::tensorflow::Var;
 
+// Generate a unique shared name based on op instance if needed
 template <typename T>
 class MusaVariableV2Op : public OpKernel {
  public:
@@ -19,6 +20,12 @@ class MusaVariableV2Op : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("container", &container_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("shared_name", &shared_name_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("shape", &shape_));
+
+    // If shared_name is empty, generate a unique name based on node name
+    // This ensures each VariableV2 op instance has its own unique variable
+    if (shared_name_.empty()) {
+      shared_name_ = ctx->def().name();
+    }
   }
 
   void Compute(OpKernelContext* ctx) override {
@@ -26,12 +33,12 @@ class MusaVariableV2Op : public OpKernel {
 
     // Create or lookup the Var resource by (container, shared_name).
     Var* var = nullptr;
-    OP_REQUIRES_OK(
-        ctx, ctx->resource_manager()->LookupOrCreate<Var>(
-                 container_, shared_name_, &var, [dtype](Var** ptr) -> Status {
-                   *ptr = new Var(dtype);
-                   return Status::OK();
-                 }));
+    OP_REQUIRES_OK(ctx, ctx->resource_manager()->LookupOrCreate<Var>(
+                            container_, shared_name_, &var,
+                            [dtype, this](Var** ptr) -> Status {
+                              *ptr = new Var(dtype);
+                              return Status::OK();
+                            }));
 
     core::ScopedUnref unref(var);
 

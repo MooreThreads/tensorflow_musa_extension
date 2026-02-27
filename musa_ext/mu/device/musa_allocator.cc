@@ -6,6 +6,11 @@
 namespace tensorflow {
 namespace musa {
 
+// Out-of-class definition for static constexpr members
+constexpr size_t MusaBFCAllocator::kMinAllocationSize;
+constexpr size_t MusaBFCAllocator::kMaxPoolSize;
+constexpr size_t MusaBFCAllocator::kAllocationAlignment;
+
 // Simple Pool-based Allocator Implementation
 // Uses power-of-2 size classes for efficient reuse
 
