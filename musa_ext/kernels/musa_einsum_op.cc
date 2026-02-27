@@ -1,7 +1,9 @@
 #include "musa_einsum_op.h"
 
+#include <cstring>
 #include <functional>
 #include <memory>
+#include <vector>
 
 #include "../mu/device/musa_device.h"
 #include "../utils/musa_einsum_op_util.h"
@@ -351,23 +353,92 @@ struct EinsumHelper {
     int64 n = trans_b ? d2 : d3;
     int64 k_check = trans_b ? d3 : d2;
 
-    if (k != k_check) {
-      return errors::InvalidArgument(
-          "Matrix size-incompatible: In[0] mismatch In[1]");
-    }
-
-    if (output->dims() < 2) {
-      return errors::Internal(
-          "Einsum output tensor rank must be at least 2, got ", output->dims());
-    }
-    if (output->dim_size(output->dims() - 2) != m ||
-        output->dim_size(output->dims() - 1) != n) {
-      return errors::Internal(
-          "Einsum output tensor shape mismatch, expected tail [", m, ", ", n,
-          "], got ", output->shape().DebugString());
-    }
-
     if (output->NumElements() == 0) return Status::OK();
+
+    // // USE CPU to compute half and bfloat16 bMatMul
+    // if (std::is_same<T, Eigen::half>::value ||
+    //     std::is_same<T, bfloat16>::value) {
+    //   const int64_t batch_a = in0.dims() == 2 ? 1 : in0.dim_size(0);
+    //   const int64_t batch_b = in1.dims() == 2 ? 1 : in1.dim_size(0);
+    //   const int64_t batch_out = output->dims() == 2 ? 1 :
+    //   output->dim_size(0);
+
+    //   const int64_t a_rows =
+    //       in0.dims() == 2 ? in0.dim_size(0) : in0.dim_size(1);
+    //   const int64_t a_cols =
+    //       in0.dims() == 2 ? in0.dim_size(1) : in0.dim_size(2);
+    //   const int64_t b_rows =
+    //       in1.dims() == 2 ? in1.dim_size(0) : in1.dim_size(1);
+    //   const int64_t b_cols =
+    //       in1.dims() == 2 ? in1.dim_size(1) : in1.dim_size(2);
+
+    //   const int64_t elem_a = in0.NumElements();
+    //   const int64_t elem_b = in1.NumElements();
+    //   const int64_t elem_out = output->NumElements();
+
+    //   std::vector<T> host_a(elem_a);
+    //   std::vector<T> host_b(elem_b);
+    //   std::vector<T> host_out(elem_out);
+
+    //   mStatus memcpy_status = MusaMemcpyD2H(host_a.data(),
+    //   in0.flat<T>().data(),
+    //                                         elem_a * sizeof(T));
+    //   if (memcpy_status != mStatus::SUCCESS) {
+    //     return errors::Internal("Einsum half path: MusaMemcpyD2H A failed");
+    //   }
+    //   memcpy_status = MusaMemcpyD2H(host_b.data(), in1.flat<T>().data(),
+    //                                 elem_b * sizeof(T));
+    //   if (memcpy_status != mStatus::SUCCESS) {
+    //     return errors::Internal("Einsum half path: MusaMemcpyD2H B failed");
+    //   }
+
+    //   auto index_a = [&](int64_t batch, int64_t row, int64_t col) {
+    //     if (in0.dims() == 2) {
+    //       return row * a_cols + col;
+    //     }
+    //     return (batch * a_rows + row) * a_cols + col;
+    //   };
+    //   auto index_b = [&](int64_t batch, int64_t row, int64_t col) {
+    //     if (in1.dims() == 2) {
+    //       return row * b_cols + col;
+    //     }
+    //     return (batch * b_rows + row) * b_cols + col;
+    //   };
+
+    //   for (int64_t bo = 0; bo < batch_out; ++bo) {
+    //     const int64_t ba = batch_a == 1 ? 0 : bo;
+    //     const int64_t bb = batch_b == 1 ? 0 : bo;
+    //     for (int64_t i = 0; i < m; ++i) {
+    //       for (int64_t j = 0; j < n; ++j) {
+    //         T sum = static_cast<T>(0);
+    //         for (int64_t kk = 0; kk < k; ++kk) {
+    //           const int64_t ar = trans_a ? kk : i;
+    //           const int64_t ac = trans_a ? i : kk;
+    //           const int64_t br = trans_b ? j : kk;
+    //           const int64_t bc = trans_b ? kk : j;
+    //           const T av = host_a[index_a(ba, ar, ac)];
+    //           const T bv = host_b[index_b(bb, br, bc)];
+    //           sum = static_cast<T>(sum + static_cast<T>(av * bv));
+    //         }
+
+    //         if (output->dims() == 2) {
+    //           host_out[i * n + j] = sum;
+    //         } else {
+    //           host_out[(bo * m + i) * n + j] = sum;
+    //         }
+    //       }
+    //     }
+    //   }
+
+    //   memcpy_status = MusaMemcpyH2D(output->flat<T>().data(),
+    //   host_out.data(),
+    //                                 elem_out * sizeof(T));
+    //   if (memcpy_status != mStatus::SUCCESS) {
+    //     return errors::Internal(
+    //         "Einsum half path: MusaMemcpyH2D output failed");
+    //   }
+    //   return Status::OK();
+    // }
 
     auto& handle = GetHandleByCtx(ctx);
     handle.SetAllowTF32(false);
@@ -391,34 +462,21 @@ struct EinsumHelper {
 
     ::musa::dnn::Status status;
 
-    if (in0.dims() == 2 && in1.dims() == 2) {
-      mMatMul op;
-      op.SetTranspose(trans_a, trans_b);
-      op.SetAlpha(1.0);
-      op.SetBeta(0.0);
+    mBatchMatMul op;
+    op.SetTranspose(trans_a, trans_b);
+    op.SetAlpha(1.0);
+    op.SetBeta(0.0);
 
-      status = op.Run(handle, mt_out, mt_a, mt_b);
-      if (status != ::musa::dnn::Status::SUCCESS) {
-        return errors::Internal(
-            "MUSA MatMul (2D High Precision) execution failed. Status: ",
-            (int)status);
-      }
-    } else {
-      mBatchMatMul op;
-      op.SetTranspose(trans_a, trans_b);
-      op.SetAlpha(1.0);
-      op.SetBeta(0.0);
+    FixToBatchFormat(mt_a, in0);
+    FixToBatchFormat(mt_b, in1);
+    FixToBatchFormat(mt_out, *output);
 
-      FixToBatchFormat(mt_a, in0);
-      FixToBatchFormat(mt_b, in1);
-      FixToBatchFormat(mt_out, *output);
-
-      status = op.Run(handle, mt_out, mt_a, mt_b);
-      if (status != ::musa::dnn::Status::SUCCESS) {
-        return errors::Internal("MUSA BatchMatMul execution failed. Status: ",
-                                (int)status);
-      }
+    status = op.Run(handle, mt_out, mt_a, mt_b);
+    if (status != ::musa::dnn::Status::SUCCESS) {
+      return errors::Internal("MUSA BatchMatMul execution failed. Status: ",
+                              (int)status);
     }
+
     return Status::OK();
   }
 
@@ -554,6 +612,62 @@ struct EinsumHelper {
     return CopyFrom(input, output_shape, output);
   }
 
+  template <typename T>
+  static Status MaterializeBroadcastedBatch(
+      OpKernelContext* ctx, const Tensor& input, int64_t input_batch_size,
+      int64_t output_batch_size, const std::vector<int64>& batch_indices,
+      Tensor* output) {
+    Tensor input_rank3;
+    TF_RETURN_IF_ERROR(ReshapeToRank3(input, static_cast<int>(input_batch_size),
+                                      &input_rank3));
+
+    TensorShape output_shape = {output_batch_size, input_rank3.dim_size(1),
+                                input_rank3.dim_size(2)};
+
+    if (input_batch_size == output_batch_size && batch_indices.empty()) {
+      return CopyFrom(input_rank3, output_shape, output);
+    }
+
+    TF_RETURN_IF_ERROR(
+        ctx->allocate_temp(DataTypeToEnum<T>::value, output_shape, output));
+    if (output->NumElements() == 0) return Status::OK();
+
+    const int64_t elems_per_batch =
+        input_rank3.dim_size(1) * input_rank3.dim_size(2);
+    std::vector<T> host_input(input_rank3.NumElements());
+    std::vector<T> host_output(output->NumElements());
+
+    mStatus memcpy_status =
+        MusaMemcpyD2H(host_input.data(), input_rank3.flat<T>().data(),
+                      input_rank3.NumElements() * sizeof(T));
+    if (memcpy_status != mStatus::SUCCESS) {
+      return errors::Internal(
+          "Einsum batch broadcast: MusaMemcpyD2H input failed");
+    }
+
+    for (int64_t out_batch = 0; out_batch < output_batch_size; ++out_batch) {
+      const int64_t in_batch =
+          batch_indices.empty() ? out_batch : batch_indices[out_batch];
+      if (in_batch < 0 || in_batch >= input_batch_size) {
+        return errors::Internal("Einsum batch broadcast: invalid batch index ",
+                                in_batch, " for input batch size ",
+                                input_batch_size);
+      }
+      const T* src = host_input.data() + in_batch * elems_per_batch;
+      T* dst = host_output.data() + out_batch * elems_per_batch;
+      std::memcpy(dst, src, elems_per_batch * sizeof(T));
+    }
+
+    memcpy_status = MusaMemcpyH2D(output->flat<T>().data(), host_output.data(),
+                                  output->NumElements() * sizeof(T));
+    if (memcpy_status != mStatus::SUCCESS) {
+      return errors::Internal(
+          "Einsum batch broadcast: MusaMemcpyH2D output failed");
+    }
+
+    return Status::OK();
+  }
+
   // Contracts the inputs along the last axis (or the second last if the
   // corresponding value of swap_free_and_contract is true). The batch
   // dimensions are broadcast to the output shape.
@@ -571,10 +685,16 @@ struct EinsumHelper {
           "Invalid broadcasting dimensions: ", inputs[0].shape().DebugString(),
           " vs. ", inputs[1].shape().DebugString());
     }
+
     Tensor lhs;
-    TF_RETURN_IF_ERROR(ReshapeToRank3(inputs[0], bcast.x_batch_size(), &lhs));
+    TF_RETURN_IF_ERROR(MaterializeBroadcastedBatch<T>(
+        ctx, inputs[0], bcast.x_batch_size(), bcast.output_batch_size(),
+        bcast.x_batch_indices(), &lhs));
     Tensor rhs;
-    TF_RETURN_IF_ERROR(ReshapeToRank3(inputs[1], bcast.y_batch_size(), &rhs));
+    TF_RETURN_IF_ERROR(MaterializeBroadcastedBatch<T>(
+        ctx, inputs[1], bcast.y_batch_size(), bcast.output_batch_size(),
+        bcast.y_batch_indices(), &rhs));
+
     TensorShape output_shape = bcast.output_batch_shape();
     for (int i = 0; i < inputs.size(); ++i) {
       const int64_t free_axis =
@@ -765,6 +885,8 @@ REGISTER_MUSA_EINSUM(float);
 REGISTER_MUSA_EINSUM(double);
 REGISTER_MUSA_EINSUM(int32);
 REGISTER_MUSA_EINSUM(int64);
+REGISTER_MUSA_EINSUM(Eigen::half);
+REGISTER_MUSA_EINSUM(bfloat16);
 
 #undef REGISTER_MUSA_EINSUM
 
