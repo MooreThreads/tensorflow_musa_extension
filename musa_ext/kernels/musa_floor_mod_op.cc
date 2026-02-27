@@ -1,6 +1,7 @@
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
+#include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/util/bcast.h"
 #include "utils_op.h"
 
@@ -40,105 +41,15 @@ class MusaFloorModOp : public MusaOpKernel {
     mTensor t1 = CreateMTensor(in1, format_);
     mTensor t_out = CreateMTensor(*out, format_);
 
-    if (!bcast.IsBroadcastingRequired()) {
-      compute_floormod(handle, t_out, t0, t1, output_shape, in0.dtype(), ctx);
-    } else {
-      compute_broadcast_floormod(handle, t_out, t0, t1, in0, in1, bcast,
-                                 output_shape, in0.dtype(), ctx);
-    }
-  }
+    ::musa::dnn::Binary binary_op;
+    binary_op.SetMode(::musa::dnn::Binary::Mode::FLOORMOD);
 
- private:
-  void compute_floormod(::musa::dnn::Handle& handle, mTensor& t_out,
-                        mTensor& t0, mTensor& t1,
-                        const TensorShape& output_shape, DataType dtype,
-                        OpKernelContext* ctx) {
-    Tensor temp_div;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(dtype, output_shape, &temp_div));
-    mTensor t_temp_div = CreateMTensor(temp_div, format_);
+    auto status = binary_op.Run(handle, t_out, t0, t1);
 
-    ::musa::dnn::Binary div_op;
-    div_op.SetMode(::musa::dnn::Binary::Mode::DIV);
-    auto status = div_op.Run(handle, t_temp_div, t0, t1);
     OP_REQUIRES(
         ctx, status == ::musa::dnn::Status::SUCCESS,
-        errors::Internal("MUSA Division execution failed in FloorMod."));
-
-    Tensor temp_floor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(dtype, output_shape, &temp_floor));
-    mTensor t_temp_floor = CreateMTensor(temp_floor, format_);
-
-    ::musa::dnn::Unary floor_op;
-    floor_op.SetMode(::musa::dnn::Unary::Mode::FLOOR);
-    status = floor_op.Run(handle, t_temp_floor, t_temp_div);
-    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
-                errors::Internal("MUSA Floor execution failed in FloorMod."));
-
-    Tensor temp_mul;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(dtype, output_shape, &temp_mul));
-    mTensor t_temp_mul = CreateMTensor(temp_mul, format_);
-
-    ::musa::dnn::Binary mul_op;
-    mul_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    status = mul_op.Run(handle, t_temp_mul, t_temp_floor, t1);
-    OP_REQUIRES(
-        ctx, status == ::musa::dnn::Status::SUCCESS,
-        errors::Internal("MUSA Multiplication execution failed in FloorMod."));
-
-    ::musa::dnn::Binary sub_op;
-    sub_op.SetMode(::musa::dnn::Binary::Mode::SUB);
-    status = sub_op.Run(handle, t_out, t0, t_temp_mul);
-    OP_REQUIRES(
-        ctx, status == ::musa::dnn::Status::SUCCESS,
-        errors::Internal("MUSA Subtraction execution failed in FloorMod."));
-  }
-
-  void compute_broadcast_floormod(::musa::dnn::Handle& handle, mTensor& t_out,
-                                  mTensor& t0, mTensor& t1, const Tensor& in0,
-                                  const Tensor& in1, const BCast& bcast,
-                                  const TensorShape& output_shape,
-                                  DataType dtype, OpKernelContext* ctx) {
-    Tensor temp_div;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(dtype, output_shape, &temp_div));
-    mTensor t_temp_div = CreateMTensor(temp_div, format_);
-
-    ::musa::dnn::Binary div_op;
-    div_op.SetMode(::musa::dnn::Binary::Mode::DIV);
-    auto status = div_op.Run(handle, t_temp_div, t0, t1);
-    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
-                errors::Internal(
-                    "MUSA Division execution failed in FloorMod (broadcast)."));
-
-    Tensor temp_floor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(dtype, output_shape, &temp_floor));
-    mTensor t_temp_floor = CreateMTensor(temp_floor, format_);
-
-    ::musa::dnn::Unary floor_op;
-    floor_op.SetMode(::musa::dnn::Unary::Mode::FLOOR);
-    status = floor_op.Run(handle, t_temp_floor, t_temp_div);
-    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
-                errors::Internal(
-                    "MUSA Floor execution failed in FloorMod (broadcast)."));
-
-    Tensor temp_mul;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(dtype, output_shape, &temp_mul));
-    mTensor t_temp_mul = CreateMTensor(temp_mul, format_);
-
-    ::musa::dnn::Binary mul_op;
-    mul_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    status = mul_op.Run(handle, t_temp_mul, t_temp_floor, t1);
-    OP_REQUIRES(
-        ctx, status == ::musa::dnn::Status::SUCCESS,
-        errors::Internal(
-            "MUSA Multiplication execution failed in FloorMod (broadcast)."));
-
-    ::musa::dnn::Binary sub_op;
-    sub_op.SetMode(::musa::dnn::Binary::Mode::SUB);
-    status = sub_op.Run(handle, t_out, t0, t_temp_mul);
-    OP_REQUIRES(
-        ctx, status == ::musa::dnn::Status::SUCCESS,
-        errors::Internal(
-            "MUSA Subtraction execution failed in FloorMod (broadcast)."));
+        errors::Internal("MUSA Native FLOORMOD execution failed. Status code: ",
+                         static_cast<int>(status)));
   }
 };
 
@@ -153,6 +64,8 @@ REGISTER_MUSA_FLOORMOD(Eigen::half);
 REGISTER_MUSA_FLOORMOD(bfloat16);
 REGISTER_MUSA_FLOORMOD(int32);
 REGISTER_MUSA_FLOORMOD(int64);
+
+#undef REGISTER_MUSA_FLOORMOD
 
 }  // namespace musa
 }  // namespace tensorflow
