@@ -337,6 +337,7 @@ struct EinsumHelper {
     return true;
   }
 
+  // TODO: BMatMul seems to perform worse when the input use half precision.
   template <typename T>
   static Status BMatMul(OpKernelContext* ctx, Tensor& lhs, const Tensor& rhs,
                         bool trans_a, bool trans_b, Tensor* output) {
@@ -354,91 +355,6 @@ struct EinsumHelper {
     int64 k_check = trans_b ? d3 : d2;
 
     if (output->NumElements() == 0) return Status::OK();
-
-    // // USE CPU to compute half and bfloat16 bMatMul
-    // if (std::is_same<T, Eigen::half>::value ||
-    //     std::is_same<T, bfloat16>::value) {
-    //   const int64_t batch_a = in0.dims() == 2 ? 1 : in0.dim_size(0);
-    //   const int64_t batch_b = in1.dims() == 2 ? 1 : in1.dim_size(0);
-    //   const int64_t batch_out = output->dims() == 2 ? 1 :
-    //   output->dim_size(0);
-
-    //   const int64_t a_rows =
-    //       in0.dims() == 2 ? in0.dim_size(0) : in0.dim_size(1);
-    //   const int64_t a_cols =
-    //       in0.dims() == 2 ? in0.dim_size(1) : in0.dim_size(2);
-    //   const int64_t b_rows =
-    //       in1.dims() == 2 ? in1.dim_size(0) : in1.dim_size(1);
-    //   const int64_t b_cols =
-    //       in1.dims() == 2 ? in1.dim_size(1) : in1.dim_size(2);
-
-    //   const int64_t elem_a = in0.NumElements();
-    //   const int64_t elem_b = in1.NumElements();
-    //   const int64_t elem_out = output->NumElements();
-
-    //   std::vector<T> host_a(elem_a);
-    //   std::vector<T> host_b(elem_b);
-    //   std::vector<T> host_out(elem_out);
-
-    //   mStatus memcpy_status = MusaMemcpyD2H(host_a.data(),
-    //   in0.flat<T>().data(),
-    //                                         elem_a * sizeof(T));
-    //   if (memcpy_status != mStatus::SUCCESS) {
-    //     return errors::Internal("Einsum half path: MusaMemcpyD2H A failed");
-    //   }
-    //   memcpy_status = MusaMemcpyD2H(host_b.data(), in1.flat<T>().data(),
-    //                                 elem_b * sizeof(T));
-    //   if (memcpy_status != mStatus::SUCCESS) {
-    //     return errors::Internal("Einsum half path: MusaMemcpyD2H B failed");
-    //   }
-
-    //   auto index_a = [&](int64_t batch, int64_t row, int64_t col) {
-    //     if (in0.dims() == 2) {
-    //       return row * a_cols + col;
-    //     }
-    //     return (batch * a_rows + row) * a_cols + col;
-    //   };
-    //   auto index_b = [&](int64_t batch, int64_t row, int64_t col) {
-    //     if (in1.dims() == 2) {
-    //       return row * b_cols + col;
-    //     }
-    //     return (batch * b_rows + row) * b_cols + col;
-    //   };
-
-    //   for (int64_t bo = 0; bo < batch_out; ++bo) {
-    //     const int64_t ba = batch_a == 1 ? 0 : bo;
-    //     const int64_t bb = batch_b == 1 ? 0 : bo;
-    //     for (int64_t i = 0; i < m; ++i) {
-    //       for (int64_t j = 0; j < n; ++j) {
-    //         T sum = static_cast<T>(0);
-    //         for (int64_t kk = 0; kk < k; ++kk) {
-    //           const int64_t ar = trans_a ? kk : i;
-    //           const int64_t ac = trans_a ? i : kk;
-    //           const int64_t br = trans_b ? j : kk;
-    //           const int64_t bc = trans_b ? kk : j;
-    //           const T av = host_a[index_a(ba, ar, ac)];
-    //           const T bv = host_b[index_b(bb, br, bc)];
-    //           sum = static_cast<T>(sum + static_cast<T>(av * bv));
-    //         }
-
-    //         if (output->dims() == 2) {
-    //           host_out[i * n + j] = sum;
-    //         } else {
-    //           host_out[(bo * m + i) * n + j] = sum;
-    //         }
-    //       }
-    //     }
-    //   }
-
-    //   memcpy_status = MusaMemcpyH2D(output->flat<T>().data(),
-    //   host_out.data(),
-    //                                 elem_out * sizeof(T));
-    //   if (memcpy_status != mStatus::SUCCESS) {
-    //     return errors::Internal(
-    //         "Einsum half path: MusaMemcpyH2D output failed");
-    //   }
-    //   return Status::OK();
-    // }
 
     auto& handle = GetHandleByCtx(ctx);
     handle.SetAllowTF32(false);
