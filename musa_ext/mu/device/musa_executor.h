@@ -35,7 +35,11 @@ class MusaExecutor : public internal::StreamExecutorInterface {
   std::unique_ptr<internal::StreamInterface> GetStreamImplementation()
       override {
     musaStream_t h;
-    musaStreamCreate(&h);
+    musaError_t err = musaStreamCreate(&h);
+    if (err != musaSuccess) {
+      LOG(ERROR) << "musaStreamCreate failed: " << musaGetErrorString(err);
+      return nullptr;
+    }
     return std::make_unique<MusaStream>(h);
   }
 

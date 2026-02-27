@@ -13,11 +13,11 @@ mStatus SetTensorInfo(mTensor& tensor, void* device_dst, uint64_t size,
 
   mTensor::Type tensor_type = mTensor::Type::UINT8;
   uint64_t tensor_size = size;
-  if (size & 0x07 == 0) {
+  if ((size & 0x07) == 0) {
     tensor_type = mTensor::Type::UINT64;
     tensor_size = size >> 3;
     type_size = 8;
-  } else if (size & 0x03 == 0) {
+  } else if ((size & 0x03) == 0) {
     tensor_type = mTensor::Type::UINT32;
     tensor_size = size >> 2;
     type_size = 4;
