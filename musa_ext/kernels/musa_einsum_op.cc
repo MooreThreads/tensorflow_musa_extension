@@ -9,6 +9,7 @@
 #include "absl/strings/str_split.h"
 #include "musa_fill_functor.h"
 #include "musa_reduce_functor.h"
+#include "musa_transpose_functor.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/lib/gtl/array_slice.h"
@@ -21,9 +22,6 @@
 
 namespace tensorflow {
 namespace musa {
-
-void DoTranspose(OpKernelContext* ctx, mTensor& in_mt,
-                 const std::vector<int64_t>& permutation, mTensor& out_mt);
 
 using ShapeVec = gtl::InlinedVector<int64_t, 8>;
 using Labels = gtl::InlinedVector<int, 8>;
@@ -233,8 +231,7 @@ struct EinsumHelper {
         ctx->allocate_temp(DataTypeToEnum<T>::value, transposed_shape, output));
     mTensor input_mt = CreateMTensor(input);
     mTensor output_mt = CreateMTensor(*output);
-    DoTranspose(ctx, input_mt, permutation, output_mt);
-    return Status::OK();
+    return TransposeFunctor::Compute(ctx, input_mt, permutation, output_mt);
   }
 
   // If there are repeated labels in either the input or output, then this

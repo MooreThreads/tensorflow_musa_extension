@@ -14,9 +14,6 @@
 namespace tensorflow {
 namespace musa {
 
-void DoTranspose(OpKernelContext* ctx, mTensor& in_mt,
-                 const std::vector<int64_t>& permutation, mTensor& out_mt);
-
 template <typename T>
 class MusaTransposeOp : public MusaOpKernel {
  public:
@@ -81,7 +78,11 @@ class MusaTransposeOp : public MusaOpKernel {
 
     mTensor input_mt = CreateMTensor(input);
     mTensor output_mt = CreateMTensor(*output);
-    DoTranspose(ctx, input_mt, permutation_64, output_mt);
+    Status status =
+        TransposeFunctor::Compute(ctx, input_mt, permutation_64, output_mt);
+    if (!status.ok()) {
+      ctx->CtxFailure(status);
+    }
   }
 };
 
