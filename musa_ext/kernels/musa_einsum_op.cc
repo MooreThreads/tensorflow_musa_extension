@@ -1,6 +1,5 @@
 #include "musa_einsum_op.h"
 
-#include <functional>
 #include <memory>
 #include <vector>
 
@@ -9,6 +8,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_split.h"
 #include "musa_fill_functor.h"
+#include "musa_reduce_functor.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/lib/gtl/array_slice.h"
@@ -318,8 +318,7 @@ struct EinsumHelper {
     auto output_mt = CreateMTensor(*output);
 
     if (should_inflate) {
-      SetZeroFunctor<T> set_zero;
-      set_zero(ctx, output);
+      SetZeroFunctor::Compute<T>(ctx, &output_mt);
       output_mt.SetNdInfo(rank, strided_dims_vec.data(),
                           diagonal_strides_vec.data());
     } else {
@@ -517,31 +516,10 @@ struct EinsumHelper {
     auto input_mt = CreateMTensor(input_flattened);
     auto output_mt = CreateMTensor(output_flattened);
 
-    auto& handle = GetHandleByCtx(ctx);
-    mReduce op;
-    op.SetMode(::musa::dnn::Reduce::Mode::ADD);
     int reduce_dims[] = {1};
-    op.SetDim(1, reduce_dims);
-
-    tensorflow::Allocator* tf_allocator =
-        ctx->device()->GetAllocator(tensorflow::AllocatorAttributes());
-    auto alloc_func =
-        [tf_allocator](
-            size_t size) -> std::unique_ptr<void, std::function<void(void*)>> {
-      void* ptr = tf_allocator->AllocateRaw(256, size);
-      std::function<void(void*)> deleter = [tf_allocator](void* p) {
-        if (p) tf_allocator->DeallocateRaw(p);
-      };
-      return std::unique_ptr<void, std::function<void(void*)>>(ptr, deleter);
-    };
-    ::musa::dnn::MemoryMaintainer mm(alloc_func);
-
-    auto status = op.Run(handle, output_mt, input_mt, mm);
-    if (status != ::musa::dnn::Status::SUCCESS) {
-      return errors::Internal("MUSA Reduce (sum) execution failed. Status: ",
-                              static_cast<int>(status));
-    }
-    return Status::OK();
+    return ReduceFunctor::Compute<T>(
+        ctx, &output_mt, &input_mt, ::musa::dnn::Reduce::Mode::ADD, reduce_dims,
+        1, "MUSA Reduce (sum) execution failed. Status: ");
   }
 
   // Reshapes a Tensor of shape [b0,b1...bk,N,M] to [prod(b0,b1...bk),N,M].
@@ -693,8 +671,8 @@ struct EinsumHelper {
     TF_RETURN_IF_ERROR(
         ctx->allocate_temp(DataTypeToEnum<T>::value, output_shape, output));
     if (lhs.NumElements() == 0 || rhs.NumElements() == 0) {
-      SetZeroFunctor<T> set_zero;
-      set_zero(ctx, output);
+      mTensor output_mt = CreateMTensor(*output);
+      TF_RETURN_IF_ERROR(SetZeroFunctor::Compute<T>(ctx, &output_mt));
       return Status::OK();
     }
     Tensor output_reshaped;
@@ -703,23 +681,6 @@ struct EinsumHelper {
     return BMatMul<T>(ctx, lhs, rhs, trans_x, trans_y, &output_reshaped);
   }
 };
-
-template <>
-Status EinsumHelper::ReduceOperand<bfloat16>(
-    OpKernelContext* ctx, const Tensor& input,
-    const std::vector<EinsumDimensionType>& label_types,
-    const LabelCounts& label_counts, Labels* labels, Labels* free_labels,
-    bool* swap_free_and_contract, Tensor* output) {
-  Tensor input_fp32;
-  TF_RETURN_IF_ERROR(CastTensor(ctx, input, DT_FLOAT, &input_fp32));
-
-  Tensor output_fp32;
-  TF_RETURN_IF_ERROR(
-      ReduceOperand<float>(ctx, input_fp32, label_types, label_counts, labels,
-                           free_labels, swap_free_and_contract, &output_fp32));
-
-  return CastTensor(ctx, output_fp32, DataTypeToEnum<bfloat16>::value, output);
-}
 
 template <typename T>
 class MusaEinsumOp : public MusaOpKernel {

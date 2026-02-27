@@ -7,19 +7,48 @@
 
 */
 
+#include <type_traits>
+
 #include "tensorflow/core/framework/tensor_types.h"
+#include "tensorflow/core/lib/core/errors.h"
+#include "tensorflow/core/lib/core/status.h"
+#include "tensorflow/core/platform/types.h"
+#include "utils_op.h"
 
 namespace tensorflow {
 namespace musa {
 
 template <typename T>
-Status MusaFillCall(Tensor* out, T value, OpKernelContext* context);
+Status MusaFillCall(mTensor* out_mt, T value, OpKernelContext* context) {
+  mFill op;
+  mHandle& h = GetHandleByCtx(context);
 
-template <typename T>
+  if (std::is_integral<T>::value) {
+    if (mStatus::SUCCESS != op.SetValue(static_cast<int64_t>(value))) {
+      return errors::Internal("mtdnn set value (int) error!");
+    }
+  } else if (std::is_floating_point<T>::value ||
+             std::is_same<T, Eigen::half>::value ||
+             std::is_same<T, Eigen::bfloat16>::value) {
+    if (mStatus::SUCCESS != op.SetValue(static_cast<double>(value))) {
+      return errors::Internal("mtdnn set value (float) error!");
+    }
+  } else {
+    return errors::Unimplemented("Data type not supported in MTGPU Fill.");
+  }
+
+  if (mStatus::SUCCESS != op.Run(h, *out_mt)) {
+    return errors::Internal("mtdnn run op error!");
+  }
+
+  return Status::OK();
+}
+
 struct SetZeroFunctor {
   // Computes on device "d": out = out.setZero(),
-  void operator()(OpKernelContext* ctx, Tensor* out) {
-    MusaFillCall(out, T(0), ctx);
+  template <typename T>
+  static Status Compute(OpKernelContext* ctx, mTensor* out_mt) {
+    return MusaFillCall<T>(out_mt, T(0), ctx);
   }
 };
 
