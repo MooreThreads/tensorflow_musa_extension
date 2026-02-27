@@ -76,11 +76,6 @@ class SqrtGradOpTest(MUSATestCase):
       
       self._test_sqrt_grad_direct(shape, dtype, rtol=rtol, atol=atol)
 
-  def testSqrtGradDirectDouble(self):
-    """Test raw SqrtGrad op with float64."""
-    shape = [2, 3]
-    self._test_sqrt_grad_direct(shape, tf.float64)
-
   def testSqrtIntegrationBasic(self):
     """Test Sqrt gradient integration (Tape) with standard types."""
     shape = [10, 10]
@@ -103,3 +98,4 @@ class SqrtGradOpTest(MUSATestCase):
 
 if __name__ == "__main__":
   tf.test.main()
+

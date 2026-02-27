@@ -1,9 +1,50 @@
+#include <musa_runtime.h>
+
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/platform/logging.h"
+#include "utils_op.h"
+
+extern "C" {
+void LaunchUnsortedSegmentSumFloatInt32(const float* data,
+                                        const int* segment_ids,
+                                        int num_segments, int64_t N, int64_t M,
+                                        float* output, musaStream_t stream);
+void LaunchUnsortedSegmentSumFloatInt64(const float* data,
+                                        const long long* segment_ids,
+                                        long long num_segments, int64_t N,
+                                        int64_t M, float* output,
+                                        musaStream_t stream);
+void LaunchUnsortedSegmentSumDoubleInt32(const double* data,
+                                         const int* segment_ids,
+                                         int num_segments, int64_t N, int64_t M,
+                                         double* output, musaStream_t stream);
+void LaunchUnsortedSegmentSumDoubleInt64(const double* data,
+                                         const long long* segment_ids,
+                                         long long num_segments, int64_t N,
+                                         int64_t M, double* output,
+                                         musaStream_t stream);
+void LaunchUnsortedSegmentSumInt32Int32(const int* data, const int* segment_ids,
+                                        int num_segments, int64_t N, int64_t M,
+                                        int* output, musaStream_t stream);
+void LaunchUnsortedSegmentSumInt32Int64(const int* data,
+                                        const long long* segment_ids,
+                                        long long num_segments, int64_t N,
+                                        int64_t M, int* output,
+                                        musaStream_t stream);
+void LaunchUnsortedSegmentSumInt64Int32(const long long* data,
+                                        const int* segment_ids,
+                                        int num_segments, int64_t N, int64_t M,
+                                        long long* output, musaStream_t stream);
+void LaunchUnsortedSegmentSumInt64Int64(const long long* data,
+                                        const long long* segment_ids,
+                                        long long num_segments, int64_t N,
+                                        int64_t M, long long* output,
+                                        musaStream_t stream);
+}
 
 namespace tensorflow {
 namespace musa {
@@ -39,12 +80,13 @@ class UnsortedSegmentSumOp : public OpKernel {
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
 
-    auto output_flat = output->flat_outer_dims<T>();
-    output_flat.setZero();
+    auto& handle = GetHandleByCtx(ctx);
+    musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 
-    if (N == 0) {
-      return;
-    }
+    musaMemsetAsync(const_cast<char*>(output->tensor_data().data()), 0,
+                    output->TotalBytes(), stream);
+
+    if (N == 0 || data_elements == 0) return;
 
     OP_REQUIRES(ctx, data_elements % N == 0,
                 errors::InvalidArgument(
@@ -52,30 +94,41 @@ class UnsortedSegmentSumOp : public OpKernel {
 
     const int64 M = data_elements / N;
 
-    const auto data_flat = data.shaped<T, 2>({N, M});
-    const auto segment_vec = segment_ids.flat<Tindex>();
-
-    for (int64 i = 0; i < N; ++i) {
-      Tindex idx = segment_vec(i);
-      if (idx < 0 || idx >= num_segments) {
-        continue;
-      }
-      for (int64 j = 0; j < M; ++j) {
-        output_flat(idx, j) += data_flat(i, j);
-      }
-    }
+    LaunchKernel(data.flat<T>().data(), segment_ids.flat<Tindex>().data(),
+                 num_segments, N, M, output->flat<T>().data(), stream);
   }
+
+ private:
+  void LaunchKernel(const T* data, const Tindex* segment_ids,
+                    Tindex num_segments, int64 N, int64 M, T* output,
+                    musaStream_t stream);
 };
+
+#define SPECIALIZE_LAUNCHER(T, Tindex, FuncName)                              \
+  template <>                                                                 \
+  void UnsortedSegmentSumOp<T, Tindex>::LaunchKernel(                         \
+      const T* data, const Tindex* segment_ids, Tindex num_segments, int64 N, \
+      int64 M, T* output, musaStream_t stream) {                              \
+    FuncName(data, segment_ids, num_segments, N, M, output, stream);          \
+  }
+
+SPECIALIZE_LAUNCHER(float, int32, LaunchUnsortedSegmentSumFloatInt32)
+SPECIALIZE_LAUNCHER(float, int64, LaunchUnsortedSegmentSumFloatInt64)
+SPECIALIZE_LAUNCHER(double, int32, LaunchUnsortedSegmentSumDoubleInt32)
+SPECIALIZE_LAUNCHER(double, int64, LaunchUnsortedSegmentSumDoubleInt64)
+SPECIALIZE_LAUNCHER(int32, int32, LaunchUnsortedSegmentSumInt32Int32)
+SPECIALIZE_LAUNCHER(int32, int64, LaunchUnsortedSegmentSumInt32Int64)
+SPECIALIZE_LAUNCHER(int64, int32, LaunchUnsortedSegmentSumInt64Int32)
+SPECIALIZE_LAUNCHER(int64, int64, LaunchUnsortedSegmentSumInt64Int64)
+
+#undef SPECIALIZE_LAUNCHER
 
 #define REGISTER_MUSA_SEGMENT_SUM(type, index_type)                   \
   REGISTER_KERNEL_BUILDER(Name("UnsortedSegmentSum")                  \
                               .Device("MUSA")                         \
                               .TypeConstraint<type>("T")              \
                               .TypeConstraint<index_type>("Tindices") \
-                              .HostMemory("data")                     \
-                              .HostMemory("segment_ids")              \
-                              .HostMemory("num_segments")             \
-                              .HostMemory("output"),                  \
+                              .HostMemory("num_segments"),            \
                           UnsortedSegmentSumOp<type, index_type>)
 
 #define REGISTER_MUSA_SEGMENT_SUM_ALL(type) \
