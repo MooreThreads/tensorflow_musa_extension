@@ -1,6 +1,5 @@
 #include "musa_einsum_op.h"
 
-#include <cstring>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -9,7 +8,6 @@
 #include "../utils/musa_einsum_op_util.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_split.h"
-#include "mu/device/musa_memcpy.h"
 #include "musa_fill_functor.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/core/status.h"
@@ -339,8 +337,9 @@ struct EinsumHelper {
 
   // TODO: BMatMul seems to perform worse when the input use half precision.
   template <typename T>
-  static Status BMatMul(OpKernelContext* ctx, Tensor& lhs, const Tensor& rhs,
-                        bool trans_a, bool trans_b, Tensor* output) {
+  static Status BMatMul(OpKernelContext* ctx, const Tensor& lhs,
+                        const Tensor& rhs, bool trans_a, bool trans_b,
+                        Tensor* output) {
     const Tensor& in0 = lhs;
     const Tensor& in1 = rhs;
 
@@ -530,57 +529,96 @@ struct EinsumHelper {
 
   template <typename T>
   static Status MaterializeBroadcastedBatch(
-      OpKernelContext* ctx, const Tensor& input, int64_t input_batch_size,
-      int64_t output_batch_size, const std::vector<int64>& batch_indices,
-      Tensor* output) {
-    Tensor input_rank3;
-    TF_RETURN_IF_ERROR(ReshapeToRank3(input, static_cast<int>(input_batch_size),
-                                      &input_rank3));
+      OpKernelContext* ctx, const Tensor& input,
+      const TensorShape& output_batch_shape, Tensor* output) {
+    const int input_rank = input.dims();
+    if (input_rank < 2) {
+      return errors::InvalidArgument(
+          "Einsum batch broadcast expects rank >= 2, got rank ", input_rank);
+    }
 
-    TensorShape output_shape = {output_batch_size, input_rank3.dim_size(1),
-                                input_rank3.dim_size(2)};
+    const int input_batch_rank = input_rank - 2;
+    const int output_batch_rank = output_batch_shape.dims();
+    if (output_batch_rank < input_batch_rank) {
+      return errors::Internal(
+          "Einsum batch broadcast: output batch rank ", output_batch_rank,
+          " is smaller than input batch rank ", input_batch_rank);
+    }
 
-    if (input_batch_size == output_batch_size && batch_indices.empty()) {
-      return CopyFrom(input_rank3, output_shape, output);
+    TensorShape output_shape = output_batch_shape;
+    TF_RETURN_IF_ERROR(
+        output_shape.AddDimWithStatus(input.dim_size(input_rank - 2)));
+    TF_RETURN_IF_ERROR(
+        output_shape.AddDimWithStatus(input.dim_size(input_rank - 1)));
+
+    if (input.shape() == output_shape) {
+      return CopyFrom(input, output_shape, output);
     }
 
     TF_RETURN_IF_ERROR(
         ctx->allocate_temp(DataTypeToEnum<T>::value, output_shape, output));
     if (output->NumElements() == 0) return Status::OK();
 
-    const int64_t elems_per_batch =
-        input_rank3.dim_size(1) * input_rank3.dim_size(2);
-    std::vector<T> host_input(input_rank3.NumElements());
-    std::vector<T> host_output(output->NumElements());
-
-    mStatus memcpy_status =
-        MusaMemcpyD2H(host_input.data(), input_rank3.flat<T>().data(),
-                      input_rank3.NumElements() * sizeof(T));
-    if (memcpy_status != mStatus::SUCCESS) {
-      return errors::Internal(
-          "Einsum batch broadcast: MusaMemcpyD2H input failed");
+    std::vector<int64_t> input_dense_strides(input_rank, 1);
+    for (int axis = input_rank - 2; axis >= 0; --axis) {
+      input_dense_strides[axis] =
+          input_dense_strides[axis + 1] * input.dim_size(axis + 1);
     }
 
-    for (int64_t out_batch = 0; out_batch < output_batch_size; ++out_batch) {
-      const int64_t in_batch =
-          batch_indices.empty() ? out_batch : batch_indices[out_batch];
-      if (in_batch < 0 || in_batch >= input_batch_size) {
-        return errors::Internal("Einsum batch broadcast: invalid batch index ",
-                                in_batch, " for input batch size ",
-                                input_batch_size);
+    const int target_rank = output_batch_rank + 2;
+    std::vector<int64_t> target_dims(target_rank, 1);
+    std::vector<int64_t> target_strides(target_rank, 0);
+    const int batch_axis_offset = output_batch_rank - input_batch_rank;
+
+    for (int out_axis = 0; out_axis < output_batch_rank; ++out_axis) {
+      const int64_t out_dim = output_batch_shape.dim_size(out_axis);
+      target_dims[out_axis] = out_dim;
+
+      const int in_axis = out_axis - batch_axis_offset;
+      if (in_axis < 0) {
+        target_strides[out_axis] = 0;
+        continue;
       }
-      const T* src = host_input.data() + in_batch * elems_per_batch;
-      T* dst = host_output.data() + out_batch * elems_per_batch;
-      std::memcpy(dst, src, elems_per_batch * sizeof(T));
+
+      const int64_t in_dim = input.dim_size(in_axis);
+      if (in_dim != out_dim && in_dim != 1) {
+        return errors::Internal(
+            "Einsum batch broadcast: incompatible batch dim at axis ", out_axis,
+            ", input dim ", in_dim, ", output dim ", out_dim);
+      }
+      target_strides[out_axis] =
+          (in_dim == 1 && out_dim != 1) ? 0 : input_dense_strides[in_axis];
     }
 
-    memcpy_status = MusaMemcpyH2D(output->flat<T>().data(), host_output.data(),
-                                  output->NumElements() * sizeof(T));
-    if (memcpy_status != mStatus::SUCCESS) {
+    target_dims[output_batch_rank] = input.dim_size(input_rank - 2);
+    target_dims[output_batch_rank + 1] = input.dim_size(input_rank - 1);
+    target_strides[output_batch_rank] = input_dense_strides[input_rank - 2];
+    target_strides[output_batch_rank + 1] = input_dense_strides[input_rank - 1];
+
+    auto input_mt = CreateMTensor(input);
+    auto output_mt = CreateMTensor(*output);
+    auto status = input_mt.SetNdInfo(target_rank, target_dims.data(),
+                                     target_strides.data());
+    if (status != ::musa::dnn::Status::SUCCESS) {
       return errors::Internal(
-          "Einsum batch broadcast: MusaMemcpyH2D output failed");
+          "Einsum batch broadcast: SetNdInfo failed. Status: ",
+          static_cast<int>(status));
     }
 
+    auto& handle = GetHandleByCtx(ctx);
+    ::musa::dnn::Unary op;
+    status = op.SetMode(::musa::dnn::Unary::Mode::IDENTITY);
+    if (status != ::musa::dnn::Status::SUCCESS) {
+      return errors::Internal(
+          "Einsum batch broadcast: Unary SetMode failed. Status: ",
+          static_cast<int>(status));
+    }
+    status = op.Run(handle, output_mt, input_mt);
+    if (status != ::musa::dnn::Status::SUCCESS) {
+      return errors::Internal(
+          "Einsum batch broadcast: Unary Run failed. Status: ",
+          static_cast<int>(status));
+    }
     return Status::OK();
   }
 
@@ -602,16 +640,22 @@ struct EinsumHelper {
           " vs. ", inputs[1].shape().DebugString());
     }
 
-    Tensor lhs;
+    const TensorShape output_batch_shape = bcast.output_batch_shape();
+    Tensor lhs_broadcasted;
     TF_RETURN_IF_ERROR(MaterializeBroadcastedBatch<T>(
-        ctx, inputs[0], bcast.x_batch_size(), bcast.output_batch_size(),
-        bcast.x_batch_indices(), &lhs));
-    Tensor rhs;
+        ctx, inputs[0], output_batch_shape, &lhs_broadcasted));
+    Tensor rhs_broadcasted;
     TF_RETURN_IF_ERROR(MaterializeBroadcastedBatch<T>(
-        ctx, inputs[1], bcast.y_batch_size(), bcast.output_batch_size(),
-        bcast.y_batch_indices(), &rhs));
+        ctx, inputs[1], output_batch_shape, &rhs_broadcasted));
 
-    TensorShape output_shape = bcast.output_batch_shape();
+    Tensor lhs;
+    TF_RETURN_IF_ERROR(
+        ReshapeToRank3(lhs_broadcasted, bcast.output_batch_size(), &lhs));
+    Tensor rhs;
+    TF_RETURN_IF_ERROR(
+        ReshapeToRank3(rhs_broadcasted, bcast.output_batch_size(), &rhs));
+
+    TensorShape output_shape = output_batch_shape;
     for (int i = 0; i < inputs.size(); ++i) {
       const int64_t free_axis =
           inputs[i].dims() - (swap_free_and_contract[i] ? 1 : 2);
