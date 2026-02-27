@@ -22,8 +22,8 @@
 namespace tensorflow {
 namespace musa {
 
-void DoTranspose(OpKernelContext* ctx, const Tensor& input,
-                 const std::vector<int64_t>& permutation, Tensor* output);
+void DoTranspose(OpKernelContext* ctx, mTensor& in_mt,
+                 const std::vector<int64_t>& permutation, mTensor& out_mt);
 
 using ShapeVec = gtl::InlinedVector<int64_t, 8>;
 using Labels = gtl::InlinedVector<int, 8>;
@@ -231,7 +231,9 @@ struct EinsumHelper {
     }
     TF_RETURN_IF_ERROR(
         ctx->allocate_temp(DataTypeToEnum<T>::value, transposed_shape, output));
-    DoTranspose(ctx, input, permutation, output);
+    mTensor input_mt = CreateMTensor(input);
+    mTensor output_mt = CreateMTensor(*output);
+    DoTranspose(ctx, input_mt, permutation, output_mt);
     return Status::OK();
   }
 
@@ -698,13 +700,6 @@ class MusaEinsumOp : public MusaOpKernel {
     OpInputList inputs;
     OP_REQUIRES_OK(ctx, ctx->input_list("inputs", &inputs));
 
-    // Take ...i,i->... as an example. After parsing the equation, we have
-    // input_labels = [kEllipsisLabel, 0]
-    // output_labels = [kEllipsisLabel]
-    // label_types = [${EinsumDimensionType for label 0, which is kContract}]
-    // input_label_counts = [1, 1], which use the default value of 1 for the
-    // every label. output_label_counts = [1] label_to_dim_sizes = {}, which
-    // will be populated during dimension processing.
     OperandLabels input_labels(input_labels_);
     Labels output_labels(output_labels_);
     std::vector<EinsumDimensionType> label_types(label_types_);

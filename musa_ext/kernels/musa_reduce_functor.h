@@ -45,6 +45,10 @@ struct ReduceFunctor {
   }
 };
 
+// Given the fact that bf16 does not work well with reduction, we compute the
+// reduction in fp32 and cast the result back to bf16.
+// This conversion is aligned with tensorflow's convention of promoting bf16 to
+// fp32 for ReduceFunctor.
 template <>
 Status ReduceFunctor::Compute<bfloat16>(OpKernelContext* ctx,
                                         mTensor* output_mt, mTensor* input_mt,
