@@ -9,6 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -20,8 +21,11 @@
 namespace tensorflow {
 namespace musa {
 
-// Simple Pool-based Allocator for MUSA
-// Uses a straightforward pool-per-size-class approach
+// Optimized Pool-based Allocator for MUSA
+// Uses a multi-tier approach for different allocation sizes:
+// - Small (<=64KB): Power-of-2 size classes with pre-populated pools
+// - Medium (64KB-256MB): 64KB granularity size classes
+// - Large (>256MB): Direct allocation without pooling
 class MusaBFCAllocator : public Allocator {
  public:
   explicit MusaBFCAllocator(int device_id, size_t total_memory = 0);
@@ -35,18 +39,36 @@ class MusaBFCAllocator : public Allocator {
   // Memory statistics
   size_t AllocatedSize() const { return allocated_bytes_; }
   size_t AvailableSize() const { return pool_bytes_ - allocated_bytes_; }
+  std::string GetStats() const;
 
  private:
   // Size class configuration
   static constexpr size_t kMinAllocationSize = 256;
   static constexpr size_t kMaxPoolSize = 1ULL << 30;  // 1GB max per pool
   static constexpr size_t kAllocationAlignment = 256;
+  static constexpr size_t kSmallSizeThreshold = 65536;  // 64KB
+  static constexpr size_t kLargeSizeThreshold = 256 * 1024 * 1024;  // 256MB
 
   // Round up to alignment
   size_t RoundedBytes(size_t bytes) const;
 
   // Get size class for allocation
   size_t GetSizeClass(size_t bytes) const;
+
+  // Pre-populate small pools on initialization
+  void PrepopulateSmallPools();
+
+  // Fast path allocation without full locking
+  bool TryAllocateFromPool(size_t size_class, void** ptr);
+
+  // Slow path allocation with full locking
+  void* AllocateRawLocked(size_t alignment, size_t num_bytes, size_t size_class);
+
+  // Direct allocation for large sizes
+  void* AllocateDirect(size_t alignment, size_t num_bytes);
+
+  // Try to free pooled memory when allocation fails
+  bool TryFreePoolMemory(size_t min_size);
 
   int device_id_;
   size_t pool_bytes_;
@@ -63,7 +85,7 @@ class MusaBFCAllocator : public Allocator {
   // Track which size class each allocated pointer belongs to
   std::unordered_map<void*, size_t> allocated_sizes_;
 
-  // Track original MUSA allocations for cleanup
+  // Track original MUSA allocations for cleanup (large allocations)
   std::vector<void*> musa_allocations_;
 
   // Statistics
@@ -71,6 +93,11 @@ class MusaBFCAllocator : public Allocator {
   size_t num_deallocs_ = 0;
   size_t num_pool_hits_ = 0;
   size_t num_pool_misses_ = 0;
+  size_t num_prealloc_ = 0;
+  size_t num_small_allocs_ = 0;
+  
+  // Temporary storage for fast path
+  void* ptr_ = nullptr;
 };
 
 // Legacy raw allocator for comparison/testing
