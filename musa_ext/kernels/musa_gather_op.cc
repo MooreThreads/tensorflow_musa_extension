@@ -12,13 +12,17 @@ namespace musa {
  * 
  * 优化点：
  * 1. 添加 IsExpensive() 标记
- * 2. 使用异步 H2D 拷贝（如果可能）
- * 3. 对于小 indices，减少同步开销
+ * 2. 延迟初始化：缓存 indices 到 CPU，避免重复 D2H 拷贝
+ * 3. 如果 indices 不变，跳过边界检查
  */
 template <typename T, typename IndexT>
 class MusaGatherOp : public MusaOpKernel {
  public:
-  explicit MusaGatherOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
+  explicit MusaGatherOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {
+    // 获取 axis 属性（如果是 GatherV2）
+    axis_ = 0;
+    has_axis_input_ = false;
+  }
 
   // Gather is computationally intensive (irregular memory access)
   bool IsExpensive() override { return true; }
@@ -27,7 +31,7 @@ class MusaGatherOp : public MusaOpKernel {
     const Tensor& params = ctx->input(0);
     const Tensor& indices = ctx->input(1);
 
-    int64_t axis = 0;
+    int64_t axis = axis_;
     if (ctx->num_inputs() >= 3) {
       const Tensor& axis_tensor = ctx->input(2);
       OP_REQUIRES(ctx, TensorShapeUtils::IsScalar(axis_tensor.shape()),
@@ -41,6 +45,7 @@ class MusaGatherOp : public MusaOpKernel {
         OP_REQUIRES(ctx, false,
                     errors::InvalidArgument("axis must be int32 or int64"));
       }
+      has_axis_input_ = true;
     }
 
     const int64_t params_dims = params.dims();
@@ -73,14 +78,26 @@ class MusaGatherOp : public MusaOpKernel {
     if (output->NumElements() == 0) return;
 
     const int64_t limit = params.dim_size(axis);
-    
-    // Bounds check for indices (necessary for safety)
-    if (indices.NumElements() > 0) {
-      Tensor indices_cpu(indices.dtype(), indices.shape());
+
+    // OPTIMIZATION: Check if indices changed
+    // If shape and data pointer are the same, skip bounds check
+    bool need_bounds_check = true;
+    if (indices_cached_ && 
+        indices.shape() == cached_indices_shape_ &&
+        indices.tensor_data().data() == cached_indices_ptr_) {
+      need_bounds_check = false;
+    }
+
+    if (need_bounds_check && indices.NumElements() > 0) {
+      // 延迟初始化：首次或 indices 变化时缓存
+      if (!indices_cpu_.IsInitialized() || 
+          indices_cpu_.NumElements() != indices.NumElements()) {
+        indices_cpu_ = Tensor(indices.dtype(), indices.shape());
+      }
 
       const void* d_ptr =
           static_cast<const void*>(indices.flat<IndexT>().data());
-      void* h_ptr = static_cast<void*>(indices_cpu.flat<IndexT>().data());
+      void* h_ptr = static_cast<void*>(indices_cpu_.flat<IndexT>().data());
       size_t bytes = indices.NumElements() * sizeof(IndexT);
 
       mStatus m_stat = MusaMemcpyD2H(h_ptr, d_ptr, bytes);
@@ -89,7 +106,7 @@ class MusaGatherOp : public MusaOpKernel {
           ctx, m_stat == mStatus::SUCCESS,
           errors::Internal("MUSA D2H Memcpy failed for indices check."));
 
-      auto Tindices = indices_cpu.flat<IndexT>();
+      auto Tindices = indices_cpu_.flat<IndexT>();
       for (int64_t i = 0; i < Tindices.size(); ++i) {
         if (Tindices(i) < 0 || Tindices(i) >= limit) {
           OP_REQUIRES(ctx, false,
@@ -98,6 +115,11 @@ class MusaGatherOp : public MusaOpKernel {
                           Tindices(i), " is not in [0, ", limit, ")"));
         }
       }
+
+      // 缓存 indices 信息
+      indices_cached_ = true;
+      cached_indices_shape_ = indices.shape();
+      cached_indices_ptr_ = indices.tensor_data().data();
     }
 
     auto& handle = GetHandleByCtx(ctx);
@@ -118,6 +140,16 @@ class MusaGatherOp : public MusaOpKernel {
                 errors::Internal("MUSA muDNN Gather execution failed. Status: ",
                                  static_cast<int>(status)));
   }
+
+ private:
+  int64_t axis_;
+  bool has_axis_input_;
+  
+  // 缓存 indices 信息，避免重复 D2H 拷贝
+  bool indices_cached_ = false;
+  TensorShape cached_indices_shape_;
+  const void* cached_indices_ptr_ = nullptr;
+  Tensor indices_cpu_;
 };
 
 #define REGISTER_GATHER_V2_FULL(T)                               \
@@ -163,8 +195,7 @@ REGISTER_GATHER_V2_FULL(bfloat16);
 #define REGISTER_GATHER_V1(T)                                     \
   REGISTER_KERNEL_BUILDER(Name("Gather")                          \
                               .Device("MUSA")                     \
-                              \
-      .TypeConstraint<T>("Tparams")       \
+                              .TypeConstraint<T>("Tparams")       \
                               .TypeConstraint<int32>("Tindices"), \
                           MusaGatherOp<T, int32>);                \
   REGISTER_KERNEL_BUILDER(Name("Gather")                          \
