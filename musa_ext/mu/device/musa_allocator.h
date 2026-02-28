@@ -21,7 +21,6 @@
 namespace tensorflow {
 namespace musa {
 
-// Optimized Pool-based Allocator for MUSA
 // Uses a multi-tier approach for different allocation sizes:
 // - Small (<=64KB): Power-of-2 size classes with pre-populated pools
 // - Medium (64KB-256MB): 64KB granularity size classes
@@ -95,7 +94,7 @@ class MusaBFCAllocator : public Allocator {
   size_t num_pool_misses_ = 0;
   size_t num_prealloc_ = 0;
   size_t num_small_allocs_ = 0;
-  
+
   // Temporary storage for fast path
   void* ptr_ = nullptr;
 };

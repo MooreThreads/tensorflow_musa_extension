@@ -9,14 +9,6 @@
 namespace tensorflow {
 namespace musa {
 
-/**
- * Reshape Op 优化实现
- * 
- * 关键优化点：
- * 1. 优先使用 forward_input_or_allocate_output 直接转发输入缓冲区（零拷贝）
- * 2. 仅在 forwarding 失败时执行必要的 D2D 拷贝
- * 3. 继承 MusaOpKernel 以使用 MusaMemcpyAsyncD2D
- */
 template <typename T>
 class MusaReshapeOp : public MusaOpKernel {
  public:
@@ -80,7 +72,6 @@ class MusaReshapeOp : public MusaOpKernel {
           errors::InvalidArgument("Shape tensor must be int32 or int64"));
     }
 
-    // 处理 -1 维度推断
     if (unknown_index != -1) {
       int64 input_num_elements = input.NumElements();
       OP_REQUIRES(ctx, product > 0,
@@ -99,12 +90,12 @@ class MusaReshapeOp : public MusaOpKernel {
                                         " elements, but target shape has ",
                                         shape.num_elements(), " elements."));
 
-    // 优化：优先尝试 buffer forwarding（零拷贝）
+    // try buffer forwarding (zero-copy) first
     Tensor* output = nullptr;
     OP_REQUIRES_OK(
         ctx, ctx->forward_input_or_allocate_output({0}, 0, shape, &output));
-    
-    // 如果 forwarding 失败（output 与 input 指向不同内存），需要拷贝数据
+
+    // copy data if forwarding failed (output and input point to different memory)
     if (output->tensor_data().data() != input.tensor_data().data()) {
       auto& handle = GetHandleByCtx(ctx);
       musaStream_t stream =
