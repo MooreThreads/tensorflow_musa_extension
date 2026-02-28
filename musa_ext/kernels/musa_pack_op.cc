@@ -55,6 +55,10 @@ class MusaPackOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("axis", &axis_));
   }
 
+  // Pack is memory-intensive but computationally simple
+  // Mark as inexpensive for inline scheduling
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     const int num_inputs = ctx->num_inputs();
     const Tensor& first_input = ctx->input(0);
@@ -157,6 +161,9 @@ class MusaUnpackOp : public MusaOpKernel {
   explicit MusaUnpackOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("axis", &axis_));
   }
+
+  // Unpack is memory-intensive but computationally simple
+  bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
     const Tensor& input = ctx->input(0);

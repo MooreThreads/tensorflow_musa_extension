@@ -3,13 +3,25 @@
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "utils_op.h"
+
 namespace tensorflow {
 namespace musa {
 
+/**
+ * Gather Op 优化实现
+ * 
+ * 优化点：
+ * 1. 添加 IsExpensive() 标记
+ * 2. 使用异步 H2D 拷贝（如果可能）
+ * 3. 对于小 indices，减少同步开销
+ */
 template <typename T, typename IndexT>
 class MusaGatherOp : public MusaOpKernel {
  public:
   explicit MusaGatherOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
+
+  // Gather is computationally intensive (irregular memory access)
+  bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
     const Tensor& params = ctx->input(0);
@@ -61,6 +73,8 @@ class MusaGatherOp : public MusaOpKernel {
     if (output->NumElements() == 0) return;
 
     const int64_t limit = params.dim_size(axis);
+    
+    // Bounds check for indices (necessary for safety)
     if (indices.NumElements() > 0) {
       Tensor indices_cpu(indices.dtype(), indices.shape());
 
@@ -149,7 +163,8 @@ REGISTER_GATHER_V2_FULL(bfloat16);
 #define REGISTER_GATHER_V1(T)                                     \
   REGISTER_KERNEL_BUILDER(Name("Gather")                          \
                               .Device("MUSA")                     \
-                              .TypeConstraint<T>("Tparams")       \
+                              \
+      .TypeConstraint<T>("Tparams")       \
                               .TypeConstraint<int32>("Tindices"), \
                           MusaGatherOp<T, int32>);                \
   REGISTER_KERNEL_BUILDER(Name("Gather")                          \

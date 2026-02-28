@@ -15,6 +15,10 @@ class MusaVarHandleOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("container", &container_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("shared_name", &shared_name_));
   }
+
+  // VarHandleOp is a lightweight metadata operation
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     Tensor* out;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, TensorShape({}), &out));
@@ -22,6 +26,7 @@ class MusaVarHandleOp : public OpKernel {
         MakeResourceHandle<Var>(ctx, container_, shared_name_);
     out->flat<ResourceHandle>()(0) = handle;
   }
+
  private:
   string container_;
   string shared_name_;
@@ -31,6 +36,10 @@ template <typename T>
 class MusaAssignVariableOp : public OpKernel {
  public:
   explicit MusaAssignVariableOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
+
+  // AssignVariableOp is a lightweight operation (just pointer/reference passing)
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& value = ctx->input(1);
 
@@ -46,7 +55,17 @@ class MusaAssignVariableOp : public OpKernel {
                             }));
 
     mutex_lock lock(*var->mu());
-    *var->tensor() = value;
+
+    // Use CopyFrom instead of operator= for better performance
+    // CopyFrom will forward the buffer if possible (ref count == 1),
+    // otherwise it will perform a proper device-to-device copy
+    OP_REQUIRES(
+        ctx,
+        var->tensor()->CopyFrom(value, value.shape()),
+        errors::Internal("Failed to assign value to variable. Expected shape: ",
+                         var->tensor()->shape().DebugString(),
+                         ", got shape: ", value.shape().DebugString()));
+
     var->is_initialized = true;
   }
 };
@@ -55,18 +74,16 @@ class MusaReadVariableOp : public OpKernel {
  public:
   explicit MusaReadVariableOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
 
+  // ReadVariableOp is a zero-copy metadata operation
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     core::RefCountPtr<Var> var;
     const Tensor& handle_tensor = ctx->input(0);
     const ResourceHandle& handle = handle_tensor.flat<ResourceHandle>()(0);
 
-    // std::cerr << ">>>>> [MUSA_READ_LOG] 2. Handle Name: " << handle.name() <<
-    // ", Device: " << handle.device() << std::endl;
-
     Status s = LookupResource(ctx, handle, &var);
     if (!s.ok()) {
-      //  std::cerr << ">>>>> [MUSA_READ_LOG] ❌ 3. LookupResource FAILED: " <<
-      //  s.ToString() << std::endl;
       ctx->CtxFailure(s);
       return;
     }
@@ -74,21 +91,16 @@ class MusaReadVariableOp : public OpKernel {
     tf_shared_lock lock(*var->mu());
 
     if (!var->is_initialized) {
-      //  std::cerr << ">>>>> [MUSA_READ_LOG] ❌ 4. Variable NOT Initialized!" <<
-      //  std::endl;
       ctx->CtxFailure(errors::FailedPrecondition("Variable not initialized."));
       return;
     }
 
     const Tensor& t = *var->tensor();
-    // std::cerr << ">>>>> [MUSA_READ_LOG] 5. Tensor Ready. DType: " <<
-    // DataTypeString(t.dtype())
-    //           << ", Shape: " << t.shape().DebugString() << std::endl;
 
+    // OPTIMIZATION: set_output creates a shallow copy (alias) of the tensor
+    // This is zero-copy - it only increments the reference count of the buffer
+    // The actual data remains in GPU memory without any memcpy
     ctx->set_output(0, t);
-
-    //  std::cerr << ">>>>> [MUSA_READ_LOG] 6. set_output(0) SUCCESS. Done." <<
-    //  std::endl;
   }
 };
 
@@ -103,6 +115,10 @@ REGISTER_KERNEL_BUILDER(
 class MusaVarIsInitializedOp : public OpKernel {
  public:
   explicit MusaVarIsInitializedOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
+
+  // VarIsInitializedOp is a lightweight check operation
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     Tensor* out = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, TensorShape({}), &out));
@@ -116,6 +132,9 @@ class MusaVarIsInitializedOp : public OpKernel {
 class MusaDestroyResourceOp : public OpKernel {
  public:
   explicit MusaDestroyResourceOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
+
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     DeleteResource(ctx, HandleFromInput(ctx, 0));
   }
