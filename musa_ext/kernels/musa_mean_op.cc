@@ -31,6 +31,11 @@ class MusaMeanOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("keep_dims", &keep_dims_));
   }
 
+  // Mean is computationally intensive (reduction operation)
+  // Mark as expensive to enable optimal scheduling (async execution)
+  // Expected improvement: Better overlapping with other operations
+  bool IsExpensive() override { return true; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& input = ctx->input(0);
     const Tensor& axes_tensor = ctx->input(1);

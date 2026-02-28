@@ -12,6 +12,9 @@ class MusaMinimumOp : public MusaOpKernel {
  public:
   explicit MusaMinimumOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
+  // Minimum is element-wise - lightweight
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& in0 = ctx->input(0);
     const Tensor& in1 = ctx->input(1);

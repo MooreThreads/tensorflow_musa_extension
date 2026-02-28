@@ -18,6 +18,11 @@ class MusaTransposeOp : public MusaOpKernel {
  public:
   explicit MusaTransposeOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
+  // Transpose is memory-intensive but not computationally expensive
+  // Mark as inexpensive to enable better scheduling decisions
+  // The TensorFlow scheduler can better overlap memory-bound ops with compute
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& input = ctx->input(0);
     const Tensor& perm_tensor = ctx->input(1);

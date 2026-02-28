@@ -11,6 +11,11 @@ class MusaAddOp : public MusaOpKernel {
  public:
   explicit MusaAddOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
+  // Add is element-wise and computationally lightweight
+  // Mark as inexpensive to enable inline scheduling
+  // Expected improvement: Reduced scheduling overhead
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& in0 = ctx->input(0);
     const Tensor& in1 = ctx->input(1);

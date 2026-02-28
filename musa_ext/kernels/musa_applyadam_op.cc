@@ -21,6 +21,9 @@ class MusaApplyAdamOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("use_nesterov", &use_nesterov_));
   }
 
+  // ApplyAdam is computationally intensive (multiple element-wise ops)
+  bool IsExpensive() override { return true; }
+
   void Compute(OpKernelContext* ctx) override {
     Var* var = nullptr;
     Var* m = nullptr;

@@ -17,6 +17,9 @@ class MusaArgMaxOp : public MusaOpKernel {
  public:
   explicit MusaArgMaxOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
+  // ArgMax is a reduction operation - computationally intensive
+  bool IsExpensive() override { return true; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& input = ctx->input(0);
     const Tensor& axis_tensor = ctx->input(1);

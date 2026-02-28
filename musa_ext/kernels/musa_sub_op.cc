@@ -11,6 +11,10 @@ class MusaSubOp : public MusaOpKernel {
  public:
   explicit MusaSubOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
+  // Sub is element-wise and computationally lightweight
+  // Mark as inexpensive to enable inline scheduling
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& in0 = ctx->input(0);
     const Tensor& in1 = ctx->input(1);

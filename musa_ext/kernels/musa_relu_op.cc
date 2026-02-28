@@ -12,6 +12,10 @@ class MusaReluOp : public MusaOpKernel {
  public:
   using MusaOpKernel::MusaOpKernel;
 
+  // ReLU is element-wise and computationally lightweight
+  // Mark as inexpensive to enable inline scheduling
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& input = ctx->input(0);
 

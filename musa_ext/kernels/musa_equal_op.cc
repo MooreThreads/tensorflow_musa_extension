@@ -9,6 +9,9 @@ class MusaComparisonOp : public MusaOpKernel {
  public:
   explicit MusaComparisonOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
+  // Comparison ops are element-wise - lightweight
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& in0 = ctx->input(0);
     const Tensor& in1 = ctx->input(1);

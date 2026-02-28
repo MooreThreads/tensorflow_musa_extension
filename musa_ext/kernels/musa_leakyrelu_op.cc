@@ -14,6 +14,9 @@ class MusaLeakyReluOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("alpha", &alpha_));
   }
 
+  // LeakyRelu is element-wise - lightweight
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& input = ctx->input(0);
 

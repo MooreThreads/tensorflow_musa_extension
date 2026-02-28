@@ -13,6 +13,9 @@ class MusaLogOp : public MusaOpKernel {
  public:
   explicit MusaLogOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
+  // Log is element-wise - lightweight
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& input = ctx->input(0);
     Tensor* output = nullptr;

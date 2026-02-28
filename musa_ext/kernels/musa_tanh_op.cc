@@ -12,6 +12,9 @@ class MusaTahnOp : public MusaOpKernel {
  public:
   using MusaOpKernel::MusaOpKernel;
 
+  // Tanh is element-wise - lightweight
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& input = ctx->input(0);
     Tensor* output = nullptr;

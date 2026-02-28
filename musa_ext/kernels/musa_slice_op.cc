@@ -8,6 +8,9 @@ class MusaSliceOp : public MusaOpKernel {
  public:
   explicit MusaSliceOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
+  // Slice is memory-intensive but not computationally expensive
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& input = ctx->input(0);
     const Tensor& begin_tensor = ctx->input(1);

@@ -17,6 +17,9 @@ class MusaBiasAddOp : public MusaOpKernel {
                 errors::InvalidArgument("Invalid data format"));
   }
 
+  // BiasAdd is element-wise broadcasting - lightweight
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& input = ctx->input(0);
     const Tensor& bias = ctx->input(1);

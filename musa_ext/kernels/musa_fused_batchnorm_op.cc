@@ -25,6 +25,9 @@ class MusaFusedBatchNormOp : public MusaOpKernel {
     is_nhwc_ = (data_format_str == "NHWC");
   }
 
+  // BatchNorm is computationally intensive (reduction operations)
+  bool IsExpensive() override { return true; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& x = ctx->input(0);
     const Tensor& scale = ctx->input(1);
@@ -136,6 +139,9 @@ class MusaFusedBatchNormGradOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("data_format", &data_format_str));
     is_nhwc_ = (data_format_str == "NHWC");
   }
+
+  // BatchNormGrad is computationally intensive
+  bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
     const Tensor& dy = ctx->input(0);

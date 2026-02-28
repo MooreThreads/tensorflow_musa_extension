@@ -21,6 +21,9 @@ class MusaMaximumOp : public MusaOpKernel {
  public:
   explicit MusaMaximumOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
+  // Maximum is element-wise - lightweight
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& input_x = ctx->input(0);
     const Tensor& input_y = ctx->input(1);

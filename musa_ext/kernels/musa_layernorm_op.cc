@@ -19,6 +19,10 @@ class MusaLayerNormOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("epsilon", &epsilon_));
   }
 
+  // LayerNorm is computationally intensive (reduction + normalization)
+  // Mark as expensive to enable optimal scheduling
+  bool IsExpensive() override { return true; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& x = ctx->input(0);
     const Tensor& gamma = ctx->input(1);

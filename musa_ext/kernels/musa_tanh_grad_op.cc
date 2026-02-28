@@ -12,6 +12,9 @@ class MusaTanhGradOp : public MusaOpKernel {
  public:
   explicit MusaTanhGradOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
+  // TanhGrad is element-wise - lightweight
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& y = ctx->input(0);
     const Tensor& dy = ctx->input(1);

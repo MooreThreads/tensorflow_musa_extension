@@ -111,6 +111,9 @@ class MusaAddNOp : public MusaOpKernel {
  public:
   explicit MusaAddNOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
+  // AddN is element-wise - lightweight
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     AddNCompute<T>(ctx, format_, GetLauncher());
   }

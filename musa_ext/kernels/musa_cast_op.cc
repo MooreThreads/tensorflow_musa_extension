@@ -13,6 +13,9 @@ class MusaCastOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("DstT", &external_dst_dtype_));
   }
 
+  // Cast is element-wise - lightweight
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& inp = ctx->input(0);
     Tensor* output = nullptr;

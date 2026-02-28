@@ -15,6 +15,9 @@ class MusaTileOp : public MusaOpKernel {
  public:
   explicit MusaTileOp(OpKernelConstruction* context) : MusaOpKernel(context) {}
 
+  // Tile is memory-intensive but not computationally expensive
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* context) override {
     const Tensor& input = context->input(0);
     const Tensor& multiples = context->input(1);

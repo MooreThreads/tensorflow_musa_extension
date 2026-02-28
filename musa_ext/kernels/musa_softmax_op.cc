@@ -12,6 +12,11 @@ class MusaSoftmaxCall : public MusaOpKernel {
   explicit MusaSoftmaxCall(OpKernelConstruction* context)
       : MusaOpKernel(context) {}
 
+  // Softmax is computationally intensive (exp + reduction)
+  // Mark as expensive to enable optimal scheduling (async execution)
+  // Expected improvement: Better overlapping with other operations
+  bool IsExpensive() override { return true; }
+
   void Compute(OpKernelContext* context) override {
     const Tensor& logits_in = context->input(0);
 

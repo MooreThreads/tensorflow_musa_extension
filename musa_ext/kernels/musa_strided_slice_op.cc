@@ -24,6 +24,9 @@ class MusaStridedSliceOp : public OpKernel {
                    context->GetAttr("shrink_axis_mask", &shrink_axis_mask_));
   }
 
+  // StridedSlice is memory-intensive but not computationally expensive
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* context) override {
     const Tensor& input = context->input(0);
     const int input_dims = input.dims();

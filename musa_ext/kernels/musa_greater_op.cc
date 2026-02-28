@@ -12,6 +12,9 @@ class MusaGreaterOp : public MusaOpKernel {
  public:
   explicit MusaGreaterOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
+  // Greater is element-wise - lightweight
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& x = ctx->input(0);
     const Tensor& y = ctx->input(1);

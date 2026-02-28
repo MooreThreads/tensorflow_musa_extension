@@ -11,6 +11,9 @@ class MusaExpOp : public MusaOpKernel {
  public:
   explicit MusaExpOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
+  // Exp is element-wise - lightweight
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& input = ctx->input(0);
 

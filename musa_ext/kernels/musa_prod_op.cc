@@ -16,6 +16,9 @@ class MusaProdOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("keep_dims", &keep_dims_));
   }
 
+  // Prod is a reduction operation - computationally intensive
+  bool IsExpensive() override { return true; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& input = ctx->input(0);
     const Tensor& axes_tensor = ctx->input(1);

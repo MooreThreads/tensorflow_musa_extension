@@ -21,6 +21,10 @@ class MusaMaxOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("keep_dims", &keep_dims_));
   }
 
+  // Max (reduction) is computationally intensive
+  // Mark as expensive to enable optimal scheduling
+  bool IsExpensive() override { return true; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& input = ctx->input(0);
     const Tensor& axes_tensor = ctx->input(1);
@@ -81,7 +85,7 @@ class MusaMaxOp : public MusaOpKernel {
         musa_output_shape.AddDim(input.dim_size(d));
       }
     }
-   
+
     Tensor* out = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &out));
     if (out->NumElements() == 0) return;
@@ -157,6 +161,6 @@ REGISTER_MUSA_MAX(int32);
 REGISTER_MUSA_MAX(int64);
 
 #undef REGISTER_MUSA_MAX
- 
+
 }  // namespace musa
 }  // namespace tensorflow

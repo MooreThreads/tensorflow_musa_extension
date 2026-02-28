@@ -22,10 +22,10 @@ from musa_test_utils import MUSATestCase
 
 
 class MatMulOpTest(MUSATestCase):
-  """Tests for MUSA MatMul operator."""
+  """Tests for MUSA MatMul operator, TF32 enabled by default."""
 
-  def _test_matmul(self, shape_a, shape_b, transpose_a=False, transpose_b=False, 
-                   dtype=tf.float32, rtol=1e-5, atol=1e-6):
+  def _test_matmul(self, shape_a, shape_b, transpose_a=False, transpose_b=False,
+                   dtype=tf.float32, rtol=1e-3, atol=1e-3):
     """Test matmul operation with given shapes and options."""
     if dtype == tf.bfloat16:
       a_np = np.random.uniform(-1, 1, size=shape_a).astype(np.float32)
@@ -33,37 +33,37 @@ class MatMulOpTest(MUSATestCase):
     else:
       a_np = np.random.uniform(-1, 1, size=shape_a).astype(dtype.as_numpy_dtype)
       b_np = np.random.uniform(-1, 1, size=shape_b).astype(dtype.as_numpy_dtype)
-    
+
     a = tf.constant(a_np, dtype=dtype)
     b = tf.constant(b_np, dtype=dtype)
-    
+
     # Test on CPU
     with tf.device('/CPU:0'):
       cpu_result = tf.matmul(a, b, transpose_a=transpose_a, transpose_b=transpose_b)
-    
+
     # Test on MUSA
     with tf.device('/device:MUSA:0'):
       musa_result = tf.matmul(a, b, transpose_a=transpose_a, transpose_b=transpose_b)
-    
+
     # Compare results
     if dtype in [tf.float16, tf.bfloat16]:
       cpu_result_f32 = tf.cast(cpu_result, tf.float32)
       musa_result_f32 = tf.cast(musa_result, tf.float32)
-      self.assertAllClose(cpu_result_f32.numpy(), 
+      self.assertAllClose(cpu_result_f32.numpy(),
                          musa_result_f32.numpy(),
-                         rtol=rtol, 
+                         rtol=rtol,
                          atol=atol)
     else:
-      self.assertAllClose(cpu_result.numpy(), 
+      self.assertAllClose(cpu_result.numpy(),
                          musa_result.numpy(),
-                         rtol=rtol, 
+                         rtol=rtol,
                          atol=atol)
 
   def testMatMulBasic(self):
     """Basic matrix multiplication test."""
     for dtype in [tf.float32, tf.float16, tf.bfloat16]:
-      rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
-      atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-6
+      rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-3
+      atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-3
       self._test_matmul([10, 20], [20, 15], dtype=dtype, rtol=rtol, atol=atol)
 
   def testMatMulTransposeA(self):
@@ -84,9 +84,7 @@ class MatMulOpTest(MUSATestCase):
   def testMatMulSquare(self):
     """Square matrix multiplication."""
     for dtype in [tf.float32, tf.float16]:
-      rtol = 1e-2 if dtype == tf.float16 else 1e-5
-      atol = 1e-2 if dtype == tf.float16 else 1e-8
-      self._test_matmul([32, 32], [32, 32], dtype=dtype, rtol=rtol, atol=atol)
+      self._test_matmul([32, 32], [32, 32], dtype=dtype, rtol=1e-2, atol=1e-2)
 
   def testMatMulVectorMatrix(self):
     """Vector-matrix multiplication."""

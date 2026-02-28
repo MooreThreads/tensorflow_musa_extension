@@ -17,6 +17,9 @@ class MusaConcatOp : public MusaOpKernel {
  public:
   explicit MusaConcatOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
+  // Concat is memory-intensive but not computationally expensive
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     const int N = ctx->num_inputs() - 1;
     const Tensor& axis_tensor = ctx->input(N);

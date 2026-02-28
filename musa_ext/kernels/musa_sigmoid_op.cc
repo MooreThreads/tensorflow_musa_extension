@@ -12,6 +12,9 @@ class MusaSigmoidOp : public MusaOpKernel {
  public:
   explicit MusaSigmoidOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
+  // Sigmoid is element-wise - lightweight
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& input = ctx->input(0);
     Tensor* output = nullptr;
@@ -34,6 +37,9 @@ template <typename T>
 class MusaSigmoidGradOp : public MusaOpKernel {
  public:
   explicit MusaSigmoidGradOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
+
+  // SigmoidGrad is element-wise - lightweight
+  bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
     const Tensor& y = ctx->input(0);

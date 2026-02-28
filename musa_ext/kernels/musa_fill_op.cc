@@ -55,6 +55,9 @@ class MusaFillOp : public MusaOpKernel {
  public:
   explicit MusaFillOp(OpKernelConstruction* context) : MusaOpKernel(context) {}
 
+  // Fill is memory-intensive but not computationally expensive
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* context) override {
     const Tensor& Tdims = context->input(0);
     const Tensor& Tvalue = context->input(1);

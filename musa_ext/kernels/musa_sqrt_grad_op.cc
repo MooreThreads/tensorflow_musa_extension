@@ -13,6 +13,9 @@ class MusaSqrtGradOp : public MusaOpKernel {
  public:
   explicit MusaSqrtGradOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
+  // SqrtGrad is element-wise - lightweight
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& y = ctx->input(0);
     const Tensor& dy = ctx->input(1);

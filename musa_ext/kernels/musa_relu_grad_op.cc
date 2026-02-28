@@ -13,6 +13,9 @@ class MusaReluGradOp : public MusaOpKernel {
  public:
   explicit MusaReluGradOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
+  // ReluGrad is element-wise - lightweight
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& gradients = ctx->input(0);
     const Tensor& features = ctx->input(1);

@@ -12,6 +12,9 @@ class MusaSqrtOp : public MusaOpKernel {
  public:
   explicit MusaSqrtOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
+  // Sqrt is element-wise - lightweight
+  bool IsExpensive() override { return false; }
+
   void Compute(OpKernelContext* ctx) override {
     const Tensor& input = ctx->input(0);
     Tensor* output = nullptr;
