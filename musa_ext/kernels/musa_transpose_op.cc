@@ -2,6 +2,7 @@
 
 #include <vector>
 
+#include "musa_transpose_functor.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -75,25 +76,12 @@ class MusaTransposeOp : public MusaOpKernel {
 
     if (output->NumElements() == 0) return;
 
-    mHandle& h = GetHandleByCtx(ctx);
-
-    mTensor in_mt = CreateMTensor(input, format_);
-    mTensor out_mt = CreateMTensor(*output, format_);
-
-    ::musa::dnn::Permute pop;
-
-    if (::musa::dnn::Status::SUCCESS !=
-        pop.ConfigDimStride(out_mt, in_mt,
-                            static_cast<int>(permutation_64.size()),
-                            permutation_64.data())) {
-      ctx->CtxFailure(
-          errors::Internal("muDNN Permute ConfigDimStride failed!"));
-      return;
-    }
-
-    if (::musa::dnn::Status::SUCCESS != pop.Run(h, out_mt, in_mt)) {
-      ctx->CtxFailure(errors::Internal("muDNN Permute Run failed!"));
-      return;
+    mTensor input_mt = CreateMTensor(input);
+    mTensor output_mt = CreateMTensor(*output);
+    Status status =
+        TransposeFunctor::Compute(ctx, input_mt, permutation_64, output_mt);
+    if (!status.ok()) {
+      ctx->CtxFailure(status);
     }
   }
 };
