@@ -101,14 +101,14 @@ tf.load_library("/path/to/tensorflow_musa_extension/build/libmusa_plugin.so")
 
 ```bash
 # 运行特定算子测试
-python test/add_op_test.py
-python test/matmul_op_test.py
+python test/ops/add_op_test.py
+python test/ops/matmul_op_test.py
 
 # 运行所有测试
 ./test/run_all_tests.sh
 
 # 或者单独运行每个测试
-for test_file in test/*_op_test.py; do
+for test_file in test/ops/*_op_test.py; do
     python "$test_file"
 done
 ```
