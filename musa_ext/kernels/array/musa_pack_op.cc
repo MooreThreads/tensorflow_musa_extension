@@ -84,7 +84,6 @@ class MusaPackOp : public MusaOpKernel {
     auto& handle = GetHandleByCtx(ctx);
     musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 
-    // 优化1: axis==0 快速路径，直接 DtoD memcpy，跳过 kernel launch
     if (axis == 0) {
       const int64_t input_bytes = first_input.NumElements() * sizeof(T);
       char* dst = const_cast<char*>(output->tensor_data().data());
@@ -236,7 +235,6 @@ class MusaUnpackOp : public MusaOpKernel {
     auto& handle = GetHandleByCtx(ctx);
     musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 
-    // 优化1: axis==0 快速路径，直接 DtoD memcpy
     if (axis == 0) {
       const int64_t output_bytes =
           (num_outputs > 0 ? total_elements / num_outputs : 0) * sizeof(T);
