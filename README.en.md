@@ -9,6 +9,7 @@ TensorFlow MUSA Extension is a high-performance TensorFlow plugin specifically d
 - **Automatic Graph Optimization**: Supports automatic layout conversion, operator fusion, and Automatic Mixed Precision (AMP)
 - **Seamless Integration**: Fully compatible with TensorFlow ecosystem without requiring code modifications
 - **Device Management**: Complete MUSA device registration, memory management, and stream processing support
+- **Kernel Debugging Support**: Built-in kernel execution time statistics for performance analysis
 
 ## Quick Start
 
@@ -56,8 +57,11 @@ tensorflow_musa_extension/
 git clone <repository-url>
 cd tensorflow_musa_extension
 
-# Build the plugin
+# Build the plugin (Release mode, default)
 ./build.sh
+
+# Or build Debug mode (with kernel timing)
+./build.sh debug
 
 # Load the plugin in Python
 import tensorflow as tf
@@ -66,19 +70,32 @@ tf.load_library("./build/libmusa_plugin.so")
 
 ## Build Guide
 
-### 1. Operator Configuration
+### 1. Build Type Selection
+
+Two build modes are supported:
+
+| Mode | Command | Description |
+|------|---------|-------------|
+| **Release** | `./build.sh` or `./build.sh release` | Optimized for performance, no debug overhead |
+| **Debug** | `./build.sh debug` | Enable kernel timing for performance analysis |
+
+### 2. Operator Configuration
 
 Configure operators to be compiled in the `CMakeLists.txt` file:
 
 - **Operator Selection**: Enable required operator implementations in the source file configuration section
 - **Custom Kernels**: If using `.mu` custom kernel implementations, add corresponding source files to `set(MU_SOURCES "")`
 
-### 2. Compilation Process
+### 3. Compilation Process
 
 Execute the automated build script:
 
 ```bash
+# Release mode (default, for production)
 ./build.sh
+
+# Debug mode (for development and performance analysis)
+./build.sh debug
 ```
 
 The build script automatically completes the following steps:
@@ -86,13 +103,58 @@ The build script automatically completes the following steps:
 - Compiles MUSA kernels and host code
 - Generates the dynamic library `libmusa_plugin.so`
 
-### 3. Plugin Loading
+### 4. Plugin Loading
 
 After successful compilation, load the plugin in your TensorFlow application:
 
 ```python
 import tensorflow as tf
 tf.load_library("/path/to/tensorflow_musa_extension/build/libmusa_plugin.so")
+```
+
+## Environment Variables
+
+### Kernel Debugging Environment Variables (Debug Mode Only)
+
+After building in Debug mode, control kernel debugging output with the following environment variables:
+
+| Environment Variable | Value | Description |
+|---------------------|-------|-------------|
+| `MUSA_KERNEL_DEBUG` | `0` | Disable kernel timing (default) |
+| | `1` | Enable basic kernel timing log |
+| | `2` | Enable detailed timing (with input shape info) |
+| `MUSA_KERNEL_DEBUG_STATS` | `0` | Disable statistics aggregation (default) |
+| | `1` | Enable statistics aggregation, summary output on exit |
+
+### Usage Examples
+
+```bash
+# Basic kernel timing
+MUSA_KERNEL_DEBUG=1 python your_script.py
+
+# Detailed timing (shows input shapes)
+MUSA_KERNEL_DEBUG=2 python your_script.py
+
+# Enable statistics summary
+MUSA_KERNEL_DEBUG=2 MUSA_KERNEL_DEBUG_STATS=1 python your_script.py
+```
+
+### Output Example
+
+```
+[MUSA_KERNEL] Debug level set to 2 (from MUSA_KERNEL_DEBUG=2)
+[MUSA_KERNEL] Statistics aggregation enabled
+[MUSA_KERNEL] GatherV2[[10000,256],[1000]] took 0.234 ms
+[MUSA_KERNEL] MatMul[[1024,1024],[1024,1024]] took 2.345 ms
+...
+====================================================================================================
+MUSA Kernel Debug Statistics
+====================================================================================================
+Kernel Name                              Count       Total(ms)    Avg(ms)      Min(ms)      Max(ms)
+----------------------------------------------------------------------------------------------------
+GatherV2[[10000,256],[1000]]             150         34.567       0.230        0.198        0.456
+MatMul[[1024,1024],[1024,1024]]          150         345.234      2.301        1.890        3.456
+====================================================================================================
 ```
 
 ## Testing

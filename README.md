@@ -9,6 +9,7 @@ TensorFlow MUSA Extension 是一个高性能的 TensorFlow 插件，专为摩尔
 - **自动图优化**：支持 Layout 自动转换、算子融合和自动混合精度（AMP）
 - **无缝集成**：与 TensorFlow 生态系统完全兼容，无需修改现有代码
 - **设备管理**：完整的 MUSA 设备注册、内存管理和流式处理支持
+- **Kernel 调试支持**：内置 Kernel 执行时间统计功能，便于性能分析
 
 ## 快速开始
 
@@ -56,8 +57,11 @@ tensorflow_musa_extension/
 git clone <repository-url>
 cd tensorflow_musa_extension
 
-# 构建插件
+# 构建插件（Release 模式，默认）
 ./build.sh
+
+# 或构建 Debug 模式（启用 Kernel 计时）
+./build.sh debug
 
 # 在 Python 中加载插件
 import tensorflow as tf
@@ -66,19 +70,32 @@ tf.load_library("./build/libmusa_plugin.so")
 
 ## 构建指南
 
-### 1. 算子配置
+### 1. 编译模式选择
+
+支持两种编译模式：
+
+| 模式 | 命令 | 说明 |
+|------|------|------|
+| **Release** | `./build.sh` 或 `./build.sh release` | 优化性能，无调试开销 |
+| **Debug** | `./build.sh debug` | 启用 Kernel 计时，便于性能分析 |
+
+### 2. 算子配置
 
 在 `CMakeLists.txt` 文件中配置需要编译的算子：
 
 - **算子选择**：在源文件配置区域启用所需的算子实现
 - **自定义内核**：如需使用 `.mu` 自定义内核实现，在 `set(MU_SOURCES "")` 中添加对应的源文件
 
-### 2. 编译流程
+### 3. 编译流程
 
 执行自动化构建脚本：
 
 ```bash
+# Release 模式（默认，用于生产环境）
 ./build.sh
+
+# Debug 模式（用于开发和性能分析）
+./build.sh debug
 ```
 
 构建脚本将自动完成以下步骤：
@@ -86,13 +103,58 @@ tf.load_library("./build/libmusa_plugin.so")
 - 编译 MUSA 内核和主机代码
 - 生成动态链接库 `libmusa_plugin.so`
 
-### 3. 加载插件
+### 4. 加载插件
 
 编译成功后，在 TensorFlow 应用中加载插件：
 
 ```python
 import tensorflow as tf
 tf.load_library("/path/to/tensorflow_musa_extension/build/libmusa_plugin.so")
+```
+
+## 环境变量
+
+### Kernel 调试环境变量（仅 Debug 模式）
+
+在 Debug 模式下编译后，可通过以下环境变量控制 Kernel 调试输出：
+
+| 环境变量 | 取值 | 说明 |
+|---------|------|------|
+| `MUSA_KERNEL_DEBUG` | `0` | 禁用 Kernel 计时（默认） |
+| | `1` | 启用基本 Kernel 计时日志 |
+| | `2` | 启用详细计时（包含输入 Shape 信息） |
+| `MUSA_KERNEL_DEBUG_STATS` | `0` | 禁用统计聚合（默认） |
+| | `1` | 启用统计聚合，程序退出时输出汇总 |
+
+### 使用示例
+
+```bash
+# 基本 Kernel 计时
+MUSA_KERNEL_DEBUG=1 python your_script.py
+
+# 详细计时（显示输入 Shape）
+MUSA_KERNEL_DEBUG=2 python your_script.py
+
+# 启用统计汇总
+MUSA_KERNEL_DEBUG=2 MUSA_KERNEL_DEBUG_STATS=1 python your_script.py
+```
+
+### 输出示例
+
+```
+[MUSA_KERNEL] Debug level set to 2 (from MUSA_KERNEL_DEBUG=2)
+[MUSA_KERNEL] Statistics aggregation enabled
+[MUSA_KERNEL] GatherV2[[10000,256],[1000]] took 0.234 ms
+[MUSA_KERNEL] MatMul[[1024,1024],[1024,1024]] took 2.345 ms
+...
+====================================================================================================
+MUSA Kernel Debug Statistics
+====================================================================================================
+Kernel Name                              Count       Total(ms)    Avg(ms)      Min(ms)      Max(ms)
+----------------------------------------------------------------------------------------------------
+GatherV2[[10000,256],[1000]]             150         34.567       0.230        0.198        0.456
+MatMul[[1024,1024],[1024,1024]]          150         345.234      2.301        1.890        3.456
+====================================================================================================
 ```
 
 ## 测试

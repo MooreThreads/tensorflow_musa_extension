@@ -38,8 +38,27 @@ string(REPLACE "-D_GLIBCXX_USE_CXX11_ABI=1" "" TF_COMPILE_FLAGS "${TF_COMPILE_FL
 # Re-add the safest definition
 set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=0")
 
-# Add compile definitions to disable debug logging
-set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_DISABLE_DEBUG_LOGGING -DNDEBUG -DMUSA_DISABLE_TRACE_LOGGING -DMUSA_DISABLE_AUTO_TRACE")
+# Handle MUSA_KERNEL_DEBUG option
+# Can be set via: cmake -DMUSA_KERNEL_DEBUG=1 or -DMUSA_KERNEL_DEBUG=ON
+if(DEFINED MUSA_KERNEL_DEBUG)
+    if(MUSA_KERNEL_DEBUG STREQUAL "ON" OR MUSA_KERNEL_DEBUG STREQUAL "1" OR MUSA_KERNEL_DEBUG STREQUAL "2")
+        message(STATUS "MUSA_KERNEL_DEBUG enabled: ${MUSA_KERNEL_DEBUG}")
+        set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_KERNEL_DEBUG=${MUSA_KERNEL_DEBUG}")
+    else()
+        message(STATUS "MUSA_KERNEL_DEBUG disabled")
+    endif()
+else()
+    # Auto-enable for Debug build
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        message(STATUS "MUSA_KERNEL_DEBUG auto-enabled for Debug build")
+        set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_KERNEL_DEBUG=1")
+    endif()
+endif()
+
+# Add compile definitions to disable debug logging (only when not in debug mode)
+if(NOT MUSA_KERNEL_DEBUG)
+    set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_DISABLE_DEBUG_LOGGING -DNDEBUG -DMUSA_DISABLE_TRACE_LOGGING -DMUSA_DISABLE_AUTO_TRACE")
+endif()
 
 # Include paths
 include_directories("${TF_INC}" "${MUSA_PATH}/include")

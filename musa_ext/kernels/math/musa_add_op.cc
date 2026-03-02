@@ -1,7 +1,12 @@
+#if defined(DEBUG) || defined(_DEBUG) || defined(MUSA_KERNEL_DEBUG)
+#define MUSA_KERNEL_DEBUG_ENABLED
+#endif
+
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "../utils_op.h"
+#include "../../mu/kernel_register.h"
 
 namespace tensorflow {
 namespace musa {
@@ -17,6 +22,7 @@ class MusaAddOp : public MusaOpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_KERNEL_TRACE_DETAIL(ctx);
     const Tensor& in0 = ctx->input(0);
     const Tensor& in1 = ctx->input(1);
 

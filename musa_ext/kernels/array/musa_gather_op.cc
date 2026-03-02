@@ -1,16 +1,12 @@
-// Optimized MUSA Gather Op Implementation
-// Uses custom kernels for maximum performance
-//
-// Performance optimizations:
-// 1. Custom MUSA kernels with vectorized memory access
-// 2. GPU-side bounds checking (no D2H memcpy overhead)
-// 3. Coalesced memory access patterns
-// 4. Direct launcher calls without muDNN overhead
+#if defined(DEBUG) || defined(_DEBUG) || defined(MUSA_KERNEL_DEBUG)
+#define MUSA_KERNEL_DEBUG_ENABLED
+#endif
 
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "../utils_op.h"
+#include "../../mu/kernel_register.h"
 
 // ============================================================================
 // Custom Kernel Launcher Declarations
@@ -94,6 +90,9 @@ class MusaGatherOp : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
+    // Debug timing - enabled in Debug build or when MUSA_KERNEL_DEBUG is defined
+    MUSA_KERNEL_TRACE_DETAIL(ctx);
+
     const Tensor& params = ctx->input(0);
     const Tensor& indices = ctx->input(1);
 
@@ -146,17 +145,17 @@ class MusaGatherOp : public MusaOpKernel {
 
     // Compute dimensions for kernel launch
     const int64_t limit = params.dim_size(axis);
-    
+
     int64_t batch_size = 1;
     for (int64_t i = 0; i < axis; ++i) {
       batch_size *= params.dim_size(i);
     }
-    
+
     int64_t inner_size = 1;
     for (int64_t i = axis + 1; i < params_dims; ++i) {
       inner_size *= params.dim_size(i);
     }
-    
+
     const int64_t indices_size = indices.NumElements();
     const int64_t params_stride = limit * inner_size;
 
