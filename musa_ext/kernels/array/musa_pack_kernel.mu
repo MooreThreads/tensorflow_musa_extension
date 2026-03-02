@@ -1,12 +1,7 @@
 //
 // MUSA Pack/Unpack Kernels
 //
-// 5 项优化:
-//   1. axis=0 快速路径 (host 端 musaMemcpyAsync DtoD, 不走 kernel)
-//   2. after_size=1 专用 kernel (消除 % after_size 除法)
-//   3. 2D grid dispatch (大 before_size 时 blockIdx.y = before, 减少除法)
-//   4. 向量化 kernel (float4/int4, 4x 带宽)
-//   5. grid-stride loop (所有 kernel 均使用)
+
 
 #include <musa_runtime.h>
 #include <musa_fp16.h>
@@ -17,7 +12,7 @@
 // Pack Kernels
 // ============================================================================
 
-// 通用标量 kernel + grid-stride loop (优化5)
+
 template <typename T>
 __global__ void PackKernelScalar(const T** __restrict__ inputs,
                                  T* __restrict__ output,
@@ -36,7 +31,7 @@ __global__ void PackKernelScalar(const T** __restrict__ inputs,
   }
 }
 
-// after_size==1 专用 kernel: 消除 % after_size (优化2 + 优化5)
+
 template <typename T>
 __global__ void PackKernelAfter1(const T** __restrict__ inputs,
                                  T* __restrict__ output,
@@ -51,7 +46,7 @@ __global__ void PackKernelAfter1(const T** __restrict__ inputs,
   }
 }
 
-// 2D grid kernel: blockIdx.y = before 维度 (优化3 + 优化5)
+
 template <typename T>
 __global__ void PackKernel2D(const T** __restrict__ inputs,
                              T* __restrict__ output,
@@ -70,7 +65,7 @@ __global__ void PackKernel2D(const T** __restrict__ inputs,
   }
 }
 
-// 向量化 kernel: 用 VecT (float4/int4) 一次读写多个元素 (优化4 + 优化5)
+
 template <typename T, typename VecT, int VecWidth>
 __global__ void PackKernelVec(const T** __restrict__ inputs,
                               T* __restrict__ output,
@@ -92,7 +87,7 @@ __global__ void PackKernelVec(const T** __restrict__ inputs,
 }
 
 // ============================================================================
-// Unpack Kernels (与 Pack 对称)
+
 // ============================================================================
 
 template <typename T>
@@ -166,7 +161,7 @@ __global__ void UnpackKernelVec(const T* __restrict__ input,
 }
 
 // ============================================================================
-// Launcher 辅助宏
+
 // ============================================================================
 
 extern "C" {
@@ -176,32 +171,31 @@ extern "C" {
 #define CALC_BLOCKS(n) \
   (int)(min((int64_t)(((n) + THREADS - 1) / THREADS), (int64_t)MAX_BLOCKS))
 
-// before_size 超过此阈值使用 2D grid
+
 #define GRID_2D_THRESH 4
 
 // ============================================================================
-// Pack Launcher: 4 字节类型 (float, int32)
-// 路径选择: after1 -> vec4 -> 2D -> scalar
+
 // ============================================================================
 #define DEFINE_PACK_LAUNCHER_4B(T, Name)                                       \
   void Name(const T** inputs, T* output, int num_inputs, int64_t before_size,  \
             int64_t after_size, int64_t total_elements, musaStream_t stream) {  \
     if (total_elements == 0) return;                                           \
-    /* 优化2: after_size==1 专用 */                                              \
+                                               \
     if (after_size == 1) {                                                     \
       PackKernelAfter1<T><<<CALC_BLOCKS(total_elements), THREADS, 0,           \
                             stream>>>(inputs, output, num_inputs,              \
                                       total_elements);                         \
       return;                                                                  \
     }                                                                          \
-    /* 优化4: float4 向量化 (after_size 能被 4 整除) */                            \
+                               \
     if (after_size % 4 == 0) {                                                 \
       int64_t av = after_size / 4, tv = total_elements / 4;                    \
       PackKernelVec<T, float4, 4><<<CALC_BLOCKS(tv), THREADS, 0, stream>>>(   \
           inputs, output, num_inputs, before_size, av, tv);                    \
       return;                                                                  \
     }                                                                          \
-    /* 优化3: 2D grid */                                                        \
+                                                         \
     if (before_size > GRID_2D_THRESH) {                                        \
       int64_t inner = (int64_t)num_inputs * after_size;                        \
       dim3 grid(CALC_BLOCKS(inner),                                            \
@@ -210,7 +204,7 @@ extern "C" {
           inputs, output, num_inputs, before_size, after_size, inner);         \
       return;                                                                  \
     }                                                                          \
-    /* 优化5: 通用标量 + grid-stride */                                           \
+                                              \
     PackKernelScalar<T><<<CALC_BLOCKS(total_elements), THREADS, 0, stream>>>(  \
         inputs, output, num_inputs, before_size, after_size, total_elements);  \
   }
@@ -248,8 +242,7 @@ extern "C" {
   }
 
 // ============================================================================
-// Pack Launcher: 2 字节类型 (half, bf16)
-// 向量化: %8==0 用 float4 (16B=8×2B), %2==0 用 int (4B=2×2B)
+
 // ============================================================================
 #define DEFINE_PACK_LAUNCHER_2B(T, Name)                                       \
   void Name(const void** inputs, void* output, int num_inputs,                \
@@ -288,7 +281,7 @@ extern "C" {
   }
 
 // ============================================================================
-// Unpack Launcher: 4 字节
+
 // ============================================================================
 #define DEFINE_UNPACK_LAUNCHER_4B(T, Name)                                     \
   void Name(const T* input, T** outputs, int num_outputs,                      \
@@ -322,7 +315,7 @@ extern "C" {
   }
 
 // ============================================================================
-// Unpack Launcher: 8 字节
+
 // ============================================================================
 #define DEFINE_UNPACK_LAUNCHER_8B(T, Name)                                     \
   void Name(const T* input, T** outputs, int num_outputs,                      \
@@ -355,7 +348,7 @@ extern "C" {
   }
 
 // ============================================================================
-// Unpack Launcher: 2 字节
+
 // ============================================================================
 #define DEFINE_UNPACK_LAUNCHER_2B(T, Name)                                     \
   void Name(const void* input, void** outputs, int num_outputs,               \
@@ -396,7 +389,7 @@ extern "C" {
   }
 
 // ============================================================================
-// 实例化
+
 // ============================================================================
 
 DEFINE_PACK_LAUNCHER_4B(float, LaunchPackKernelFloat)
