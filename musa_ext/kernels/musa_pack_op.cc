@@ -48,14 +48,6 @@ void LaunchUnpackKernelInt64(const long long* input, long long** outputs,
 namespace tensorflow {
 namespace musa {
 
-/**
- * Pack Op 优化实现
- * 
- * 优化点：
- * 1. 添加 IsExpensive() 标记
- * 2. 延迟初始化：预分配设备内存，避免每次 Compute 都 malloc/free
- * 3. 使用异步 H2D 拷贝
- */
 template <typename T>
 class MusaPackOp : public MusaOpKernel {
  public:
@@ -71,7 +63,6 @@ class MusaPackOp : public MusaOpKernel {
     }
   }
 
-  // Pack is memory-intensive but computationally simple
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
@@ -93,6 +84,18 @@ class MusaPackOp : public MusaOpKernel {
     auto& handle = GetHandleByCtx(ctx);
     musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 
+    // 优化1: axis==0 快速路径，直接 DtoD memcpy，跳过 kernel launch
+    if (axis == 0) {
+      const int64_t input_bytes = first_input.NumElements() * sizeof(T);
+      char* dst = const_cast<char*>(output->tensor_data().data());
+      for (int i = 0; i < num_inputs; ++i) {
+        const char* src = ctx->input(i).tensor_data().data();
+        musaMemcpyAsync(dst + i * input_bytes, src, input_bytes,
+                        musaMemcpyDeviceToDevice, stream);
+      }
+      return;
+    }
+
     int64_t before_size = 1;
     for (int i = 0; i < axis; ++i) before_size *= output_shape.dim_size(i);
 
@@ -100,7 +103,6 @@ class MusaPackOp : public MusaOpKernel {
     for (int i = axis + 1; i < output_shape.dims(); ++i)
       after_size *= output_shape.dim_size(i);
 
-    // OPTIMIZATION: Pre-allocate device memory if needed
     if (d_inputs_capacity_ < num_inputs) {
       if (d_inputs_ != nullptr) {
         musaFree(d_inputs_);
@@ -110,20 +112,17 @@ class MusaPackOp : public MusaOpKernel {
       d_inputs_capacity_ = num_inputs;
     }
 
-    // Use stack array for small inputs to avoid vector allocation
     const void* input_ptrs[16];
-    const void** ptr_array = (num_inputs <= 16) ? input_ptrs : 
-        new const void*[num_inputs];
-    
+    const void** ptr_array =
+        (num_inputs <= 16) ? input_ptrs : new const void*[num_inputs];
+
     for (int i = 0; i < num_inputs; ++i) {
       ptr_array[i] = ctx->input(i).tensor_data().data();
     }
 
-    // Async H2D copy
-    tensorflow::musa::MusaMemcpyAsyncH2D(const_cast<void**>(d_inputs_),
-                                         ptr_array,
-                                         num_inputs * sizeof(const void*),
-                                         stream);
+    tensorflow::musa::MusaMemcpyAsyncH2D(
+        const_cast<void**>(d_inputs_), ptr_array,
+        num_inputs * sizeof(const void*), stream);
 
     void* output_ptr = const_cast<char*>(output->tensor_data().data());
     LaunchKernel(reinterpret_cast<const void**>(d_inputs_), output_ptr,
@@ -138,7 +137,7 @@ class MusaPackOp : public MusaOpKernel {
   int axis_;
   const void** d_inputs_;
   int d_inputs_capacity_;
-  
+
   void LaunchKernel(const void** inputs, void* output, int num, int before,
                     int after, int total, musaStream_t stream);
 };
@@ -216,14 +215,14 @@ class MusaUnpackOp : public MusaOpKernel {
     const int total_elements = input.NumElements();
 
     void* output_ptrs[16];
-    void** ptr_array = (num_outputs <= 16) ? output_ptrs :
-        new void*[num_outputs];
-    
+    void** ptr_array =
+        (num_outputs <= 16) ? output_ptrs : new void*[num_outputs];
+
     for (int i = 0; i < num_outputs; ++i) {
-      Tensor* output = nullptr;
-      OP_REQUIRES_OK(ctx, ctx->allocate_output(i, output_shape, &output));
-      if (output->NumElements() > 0) {
-        ptr_array[i] = const_cast<char*>(output->tensor_data().data());
+      Tensor* out = nullptr;
+      OP_REQUIRES_OK(ctx, ctx->allocate_output(i, output_shape, &out));
+      if (out->NumElements() > 0) {
+        ptr_array[i] = const_cast<char*>(out->tensor_data().data());
       } else {
         ptr_array[i] = nullptr;
       }
@@ -237,13 +236,27 @@ class MusaUnpackOp : public MusaOpKernel {
     auto& handle = GetHandleByCtx(ctx);
     musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 
+    // 优化1: axis==0 快速路径，直接 DtoD memcpy
+    if (axis == 0) {
+      const int64_t output_bytes =
+          (num_outputs > 0 ? total_elements / num_outputs : 0) * sizeof(T);
+      const char* src = input.tensor_data().data();
+      for (int i = 0; i < num_outputs; ++i) {
+        if (ptr_array[i] != nullptr) {
+          musaMemcpyAsync(ptr_array[i], src + i * output_bytes, output_bytes,
+                          musaMemcpyDeviceToDevice, stream);
+        }
+      }
+      if (num_outputs > 16) delete[] ptr_array;
+      return;
+    }
+
     int64_t before_size = 1;
     for (int i = 0; i < axis; ++i) before_size *= input.dim_size(i);
     int64_t after_size = 1;
     for (int i = axis + 1; i < input.dims(); ++i)
       after_size *= input.dim_size(i);
 
-    // OPTIMIZATION: Pre-allocate device memory if needed
     if (d_outputs_capacity_ < num_outputs) {
       if (d_outputs_ != nullptr) {
         musaFree(d_outputs_);
@@ -254,8 +267,7 @@ class MusaUnpackOp : public MusaOpKernel {
     }
 
     tensorflow::musa::MusaMemcpyAsyncH2D(d_outputs_, ptr_array,
-                                         num_outputs * sizeof(void*),
-                                         stream);
+                                         num_outputs * sizeof(void*), stream);
 
     const void* input_ptr = input.tensor_data().data();
     LaunchKernel(input_ptr, d_outputs_, num_outputs, before_size, after_size,
@@ -268,7 +280,7 @@ class MusaUnpackOp : public MusaOpKernel {
   int axis_;
   void** d_outputs_;
   int d_outputs_capacity_;
-  
+
   void LaunchKernel(const void* input, void** outputs, int num, int before,
                     int after, int total, musaStream_t stream);
 };
