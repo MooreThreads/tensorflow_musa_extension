@@ -12,7 +12,9 @@ class Conv2DOpTest(MUSATestCase):
   def _tolerance_for_dtype(self, dtype):
     if dtype in (tf.float16, tf.bfloat16):
       return 1e-2, 1e-2
-    return 1e-5, 1e-8
+    # Conv2D on MUSA enables TF32 by default for float32 compute, so use
+    # slightly relaxed tolerance vs strict FP32 reference.
+    return 1e-4, 1e-5
 
   def _make_input_and_filter(self, input_shape, filter_shape, dtype, seed=2026):
     np.random.seed(seed)

@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -21,6 +22,18 @@ inline int GetDimFromAttr(const std::vector<int32>& attr, TensorFormat format,
                           char dim) {
   const int index = GetTensorDimIndex(format, dim);
   return (index >= 0) ? attr[index] : -1;
+}
+
+inline bool ResolveTF32Enabled() {
+  // Default-on per project performance guideline.
+  // MUSA_ENABLE_TF32 can explicitly override:
+  //   1 -> enable TF32
+  //   0 -> disable TF32
+  const char* tf32_env = std::getenv("MUSA_ENABLE_TF32");
+  if (tf32_env == nullptr) {
+    return true;
+  }
+  return std::atoi(tf32_env) != 0;
 }
 
 Status PermuteTensorOnMusa(OpKernelContext* ctx, const Tensor& input,
@@ -99,11 +112,10 @@ Status RunMusaConv2D(OpKernelContext* ctx, const Tensor& input,
                      const Tensor& filter, Tensor* output,
                      TensorFormat data_format, int stride_h, int stride_w,
                      int dilation_h, int dilation_w, int pad_top,
-                     int pad_left) {
+                     int pad_left, bool tf32_enabled) {
   auto& handle = GetHandleByCtx(ctx);
 
-  // Match CPU float32 numerics as much as possible.
-  handle.SetAllowTF32(false);
+  handle.SetAllowTF32(tf32_enabled);
   if (data_format != FORMAT_NHWC) {
     return errors::InvalidArgument(
         "RunMusaConv2D currently expects NHWC tensors.");
@@ -236,7 +248,11 @@ class MusaConv2DOp : public MusaOpKernel {
     OP_REQUIRES(
         ctx, dilation_h_ > 0 && dilation_w_ > 0,
         errors::InvalidArgument("Conv2D spatial dilations must be > 0."));
+
+    tf32_enabled_ = ResolveTF32Enabled();
   }
+
+  bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
     const Tensor& input = ctx->input(0);
@@ -306,7 +322,7 @@ class MusaConv2DOp : public MusaOpKernel {
       OP_REQUIRES_OK(
           ctx, RunMusaConv2D<T>(ctx, input, filter, output, FORMAT_NHWC,
                                 stride_h_, stride_w_, dilation_h_, dilation_w_,
-                                pad_top, pad_left));
+                                pad_top, pad_left, tf32_enabled_));
       return;
     }
 
@@ -330,7 +346,7 @@ class MusaConv2DOp : public MusaOpKernel {
     OP_REQUIRES_OK(
         ctx, RunMusaConv2D<T>(ctx, input_nhwc, filter, &output_nhwc,
                               FORMAT_NHWC, stride_h_, stride_w_, dilation_h_,
-                              dilation_w_, pad_top, pad_left));
+                              dilation_w_, pad_top, pad_left, tf32_enabled_));
     OP_REQUIRES_OK(
         ctx, PermuteTensorOnMusa(ctx, output_nhwc, output, kPermNhwcToNchw));
   }
@@ -347,6 +363,7 @@ class MusaConv2DOp : public MusaOpKernel {
   int stride_w_ = 1;
   int dilation_h_ = 1;
   int dilation_w_ = 1;
+  bool tf32_enabled_ = true;
 };
 
 #define REGISTER_MUSA_CONV2D(TYPE)                             \
