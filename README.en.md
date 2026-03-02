@@ -101,14 +101,14 @@ After building, run the test suite to verify functional correctness. Test files 
 
 ```bash
 # Run specific operator tests
-python test/add_op_test.py
-python test/matmul_op_test.py
+python test/ops/add_op_test.py
+python test/ops/matmul_op_test.py
 
 # Run all tests
 ./test/run_all_tests.sh
 
 # Or run each test individually
-for test_file in test/*_op_test.py; do
+for test_file in test/ops/*_op_test.py; do
     python "$test_file"
 done
 ```

@@ -46,7 +46,7 @@ include_directories("${TF_INC}" "${MUSA_PATH}/include")
 
 # Define source root directory
 set(SRC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/musa_ext")
-include_directories("${SRC_ROOT}" "${SRC_ROOT}/mu")
+include_directories("${SRC_ROOT}" "${SRC_ROOT}/mu" "${SRC_ROOT}/kernels")
 
 # Validate source directory exists
 if(NOT EXISTS "${SRC_ROOT}")
@@ -66,15 +66,17 @@ file(GLOB_RECURSE CPP_SOURCES
 # filter out disabled kernels (if any)
 # list(FILTER CPP_SOURCES EXCLUDE REGEX ".*test.*|.*disabled.*")
 # Automatically collect MUSA Kernel files
-file(GLOB MU_SOURCES "${SRC_ROOT}/kernels/*.mu")
+file(GLOB_RECURSE MU_SOURCES "${SRC_ROOT}/kernels/*.mu")
 
 # MCC compile MUSA Kernel
 set(MU_OBJECTS "")
 foreach(mu_file ${MU_SOURCES})
     get_filename_component(filename ${mu_file} NAME)
     if(NOT filename MATCHES "^disabled_")
-        get_filename_component(basename ${mu_file} NAME_WE)
-        set(obj_file "${CMAKE_CURRENT_BINARY_DIR}/${basename}.mu.o")
+        file(RELATIVE_PATH mu_rel_path "${SRC_ROOT}/kernels" "${mu_file}")
+        string(REPLACE "/" "_" mu_rel_obj "${mu_rel_path}")
+        string(REPLACE ".mu" "" mu_rel_obj "${mu_rel_obj}")
+        set(obj_file "${CMAKE_CURRENT_BINARY_DIR}/${mu_rel_obj}.mu.o")
         set(mu_full_path "${mu_file}")
 
         add_custom_command(
