@@ -3,7 +3,7 @@
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/framework/types.h"
-#include "utils_op.h"
+#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
