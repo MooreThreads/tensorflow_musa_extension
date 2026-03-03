@@ -96,9 +96,9 @@ class MusaPackOp : public MusaOpKernel {
 
     Tensor d_inputs_tensor;
     const int64_t ptr_array_bytes = num_inputs * sizeof(const void*);
-    OP_REQUIRES_OK(
-        ctx, ctx->allocate_temp(
-                 DT_INT8, TensorShape({ptr_array_bytes}), &d_inputs_tensor));
+    OP_REQUIRES_OK(ctx,
+                   ctx->allocate_temp(DT_INT8, TensorShape({ptr_array_bytes}),
+                                      &d_inputs_tensor));
     const void** d_inputs =
         reinterpret_cast<const void**>(d_inputs_tensor.flat<int8>().data());
 
@@ -238,9 +238,9 @@ class MusaUnpackOp : public MusaOpKernel {
 
     Tensor d_outputs_tensor;
     const int64_t ptr_array_bytes = num_outputs * sizeof(void*);
-    OP_REQUIRES_OK(
-        ctx, ctx->allocate_temp(
-                 DT_INT8, TensorShape({ptr_array_bytes}), &d_outputs_tensor));
+    OP_REQUIRES_OK(ctx,
+                   ctx->allocate_temp(DT_INT8, TensorShape({ptr_array_bytes}),
+                                      &d_outputs_tensor));
     void** d_outputs =
         reinterpret_cast<void**>(d_outputs_tensor.flat<int8>().data());
 
@@ -252,7 +252,6 @@ class MusaUnpackOp : public MusaOpKernel {
                  total_elements, stream);
 
     if (num_outputs > 16) delete[] ptr_array;
-    // d_outputs_tensor 在函数结束时自动释放
   }
 
  private:
