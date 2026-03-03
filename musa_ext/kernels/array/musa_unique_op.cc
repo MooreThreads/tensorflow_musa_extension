@@ -4,7 +4,7 @@
 #include "mu/device/musa_device.h"
 #include "mu/device/musa_memcpy.h"
 #include "mu/device/musa_memset.h"
-#include "utils_op.h"
+#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
