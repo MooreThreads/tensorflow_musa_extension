@@ -43,7 +43,8 @@ tensorflow_musa_extension/
   - 默认安装路径: `/usr/local/musa`
 - **Python 依赖**
   - Python: >= 3.7
-  - TensorFlow: == 2.4.4
+  - TensorFlow: == 2.6.1
+  - protobuf: == 3.20.3
   - NumPy: >= 1.19.0
   - pettytable: >= 3.0.0
 - **开发工具**:

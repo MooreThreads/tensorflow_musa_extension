@@ -33,10 +33,10 @@ __global__ void RangeKernelInt32(int* output, int start, int delta, int size) {
 }
 
 // Int64 kernel
-__global__ void RangeKernelInt64(long long* output, long long start, long long delta, int size) {
+__global__ void RangeKernelInt64(int64_t* output, int64_t start, int64_t delta, int size) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < size) {
-    output[idx] = start + static_cast<long long>(idx) * delta;
+    output[idx] = start + static_cast<int64_t>(idx) * delta;
   }
 }
 
@@ -51,7 +51,7 @@ __global__ void RangeKernelInt64(long long* output, long long start, long long d
 DEFINE_RANGE_LAUNCHER(LaunchRangeKernelFloat, RangeKernelFloat, float)
 DEFINE_RANGE_LAUNCHER(LaunchRangeKernelDouble, RangeKernelDouble, double)
 DEFINE_RANGE_LAUNCHER(LaunchRangeKernelInt32, RangeKernelInt32, int)
-DEFINE_RANGE_LAUNCHER(LaunchRangeKernelInt64, RangeKernelInt64, long long)
+DEFINE_RANGE_LAUNCHER(LaunchRangeKernelInt64, RangeKernelInt64, int64_t)
 
 #undef DEFINE_RANGE_LAUNCHER
 

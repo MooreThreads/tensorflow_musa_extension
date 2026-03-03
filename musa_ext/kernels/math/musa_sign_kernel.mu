@@ -171,7 +171,7 @@ namespace tensorflow
 
     template void MusaSignKernelLauncher<float>(const float *, float *, int64_t);
     template void MusaSignKernelLauncher<int>(const int *, int *, int64_t);
-    template void MusaSignKernelLauncher<long long>(const long long *, long long *, int64_t);
+    template void MusaSignKernelLauncher<int64_t>(const int64_t *, int64_t *, int64_t);
 
   } // namespace musa
 } // namespace tensorflow
