@@ -79,14 +79,7 @@ tf.load_library("./build/libmusa_plugin.so")
 | **Release** | `./build.sh` 或 `./build.sh release` | 优化性能，无调试开销 |
 | **Debug** | `./build.sh debug` | 启用 Kernel 计时，便于性能分析 |
 
-### 2. 算子配置
-
-在 `CMakeLists.txt` 文件中配置需要编译的算子：
-
-- **算子选择**：在源文件配置区域启用所需的算子实现
-- **自定义内核**：如需使用 `.mu` 自定义内核实现，在 `set(MU_SOURCES "")` 中添加对应的源文件
-
-### 3. 编译流程
+### 2. 编译流程
 
 执行自动化构建脚本：
 
@@ -112,67 +105,19 @@ import tensorflow as tf
 tf.load_library("/path/to/tensorflow_musa_extension/build/libmusa_plugin.so")
 ```
 
-## 环境变量
-
-### Kernel 调试环境变量（仅 Debug 模式）
-
-在 Debug 模式下编译后，可通过以下环境变量控制 Kernel 调试输出：
-
-| 环境变量 | 取值 | 说明 |
-|---------|------|------|
-| `MUSA_KERNEL_DEBUG` | `0` | 禁用 Kernel 计时（默认） |
-| | `1` | 启用基本 Kernel 计时日志 |
-| | `2` | 启用详细计时（包含输入 Shape 信息） |
-| `MUSA_KERNEL_DEBUG_STATS` | `0` | 禁用统计聚合（默认） |
-| | `1` | 启用统计聚合，程序退出时输出汇总 |
-
-### 使用示例
-
-```bash
-# 基本 Kernel 计时
-MUSA_KERNEL_DEBUG=1 python your_script.py
-
-# 详细计时（显示输入 Shape）
-MUSA_KERNEL_DEBUG=2 python your_script.py
-
-# 启用统计汇总
-MUSA_KERNEL_DEBUG=2 MUSA_KERNEL_DEBUG_STATS=1 python your_script.py
-```
-
-### 输出示例
-
-```
-[MUSA_KERNEL] Debug level set to 2 (from MUSA_KERNEL_DEBUG=2)
-[MUSA_KERNEL] Statistics aggregation enabled
-[MUSA_KERNEL] GatherV2[[10000,256],[1000]] took 0.234 ms
-[MUSA_KERNEL] MatMul[[1024,1024],[1024,1024]] took 2.345 ms
-...
-====================================================================================================
-MUSA Kernel Debug Statistics
-====================================================================================================
-Kernel Name                              Count       Total(ms)    Avg(ms)      Min(ms)      Max(ms)
-----------------------------------------------------------------------------------------------------
-GatherV2[[10000,256],[1000]]             150         34.567       0.230        0.198        0.456
-MatMul[[1024,1024],[1024,1024]]          150         345.234      2.301        1.890        3.456
-====================================================================================================
-```
-
 ## 测试
 
 构建完成后，运行测试套件验证功能正确性。测试文件遵循 TensorFlow 官方 `python/kernel_tests` 风格，使用 `tf.test.TestCase` 作为基类。
 
 ```bash
+cd test
+
 # 运行特定算子测试
-python test/ops/add_op_test.py
-python test/ops/matmul_op_test.py
+python -m ops.add_op_test
+python -m ops.matmul_op_test
 
 # 运行所有测试
-./test/run_all_tests.sh
-
-# 或者单独运行每个测试
-for test_file in test/ops/*_op_test.py; do
-    python "$test_file"
-done
+./run_all_tests.sh
 ```
 
 测试文件命名规范：

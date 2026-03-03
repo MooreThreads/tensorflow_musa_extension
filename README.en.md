@@ -79,14 +79,7 @@ Two build modes are supported:
 | **Release** | `./build.sh` or `./build.sh release` | Optimized for performance, no debug overhead |
 | **Debug** | `./build.sh debug` | Enable kernel timing for performance analysis |
 
-### 2. Operator Configuration
-
-Configure operators to be compiled in the `CMakeLists.txt` file:
-
-- **Operator Selection**: Enable required operator implementations in the source file configuration section
-- **Custom Kernels**: If using `.mu` custom kernel implementations, add corresponding source files to `set(MU_SOURCES "")`
-
-### 3. Compilation Process
+### 2. Compilation Process
 
 Execute the automated build script:
 
@@ -112,67 +105,19 @@ import tensorflow as tf
 tf.load_library("/path/to/tensorflow_musa_extension/build/libmusa_plugin.so")
 ```
 
-## Environment Variables
-
-### Kernel Debugging Environment Variables (Debug Mode Only)
-
-After building in Debug mode, control kernel debugging output with the following environment variables:
-
-| Environment Variable | Value | Description |
-|---------------------|-------|-------------|
-| `MUSA_KERNEL_DEBUG` | `0` | Disable kernel timing (default) |
-| | `1` | Enable basic kernel timing log |
-| | `2` | Enable detailed timing (with input shape info) |
-| `MUSA_KERNEL_DEBUG_STATS` | `0` | Disable statistics aggregation (default) |
-| | `1` | Enable statistics aggregation, summary output on exit |
-
-### Usage Examples
-
-```bash
-# Basic kernel timing
-MUSA_KERNEL_DEBUG=1 python your_script.py
-
-# Detailed timing (shows input shapes)
-MUSA_KERNEL_DEBUG=2 python your_script.py
-
-# Enable statistics summary
-MUSA_KERNEL_DEBUG=2 MUSA_KERNEL_DEBUG_STATS=1 python your_script.py
-```
-
-### Output Example
-
-```
-[MUSA_KERNEL] Debug level set to 2 (from MUSA_KERNEL_DEBUG=2)
-[MUSA_KERNEL] Statistics aggregation enabled
-[MUSA_KERNEL] GatherV2[[10000,256],[1000]] took 0.234 ms
-[MUSA_KERNEL] MatMul[[1024,1024],[1024,1024]] took 2.345 ms
-...
-====================================================================================================
-MUSA Kernel Debug Statistics
-====================================================================================================
-Kernel Name                              Count       Total(ms)    Avg(ms)      Min(ms)      Max(ms)
-----------------------------------------------------------------------------------------------------
-GatherV2[[10000,256],[1000]]             150         34.567       0.230        0.198        0.456
-MatMul[[1024,1024],[1024,1024]]          150         345.234      2.301        1.890        3.456
-====================================================================================================
-```
-
 ## Testing
 
 After building, run the test suite to verify functional correctness. Test files follow TensorFlow's official `python/kernel_tests` style, using `tf.test.TestCase` as the base class.
 
 ```bash
+cd test
+
 # Run specific operator tests
-python test/ops/add_op_test.py
-python test/ops/matmul_op_test.py
+python -m ops.add_op_test
+python -m ops.matmul_op_test
 
 # Run all tests
-./test/run_all_tests.sh
-
-# Or run each test individually
-for test_file in test/ops/*_op_test.py; do
-    python "$test_file"
-done
+./run_all_tests.sh
 ```
 
 Test file naming convention:

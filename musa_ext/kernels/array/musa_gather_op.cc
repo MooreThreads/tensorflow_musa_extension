@@ -1,7 +1,3 @@
-#if defined(DEBUG) || defined(_DEBUG) || defined(MUSA_KERNEL_DEBUG)
-#define MUSA_KERNEL_DEBUG_ENABLED
-#endif
-
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
@@ -90,8 +86,6 @@ class MusaGatherOp : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
-    // Debug timing - enabled in Debug build or when MUSA_KERNEL_DEBUG is defined
-    MUSA_KERNEL_TRACE_DETAIL(ctx);
 
     const Tensor& params = ctx->input(0);
     const Tensor& indices = ctx->input(1);
