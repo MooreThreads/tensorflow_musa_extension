@@ -13,47 +13,68 @@
 #include <limits>
 #include <vector>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/resource_mgr.h"
 #include "tensorflow/core/framework/resource_var.h"
 #include "tensorflow/core/platform/logging.h"
-#include "../utils_op.h"
 
 // ============================================================================
 // Custom Kernel Launcher Declarations
 // ============================================================================
 
 extern "C" {
-void LaunchResourceGatherFloatInt32(const float* params, const int* indices, float* output,
-                                    int64_t batch_size, int64_t inner_size, int64_t indices_size,
-                                    int64_t params_stride, int limit, musaStream_t stream);
-void LaunchResourceGatherFloatInt64(const float* params, const long long* indices, float* output,
-                                    int64_t batch_size, int64_t inner_size, int64_t indices_size,
-                                    int64_t params_stride, long long limit, musaStream_t stream);
-void LaunchResourceGatherDoubleInt32(const double* params, const int* indices, double* output,
-                                     int64_t batch_size, int64_t inner_size, int64_t indices_size,
-                                     int64_t params_stride, int limit, musaStream_t stream);
-void LaunchResourceGatherDoubleInt64(const double* params, const long long* indices, double* output,
-                                     int64_t batch_size, int64_t inner_size, int64_t indices_size,
-                                     int64_t params_stride, long long limit, musaStream_t stream);
-void LaunchResourceGatherInt32Int32(const int* params, const int* indices, int* output,
-                                    int64_t batch_size, int64_t inner_size, int64_t indices_size,
-                                    int64_t params_stride, int limit, musaStream_t stream);
-void LaunchResourceGatherInt32Int64(const int* params, const long long* indices, int* output,
-                                    int64_t batch_size, int64_t inner_size, int64_t indices_size,
-                                    int64_t params_stride, long long limit, musaStream_t stream);
-void LaunchResourceGatherInt64Int32(const long long* params, const int* indices, long long* output,
-                                    int64_t batch_size, int64_t inner_size, int64_t indices_size,
-                                    int64_t params_stride, int limit, musaStream_t stream);
-void LaunchResourceGatherInt64Int64(const long long* params, const long long* indices, long long* output,
-                                    int64_t batch_size, int64_t inner_size, int64_t indices_size,
-                                    int64_t params_stride, long long limit, musaStream_t stream);
-void LaunchResourceGatherHalfInt32(const void* params, const int* indices, void* output,
-                                   int64_t batch_size, int64_t inner_size, int64_t indices_size,
-                                   int64_t params_stride, int limit, musaStream_t stream);
-void LaunchResourceGatherHalfInt64(const void* params, const long long* indices, void* output,
-                                   int64_t batch_size, int64_t inner_size, int64_t indices_size,
-                                   int64_t params_stride, long long limit, musaStream_t stream);
+void LaunchResourceGatherFloatInt32(const float* params, const int* indices,
+                                    float* output, int64_t batch_size,
+                                    int64_t inner_size, int64_t indices_size,
+                                    int64_t params_stride, int limit,
+                                    musaStream_t stream);
+void LaunchResourceGatherFloatInt64(const float* params,
+                                    const long long* indices, float* output,
+                                    int64_t batch_size, int64_t inner_size,
+                                    int64_t indices_size, int64_t params_stride,
+                                    long long limit, musaStream_t stream);
+void LaunchResourceGatherDoubleInt32(const double* params, const int* indices,
+                                     double* output, int64_t batch_size,
+                                     int64_t inner_size, int64_t indices_size,
+                                     int64_t params_stride, int limit,
+                                     musaStream_t stream);
+void LaunchResourceGatherDoubleInt64(const double* params,
+                                     const long long* indices, double* output,
+                                     int64_t batch_size, int64_t inner_size,
+                                     int64_t indices_size,
+                                     int64_t params_stride, long long limit,
+                                     musaStream_t stream);
+void LaunchResourceGatherInt32Int32(const int* params, const int* indices,
+                                    int* output, int64_t batch_size,
+                                    int64_t inner_size, int64_t indices_size,
+                                    int64_t params_stride, int limit,
+                                    musaStream_t stream);
+void LaunchResourceGatherInt32Int64(const int* params, const long long* indices,
+                                    int* output, int64_t batch_size,
+                                    int64_t inner_size, int64_t indices_size,
+                                    int64_t params_stride, long long limit,
+                                    musaStream_t stream);
+void LaunchResourceGatherInt64Int32(const long long* params, const int* indices,
+                                    long long* output, int64_t batch_size,
+                                    int64_t inner_size, int64_t indices_size,
+                                    int64_t params_stride, int limit,
+                                    musaStream_t stream);
+void LaunchResourceGatherInt64Int64(const long long* params,
+                                    const long long* indices, long long* output,
+                                    int64_t batch_size, int64_t inner_size,
+                                    int64_t indices_size, int64_t params_stride,
+                                    long long limit, musaStream_t stream);
+void LaunchResourceGatherHalfInt32(const void* params, const int* indices,
+                                   void* output, int64_t batch_size,
+                                   int64_t inner_size, int64_t indices_size,
+                                   int64_t params_stride, int limit,
+                                   musaStream_t stream);
+void LaunchResourceGatherHalfInt64(const void* params, const long long* indices,
+                                   void* output, int64_t batch_size,
+                                   int64_t inner_size, int64_t indices_size,
+                                   int64_t params_stride, long long limit,
+                                   musaStream_t stream);
 }
 
 namespace tensorflow {
@@ -115,12 +136,12 @@ class MusaResourceGatherOp : public MusaOpKernel {
       for (int i = 0; i < batch_dims_; ++i) {
         batch_size *= params.dim_size(i);
       }
-      
+
       int64_t inner_size = 1;
       for (int i = batch_dims_ + 1; i < params.dims(); ++i) {
         inner_size *= params.dim_size(i);
       }
-      
+
       const int64_t indices_size = indices.NumElements();
       const int64_t params_stride = params.dim_size(batch_dims_) * inner_size;
       const Index limit = static_cast<Index>(params.dim_size(batch_dims_));
@@ -129,16 +150,9 @@ class MusaResourceGatherOp : public MusaOpKernel {
       musaStream_t stream = GetMusaStreamByCtx(c);
 
       // Launch optimized kernel
-      LaunchKernel(
-          params.flat<T>().data(),
-          indices.flat<Index>().data(),
-          out->flat<T>().data(),
-          batch_size,
-          inner_size,
-          indices_size,
-          params_stride,
-          limit,
-          stream);
+      LaunchKernel(params.flat<T>().data(), indices.flat<Index>().data(),
+                   out->flat<T>().data(), batch_size, inner_size, indices_size,
+                   params_stride, limit, stream);
     }
   }
 
@@ -146,22 +160,23 @@ class MusaResourceGatherOp : public MusaOpKernel {
   int32 batch_dims_ = 0;
 
   void LaunchKernel(const T* params, const Index* indices, T* output,
-                    int64_t batch_size, int64_t inner_size, int64_t indices_size,
-                    int64_t params_stride, Index limit, musaStream_t stream);
+                    int64_t batch_size, int64_t inner_size,
+                    int64_t indices_size, int64_t params_stride, Index limit,
+                    musaStream_t stream);
 };
 
 // ============================================================================
 // Launcher Specializations
 // ============================================================================
 
-#define DEFINE_RESOURCE_GATHER_LAUNCHER(T, IndexT, launcher_func) \
-  template <> \
-  void MusaResourceGatherOp<T, IndexT>::LaunchKernel( \
-      const T* params, const IndexT* indices, T* output, \
-      int64_t batch_size, int64_t inner_size, int64_t indices_size, \
-      int64_t params_stride, IndexT limit, musaStream_t stream) { \
-    launcher_func(params, indices, output, batch_size, inner_size, \
-                  indices_size, params_stride, limit, stream); \
+#define DEFINE_RESOURCE_GATHER_LAUNCHER(T, IndexT, launcher_func)            \
+  template <>                                                                \
+  void MusaResourceGatherOp<T, IndexT>::LaunchKernel(                        \
+      const T* params, const IndexT* indices, T* output, int64_t batch_size, \
+      int64_t inner_size, int64_t indices_size, int64_t params_stride,       \
+      IndexT limit, musaStream_t stream) {                                   \
+    launcher_func(params, indices, output, batch_size, inner_size,           \
+                  indices_size, params_stride, limit, stream);               \
   }
 
 DEFINE_RESOURCE_GATHER_LAUNCHER(float, int32, LaunchResourceGatherFloatInt32)
@@ -174,15 +189,15 @@ DEFINE_RESOURCE_GATHER_LAUNCHER(int64, int32, LaunchResourceGatherInt64Int32)
 DEFINE_RESOURCE_GATHER_LAUNCHER(int64, int64, LaunchResourceGatherInt64Int64)
 
 // Half specialization
-#define DEFINE_RESOURCE_GATHER_LAUNCHER_HALF(IndexT, launcher_func) \
-  template <> \
-  void MusaResourceGatherOp<Eigen::half, IndexT>::LaunchKernel( \
+#define DEFINE_RESOURCE_GATHER_LAUNCHER_HALF(IndexT, launcher_func)          \
+  template <>                                                                \
+  void MusaResourceGatherOp<Eigen::half, IndexT>::LaunchKernel(              \
       const Eigen::half* params, const IndexT* indices, Eigen::half* output, \
-      int64_t batch_size, int64_t inner_size, int64_t indices_size, \
-      int64_t params_stride, IndexT limit, musaStream_t stream) { \
-    launcher_func(reinterpret_cast<const void*>(params), indices, \
-                  reinterpret_cast<void*>(output), batch_size, inner_size, \
-                  indices_size, params_stride, limit, stream); \
+      int64_t batch_size, int64_t inner_size, int64_t indices_size,          \
+      int64_t params_stride, IndexT limit, musaStream_t stream) {            \
+    launcher_func(reinterpret_cast<const void*>(params), indices,            \
+                  reinterpret_cast<void*>(output), batch_size, inner_size,   \
+                  indices_size, params_stride, limit, stream);               \
   }
 
 DEFINE_RESOURCE_GATHER_LAUNCHER_HALF(int32, LaunchResourceGatherHalfInt32)
@@ -343,27 +358,6 @@ REGISTER_MUSA_KERNELS(Eigen::half);
 REGISTER_MUSA_KERNELS(double);
 REGISTER_MUSA_KERNELS(int32);
 REGISTER_MUSA_KERNELS(int64);
-
-REGISTER_KERNEL_BUILDER(Name("AssignAddVariableOp")
-                            .Device(DEVICE_MTGPU)
-                            .HostMemory("resource")
-                            .TypeConstraint<int64>("dtype"),
-                        MusaAssignUpdateVariableOp<int64, mBinary::Mode::ADD>);
-REGISTER_KERNEL_BUILDER(Name("AssignSubVariableOp")
-                            .Device(DEVICE_MTGPU)
-                            .HostMemory("resource")
-                            .TypeConstraint<int64>("dtype"),
-                        MusaAssignUpdateVariableOp<int64, mBinary::Mode::SUB>);
-REGISTER_KERNEL_BUILDER(Name("AssignAddVariableOp")
-                            .Device(DEVICE_MTGPU)
-                            .HostMemory("resource")
-                            .TypeConstraint<int32>("dtype"),
-                        MusaAssignUpdateVariableOp<int32, mBinary::Mode::ADD>);
-REGISTER_KERNEL_BUILDER(Name("AssignSubVariableOp")
-                            .Device(DEVICE_MTGPU)
-                            .HostMemory("resource")
-                            .TypeConstraint<int32>("dtype"),
-                        MusaAssignUpdateVariableOp<int32, mBinary::Mode::SUB>);
 
 REGISTER_KERNEL_BUILDER(Name("VariableShape")
                             .Device(DEVICE_MTGPU)
