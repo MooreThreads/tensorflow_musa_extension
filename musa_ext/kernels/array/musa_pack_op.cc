@@ -53,14 +53,6 @@ class MusaPackOp : public MusaOpKernel {
  public:
   explicit MusaPackOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("axis", &axis_));
-    d_inputs_ = nullptr;
-    d_inputs_capacity_ = 0;
-  }
-
-  ~MusaPackOp() override {
-    if (d_inputs_ != nullptr) {
-      musaFree(d_inputs_);
-    }
   }
 
   bool IsExpensive() override { return false; }
@@ -102,14 +94,13 @@ class MusaPackOp : public MusaOpKernel {
     for (int i = axis + 1; i < output_shape.dims(); ++i)
       after_size *= output_shape.dim_size(i);
 
-    if (d_inputs_capacity_ < num_inputs) {
-      if (d_inputs_ != nullptr) {
-        musaFree(d_inputs_);
-      }
-      musaMalloc(reinterpret_cast<void**>(&d_inputs_),
-                 num_inputs * sizeof(const void*));
-      d_inputs_capacity_ = num_inputs;
-    }
+    Tensor d_inputs_tensor;
+    const int64_t ptr_array_bytes = num_inputs * sizeof(const void*);
+    OP_REQUIRES_OK(
+        ctx, ctx->allocate_temp(
+                 DT_INT8, TensorShape({ptr_array_bytes}), &d_inputs_tensor));
+    const void** d_inputs =
+        reinterpret_cast<const void**>(d_inputs_tensor.flat<int8>().data());
 
     const void* input_ptrs[16];
     const void** ptr_array =
@@ -120,11 +111,11 @@ class MusaPackOp : public MusaOpKernel {
     }
 
     tensorflow::musa::MusaMemcpyAsyncH2D(
-        const_cast<void**>(d_inputs_), ptr_array,
+        const_cast<void**>(d_inputs), ptr_array,
         num_inputs * sizeof(const void*), stream);
 
     void* output_ptr = const_cast<char*>(output->tensor_data().data());
-    LaunchKernel(reinterpret_cast<const void**>(d_inputs_), output_ptr,
+    LaunchKernel(reinterpret_cast<const void**>(d_inputs), output_ptr,
                  num_inputs, before_size, after_size, total_elements, stream);
 
     if (num_inputs > 16) {
@@ -134,8 +125,6 @@ class MusaPackOp : public MusaOpKernel {
 
  private:
   int axis_;
-  const void** d_inputs_;
-  int d_inputs_capacity_;
 
   void LaunchKernel(const void** inputs, void* output, int num, int before,
                     int after, int total, musaStream_t stream);
@@ -191,14 +180,6 @@ class MusaUnpackOp : public MusaOpKernel {
  public:
   explicit MusaUnpackOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("axis", &axis_));
-    d_outputs_ = nullptr;
-    d_outputs_capacity_ = 0;
-  }
-
-  ~MusaUnpackOp() override {
-    if (d_outputs_ != nullptr) {
-      musaFree(d_outputs_);
-    }
   }
 
   bool IsExpensive() override { return false; }
@@ -255,29 +236,27 @@ class MusaUnpackOp : public MusaOpKernel {
     for (int i = axis + 1; i < input.dims(); ++i)
       after_size *= input.dim_size(i);
 
-    if (d_outputs_capacity_ < num_outputs) {
-      if (d_outputs_ != nullptr) {
-        musaFree(d_outputs_);
-      }
-      musaMalloc(reinterpret_cast<void**>(&d_outputs_),
-                 num_outputs * sizeof(void*));
-      d_outputs_capacity_ = num_outputs;
-    }
+    Tensor d_outputs_tensor;
+    const int64_t ptr_array_bytes = num_outputs * sizeof(void*);
+    OP_REQUIRES_OK(
+        ctx, ctx->allocate_temp(
+                 DT_INT8, TensorShape({ptr_array_bytes}), &d_outputs_tensor));
+    void** d_outputs =
+        reinterpret_cast<void**>(d_outputs_tensor.flat<int8>().data());
 
-    tensorflow::musa::MusaMemcpyAsyncH2D(d_outputs_, ptr_array,
+    tensorflow::musa::MusaMemcpyAsyncH2D(d_outputs, ptr_array,
                                          num_outputs * sizeof(void*), stream);
 
     const void* input_ptr = input.tensor_data().data();
-    LaunchKernel(input_ptr, d_outputs_, num_outputs, before_size, after_size,
+    LaunchKernel(input_ptr, d_outputs, num_outputs, before_size, after_size,
                  total_elements, stream);
 
     if (num_outputs > 16) delete[] ptr_array;
+    // d_outputs_tensor 在函数结束时自动释放
   }
 
  private:
   int axis_;
-  void** d_outputs_;
-  int d_outputs_capacity_;
 
   void LaunchKernel(const void* input, void** outputs, int num, int before,
                     int after, int total, musaStream_t stream);
