@@ -1,30 +1,9 @@
-#include <musa_runtime.h>
-
-#include "../math/musa_reduce_functor.h"
-
+#include "musa_where_kernel.mu"
+#include "tensorflow/core/kernels/gpu_prim.h"
+#include "tensorflow/core/util/gpu_kernel_helper.h"
 
 namespace tensorflow {
 namespace musa {
-
-template <typename DstT>
-void LaunchBoolCast(const bool* src, DstT* dst, int n, musaStream_t stream);
-
-template <int NDIM, typename TIndex>
-__global__ void PropagateWhereIndicesKernel(
-    const TIndex output_rows, const typename Eigen::array<TIndex, NDIM> strides,
-    int64* __restrict__ output) {
-  // TODO(ebrevdo): Use a multi-dimensional loop, increasing the
-  // dimensions of individual indices manually, instead of relying on
-  // a scalar loop variable and using integer division.
-  GPU_1D_KERNEL_LOOP(i, output_rows) {
-    TIndex index_value = ldg(output + NDIM * i);
-#pragma unroll
-    for (int c = 0; c < NDIM; ++c) {
-      *(output + NDIM * i + c) = index_value / strides[c];
-      index_value %= strides[c];
-    }
-  }
-}
 
 template <typename T, typename TIndex>
 struct CubDeviceReduceCount {
@@ -56,73 +35,26 @@ struct NumTrue {
                         typename TTypes<T>::ConstFlat input,
                         typename TTypes<TIndex>::UnalignedScalar num_true) {
     musaStream_t mstream = GetMusaStreamByCtx(ctx);
+    const T* input_data = input.data();
     TIndex* num_true_data = num_true.data();
 
     if (input.size() == 0) {
       *num_true_data = static_cast<TIndex>(0);
-      return OkStatus();
-    }
-
-    if constexpr (std::is_same<T, bool>::value) {
-      Tensor input_i32_t;
-      TF_RETURN_IF_ERROR(ctx->allocate_temp(
-          DT_INT32, TensorShape({static_cast<int64_t>(input.size())}),
-          &input_i32_t));
-
-      LaunchBoolCast<int32_t>(input.data(), input_i32_t.flat<int32>().data(),
-                              static_cast<int>(input.size()), mstream);
-      auto cast_launch_status = musaGetLastError();
-      if (cast_launch_status != musaSuccess) {
-        return errors::Internal("WhereOp NumTrue bool cast launch failed: ",
-                                musaGetErrorString(cast_launch_status));
-      }
-
-      Tensor output_i32_t;
-      TF_RETURN_IF_ERROR(ctx->allocate_temp(DT_INT32, TensorShape({}),
-                                            &output_i32_t));
-
-      mTensor input_mt = CreateMTensor(input_i32_t);
-      mTensor output_mt = CreateMTensor(output_i32_t);
-      int reduce_dims[] = {0};
-      TF_RETURN_IF_ERROR(ReduceFunctor::Compute<int32_t>(
-          ctx, &output_mt, &input_mt, ::musa::dnn::Reduce::Mode::ADD,
-          reduce_dims, 1,
-          "WhereOp NumTrue ReduceFunctor(bool->int32 sum) failed. Status: "));
-
-      int32 h_num_true = 0;
-      auto memcpy_status = musaMemcpyAsync(&h_num_true,
-                                           output_i32_t.scalar<int32>().data(),
-                                           sizeof(int32), musaMemcpyDeviceToHost,
-                                           mstream);
-      if (memcpy_status != musaSuccess) {
-        return errors::Internal(
-            "WhereOp NumTrue memcpy(bool reduce result) failed: ",
-            musaGetErrorString(memcpy_status));
-      }
-      auto sync_status = musaStreamSynchronize(mstream);
-      if (sync_status != musaSuccess) {
-        return errors::Internal("WhereOp NumTrue stream sync failed: ",
-                                musaGetErrorString(sync_status));
-      }
-      *num_true_data = static_cast<TIndex>(h_num_true);
-      return OkStatus();
+      return Status::OK();
     }
 
     std::size_t temp_storage_bytes = 0;
-    Tensor num_true_device_t;
-    TF_RETURN_IF_ERROR(ctx->allocate_temp(DataTypeToEnum<TIndex>::v(),
-                                          TensorShape({}), &num_true_device_t));
-    TIndex* num_true_device_data = num_true_device_t.scalar<TIndex>().data();
+    auto reducer = CubDeviceReduceCount<T, TIndex>();
+    auto first_success = reducer(/*temp_storage*/ nullptr, temp_storage_bytes,
+                                 /*d_in*/ input_data,
+                                 /*d_out*/ num_true_data,
+                                 /*num_items*/ input.size(),
+                                 /*stream*/ mstream);
 
-    CubDeviceReduceCount<T, TIndex> counter;
-    auto first_success =
-        counter(nullptr, temp_storage_bytes, input.data(), num_true_device_data,
-                static_cast<int>(input.size()), mstream);
     if (first_success != gpuSuccess) {
       return errors::Internal(
-          "WhereOp NumTrue: Could not launch gpuprim::DeviceReduce::Sum to "
-          "calculate temp_storage_bytes, status: ",
-          GpuGetErrorString(first_success));
+          "WhereOp: Could not launch gpuprim::DeviceReduce::Sum to calculate "
+          "temp_storage_bytes.");
     }
 
     Tensor temp_storage;
@@ -130,30 +62,21 @@ struct NumTrue {
         DT_INT8, TensorShape({static_cast<int64_t>(temp_storage_bytes)}),
         &temp_storage));
 
-    auto second_success =
-        counter(temp_storage.flat<int8>().data(), temp_storage_bytes,
-                input.data(), num_true_device_data,
-                static_cast<int>(input.size()), mstream);
+    auto second_success = reducer(
+        /*temp_storage*/ temp_storage.flat<int8>().data(), temp_storage_bytes,
+        /*d_in*/ input_data,
+        /*d_out*/ num_true_data,
+        /*num_items*/ input.size(),
+        /*stream*/ mstream);
+
     if (second_success != gpuSuccess) {
       return errors::Internal(
-          "WhereOp NumTrue: Could not launch gpuprim::DeviceReduce::Sum to "
-          "count nonzero, status: ",
-          GpuGetErrorString(second_success));
+          "WhereOp: Could not launch gpuprim::DeviceReduce::Sum to count "
+          "number of true / nonzero indices.  temp_storage_bytes: ",
+          temp_storage_bytes, ".");
     }
 
-    auto memcpy_status = musaMemcpyAsync(num_true_data, num_true_device_data,
-                                         sizeof(TIndex), musaMemcpyDeviceToHost,
-                                         mstream);
-    if (memcpy_status != musaSuccess) {
-      return errors::Internal("WhereOp NumTrue memcpy failed: ",
-                              musaGetErrorString(memcpy_status));
-    }
-    auto sync_status = musaStreamSynchronize(mstream);
-    if (sync_status != musaSuccess) {
-      return errors::Internal("WhereOp NumTrue stream sync failed: ",
-                              musaGetErrorString(sync_status));
-    }
-    return OkStatus();
+    return Status::OK();
   }
 };
 
@@ -241,7 +164,7 @@ struct Where {
                         TIndex* found_true_host) {
     if (output.dimension(0) == 0) {
       // Nothing to do.
-      return OkStatus();
+      return Status::OK();
     }
 
     musaStream_t stream = GetMusaStreamByCtx(ctx);
@@ -302,14 +225,32 @@ struct Where {
     const Eigen::array<TIndex, NDIM> strides =
         CalculateStrides<TIndex, T, NDIM>(input);
     const TIndex output_rows = output.dimension(0);
-    GpuLaunchConfig config = GetGpuLaunchConfig(output_rows, d);
-    TF_CHECK_OK(GpuLaunchKernel(PropagateWhereIndicesKernel<NDIM, TIndex>,
-                                config.block_count, config.thread_per_block, 0,
-                                stream, output_rows, strides, output.data()));
 
-    return OkStatus();
+    auto propagate_status = LaunchPropagateWhereIndicesKernel(
+        output_rows, strides, output.data(), stream);
+    if (!propagate_status.ok()) {
+      return errors::Internal(
+          "WhereOp: Failed to launch PropagateWhereIndicesKernel, status: ",
+          propagate_status.ToString());
+    }
+    return Status::OK();
   }
-};
+
+  Status LaunchPropagateWhereIndicesKernel(
+      int64 output_rows, const Eigen::array<int64, 4>& strides, int64* output,
+      musaStream_t stream) {
+    const int block_size = 256;
+    const int grid_size = (output_rows + block_size - 1) / block_size;
+    PropagateWhereIndicesKernel<4, int64>
+        <<<grid_size, block_size, 0, stream>>>(output_rows, strides, output);
+    auto launch_status = musaGetLastError();
+    if (launch_status != musaSuccess) {
+      return errors::Internal(
+          "WhereOp: Could not launch PropagateWhereIndicesKernel, status: ",
+          musaGetErrorString(launch_status));
+    }
+    return Status::OK();
+  };
 
 }  // namespace musa
 }  // namespace tensorflow

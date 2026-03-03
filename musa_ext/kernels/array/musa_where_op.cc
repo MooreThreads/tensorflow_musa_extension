@@ -16,6 +16,7 @@ class MusaWhereOp : public MusaOpKernel {
     ScratchShape<Tindex> num_true(context, 1,
                                   /*on_host=*/true);  // pinned memory
     typename TTypes<Tindex>::Unaligned num_true_t(num_true.mutable_data());
+    const int input_dims = input.dims();
 
     Status s = NumTrue::Compute(context, input.flat<T>(), num_true_t);
     OP_REQUIRES_OK(context, s.status());
@@ -47,7 +48,8 @@ class MusaWhereOp : public MusaOpKernel {
         ->event_mgr->ThenExecute(stream, create_and_check_output);
   }
 
-  bool IsExpensive() override { return false; }
+  // where op contains customied kernel
+  bool IsExpensive() override { return true; }
 };
 
 }  // namespace musa
