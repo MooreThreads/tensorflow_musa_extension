@@ -1,10 +1,11 @@
+#include "../utils_op.h"
+#include "musa_fill_functor.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/core/status.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -22,31 +23,31 @@ struct is_any<T, First, Rest...>
     : std::integral_constant<bool, std::is_same<T, First>::value ||
                                        is_any<T, Rest...>::value> {};
 
-template <typename T>
-Status MusaFillCall(Tensor* out, T value, OpKernelContext* context) {
-  mFill op;
-  mHandle& h = GetHandleByCtx(context);
-  auto out_mt = CreateMTensor(*out);
+// template <typename T>
+// Status MusaFillCall(Tensor* out, T value, OpKernelContext* context) {
+//   mFill op;
+//   mHandle& h = GetHandleByCtx(context);
+//   auto out_mt = CreateMTensor(*out);
 
-  if (is_any<T, int8, int16, int, int64, uint8, uint16, uint32, uint64,
-             bool>::value) {
-    if (mStatus::SUCCESS != op.SetValue(static_cast<int64_t>(value))) {
-      return errors::Internal("mtdnn set value (int) error!");
-    }
-  } else if (is_any<T, float, double, Eigen::half, Eigen::bfloat16>::value) {
-    if (mStatus::SUCCESS != op.SetValue(static_cast<double>(value))) {
-      return errors::Internal("mtdnn set value (float) error!");
-    }
-  } else {
-    return errors::Unimplemented("Data type not supported in MTGPU Fill.");
-  }
+//   if (is_any<T, int8, int16, int, int64, uint8, uint16, uint32, uint64,
+//              bool>::value) {
+//     if (mStatus::SUCCESS != op.SetValue(static_cast<int64_t>(value))) {
+//       return errors::Internal("mtdnn set value (int) error!");
+//     }
+//   } else if (is_any<T, float, double, Eigen::half, Eigen::bfloat16>::value) {
+//     if (mStatus::SUCCESS != op.SetValue(static_cast<double>(value))) {
+//       return errors::Internal("mtdnn set value (float) error!");
+//     }
+//   } else {
+//     return errors::Unimplemented("Data type not supported in MTGPU Fill.");
+//   }
 
-  if (mStatus::SUCCESS != op.Run(h, out_mt)) {
-    return errors::Internal("mtdnn run op error!");
-  }
+//   if (mStatus::SUCCESS != op.Run(h, out_mt)) {
+//     return errors::Internal("mtdnn run op error!");
+//   }
 
-  return Status::OK();
-}
+//   return Status::OK();
+// }
 
 }  // namespace
 
@@ -88,8 +89,10 @@ class MusaFillOp : public MusaOpKernel {
 
     if (shape.num_elements() == 0) return;
 
+    auto out_mt = CreateMTensor(*out);
     OP_REQUIRES_OK(
-        context, MusaFillCall(out, static_cast<T*>(Tvalue.data())[0], context));
+        context,
+        MusaFillCall(&out_mt, static_cast<T*>(Tvalue.data())[0], context));
   }
 };
 
