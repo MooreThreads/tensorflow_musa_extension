@@ -4,7 +4,7 @@
 #include <functional>
 #include <memory>
 
-#include "../array/musa_cast_functor.h"
+#include "../math/musa_cast_functor.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/core/status.h"

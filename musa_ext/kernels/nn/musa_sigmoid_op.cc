@@ -1,8 +1,8 @@
+#include "../utils_op.h"
 #include "tensorflow/core/framework/common_shape_fns.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/shape_inference.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -63,14 +63,17 @@ class MusaSigmoidGradOp : public MusaOpKernel {
                       "Sigmoid_BW Native Run", ctx);
   }
 };
+#define REGISTER_MUSA_SIGMOID(type)                                  \
+  REGISTER_KERNEL_BUILDER(                                           \
+      Name("Sigmoid").Device("MUSA").TypeConstraint<type>("T"),      \
+      MusaSigmoidOp<type>);                                          \
+  REGISTER_KERNEL_BUILDER(                                           \
+      Name("SigmoidGrad").Device("MUSA").TypeConstraint<type>("T"), \
+      MusaSigmoidGradOp<type>);
 
-REGISTER_KERNEL_BUILDER(
-    Name("Sigmoid").Device("MUSA").TypeConstraint<float>("T"),
-    MusaSigmoidOp<float>);
-
-REGISTER_KERNEL_BUILDER(
-    Name("SigmoidGrad").Device("MUSA").TypeConstraint<float>("T"),
-    MusaSigmoidGradOp<float>);
+REGISTER_MUSA_SIGMOID(float);
+REGISTER_MUSA_SIGMOID(Eigen::half);
+REGISTER_MUSA_SIGMOID(bfloat16);  
 
 }  // namespace musa
 }  // namespace tensorflow
