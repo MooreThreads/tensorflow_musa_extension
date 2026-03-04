@@ -162,15 +162,15 @@ extern "C" {
   }
 
 DEFINE_GATHER_V2_LAUNCHER(float, int, LaunchGatherV2FloatInt32)
-DEFINE_GATHER_V2_LAUNCHER(float, long long, LaunchGatherV2FloatInt64)
+DEFINE_GATHER_V2_LAUNCHER(float, int64_t, LaunchGatherV2FloatInt64)
 DEFINE_GATHER_V2_LAUNCHER(double, int, LaunchGatherV2DoubleInt32)
-DEFINE_GATHER_V2_LAUNCHER(double, long long, LaunchGatherV2DoubleInt64)
+DEFINE_GATHER_V2_LAUNCHER(double, int64_t, LaunchGatherV2DoubleInt64)
 DEFINE_GATHER_V2_LAUNCHER(int, int, LaunchGatherV2Int32Int32)
-DEFINE_GATHER_V2_LAUNCHER(int, long long, LaunchGatherV2Int32Int64)
-DEFINE_GATHER_V2_LAUNCHER(long long, int, LaunchGatherV2Int64Int32)
-DEFINE_GATHER_V2_LAUNCHER(long long, long long, LaunchGatherV2Int64Int64)
+DEFINE_GATHER_V2_LAUNCHER(int, int64_t, LaunchGatherV2Int32Int64)
+DEFINE_GATHER_V2_LAUNCHER(int64_t, int, LaunchGatherV2Int64Int32)
+DEFINE_GATHER_V2_LAUNCHER(int64_t, int64_t, LaunchGatherV2Int64Int64)
 DEFINE_GATHER_V2_LAUNCHER(bool, int, LaunchGatherV2BoolInt32)
-DEFINE_GATHER_V2_LAUNCHER(bool, long long, LaunchGatherV2BoolInt64)
+DEFINE_GATHER_V2_LAUNCHER(bool, int64_t, LaunchGatherV2BoolInt64)
 
 // Half (Eigen::half maps to half) - use scalar kernel for correctness
 void LaunchGatherV2HalfInt32(const void* params, const int* indices, void* output,
@@ -186,14 +186,14 @@ void LaunchGatherV2HalfInt32(const void* params, const int* indices, void* outpu
       indices_size, params_stride, limit);
 }
 
-void LaunchGatherV2HalfInt64(const void* params, const long long* indices, void* output,
+void LaunchGatherV2HalfInt64(const void* params, const int64_t* indices, void* output,
                              int64_t batch_size, int64_t axis_size, int64_t inner_size,
-                             int64_t indices_size, int64_t params_stride, long long limit,
+                             int64_t indices_size, int64_t params_stride, int64_t limit,
                              musaStream_t stream) {
   const int64_t total_elements = batch_size * indices_size * inner_size;
   if (total_elements == 0) return;
   const int blocks = OPTIMAL_BLOCKS(total_elements);
-  GatherV2Kernel<half, long long><<<blocks, OPTIMAL_THREADS, 0, stream>>>(
+  GatherV2Kernel<half, int64_t><<<blocks, OPTIMAL_THREADS, 0, stream>>>(
       reinterpret_cast<const half*>(params), indices,
       reinterpret_cast<half*>(output), batch_size, axis_size, inner_size,
       indices_size, params_stride, limit);
@@ -213,14 +213,14 @@ void LaunchGatherV2BFloat16Int32(const void* params, const int* indices, void* o
       indices_size, params_stride, limit);
 }
 
-void LaunchGatherV2BFloat16Int64(const void* params, const long long* indices, void* output,
+void LaunchGatherV2BFloat16Int64(const void* params, const int64_t* indices, void* output,
                                  int64_t batch_size, int64_t axis_size, int64_t inner_size,
-                                 int64_t indices_size, int64_t params_stride, long long limit,
+                                 int64_t indices_size, int64_t params_stride, int64_t limit,
                                  musaStream_t stream) {
   const int64_t total_elements = batch_size * indices_size * inner_size;
   if (total_elements == 0) return;
   const int blocks = OPTIMAL_BLOCKS(total_elements);
-  GatherV2Kernel<__mt_bfloat16, long long><<<blocks, OPTIMAL_THREADS, 0, stream>>>(
+  GatherV2Kernel<__mt_bfloat16, int64_t><<<blocks, OPTIMAL_THREADS, 0, stream>>>(
       reinterpret_cast<const __mt_bfloat16*>(params), indices,
       reinterpret_cast<__mt_bfloat16*>(output), batch_size, axis_size, inner_size,
       indices_size, params_stride, limit);
@@ -244,15 +244,15 @@ void LaunchGatherV2BFloat16Int64(const void* params, const long long* indices, v
   }
 
 DEFINE_GATHER_ND_LAUNCHER(float, int, LaunchGatherNDFloatInt32)
-DEFINE_GATHER_ND_LAUNCHER(float, long long, LaunchGatherNDFloatInt64)
+DEFINE_GATHER_ND_LAUNCHER(float, int64_t, LaunchGatherNDFloatInt64)
 DEFINE_GATHER_ND_LAUNCHER(double, int, LaunchGatherNDDoubleInt32)
-DEFINE_GATHER_ND_LAUNCHER(double, long long, LaunchGatherNDDoubleInt64)
+DEFINE_GATHER_ND_LAUNCHER(double, int64_t, LaunchGatherNDDoubleInt64)
 DEFINE_GATHER_ND_LAUNCHER(int, int, LaunchGatherNDInt32Int32)
-DEFINE_GATHER_ND_LAUNCHER(int, long long, LaunchGatherNDInt32Int64)
-DEFINE_GATHER_ND_LAUNCHER(long long, int, LaunchGatherNDInt64Int32)
-DEFINE_GATHER_ND_LAUNCHER(long long, long long, LaunchGatherNDInt64Int64)
+DEFINE_GATHER_ND_LAUNCHER(int, int64_t, LaunchGatherNDInt32Int64)
+DEFINE_GATHER_ND_LAUNCHER(int64_t, int, LaunchGatherNDInt64Int32)
+DEFINE_GATHER_ND_LAUNCHER(int64_t, int64_t, LaunchGatherNDInt64Int64)
 DEFINE_GATHER_ND_LAUNCHER(bool, int, LaunchGatherNDBoolInt32)
-DEFINE_GATHER_ND_LAUNCHER(bool, long long, LaunchGatherNDBoolInt64)
+DEFINE_GATHER_ND_LAUNCHER(bool, int64_t, LaunchGatherNDBoolInt64)
 
 // Half
 void LaunchGatherNDHalfInt32(const void* params, const int* indices, void* output,
@@ -266,13 +266,13 @@ void LaunchGatherNDHalfInt32(const void* params, const int* indices, void* outpu
       reinterpret_cast<half*>(output), index_depth, indices_nd_size, slice_size, params_strides);
 }
 
-void LaunchGatherNDHalfInt64(const void* params, const long long* indices, void* output,
+void LaunchGatherNDHalfInt64(const void* params, const int64_t* indices, void* output,
                              int index_depth, int64_t indices_nd_size, int64_t slice_size,
                              const int64_t* params_strides, musaStream_t stream) {
   const int64_t total_elements = indices_nd_size * slice_size;
   if (total_elements == 0) return;
   const int blocks = OPTIMAL_BLOCKS(total_elements);
-  GatherNDKernel<half, long long><<<blocks, OPTIMAL_THREADS, 0, stream>>>(
+  GatherNDKernel<half, int64_t><<<blocks, OPTIMAL_THREADS, 0, stream>>>(
       reinterpret_cast<const half*>(params), indices,
       reinterpret_cast<half*>(output), index_depth, indices_nd_size, slice_size, params_strides);
 }
@@ -289,13 +289,13 @@ void LaunchGatherNDBFloat16Int32(const void* params, const int* indices, void* o
       reinterpret_cast<__mt_bfloat16*>(output), index_depth, indices_nd_size, slice_size, params_strides);
 }
 
-void LaunchGatherNDBFloat16Int64(const void* params, const long long* indices, void* output,
+void LaunchGatherNDBFloat16Int64(const void* params, const int64_t* indices, void* output,
                                  int index_depth, int64_t indices_nd_size, int64_t slice_size,
                                  const int64_t* params_strides, musaStream_t stream) {
   const int64_t total_elements = indices_nd_size * slice_size;
   if (total_elements == 0) return;
   const int blocks = OPTIMAL_BLOCKS(total_elements);
-  GatherNDKernel<__mt_bfloat16, long long><<<blocks, OPTIMAL_THREADS, 0, stream>>>(
+  GatherNDKernel<__mt_bfloat16, int64_t><<<blocks, OPTIMAL_THREADS, 0, stream>>>(
       reinterpret_cast<const __mt_bfloat16*>(params), indices,
       reinterpret_cast<__mt_bfloat16*>(output), index_depth, indices_nd_size, slice_size, params_strides);
 }
@@ -319,13 +319,13 @@ void LaunchGatherNDBFloat16Int64(const void* params, const long long* indices, v
   }
 
 DEFINE_RESOURCE_GATHER_LAUNCHER(float, int, LaunchResourceGatherFloatInt32)
-DEFINE_RESOURCE_GATHER_LAUNCHER(float, long long, LaunchResourceGatherFloatInt64)
+DEFINE_RESOURCE_GATHER_LAUNCHER(float, int64_t, LaunchResourceGatherFloatInt64)
 DEFINE_RESOURCE_GATHER_LAUNCHER(double, int, LaunchResourceGatherDoubleInt32)
-DEFINE_RESOURCE_GATHER_LAUNCHER(double, long long, LaunchResourceGatherDoubleInt64)
+DEFINE_RESOURCE_GATHER_LAUNCHER(double, int64_t, LaunchResourceGatherDoubleInt64)
 DEFINE_RESOURCE_GATHER_LAUNCHER(int, int, LaunchResourceGatherInt32Int32)
-DEFINE_RESOURCE_GATHER_LAUNCHER(int, long long, LaunchResourceGatherInt32Int64)
-DEFINE_RESOURCE_GATHER_LAUNCHER(long long, int, LaunchResourceGatherInt64Int32)
-DEFINE_RESOURCE_GATHER_LAUNCHER(long long, long long, LaunchResourceGatherInt64Int64)
+DEFINE_RESOURCE_GATHER_LAUNCHER(int, int64_t, LaunchResourceGatherInt32Int64)
+DEFINE_RESOURCE_GATHER_LAUNCHER(int64_t, int, LaunchResourceGatherInt64Int32)
+DEFINE_RESOURCE_GATHER_LAUNCHER(int64_t, int64_t, LaunchResourceGatherInt64Int64)
 
 // Half
 void LaunchResourceGatherHalfInt32(const void* params, const int* indices, void* output,
@@ -340,13 +340,13 @@ void LaunchResourceGatherHalfInt32(const void* params, const int* indices, void*
       params_stride, limit);
 }
 
-void LaunchResourceGatherHalfInt64(const void* params, const long long* indices, void* output,
+void LaunchResourceGatherHalfInt64(const void* params, const int64_t* indices, void* output,
                                    int64_t batch_size, int64_t inner_size, int64_t indices_size,
-                                   int64_t params_stride, long long limit, musaStream_t stream) {
+                                   int64_t params_stride, int64_t limit, musaStream_t stream) {
   const int64_t total_elements = batch_size * indices_size * inner_size;
   if (total_elements == 0) return;
   const int blocks = OPTIMAL_BLOCKS(total_elements);
-  ResourceGatherKernel<half, long long><<<blocks, OPTIMAL_THREADS, 0, stream>>>(
+  ResourceGatherKernel<half, int64_t><<<blocks, OPTIMAL_THREADS, 0, stream>>>(
       reinterpret_cast<const half*>(params), indices,
       reinterpret_cast<half*>(output), batch_size, inner_size, indices_size,
       params_stride, limit);

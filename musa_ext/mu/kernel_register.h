@@ -4,6 +4,7 @@
 #include "../kernels/utils_op.h"
 #include "./device_register.h"
 #include "tensorflow/core/framework/op_kernel.h"
+
 #ifdef MUSA_PROFILE
 static std::mutex op_lock_;
 #define MUSA_PROFILE_OP                                              \
@@ -27,6 +28,7 @@ static std::mutex op_lock_;
 #else
 #define MUSA_PROFILE_OP
 #endif
+
 namespace tensorflow {
 namespace musa {
 

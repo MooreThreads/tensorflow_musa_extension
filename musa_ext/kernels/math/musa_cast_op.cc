@@ -69,24 +69,61 @@ class MusaCastOp : public MusaOpKernel {
                               .TypeConstraint<DstT>("DstT"), \
                           MusaCastOp);
 
-REGISTER_CAST_MUSA(float, int32);
-REGISTER_CAST_MUSA(int32, float);
-REGISTER_CAST_MUSA(float, int64);
-REGISTER_CAST_MUSA(int64, float);
-REGISTER_CAST_MUSA(int32, int64);
-REGISTER_CAST_MUSA(int64, int32);
-REGISTER_CAST_MUSA(float, Eigen::half);
-REGISTER_CAST_MUSA(Eigen::half, float);
-REGISTER_CAST_MUSA(float, bfloat16);
-REGISTER_CAST_MUSA(bfloat16, float);
-
-REGISTER_CAST_MUSA(bool, float);
+REGISTER_CAST_MUSA(bool, bool);
 REGISTER_CAST_MUSA(bool, int32);
-REGISTER_CAST_MUSA(int32, bool);
+REGISTER_CAST_MUSA(bool, int64);
+REGISTER_CAST_MUSA(bool, Eigen::half);
+REGISTER_CAST_MUSA(bool, bfloat16);
+REGISTER_CAST_MUSA(bool, float);
+REGISTER_CAST_MUSA(bool, double);
 
-REGISTER_CAST_MUSA(float, float);
+REGISTER_CAST_MUSA(int32, bool);
 REGISTER_CAST_MUSA(int32, int32);
+REGISTER_CAST_MUSA(int32, int64);
+REGISTER_CAST_MUSA(int32, Eigen::half);
+REGISTER_CAST_MUSA(int32, bfloat16);
+REGISTER_CAST_MUSA(int32, float);
+REGISTER_CAST_MUSA(int32, double);
+
+REGISTER_CAST_MUSA(int64, bool);
+REGISTER_CAST_MUSA(int64, int32);
 REGISTER_CAST_MUSA(int64, int64);
+REGISTER_CAST_MUSA(int64, Eigen::half);
+REGISTER_CAST_MUSA(int64, bfloat16);
+REGISTER_CAST_MUSA(int64, float);
+REGISTER_CAST_MUSA(int64, double);
+
+REGISTER_CAST_MUSA(Eigen::half, bool);
+REGISTER_CAST_MUSA(Eigen::half, int32);
+REGISTER_CAST_MUSA(Eigen::half, int64);
+REGISTER_CAST_MUSA(Eigen::half, Eigen::half);
+REGISTER_CAST_MUSA(Eigen::half, bfloat16);
+REGISTER_CAST_MUSA(Eigen::half, float);
+REGISTER_CAST_MUSA(Eigen::half, double);
+
+REGISTER_CAST_MUSA(bfloat16, bool);
+REGISTER_CAST_MUSA(bfloat16, int32);
+REGISTER_CAST_MUSA(bfloat16, int64);
+REGISTER_CAST_MUSA(bfloat16, Eigen::half);
+REGISTER_CAST_MUSA(bfloat16, bfloat16);
+REGISTER_CAST_MUSA(bfloat16, float);
+REGISTER_CAST_MUSA(bfloat16, double);
+
+REGISTER_CAST_MUSA(float, bool);
+REGISTER_CAST_MUSA(float, int32);
+REGISTER_CAST_MUSA(float, int64);
+REGISTER_CAST_MUSA(float, Eigen::half);
+REGISTER_CAST_MUSA(float, bfloat16);
+REGISTER_CAST_MUSA(float, float);
+REGISTER_CAST_MUSA(float, double);
+
+REGISTER_CAST_MUSA(double, bool);
+REGISTER_CAST_MUSA(double, int32);
+REGISTER_CAST_MUSA(double, int64);
+REGISTER_CAST_MUSA(double, Eigen::half);
+REGISTER_CAST_MUSA(double, bfloat16);
+REGISTER_CAST_MUSA(double, float);
+REGISTER_CAST_MUSA(double, double);
 
 }  // namespace musa
 }  // namespace tensorflow

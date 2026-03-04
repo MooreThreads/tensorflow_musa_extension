@@ -8,7 +8,7 @@
 #include "tensorflow/core/framework/resource_var.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.h"
-#include "utils_op.h"
+#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {

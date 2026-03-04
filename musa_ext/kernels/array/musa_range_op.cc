@@ -21,7 +21,7 @@ void LaunchRangeKernelDouble(double* output, double start, double delta,
                              int size, musaStream_t stream);
 void LaunchRangeKernelInt32(int* output, int start, int delta, int size,
                             musaStream_t stream);
-void LaunchRangeKernelInt64(long long* output, long long start, long long delta,
+void LaunchRangeKernelInt64(int64_t* output, int64_t start, int64_t delta,
                             int size, musaStream_t stream);
 }
 

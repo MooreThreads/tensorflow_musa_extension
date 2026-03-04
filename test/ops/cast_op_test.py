@@ -60,6 +60,5 @@ class CastOpTest(MUSATestCase):
     """Test Int32 -> Int64 (Safe upcasting)."""
     self._test_cast(tf.int32, tf.int64)
 
-
 if __name__ == "__main__":
   tf.test.main()

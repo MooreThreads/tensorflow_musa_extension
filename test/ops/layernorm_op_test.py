@@ -33,11 +33,11 @@ class LayerNormOpTest(MUSATestCase):
         # Common plugin locations to try
         candidate_paths = [
             # Relative to test directory (most common case)
-            os.path.join(current_dir, "..", "build", "libmusa_plugin.so"),
+            os.path.join(current_dir, "..", "..", "build", "libmusa_plugin.so"),
             # Relative to project root (when running from project root)
-            os.path.join(os.path.dirname(current_dir), "build", "libmusa_plugin.so"),
+            os.path.join(os.path.dirname(current_dir), "..", "build", "libmusa_plugin.so"),
             # Current working directory build
-            os.path.join(os.getcwd(), "build", "libmusa_plugin.so"),
+            os.path.join(os.getcwd(), "..", "build", "libmusa_plugin.so"),
         ]
 
         for path in candidate_paths:
