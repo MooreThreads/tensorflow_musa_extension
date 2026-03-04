@@ -1,10 +1,50 @@
 #include <musa_runtime.h>
+#include <musa_fp16.h>
+#include <musa_bf16.h>
 #include <stdint.h>
 
 #include "tensorflow/core/framework/register_types.h"
 
 namespace tensorflow {
 namespace musa {
+
+// -------- Select indices of true values kernel --------
+template <typename T, typename TIndex>
+__global__ void MusaSelectFlaggedKernel(const T* __restrict__ d_flags,
+                                        TIndex* d_selected_indices,
+                                        TIndex* d_num_selected_out,
+                                        int num_items) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < num_items && static_cast<bool>(d_flags[idx])) {
+    unsigned long long pos = atomicAdd(
+        reinterpret_cast<unsigned long long*>(d_num_selected_out), 1ULL);
+    d_selected_indices[static_cast<int>(pos)] = static_cast<TIndex>(idx);
+  }
+}
+
+template <typename T, typename TIndex>
+musaError_t LaunchMusaSelectFlaggedKernel(const T* input,
+                                          TIndex* selected_indices,
+                                          TIndex* num_selected_out,
+                                          int num_items,
+                                          musaStream_t stream) {
+  const int threads = 256;
+  const int blocks = static_cast<int>((num_items + threads - 1) / threads);
+  MusaSelectFlaggedKernel<T, TIndex>
+      <<<blocks, threads, 0, stream>>>(input, selected_indices,
+                                       num_selected_out, num_items);
+  return musaGetLastError();
+}
+
+#define INSTANTIATE_SELECT_FLAGGED(T, TINDEX)                                   \
+  template musaError_t LaunchMusaSelectFlaggedKernel<T, TINDEX>(                 \
+      const T* input, TINDEX* selected_indices, TINDEX* num_selected_out, int,    \
+      musaStream_t stream)
+  
+INSTANTIATE_SELECT_FLAGGED(bool, int32);
+INSTANTIATE_SELECT_FLAGGED(bool, int64);
+
+// -------- Propagate selected indices into NDIM output kernel --------
 
 template <int NDIM, typename TIndex>
 struct StridesPack {
@@ -48,13 +88,13 @@ musaError_t LaunchPropagateWhereIndicesKernel(const TIndex output_rows,
       static_cast<int>((output_rows + block_size - 1) / block_size);
   PropagateWhereIndicesKernel<NDIM, TIndex>
       <<<grid_size, block_size, 0, stream>>>(output_rows, pack,
-                         selected_indices, output);
+                                             selected_indices, output);
   return musaGetLastError();
 }
 
-#define INSTANTIATE_PROPAGATE(NDIM, TINDEX)                                  \
-  template musaError_t LaunchPropagateWhereIndicesKernel<NDIM, TINDEX>(      \
-      const TINDEX output_rows, const TINDEX* strides_host,                   \
+#define INSTANTIATE_PROPAGATE(NDIM, TINDEX)                             \
+  template musaError_t LaunchPropagateWhereIndicesKernel<NDIM, TINDEX>( \
+      const TINDEX output_rows, const TINDEX* strides_host,             \
       const TINDEX* selected_indices, int64_t* output, musaStream_t stream)
 
 INSTANTIATE_PROPAGATE(1, int32);

@@ -1,45 +1,26 @@
 #ifndef TENSORFLOW_MUSA_KERNELS_ARRAY_MUSA_WHERE_OP_H_
 #define TENSORFLOW_MUSA_KERNELS_ARRAY_MUSA_WHERE_OP_H_
 
+#include <musa_runtime.h>
+
 #include <array>
 #include <cstdint>
 #include <type_traits>
 
+#include "../math/musa_reduce_functor.h"
 #include "../utils_op.h"
+#include "mu/device/musa_memcpy.h"
+#include "musa_where_kernel.mu"
 #include "tensorflow/core/kernels/gpu_prim.h"
 #include "tensorflow/core/util/gpu_kernel_helper.h"
 
 namespace tensorflow {
 namespace musa {
 
-template <int NDIM, typename TIndex>
-musaError_t LaunchPropagateWhereIndicesKernel(
-    const TIndex output_rows, const TIndex* strides_host,
-    const TIndex* selected_indices, int64_t* output, musaStream_t stream);
-
-template <typename T, typename TIndex>
-struct CubDeviceReduceCount {
-  musaError_t operator()(void* d_temp_storage, size_t& temp_storage_bytes,
-                        const T* d_in, TIndex* d_out, int num_items,
-                        gpuStream_t stream = 0) {
-    IsNonzero<T> is_nonzero;
-    gpuprim::TransformInputIterator<bool, IsNonzero<T>, const T*>
-        is_nonzero_iter(d_in, is_nonzero);
-    return gpuprim::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes,
-                                      is_nonzero_iter, d_out, num_items,
-                                      stream);
-  }
-};
-
-template <typename TIndex>
-struct CubDeviceReduceCount<bool, TIndex> {
-  musaError_t operator()(void* d_temp_storage, size_t& temp_storage_bytes,
-                        const bool* d_in, TIndex* d_out, int num_items,
-                        gpuStream_t stream = 0) {
-    return gpuprim::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_in,
-                                      d_out, num_items, stream);
-  }
-};
+// Count Non Zero within the input tensor
+template <typename T>
+void LaunchIsNonZeroCount(const T* input, int* output, int n,
+                          musaStream_t stream);
 
 template <typename T, typename TIndex>
 struct NumTrue {
@@ -55,81 +36,58 @@ struct NumTrue {
       return Status::OK();
     }
 
-    std::size_t temp_storage_bytes = 0;
-    auto reducer = CubDeviceReduceCount<T, TIndex>();
-    void* temp_storage_ptr = nullptr;
-    auto first_success = reducer(/*temp_storage*/ temp_storage_ptr,
-                   temp_storage_bytes,
-                                 /*d_in*/ input_data,
-                                 /*d_out*/ num_true_data,
-                                 /*num_items*/ static_cast<int>(input.size()),
-                   /*stream*/ static_cast<gpuStream_t>(mstream));
+    // Use the new LaunchIsNonZeroCount operator which directly counts
+    // non-zero values into a 64-bit device scalar, then copy/truncate the
+    // result into the requested `TIndex` device scalar.
+    Tensor count64_wrapper;
+    TF_RETURN_IF_ERROR(
+        ctx->allocate_temp(DT_INT32, TensorShape({}), &count64_wrapper));
+    int* count_device = count64_wrapper.scalar<int>().data();
 
-    if (first_success != musaSuccess) {
-      return errors::Internal(
-          "WhereOp: Could not launch gpuprim::DeviceReduce::Sum to calculate "
-          "temp_storage_bytes.");
-    }
+    LaunchIsNonZeroCount<T>(input_data, count_device,
+                            static_cast<int>(input.size()), mstream);
 
-    Tensor temp_storage;
-    TF_RETURN_IF_ERROR(ctx->allocate_temp(
-        DT_INT8, TensorShape({static_cast<int64_t>(temp_storage_bytes)}),
-        &temp_storage));
-
-    auto second_success = reducer(
-      /*temp_storage*/ reinterpret_cast<void*>(temp_storage.flat<int8>().data()),
-      temp_storage_bytes,
-        /*d_in*/ input_data,
-        /*d_out*/ num_true_data,
-        /*num_items*/ static_cast<int>(input.size()),
-      /*stream*/ static_cast<gpuStream_t>(mstream));
-
-    if (second_success != musaSuccess) {
-      return errors::Internal(
-          "WhereOp: Could not launch gpuprim::DeviceReduce::Sum to count "
-          "number of true / nonzero indices. temp_storage_bytes: ",
-          temp_storage_bytes, ".");
-    }
+    // Copy lower bytes to the `TIndex` device scalar (truncate if needed).
+    MusaMemcpyAsyncD2D(
+        reinterpret_cast<void*>(num_true_data),
+        reinterpret_cast<const void*>(count64_wrapper.tensor_data().data()),
+        static_cast<size_t>(sizeof(TIndex)), mstream);
 
     return Status::OK();
   }
 };
 
-template <typename T, typename TIndex, bool IsBoolFlags>
-struct CubDeviceSelectIndices;
-
-template <typename T, typename TIndex>
-struct CubDeviceSelectIndices<T, TIndex, false> {
-  musaError_t operator()(void* d_temp_storage, size_t& temp_storage_bytes,
-                        const T* d_flags, TIndex* d_selected_indices,
-                        TIndex* d_num_selected_out, int num_items,
-                        gpuStream_t stream = 0) {
-    gpuprim::CountingInputIterator<TIndex> select_counter(0);
-    IsNonzero<T> is_nonzero;
-    gpuprim::TransformInputIterator<bool, IsNonzero<T>, const T*>
-        is_nonzero_iter(d_flags, is_nonzero);
-    auto status = gpuprim::DeviceSelect::Flagged(
-        d_temp_storage, temp_storage_bytes, select_counter /*d_in*/,
-        is_nonzero_iter /*d_flags*/, d_selected_indices, d_num_selected_out,
-        num_items, stream);
-    if (status !=)
+template <typename TIndex, typename T, int NDIM>
+Eigen::array<TIndex, NDIM> CalculateStrides(
+    typename TTypes<T, NDIM>::ConstTensor input) {
+  const Eigen::DSizes<Eigen::DenseIndex, NDIM> dims = input.dimensions();
+  Eigen::array<TIndex, NDIM> strides;
+  EIGEN_STATIC_ASSERT((static_cast<int>(decltype(input)::Layout) ==
+                       static_cast<int>(Eigen::RowMajor)),
+                      INTERNAL_ERROR_INPUT_SHOULD_BE_ROWMAJOR);
+  strides[NDIM - 1] = 1;
+  for (int i = NDIM - 2; i >= 0; --i) {
+    strides[i] = strides[i + 1] * dims[i + 1];
   }
-};
+  return strides;
+}
 
+template <int NDIM, typename TIndex>
+musaError_t LaunchPropagateWhereIndicesKernel(const TIndex output_rows,
+                                              const TIndex* strides_host,
+                                              const TIndex* selected_indices,
+                                              int64_t* output,
+                                              musaStream_t stream);
 template <typename T, typename TIndex>
-struct CubDeviceSelectIndices<T, TIndex, true> {
-  musaError_t operator()(void* d_temp_storage, size_t& temp_storage_bytes,
-                        const T* d_flags, TIndex* d_selected_indices,
-                        TIndex* d_num_selected_out, int num_items,
-                        gpuStream_t stream = 0) {
-    gpuprim::CountingInputIterator<TIndex> select_counter(0);
-    return gpuprim::DeviceSelect::Flagged(
-        d_temp_storage, temp_storage_bytes, select_counter /*d_in*/,
-        d_flags /*d_flags*/, d_selected_indices, d_num_selected_out, num_items,
-        stream);
-  }
-};
+musaError_t LaunchMusaSelectFlaggedKernel(const T* input,
+                                          TIndex* selected_indices,
+                                          TIndex* num_selected_out,
+                                          int num_items, musaStream_t stream);
 
+// Be advised: The original TF implementation has an extra template parameter
+// called `IsConvertibleToBool`, which considered data types that cannot be
+// directly converted to bool, namely complex types. For now we only consider
+// real number cases.
 struct Where {
   template <int NDIM, typename T, typename TIndex>
   static Status Compute(OpKernelContext* ctx,
@@ -140,68 +98,44 @@ struct Where {
     }
 
     musaStream_t stream = GetMusaStreamByCtx(ctx);
-
-    Tensor selected_indices_t;
-    TF_RETURN_IF_ERROR(ctx->allocate_temp(
-        DataTypeToEnum<TIndex>::value, TensorShape({output.dimension(0)}),
-        &selected_indices_t));
-    TIndex* selected_indices = selected_indices_t.flat<TIndex>().data();
+    std::size_t temp_storage_bytes = 0;
 
     Tensor found_true_t;
-    TF_RETURN_IF_ERROR(ctx->allocate_temp(DataTypeToEnum<TIndex>::value,
+    TF_RETURN_IF_ERROR(ctx->allocate_temp(DataTypeToEnum<TIndex>::v(),
                                           TensorShape({}), &found_true_t));
     TIndex* found_true_device = found_true_t.scalar<TIndex>().data();
 
-    std::size_t temp_storage_bytes = 0;
-    using DT = typename std::decay<T>::type;
-    CubDeviceSelectIndices<T, TIndex, std::is_same<DT, bool>::value> selector;
+    // MUSA path: allocate temporary flat buffer for selected indices and
+    // perform a simple selection kernel that writes matching indices into the
+    // buffer and increments the device-side counter. Then expand indices into
+    // the NDIM output using the existing propagate kernel.
+    Tensor selected_indices_t;
+    TF_RETURN_IF_ERROR(
+        ctx->allocate_temp(DataTypeToEnum<TIndex>::value,
+                           TensorShape({static_cast<int64_t>(input.size())}),
+                           &selected_indices_t));
+    TIndex* selected_indices = selected_indices_t.flat<TIndex>().data();
 
-    const T* flags_ptr = reinterpret_cast<const T*>(input.data());
-
-    void* temp_storage_ptr = nullptr;
-    auto first_success = selector(
-      /*temp_storage*/ temp_storage_ptr, temp_storage_bytes,
-      /*d_flags*/ flags_ptr,
-        /*d_selected_indices*/ selected_indices,
-        /*d_num_selected_out*/ found_true_device,
-        /*num_items*/ static_cast<int>(input.size()),
-      /*stream*/ static_cast<gpuStream_t>(stream));
-    if (first_success != musaSuccess) {
-      return errors::Internal(
-          "WhereOp: Could not launch gpuprim::DeviceSelect::Flagged to "
-          "calculate temp_storage_bytes, status: ",
-          musaGetErrorString(static_cast<musaError_t>(first_success)));
+    // Initialize counter to zero on device.
+    musaError_t m_err =
+        musaMemsetAsync(found_true_device, 0, sizeof(TIndex), stream);
+    if (m_err != musaSuccess) {
+      return errors::Internal("WhereOp: musaMemsetAsync failed: ",
+                              musaGetErrorString(m_err));
     }
 
-    Tensor temp_storage;
-    TF_RETURN_IF_ERROR(ctx->allocate_temp(
-        DT_INT8, TensorShape({static_cast<int64_t>(temp_storage_bytes)}),
-        &temp_storage));
-
-    auto second_success = selector(
-      /*temp_storage*/ reinterpret_cast<void*>(temp_storage.flat<int8>().data()),
-      temp_storage_bytes,
-      /*d_flags*/ flags_ptr,
-        /*d_selected_indices*/ selected_indices,
-        /*d_num_selected_out*/ found_true_device,
-        /*num_items*/ static_cast<int>(input.size()),
-      /*stream*/ static_cast<gpuStream_t>(stream));
-    if (second_success != musaSuccess) {
-      return errors::Internal(
-          "WhereOp: Could not launch gpuprim::DeviceSelect::Flagged to copy "
-          "indices out, status: ",
-          musaGetErrorString(static_cast<musaError_t>(second_success)));
+    m_err = LaunchMusaSelectFlaggedKernel<T, TIndex>(
+        input.data(), selected_indices, found_true_device,
+        static_cast<int>(input.size()), stream);
+    if (m_err != musaSuccess) {
+      return errors::Internal("WhereOp: MusaSelectFlaggedKernel failed: ",
+                              musaGetErrorString(m_err));
     }
 
-    std::array<TIndex, NDIM> strides;
-    auto dims = input.dimensions();
-    strides[NDIM - 1] = static_cast<TIndex>(1);
-    for (int i = NDIM - 2; i >= 0; --i) {
-      strides[i] = strides[i + 1] * static_cast<TIndex>(dims[i + 1]);
-    }
-
-    const TIndex output_rows = static_cast<TIndex>(output.dimension(0));
-    auto launch_status = LaunchPropagateWhereIndicesKernel<NDIM, TIndex>(
+    const Eigen::array<TIndex, NDIM> strides =
+        CalculateStrides<TIndex, T, NDIM>(input);
+    const TIndex output_rows = output.dimension(0);
+    musaError_t launch_status = LaunchPropagateWhereIndicesKernel<NDIM, TIndex>(
         output_rows, strides.data(), selected_indices, output.data(), stream);
     if (launch_status != musaSuccess) {
       return errors::Internal(

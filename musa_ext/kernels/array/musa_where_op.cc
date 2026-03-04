@@ -20,12 +20,12 @@ class MusaWhereOp : public MusaOpKernel {
   void Compute(OpKernelContext* context) override {
     const Tensor& input = context->input(0);
     const int input_dims = input.dims();
-    OP_REQUIRES(
-        context,
-        input.NumElements() <= static_cast<int64_t>(std::numeric_limits<int>::max()),
-        errors::InvalidArgument("WhereOp: input is too large, num_elements=",
-                                input.NumElements()));
-    ComputeType<int32>(context, input, input_dims);
+
+    if (input.NumElements() < std::numeric_limits<int32_t>::max()) {
+      ComputeType<int32_t>(context, input, input_dims);
+    } else {
+      ComputeType<int64_t>(context, input, input_dims);
+    }
   }
 
   template <typename Tindex>
@@ -36,32 +36,25 @@ class MusaWhereOp : public MusaOpKernel {
     alloc_attr.set_gpu_compatible(true);
 
     Tensor num_true_tensor;
-    OP_REQUIRES_OK(context,
-             context->allocate_temp(DataTypeToEnum<Tindex>::value,
-                        TensorShape({1}), &num_true_tensor,
-                        alloc_attr));
+    OP_REQUIRES_OK(context, context->allocate_temp(
+                                DataTypeToEnum<Tindex>::value, TensorShape({1}),
+                                &num_true_tensor, alloc_attr));
     typename TTypes<Tindex>::UnalignedScalar num_true_t(
-      num_true_tensor.flat<Tindex>().data());
+        num_true_tensor.flat<Tindex>().data());
 
     Status s =
         NumTrue<T, Tindex>::Compute(context, input.flat<T>(), num_true_t);
     OP_REQUIRES_OK(context, s);
 
-    auto create_and_check_output = [context, &input, input_dims,
-                    num_true_tensor =
-                      std::move(num_true_tensor)]() {
-      const Tindex num_true = *num_true_tensor.flat<Tindex>().data();
-      Tensor* output = nullptr;
+    const Tindex num_true = *num_true_tensor.flat<Tindex>().data();
 
-      TensorShape output_shape;
-      OP_REQUIRES_OK(context,
-             output_shape.AddDimWithStatus(static_cast<int64>(num_true)));
-      OP_REQUIRES_OK(
-        context,
-        output_shape.AddDimWithStatus(static_cast<int64>(input_dims)));
-      OP_REQUIRES_OK(
-          context,
-        context->allocate_output(0, output_shape, &output));
+    Tensor* output = nullptr;
+    TensorShape output_shape;
+    OP_REQUIRES_OK(context,
+                   output_shape.AddDimWithStatus(static_cast<int64>(num_true)));
+    OP_REQUIRES_OK(
+        context, output_shape.AddDimWithStatus(static_cast<int64>(input_dims)));
+    OP_REQUIRES_OK(context, context->allocate_output(0, output_shape, &output));
 
 #define HANDLE_DIM(NDIM)                                              \
   case NDIM: {                                                        \
@@ -70,27 +63,21 @@ class MusaWhereOp : public MusaOpKernel {
     OP_REQUIRES_OK(context, where_status);                            \
                                                                       \
   } break
-      switch (input_dims) {
-        HANDLE_DIM(1);
-        HANDLE_DIM(2);
-        HANDLE_DIM(3);
-        HANDLE_DIM(4);
-        HANDLE_DIM(5);
-        HANDLE_DIM(6);
-        HANDLE_DIM(7);
-        HANDLE_DIM(8);
-        default:
-          OP_REQUIRES(context, false,
-                      errors::InvalidArgument(
-                          "WhereOp: Unhandled input dimensions: ", input_dims));
-      }
+    switch (input_dims) {
+      HANDLE_DIM(1);
+      HANDLE_DIM(2);
+      HANDLE_DIM(3);
+      HANDLE_DIM(4);
+      HANDLE_DIM(5);
+      HANDLE_DIM(6);
+      HANDLE_DIM(7);
+      HANDLE_DIM(8);
+      default:
+        OP_REQUIRES(context, false,
+                    errors::InvalidArgument(
+                        "WhereOp: Unhandled input dimensions: ", input_dims));
+    }
 #undef HANDLE_DIM
-    };
-
-    musaStream_t stream = GetMusaStreamByCtx(context);
-    context->device()
-        ->tensorflow_accelerator_device_info()
-        ->event_mgr->ThenExecute(stream, create_and_check_output);
   }
 
   bool IsExpensive() override { return true; }

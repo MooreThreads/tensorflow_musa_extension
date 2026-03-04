@@ -50,7 +50,7 @@ struct ReduceFunctor {
 // This conversion is aligned with tensorflow's convention of promoting bf16 to
 // fp32 for ReduceFunctor.
 template <>
-Status ReduceFunctor::Compute<bfloat16>(OpKernelContext* ctx,
+inline Status ReduceFunctor::Compute<bfloat16>(OpKernelContext* ctx,
                                         mTensor* output_mt, mTensor* input_mt,
                                         ::musa::dnn::Reduce::Mode mode,
                                         const int* reduce_dims,
