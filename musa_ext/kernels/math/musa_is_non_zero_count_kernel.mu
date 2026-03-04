@@ -72,27 +72,17 @@ void LaunchIsNonZeroCount(const T* input, int* output, int n,
   (void)err;
 }
 
-template void LaunchIsNonZeroCount<float>(const float*, int*, int,
-                                          musaStream_t);
-template void LaunchIsNonZeroCount<double>(const double*, int*, int,
-                                           musaStream_t);
-template void LaunchIsNonZeroCount<Eigen::half>(const Eigen::half*, int*, int,
-                                                musaStream_t);
-template void LaunchIsNonZeroCount<bfloat16>(const bfloat16*, int*, int,
-                                             musaStream_t);
-template void LaunchIsNonZeroCount<int8_t>(const int8_t*, int*, int,
-                                           musaStream_t);
-template void LaunchIsNonZeroCount<uint8_t>(const uint8_t*, int*, int,
-                                            musaStream_t);
-template void LaunchIsNonZeroCount<int16_t>(const int16_t*, int*, int,
-                                            musaStream_t);
-template void LaunchIsNonZeroCount<uint16_t>(const uint16_t*, int*, int,
-                                             musaStream_t);
-template void LaunchIsNonZeroCount<int32_t>(const int32_t*, int*, int,
-                                            musaStream_t);
-template void LaunchIsNonZeroCount<int64_t>(const int64_t*, int*, int,
-                                            musaStream_t);
-template void LaunchIsNonZeroCount<bool>(const bool*, int*, int, musaStream_t);
+#define REGISTER_IS_NON_ZERO_COUNT(T)                                            \
+  template void LaunchIsNonZeroCount<T>(const T* input, int* output, int n, \
+                                       musaStream_t stream)
+
+REGISTER_IS_NON_ZERO_COUNT(float);
+REGISTER_IS_NON_ZERO_COUNT(double);
+REGISTER_IS_NON_ZERO_COUNT(Eigen::half);
+REGISTER_IS_NON_ZERO_COUNT(bfloat16);
+REGISTER_IS_NON_ZERO_COUNT(int32);
+REGISTER_IS_NON_ZERO_COUNT(int64);
+REGISTER_IS_NON_ZERO_COUNT(bool);
 
 }  // namespace musa
 }  // namespace tensorflow

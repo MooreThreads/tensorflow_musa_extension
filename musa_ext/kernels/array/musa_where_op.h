@@ -1,8 +1,6 @@
 #ifndef TENSORFLOW_MUSA_KERNELS_ARRAY_MUSA_WHERE_OP_H_
 #define TENSORFLOW_MUSA_KERNELS_ARRAY_MUSA_WHERE_OP_H_
 
-#include <musa_runtime.h>
-
 #include <array>
 #include <cstdint>
 #include <type_traits>
@@ -10,7 +8,6 @@
 #include "../math/musa_reduce_functor.h"
 #include "../utils_op.h"
 #include "mu/device/musa_memcpy.h"
-#include "musa_where_kernel.mu"
 #include "tensorflow/core/kernels/gpu_prim.h"
 #include "tensorflow/core/util/gpu_kernel_helper.h"
 
