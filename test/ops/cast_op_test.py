@@ -60,33 +60,5 @@ class CastOpTest(MUSATestCase):
     """Test Int32 -> Int64 (Safe upcasting)."""
     self._test_cast(tf.int32, tf.int64)
 
-  # def testMUSADevicePlacement(self):
-  #   """Ensure common Cast dtype pairs are placed on MUSA with strict placement."""
-  #   original_soft_placement = tf.config.get_soft_device_placement()
-  #   tf.config.set_soft_device_placement(False)
-  #   try:
-  #     test_pairs = [
-  #         (tf.bool, tf.int64),
-  #         (tf.int32, tf.bfloat16),
-  #         (tf.int64, tf.bool),
-  #         (tf.float16, tf.int32),
-  #         (tf.bfloat16, tf.float16),
-  #         (tf.float32, tf.bool),
-  #     ]
-
-  #     for src_dtype, dst_dtype in test_pairs:
-  #       with tf.device('/device:MUSA:0'):
-  #         if src_dtype == tf.bool:
-  #           x = tf.greater(tf.ones([16], dtype=tf.float32), 0.0)
-  #         else:
-  #           x = tf.ones([16], dtype=src_dtype)
-  #         y = tf.cast(x, dtype=dst_dtype)
-
-  #       self.assertIn('MUSA', y.device,
-  #                     f"Cast {src_dtype.name}->{dst_dtype.name} is not on MUSA, got {y.device}")
-  #   finally:
-  #     tf.config.set_soft_device_placement(original_soft_placement)
-
-
 if __name__ == "__main__":
   tf.test.main()
