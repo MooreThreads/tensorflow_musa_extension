@@ -109,14 +109,6 @@ class MusaMatMulOp : public MusaOpKernel {
     mTensor mt_b = CreateMTensor(in1);
     mTensor mt_out = CreateMTensor(*out);
 
-    auto FixToBatchFormat = [](mTensor& mt, const Tensor& t) {
-      if (t.dims() == 2) {
-        int64_t rows = t.dim_size(0);
-        int64_t cols = t.dim_size(1);
-        mt.SetNdInfo({1, rows, cols}, {rows * cols, cols, 1});
-      }
-    };
-
     ::musa::dnn::Status status;
 
     if (in0.dims() == 2 && in1.dims() == 2) {
@@ -138,9 +130,44 @@ class MusaMatMulOp : public MusaOpKernel {
       op.SetAlpha(1.0);
       op.SetBeta(0.0);
 
-      FixToBatchFormat(mt_a, in0);
-      FixToBatchFormat(mt_b, in1);
-      FixToBatchFormat(mt_out, *out);
+      // 获取广播后的目标 batch 总大小
+      int64_t out_batch = bcast.output_batch_shape().num_elements();
+
+      // 定义 Reshape 逻辑：仅修改 mTensor (mudnn的视图)，不触及 TF Tensor 的实际内存布局
+      auto ReshapeTo3D = [out_batch](mTensor& mt, const Tensor& t) {
+        int64_t dims = t.dims();
+        int64_t rows = t.dim_size(dims - 2);
+        int64_t cols = t.dim_size(dims - 1);
+        int64_t batch = t.NumElements() / (rows * cols);
+
+        // 如果并非标准的 3 维(即 2 维 或 > 3 维)，将其在视图层面展平为 3 维
+        if (dims != 3) {
+          if (batch == 1 && out_batch > 1) {
+            // 处理简单的 1-to-N 广播 (例如 [1, M, K] 与 [B, K, N] 乘)，设置 batch_stride 为 0 以复用内存
+            mt.SetNdInfo({out_batch, rows, cols}, {0, cols, 1});
+          } else {
+            // 标准的多维 Batch 展平: [batch, rows, cols]
+            mt.SetNdInfo({batch, rows, cols}, {rows * cols, cols, 1});
+          }
+        } else if (dims == 3) {
+          // 如果本身是 3 维，也需要拦截并处理 1-to-N 的广播场景
+          if (batch == 1 && out_batch > 1) {
+            mt.SetNdInfo({out_batch, rows, cols}, {0, cols, 1});
+          }
+        }
+      };
+
+      ReshapeTo3D(mt_a, in0);
+      ReshapeTo3D(mt_b, in1);
+      
+      // 对于输出 Tensor out，它本身是用正确的高维 out_shape 申请的。
+      // 我们在此只需将底层 mt_out 视角映射为 3 维即可，乘法完成后无需任何“恢复”代码，
+      // 因为 TF 侧的 out 依然保持高维属性。
+      if (out_shape.dims() > 3) {
+         mt_out.SetNdInfo({out_batch, m, n}, {m * n, n, 1});
+      } else if (out_shape.dims() == 2) {
+         mt_out.SetNdInfo({1, m, n}, {m * n, n, 1});
+      }
 
       status = op.Run(handle, mt_out, mt_a, mt_b);
 
