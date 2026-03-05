@@ -48,7 +48,7 @@ class MusaSignOp : public MusaOpKernel {
 
 REGISTER_MUSA_SIGN(float);
 REGISTER_MUSA_SIGN(int32);
-REGISTER_MUSA_SIGN(long long);
+REGISTER_MUSA_SIGN(int64);
 REGISTER_MUSA_SIGN(bfloat16);
 REGISTER_MUSA_SIGN(Eigen::half);
 

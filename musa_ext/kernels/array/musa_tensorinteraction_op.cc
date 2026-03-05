@@ -41,9 +41,9 @@ class MusaInteractOp : public OpKernel {
     float alpha = 1.0f;
     float beta = 0.0f;
 
-    long long strideA = num_features * embed_dim;
-    long long strideB = strideA;
-    long long strideC = num_features * num_features;
+    int64_t strideA = num_features * embed_dim;
+    int64_t strideB = strideA;
+    int64_t strideC = num_features * num_features;
 
     const T* d_A = input.flat<T>().data();
     const T* d_B = input.flat<T>().data();

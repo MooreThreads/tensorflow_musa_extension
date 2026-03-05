@@ -30,50 +30,50 @@ void LaunchResourceGatherFloatInt32(const float* params, const int* indices,
                                     int64_t params_stride, int limit,
                                     musaStream_t stream);
 void LaunchResourceGatherFloatInt64(const float* params,
-                                    const long long* indices, float* output,
+                                    const int64_t* indices, float* output,
                                     int64_t batch_size, int64_t inner_size,
                                     int64_t indices_size, int64_t params_stride,
-                                    long long limit, musaStream_t stream);
+                                    int64_t limit, musaStream_t stream);
 void LaunchResourceGatherDoubleInt32(const double* params, const int* indices,
                                      double* output, int64_t batch_size,
                                      int64_t inner_size, int64_t indices_size,
                                      int64_t params_stride, int limit,
                                      musaStream_t stream);
 void LaunchResourceGatherDoubleInt64(const double* params,
-                                     const long long* indices, double* output,
+                                     const int64_t* indices, double* output,
                                      int64_t batch_size, int64_t inner_size,
                                      int64_t indices_size,
-                                     int64_t params_stride, long long limit,
+                                     int64_t params_stride, int64_t limit,
                                      musaStream_t stream);
 void LaunchResourceGatherInt32Int32(const int* params, const int* indices,
                                     int* output, int64_t batch_size,
                                     int64_t inner_size, int64_t indices_size,
                                     int64_t params_stride, int limit,
                                     musaStream_t stream);
-void LaunchResourceGatherInt32Int64(const int* params, const long long* indices,
+void LaunchResourceGatherInt32Int64(const int* params, const int64_t* indices,
                                     int* output, int64_t batch_size,
                                     int64_t inner_size, int64_t indices_size,
-                                    int64_t params_stride, long long limit,
+                                    int64_t params_stride, int64_t limit,
                                     musaStream_t stream);
-void LaunchResourceGatherInt64Int32(const long long* params, const int* indices,
-                                    long long* output, int64_t batch_size,
+void LaunchResourceGatherInt64Int32(const int64_t* params, const int* indices,
+                                    int64_t* output, int64_t batch_size,
                                     int64_t inner_size, int64_t indices_size,
                                     int64_t params_stride, int limit,
                                     musaStream_t stream);
-void LaunchResourceGatherInt64Int64(const long long* params,
-                                    const long long* indices, long long* output,
+void LaunchResourceGatherInt64Int64(const int64_t* params,
+                                    const int64_t* indices, int64_t* output,
                                     int64_t batch_size, int64_t inner_size,
                                     int64_t indices_size, int64_t params_stride,
-                                    long long limit, musaStream_t stream);
+                                    int64_t limit, musaStream_t stream);
 void LaunchResourceGatherHalfInt32(const void* params, const int* indices,
                                    void* output, int64_t batch_size,
                                    int64_t inner_size, int64_t indices_size,
                                    int64_t params_stride, int limit,
                                    musaStream_t stream);
-void LaunchResourceGatherHalfInt64(const void* params, const long long* indices,
+void LaunchResourceGatherHalfInt64(const void* params, const int64_t* indices,
                                    void* output, int64_t batch_size,
                                    int64_t inner_size, int64_t indices_size,
-                                   int64_t params_stride, long long limit,
+                                   int64_t params_stride, int64_t limit,
                                    musaStream_t stream);
 }
 

@@ -25,7 +25,7 @@ void MusaInvertPermutationKernelLauncher(
 
 template void MusaInvertPermutationKernelLauncher<int>(const void*, void*, int64_t, musaStream_t);
 
-template void MusaInvertPermutationKernelLauncher<long long>(const void*, void*, int64_t, musaStream_t);
+template void MusaInvertPermutationKernelLauncher<int64_t>(const void*, void*, int64_t, musaStream_t);
 
 } // namespace musa
 } // namespace tensorflow

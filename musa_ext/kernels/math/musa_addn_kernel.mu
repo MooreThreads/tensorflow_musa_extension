@@ -73,10 +73,10 @@ __global__ void AddNKernelInt32(const int** inputs, int* output, int num_inputs,
 }
 
 // Int64 kernel
-__global__ void AddNKernelInt64(const long long** inputs, long long* output, int num_inputs, int size) {
+__global__ void AddNKernelInt64(const int64_t** inputs, int64_t* output, int num_inputs, int size) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < size) {
-    long long sum = inputs[0][idx];
+    int64_t sum = inputs[0][idx];
     for (int i = 1; i < num_inputs; ++i) {
       sum += inputs[i][idx];
     }
@@ -97,7 +97,7 @@ DEFINE_ADDN_LAUNCHER(LaunchAddNKernelDouble, AddNKernelDouble, double)
 DEFINE_ADDN_LAUNCHER(LaunchAddNKernelHalf, AddNKernelHalf, half)
 DEFINE_ADDN_LAUNCHER(LaunchAddNKernelBFloat16, AddNKernelBFloat16, __mt_bfloat16)
 DEFINE_ADDN_LAUNCHER(LaunchAddNKernelInt32, AddNKernelInt32, int)
-DEFINE_ADDN_LAUNCHER(LaunchAddNKernelInt64, AddNKernelInt64, long long)
+DEFINE_ADDN_LAUNCHER(LaunchAddNKernelInt64, AddNKernelInt64, int64_t)
 
 #undef DEFINE_ADDN_LAUNCHER
 

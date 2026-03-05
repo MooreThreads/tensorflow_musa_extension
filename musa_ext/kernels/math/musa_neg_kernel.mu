@@ -52,7 +52,7 @@ void MusaNegKernelLauncher(const void* in, void* out, int size, musaStream_t str
 template void MusaNegKernelLauncher<float>(const void*, void*, int, musaStream_t);
 template void MusaNegKernelLauncher<double>(const void*, void*, int, musaStream_t);
 template void MusaNegKernelLauncher<int>(const void*, void*, int, musaStream_t);
-template void MusaNegKernelLauncher<long long>(const void*, void*, int, musaStream_t);
+template void MusaNegKernelLauncher<int64_t>(const void*, void*, int, musaStream_t);
 template void MusaNegKernelLauncher<Eigen::half>(const void*, void*, int, musaStream_t);
 template void MusaNegKernelLauncher<bfloat16>(const void*, void*, int, musaStream_t);
 
