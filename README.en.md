@@ -9,6 +9,7 @@ TensorFlow MUSA Extension is a high-performance TensorFlow plugin specifically d
 - **Automatic Graph Optimization**: Supports automatic layout conversion, operator fusion, and Automatic Mixed Precision (AMP)
 - **Seamless Integration**: Fully compatible with TensorFlow ecosystem without requiring code modifications
 - **Device Management**: Complete MUSA device registration, memory management, and stream processing support
+- **Kernel Debugging Support**: Built-in kernel execution time statistics for performance analysis
 
 ## Quick Start
 
@@ -56,8 +57,11 @@ tensorflow_musa_extension/
 git clone <repository-url>
 cd tensorflow_musa_extension
 
-# Build the plugin
+# Build the plugin (Release mode, default)
 ./build.sh
+
+# Or build Debug mode (with kernel timing)
+./build.sh debug
 
 # Load the plugin in Python
 import tensorflow as tf
@@ -66,19 +70,25 @@ tf.load_library("./build/libmusa_plugin.so")
 
 ## Build Guide
 
-### 1. Operator Configuration
+### 1. Build Type Selection
 
-Configure operators to be compiled in the `CMakeLists.txt` file:
+Two build modes are supported:
 
-- **Operator Selection**: Enable required operator implementations in the source file configuration section
-- **Custom Kernels**: If using `.mu` custom kernel implementations, add corresponding source files to `set(MU_SOURCES "")`
+| Mode | Command | Description |
+|------|---------|-------------|
+| **Release** | `./build.sh` or `./build.sh release` | Optimized for performance, no debug overhead |
+| **Debug** | `./build.sh debug` | Enable kernel timing for performance analysis |
 
 ### 2. Compilation Process
 
 Execute the automated build script:
 
 ```bash
+# Release mode (default, for production)
 ./build.sh
+
+# Debug mode (for development and performance analysis)
+./build.sh debug
 ```
 
 The build script automatically completes the following steps:
@@ -86,7 +96,7 @@ The build script automatically completes the following steps:
 - Compiles MUSA kernels and host code
 - Generates the dynamic library `libmusa_plugin.so`
 
-### 3. Plugin Loading
+### 4. Plugin Loading
 
 After successful compilation, load the plugin in your TensorFlow application:
 
@@ -100,17 +110,14 @@ tf.load_library("/path/to/tensorflow_musa_extension/build/libmusa_plugin.so")
 After building, run the test suite to verify functional correctness. Test files follow TensorFlow's official `python/kernel_tests` style, using `tf.test.TestCase` as the base class.
 
 ```bash
+cd test
+
 # Run specific operator tests
-python test/add_op_test.py
-python test/matmul_op_test.py
+python -m ops.add_op_test
+python -m ops.matmul_op_test
 
 # Run all tests
-./test/run_all_tests.sh
-
-# Or run each test individually
-for test_file in test/*_op_test.py; do
-    python "$test_file"
-done
+./run_all_tests.sh
 ```
 
 Test file naming convention:

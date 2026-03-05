@@ -9,6 +9,7 @@ TensorFlow MUSA Extension 是一个高性能的 TensorFlow 插件，专为摩尔
 - **自动图优化**：支持 Layout 自动转换、算子融合和自动混合精度（AMP）
 - **无缝集成**：与 TensorFlow 生态系统完全兼容，无需修改现有代码
 - **设备管理**：完整的 MUSA 设备注册、内存管理和流式处理支持
+- **Kernel 调试支持**：内置 Kernel 执行时间统计功能，便于性能分析
 
 ## 快速开始
 
@@ -56,8 +57,11 @@ tensorflow_musa_extension/
 git clone <repository-url>
 cd tensorflow_musa_extension
 
-# 构建插件
+# 构建插件（Release 模式，默认）
 ./build.sh
+
+# 或构建 Debug 模式（启用 Kernel 计时）
+./build.sh debug
 
 # 在 Python 中加载插件
 import tensorflow as tf
@@ -66,19 +70,25 @@ tf.load_library("./build/libmusa_plugin.so")
 
 ## 构建指南
 
-### 1. 算子配置
+### 1. 编译模式选择
 
-在 `CMakeLists.txt` 文件中配置需要编译的算子：
+支持两种编译模式：
 
-- **算子选择**：在源文件配置区域启用所需的算子实现
-- **自定义内核**：如需使用 `.mu` 自定义内核实现，在 `set(MU_SOURCES "")` 中添加对应的源文件
+| 模式 | 命令 | 说明 |
+|------|------|------|
+| **Release** | `./build.sh` 或 `./build.sh release` | 优化性能，无调试开销 |
+| **Debug** | `./build.sh debug` | 启用 Kernel 计时，便于性能分析 |
 
 ### 2. 编译流程
 
 执行自动化构建脚本：
 
 ```bash
+# Release 模式（默认，用于生产环境）
 ./build.sh
+
+# Debug 模式（用于开发和性能分析）
+./build.sh debug
 ```
 
 构建脚本将自动完成以下步骤：
@@ -86,7 +96,7 @@ tf.load_library("./build/libmusa_plugin.so")
 - 编译 MUSA 内核和主机代码
 - 生成动态链接库 `libmusa_plugin.so`
 
-### 3. 加载插件
+### 4. 加载插件
 
 编译成功后，在 TensorFlow 应用中加载插件：
 
@@ -100,17 +110,14 @@ tf.load_library("/path/to/tensorflow_musa_extension/build/libmusa_plugin.so")
 构建完成后，运行测试套件验证功能正确性。测试文件遵循 TensorFlow 官方 `python/kernel_tests` 风格，使用 `tf.test.TestCase` 作为基类。
 
 ```bash
+cd test
+
 # 运行特定算子测试
-python test/add_op_test.py
-python test/matmul_op_test.py
+python -m ops.add_op_test
+python -m ops.matmul_op_test
 
 # 运行所有测试
-./test/run_all_tests.sh
-
-# 或者单独运行每个测试
-for test_file in test/*_op_test.py; do
-    python "$test_file"
-done
+./run_all_tests.sh
 ```
 
 测试文件命名规范：

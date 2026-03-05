@@ -378,7 +378,7 @@ class CustomTestRunner(unittest.TextTestRunner):
 # ============================================================================
 def discover_and_run_tests(test_pattern="*_op_test.py", quiet=True, detail_mode=False, log_file=None):
     """Discover and run all test files matching the pattern."""
-    test_dir = Path(__file__).parent
+    test_dir = Path(__file__).resolve().parent / "ops"
     test_files = list(test_dir.glob(test_pattern))
 
     if not test_files:
@@ -462,7 +462,8 @@ Examples:
 
     if args.single:
         # Run a single test file
-        sys.path.insert(0, str(Path(__file__).parent))
+        ops_dir = Path(__file__).resolve().parent / "ops"
+        sys.path.insert(0, str(ops_dir))
         module_name = Path(args.single).stem
         try:
             module = importlib.import_module(module_name)

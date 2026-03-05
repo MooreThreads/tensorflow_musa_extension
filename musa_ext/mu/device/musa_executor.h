@@ -35,7 +35,11 @@ class MusaExecutor : public internal::StreamExecutorInterface {
   std::unique_ptr<internal::StreamInterface> GetStreamImplementation()
       override {
     musaStream_t h;
-    musaStreamCreate(&h);
+    musaError_t err = musaStreamCreate(&h);
+    if (err != musaSuccess) {
+      LOG(ERROR) << "musaStreamCreate failed: " << musaGetErrorString(err);
+      return nullptr;
+    }
     return std::make_unique<MusaStream>(h);
   }
 
@@ -209,10 +213,12 @@ class MusaExecutor : public internal::StreamExecutorInterface {
   port::Status AllocateEvent(Event* event) override {
     auto* musa_event = static_cast<MusaEvent*>(event->implementation());
     if (!musa_event) {
-      return port::Status(port::error::INTERNAL, "Invalid event implementation");
+      return port::Status(port::error::INTERNAL,
+                          "Invalid event implementation");
     }
     if (!musa_event->Init()) {
-      return port::Status(port::error::INTERNAL, "Failed to initialize MUSA event");
+      return port::Status(port::error::INTERNAL,
+                          "Failed to initialize MUSA event");
     }
     return port::Status::OK();
   }

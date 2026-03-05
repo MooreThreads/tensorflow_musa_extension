@@ -13,11 +13,11 @@ mStatus SetTensorInfo(mTensor& tensor, void* device_dst, uint64_t size,
 
   mTensor::Type tensor_type = mTensor::Type::UINT8;
   uint64_t tensor_size = size;
-  if (size & 0x07 == 0) {
+  if ((size & 0x07) == 0) {
     tensor_type = mTensor::Type::UINT64;
     tensor_size = size >> 3;
     type_size = 8;
-  } else if (size & 0x03 == 0) {
+  } else if ((size & 0x03) == 0) {
     tensor_type = mTensor::Type::UINT32;
     tensor_size = size >> 2;
     type_size = 4;
@@ -83,14 +83,17 @@ mStatus MemsetAsync(void* device_dst, uint8_t pattern, uint64_t size,
     return mStatus::SUCCESS;
   }
   if (device_dst == nullptr) {
-    fprintf(stderr, "[MUSA] ERROR: MemsetAsync failed: null pointer "
-            "(dst=%p, size=%zu)\n", device_dst, size);
+    fprintf(stderr,
+            "[MUSA] ERROR: MemsetAsync failed: null pointer "
+            "(dst=%p, size=%zu)\n",
+            device_dst, size);
     return static_cast<mStatus>(1);
   }
 
   musaError_t err = musaMemsetAsync(device_dst, pattern, size, stream);
   if (err != musaSuccess) {
-    fprintf(stderr, "[MUSA] ERROR: MemsetAsync failed: %s "
+    fprintf(stderr,
+            "[MUSA] ERROR: MemsetAsync failed: %s "
             "(dst=%p, size=%zu)\n",
             musaGetErrorString(err), device_dst, size);
     return static_cast<mStatus>(1);
@@ -104,19 +107,22 @@ mStatus Memset32Async(void* device_dst, uint32_t pattern, uint64_t size,
     return mStatus::SUCCESS;
   }
   if (device_dst == nullptr) {
-    fprintf(stderr, "[MUSA] ERROR: Memset32Async failed: null pointer "
-            "(dst=%p, size=%zu)\n", device_dst, size);
+    fprintf(stderr,
+            "[MUSA] ERROR: Memset32Async failed: null pointer "
+            "(dst=%p, size=%zu)\n",
+            device_dst, size);
     return static_cast<mStatus>(1);
   }
 
-  // Note: MUSA runtime may not have musaMemset32Async, so we use musaMemsetAsync
-  // with a uint8_t pattern. For 32-bit patterns, callers should use Memset32
-  // (synchronous) or implement custom kernel.
-  // Fallback: use 8-bit pattern from lower byte of 32-bit pattern
+  // Note: MUSA runtime may not have musaMemset32Async, so we use
+  // musaMemsetAsync with a uint8_t pattern. For 32-bit patterns, callers should
+  // use Memset32 (synchronous) or implement custom kernel. Fallback: use 8-bit
+  // pattern from lower byte of 32-bit pattern
   uint8_t byte_pattern = static_cast<uint8_t>(pattern & 0xFF);
   musaError_t err = musaMemsetAsync(device_dst, byte_pattern, size, stream);
   if (err != musaSuccess) {
-    fprintf(stderr, "[MUSA] ERROR: Memset32Async (fallback) failed: %s "
+    fprintf(stderr,
+            "[MUSA] ERROR: Memset32Async (fallback) failed: %s "
             "(dst=%p, size=%zu)\n",
             musaGetErrorString(err), device_dst, size);
     return static_cast<mStatus>(1);
