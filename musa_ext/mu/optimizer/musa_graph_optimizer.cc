@@ -303,8 +303,9 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
     return Status::OK();
   }
 
-  void Feedback(Cluster* cluster, const GrapplerItem& item,
-                const GraphDef& optimized_graph, double result) override {}
+  // Feedback method removed - not available in TF 2.6.1 CustomGraphOptimizer interface
+  // void Feedback(Cluster* cluster, const GrapplerItem& item,
+  //               const GraphDef& optimized_graph, double result) override {}
 
   // Get optimizer configurations - used for coordination with other optimizers
   const MusaOptimizerConfigs& GetConfigs() const { return configs_; }

@@ -335,14 +335,14 @@ extern "C" {
 DEFINE_PACK_LAUNCHER_4B(float, LaunchPackKernelFloat)
 DEFINE_PACK_LAUNCHER_4B(int, LaunchPackKernelInt32)
 DEFINE_PACK_LAUNCHER_8B(double, LaunchPackKernelDouble)
-DEFINE_PACK_LAUNCHER_8B(long long, LaunchPackKernelInt64)
+DEFINE_PACK_LAUNCHER_8B(int64_t, LaunchPackKernelInt64)
 DEFINE_PACK_LAUNCHER_2B(__half, LaunchPackKernelHalf)
 DEFINE_PACK_LAUNCHER_2B(__mt_bfloat16, LaunchPackKernelBFloat16)
 
 DEFINE_UNPACK_LAUNCHER_4B(float, LaunchUnpackKernelFloat)
 DEFINE_UNPACK_LAUNCHER_4B(int, LaunchUnpackKernelInt32)
 DEFINE_UNPACK_LAUNCHER_8B(double, LaunchUnpackKernelDouble)
-DEFINE_UNPACK_LAUNCHER_8B(long long, LaunchUnpackKernelInt64)
+DEFINE_UNPACK_LAUNCHER_8B(int64_t, LaunchUnpackKernelInt64)
 DEFINE_UNPACK_LAUNCHER_2B(__half, LaunchUnpackKernelHalf)
 DEFINE_UNPACK_LAUNCHER_2B(__mt_bfloat16, LaunchUnpackKernelBFloat16)
 

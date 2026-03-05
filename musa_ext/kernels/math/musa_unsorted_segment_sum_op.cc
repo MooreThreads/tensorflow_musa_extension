@@ -14,8 +14,8 @@ void LaunchUnsortedSegmentSumFloatInt32(const float* data,
                                         int num_segments, int64_t N, int64_t M,
                                         float* output, musaStream_t stream);
 void LaunchUnsortedSegmentSumFloatInt64(const float* data,
-                                        const long long* segment_ids,
-                                        long long num_segments, int64_t N,
+                                        const int64_t* segment_ids,
+                                        int64_t num_segments, int64_t N,
                                         int64_t M, float* output,
                                         musaStream_t stream);
 void LaunchUnsortedSegmentSumDoubleInt32(const double* data,
@@ -23,26 +23,26 @@ void LaunchUnsortedSegmentSumDoubleInt32(const double* data,
                                          int num_segments, int64_t N, int64_t M,
                                          double* output, musaStream_t stream);
 void LaunchUnsortedSegmentSumDoubleInt64(const double* data,
-                                         const long long* segment_ids,
-                                         long long num_segments, int64_t N,
+                                         const int64_t* segment_ids,
+                                         int64_t num_segments, int64_t N,
                                          int64_t M, double* output,
                                          musaStream_t stream);
 void LaunchUnsortedSegmentSumInt32Int32(const int* data, const int* segment_ids,
                                         int num_segments, int64_t N, int64_t M,
                                         int* output, musaStream_t stream);
 void LaunchUnsortedSegmentSumInt32Int64(const int* data,
-                                        const long long* segment_ids,
-                                        long long num_segments, int64_t N,
+                                        const int64_t* segment_ids,
+                                        int64_t num_segments, int64_t N,
                                         int64_t M, int* output,
                                         musaStream_t stream);
-void LaunchUnsortedSegmentSumInt64Int32(const long long* data,
+void LaunchUnsortedSegmentSumInt64Int32(const int64_t* data,
                                         const int* segment_ids,
                                         int num_segments, int64_t N, int64_t M,
-                                        long long* output, musaStream_t stream);
-void LaunchUnsortedSegmentSumInt64Int64(const long long* data,
-                                        const long long* segment_ids,
-                                        long long num_segments, int64_t N,
-                                        int64_t M, long long* output,
+                                        int64_t* output, musaStream_t stream);
+void LaunchUnsortedSegmentSumInt64Int64(const int64_t* data,
+                                        const int64_t* segment_ids,
+                                        int64_t num_segments, int64_t N,
+                                        int64_t M, int64_t* output,
                                         musaStream_t stream);
 }
 

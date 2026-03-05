@@ -94,16 +94,16 @@ template void MusaBitwiseAndKernelLauncher<int16>(const int16*, const int16*,
     int16*, int64_t);
 template void MusaBitwiseAndKernelLauncher<int32>(const int32*, const int32*,
     int32*, int64_t);
-template void MusaBitwiseAndKernelLauncher<long long>(const long long*, const long long*,
-    long long*, int64_t);
+template void MusaBitwiseAndKernelLauncher<int64_t>(const int64_t*, const int64_t*,
+    int64_t*, int64_t);
 template void MusaBitwiseAndKernelLauncher<uint8>(const uint8*, const uint8*,
     uint8*, int64_t);
 template void MusaBitwiseAndKernelLauncher<uint16>(const uint16*, const uint16*,
     uint16*, int64_t);
 template void MusaBitwiseAndKernelLauncher<uint32>(const uint32*, const uint32*,
     uint32*, int64_t);
-template void MusaBitwiseAndKernelLauncher<unsigned long long>(const unsigned long long*, const unsigned long long*,
-    unsigned long long*, int64_t);
+template void MusaBitwiseAndKernelLauncher<uint64_t>(const uint64_t*, const uint64_t*,
+    uint64_t*, int64_t);
 
 
 template void MusaBitwiseAndBroadcastKernelLauncher<int8>(
@@ -115,8 +115,8 @@ template void MusaBitwiseAndBroadcastKernelLauncher<int16>(
 template void MusaBitwiseAndBroadcastKernelLauncher<int32>(
     const int32*, const int32*, int32*,
     const int64_t*, const int64_t*, const int64_t*, int, int64_t);
-template void MusaBitwiseAndBroadcastKernelLauncher<long long>(
-    const long long*, const long long*, long long*,
+template void MusaBitwiseAndBroadcastKernelLauncher<int64_t>(
+    const int64_t*, const int64_t*, int64_t*,
     const int64_t*, const int64_t*, const int64_t*, int, int64_t);
 template void MusaBitwiseAndBroadcastKernelLauncher<uint8>(
     const uint8*, const uint8*, uint8*,
@@ -127,8 +127,8 @@ template void MusaBitwiseAndBroadcastKernelLauncher<uint16>(
 template void MusaBitwiseAndBroadcastKernelLauncher<uint32>(
     const uint32*, const uint32*, uint32*,
     const int64_t*, const int64_t*, const int64_t*, int, int64_t);
-template void MusaBitwiseAndBroadcastKernelLauncher<unsigned long long>(
-    const unsigned long long*, const unsigned long long*, unsigned long long*,
+template void MusaBitwiseAndBroadcastKernelLauncher<uint64_t>(
+    const uint64_t*, const uint64_t*, uint64_t*,
     const int64_t*, const int64_t*, const int64_t*, int, int64_t);
 
 }  // namespace musa

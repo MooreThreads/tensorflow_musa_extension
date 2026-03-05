@@ -19,7 +19,7 @@ extern "C" {
                                 int num_inputs, int size, musaStream_t stream);
   void LaunchAddNKernelInt32(const int** inputs, int* output, int num_inputs,
                              int size, musaStream_t stream);
-  void LaunchAddNKernelInt64(const long long** inputs, long long* output,
+  void LaunchAddNKernelInt64(const int64_t** inputs, int64_t* output,
                              int num_inputs, int size, musaStream_t stream);
 }
 
@@ -158,8 +158,8 @@ DEFINE_ADDN_LAUNCHER_GETTER(int32, LaunchAddNKernelInt32,
                             reinterpret_cast<const int**>,
                             reinterpret_cast<int*>)
 DEFINE_ADDN_LAUNCHER_GETTER(int64, LaunchAddNKernelInt64,
-                            reinterpret_cast<const long long**>,
-                            reinterpret_cast<long long*>)
+                            reinterpret_cast<const int64_t**>,
+                            reinterpret_cast<int64_t*>)
 
 #undef DEFINE_ADDN_LAUNCHER_GETTER
 

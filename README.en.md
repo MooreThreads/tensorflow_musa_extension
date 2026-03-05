@@ -43,7 +43,8 @@ tensorflow_musa_extension/
   - Default installation path: `/usr/local/musa`
 - **Python Dependencies**:
   - Python: >= 3.7
-  - TensorFlow: == 2.4.4
+  - TensorFlow: == 2.6.1
+  - protobuf: == 3.20.3
   - NumPy: >= 1.19.0
   - prettytable: >= 3.0.0
 - **Development Tools**:

@@ -21,7 +21,7 @@ void LaunchPackKernelBFloat16(const void** inputs, void* output, int num,
                               musaStream_t stream);
 void LaunchPackKernelInt32(const int** inputs, int* output, int num, int before,
                            int after, int total, musaStream_t stream);
-void LaunchPackKernelInt64(const long long** inputs, long long* output, int num,
+void LaunchPackKernelInt64(const int64_t** inputs, int64_t* output, int num,
                            int before, int after, int total,
                            musaStream_t stream);
 
@@ -40,7 +40,7 @@ void LaunchUnpackKernelBFloat16(const void* input, void** outputs, int num,
 void LaunchUnpackKernelInt32(const int* input, int** outputs, int num,
                              int before, int after, int total,
                              musaStream_t stream);
-void LaunchUnpackKernelInt64(const long long* input, long long** outputs,
+void LaunchUnpackKernelInt64(const int64_t* input, int64_t** outputs,
                              int num, int before, int after, int total,
                              musaStream_t stream);
 }
@@ -170,8 +170,8 @@ template <>
 void MusaPackOp<int64>::LaunchKernel(const void** inputs, void* output, int num,
                                      int before, int after, int total,
                                      musaStream_t stream) {
-  LaunchPackKernelInt64(reinterpret_cast<const long long**>(inputs),
-                        reinterpret_cast<long long*>(output), num, before,
+  LaunchPackKernelInt64(reinterpret_cast<const int64_t**>(inputs),
+                        reinterpret_cast<int64_t*>(output), num, before,
                         after, total, stream);
 }
 
@@ -301,8 +301,8 @@ template <>
 void MusaUnpackOp<int64>::LaunchKernel(const void* input, void** outputs,
                                        int num, int before, int after,
                                        int total, musaStream_t stream) {
-  LaunchUnpackKernelInt64(reinterpret_cast<const long long*>(input),
-                          reinterpret_cast<long long**>(outputs), num, before,
+  LaunchUnpackKernelInt64(reinterpret_cast<const int64_t*>(input),
+                          reinterpret_cast<int64_t**>(outputs), num, before,
                           after, total, stream);
 }
 
