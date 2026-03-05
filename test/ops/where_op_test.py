@@ -26,10 +26,6 @@ class WhereOpTest(MUSATestCase):
       cpu_result_np = cpu_result.numpy()
       musa_result_np = musa_result.numpy()
 
-      # Sort indices to handle potential non-deterministic order from MUSA
-      cpu_result_np = cpu_result_np[np.lexsort(cpu_result_np.T[::-1])]
-      musa_result_np = musa_result_np[np.lexsort(musa_result_np.T[::-1])]
-
       self.assertAllClose(cpu_result_np, musa_result_np, rtol=rtol, atol=atol)
     else:
       # tf.where(condition, x, y) returns elements from x or y based on condition

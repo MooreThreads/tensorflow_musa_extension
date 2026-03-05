@@ -56,13 +56,62 @@ __device__ __forceinline__ bool IsNonZeroValue<bfloat16>(const bfloat16& v) {
 }
 
 template <typename T, typename TIndex>
-__global__ void MusaSelectFlaggedKernel(const T* __restrict__ d_flags,
-                                        TIndex* d_selected_indices,
-                                        TIndex* d_num_selected_out,
-                                        int num_items) {
+__global__ void MusaMarkFlaggedKernel(const T* __restrict__ d_flags,
+                                      TIndex* d_marks, int num_items) {
   const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx < num_items && IsNonZeroValue<T>(d_flags[idx])) {
-    TIndex pos = atomicAdd(reinterpret_cast<unsigned long long*>(d_num_selected_out), 1ULL);
+  if (idx < num_items) {
+    d_marks[idx] = IsNonZeroValue<T>(d_flags[idx]) ? 1 : 0;
+  }
+}
+
+template <typename TIndex>
+__global__ void MusaBlockScanKernel(const TIndex* input, TIndex* output,
+                                    TIndex* block_sums, int n) {
+  extern __shared__ char shared_mem[];
+  TIndex* temp = reinterpret_cast<TIndex*>(shared_mem);
+  int tid = threadIdx.x;
+  int idx = blockIdx.x * blockDim.x + tid;
+
+  // Load into shared memory
+  temp[tid] = (idx < n) ? input[idx] : 0;
+  __syncthreads();
+
+  // Simple inclusive scan within block
+  for (int stride = 1; stride < blockDim.x; stride <<= 1) {
+    TIndex val = 0;
+    if (tid >= stride) val = temp[tid - stride];
+    __syncthreads();
+    temp[tid] += val;
+    __syncthreads();
+  }
+
+  if (idx < n) output[idx] = temp[tid];
+  if (tid == blockDim.x - 1 && block_sums) {
+    block_sums[blockIdx.x] = temp[tid];
+  }
+}
+
+template <typename TIndex>
+__global__ void MusaAddBlockOffsetsKernel(TIndex* output,
+                                          const TIndex* block_offsets, int n) {
+  int bid = blockIdx.x;
+  if (bid == 0) return;
+  int idx = bid * blockDim.x + threadIdx.x;
+  if (idx < n) {
+    output[idx] += block_offsets[bid - 1];
+  }
+}
+
+template <typename TIndex>
+__global__ void MusaScatterIndicesKernel(const TIndex* __restrict__ d_marks,
+                                          const TIndex* __restrict__ d_scanned,
+                                          TIndex* d_selected_indices,
+                                          int num_items) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < num_items && d_marks[idx] == 1) {
+    // d_scanned is inclusive sum, so (sum - 1) is the zero-based index for the
+    // current item
+    TIndex pos = d_scanned[idx] - 1;
     if (d_selected_indices) {
       d_selected_indices[static_cast<TIndex>(pos)] = static_cast<TIndex>(idx);
     }
@@ -73,10 +122,64 @@ template <typename T, typename TIndex>
 void LaunchMusaSelectFlaggedKernel(const T* input, TIndex* selected_indices,
                                    TIndex* num_selected_out, int num_items,
                                    musaStream_t stream) {
+  if (num_items <= 0) return;
+
   const int threads = 256;
-  const int blocks = static_cast<int>((num_items + threads - 1) / threads);
-  MusaSelectFlaggedKernel<T, TIndex><<<blocks, threads, 0, stream>>>(
-      input, selected_indices, num_selected_out, num_items);
+  const int blocks = (num_items + threads - 1) / threads;
+
+  // 1. Mark elements (0 or 1)
+  TIndex* d_marks = nullptr;
+  musaMalloc(reinterpret_cast<void**>(&d_marks),
+                  num_items * sizeof(TIndex));
+  MusaMarkFlaggedKernel<T, TIndex>
+      <<<blocks, threads, 0, stream>>>(input, d_marks, num_items);
+
+  // 2. Multi-pass Global Scan (Inclusive)
+  TIndex* d_scanned = nullptr;
+  musaMalloc(reinterpret_cast<void**>(&d_scanned),
+                  num_items * sizeof(TIndex));
+
+  if (blocks == 1) {
+    MusaBlockScanKernel<TIndex><<<1, threads, threads * sizeof(TIndex), stream>>>(
+        d_marks, d_scanned, nullptr, num_items);
+  } else {
+    TIndex* d_block_sums = nullptr;
+    musaMalloc(reinterpret_cast<void**>(&d_block_sums),
+                    blocks * sizeof(TIndex));
+
+    // Pass 1: Local block scan
+    MusaBlockScanKernel<TIndex>
+        <<<blocks, threads, threads * sizeof(TIndex), stream>>>(
+            d_marks, d_scanned, d_block_sums, num_items);
+
+    // Pass 2: Scan the block sums (assume blocks < threads for simplicity in
+    // this example)
+    TIndex* d_block_offsets = nullptr;
+    musaMalloc(reinterpret_cast<void**>(&d_block_offsets),
+                    blocks * sizeof(TIndex));
+    MusaBlockScanKernel<TIndex><<<1, threads, threads * sizeof(TIndex), stream>>>(
+        d_block_sums, d_block_offsets, nullptr, blocks);
+
+    // Pass 3: Add offsets back
+    MusaAddBlockOffsetsKernel<TIndex>
+        <<<blocks, threads, 0, stream>>>(d_scanned, d_block_offsets, num_items);
+
+    musaFree(d_block_sums);
+    musaFree(d_block_offsets);
+  }
+
+  // 3. Scatter indices keeping original order
+  MusaScatterIndicesKernel<<<blocks, threads, 0, stream>>>(
+      d_marks, d_scanned, selected_indices, num_items);
+
+  // 4. Update total count
+  if (num_selected_out) {
+    musaMemcpyAsync(num_selected_out, d_scanned + num_items - 1, sizeof(TIndex),
+                    musaMemcpyDeviceToDevice, stream);
+  }
+
+  musaFree(d_marks);
+  musaFree(d_scanned);
 }
 
 #define INSTANTIATE_SELECT_FLAGGED(T, TINDEX)                                  \
