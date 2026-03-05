@@ -20,8 +20,14 @@ void LaunchIsNonZeroCount(const T* input, TIndex* output, int n,
                           musaStream_t stream);
 
 template <typename T, typename TIndex>
+void LaunchMusaMarkFlaggedKernel(const T* input, TIndex* d_marks, int num_items,
+                                 musaStream_t stream);
+
+template <typename T, typename TIndex>
 void LaunchMusaSelectFlaggedKernel(const T* input, TIndex* selected_indices,
-                                   TIndex* num_selected_out, int num_items,
+                                   const TIndex* d_scanned, 
+                                   const TIndex* d_marks,
+                                   int num_items,
                                    musaStream_t stream);
 
 template <int NDIM, typename TIndex>
@@ -101,35 +107,65 @@ struct Where {
     }
 
     musaStream_t stream = GetMusaStreamByCtx(ctx);
-    std::size_t temp_storage_bytes = 0;
+    const int64_t num_items = input.size();
 
-    Tensor found_true_t;
+    // 1. Mark matching elements (1 if match, 0 if not)
+    Tensor marks_t;
     TF_RETURN_IF_ERROR(ctx->allocate_temp(DataTypeToEnum<TIndex>::value,
-                                          TensorShape({1}), &found_true_t));
-    TIndex* found_true_device = found_true_t.flat<TIndex>().data();
+                                          TensorShape({num_items}), &marks_t));
+    TIndex* d_marks = marks_t.flat<TIndex>().data();
+    LaunchMusaMarkFlaggedKernel<T, TIndex>(input.data(), d_marks, 
+                                            static_cast<int>(num_items), stream);
 
-    // MUSA path: allocate temporary flat buffer for selected indices and
-    // perform a simple selection kernel that writes matching indices into the
-    // buffer and increments the device-side counter. Then expand indices into
-    // the NDIM output using the existing propagate kernel.
+    // 2. Compute Prefix Sum (Inclusive Scan) using muDNN mCum
+    Tensor scanned_t;
+    TF_RETURN_IF_ERROR(ctx->allocate_temp(DataTypeToEnum<TIndex>::value,
+                                          TensorShape({num_items}), &scanned_t));
+    TIndex* d_scanned = scanned_t.flat<TIndex>().data();
+
+    auto& handle = GetHandleByCtx(ctx);
+    mTensor t_marks = CreateMTensor(marks_t);
+    mTensor t_scanned = CreateMTensor(scanned_t);
+    mCum cum_op;
+    // Set mode: Sum, Dimension: 0
+    cum_op.SetMode(::musa::dnn::Cum::Mode::ADD);
+    int dim = 0;
+    cum_op.SetDim(dim);
+    
+    auto* musa_device = static_cast<MusaDevice*>(ctx->device());
+    std::list<Tensor> workspace_tensors;
+    auto mem_alloc_func =
+        [ctx, &workspace_tensors](size_t size) -> ::musa::dnn::MemoryHandler {
+      workspace_tensors.emplace_back();
+      Tensor& temp = workspace_tensors.back();
+
+      Status s = ctx->allocate_temp(
+          DT_UINT8, TensorShape({static_cast<int64_t>(size)}), &temp);
+      if (!s.ok()) return nullptr;
+
+      void* raw_ptr = static_cast<void*>(temp.flat<uint8_t>().data());
+      return ::musa::dnn::MemoryHandler(raw_ptr, [](void* p) {});
+    };
+    ::musa::dnn::MemoryMaintainer maintainer =
+        musa_device->GetMemMaintainer(mem_alloc_func);
+
+    // muDNN CumSum handles the global scan
+    mStatus status = cum_op.Run(handle, t_scanned, t_marks, maintainer);
+    if (status != mStatus::SUCCESS) {
+      return errors::Internal("WhereOp: muDNN CumSum failed with status ", (int)status);
+    }
+
+    // 3. Extract indices based on prefix sum
     Tensor selected_indices_t;
     TF_RETURN_IF_ERROR(
         ctx->allocate_temp(DataTypeToEnum<TIndex>::value,
-                           TensorShape({static_cast<int64_t>(input.size())}),
+                           TensorShape({static_cast<int64_t>(output.dimension(0))}),
                            &selected_indices_t));
     TIndex* selected_indices = selected_indices_t.flat<TIndex>().data();
 
-    // Initialize counter to zero on device.
-    musaError_t m_err =
-        musaMemsetAsync(found_true_device, 0, sizeof(TIndex), stream);
-    if (m_err != musaSuccess) {
-      return errors::Internal("WhereOp: musaMemsetAsync failed: ",
-                              musaGetErrorString(m_err));
-    }
-
     LaunchMusaSelectFlaggedKernel<T, TIndex>(
-        input.data(), selected_indices, found_true_device,
-        static_cast<int>(input.size()), stream);
+        input.data(), selected_indices, d_scanned, d_marks,
+        static_cast<int>(num_items), stream);
 
     const Eigen::array<TIndex, NDIM> strides =
         CalculateStrides<TIndex, T, NDIM>(input);
