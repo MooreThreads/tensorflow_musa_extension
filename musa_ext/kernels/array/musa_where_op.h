@@ -56,12 +56,6 @@ struct NumTrue {
     LaunchIsNonZeroCount<T, TIndex>(input_data, count_device,
                             static_cast<int>(input.size()), mstream);
 
-    // Copy lower bytes to the `TIndex` device scalar (truncate if needed).
-    MusaMemcpyAsyncD2D(
-        reinterpret_cast<void*>(num_true_data),
-        reinterpret_cast<const void*>(count_device),
-        static_cast<size_t>(sizeof(TIndex)), mstream);
-
     return Status::OK();
   }
 };

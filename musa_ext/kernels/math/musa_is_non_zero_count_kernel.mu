@@ -66,6 +66,7 @@ template <typename T, typename TIndex>
 void LaunchIsNonZeroCount(const T* input, TIndex* output, int n,
                           musaStream_t stream) {
   if (n <= 0) return;
+  musaMemsetAsync(output, 0, sizeof(TIndex), stream);
   int threads = 256;
   int blocks = (n + threads - 1) / threads;
   IsNonZeroCountKernel<T, TIndex>
