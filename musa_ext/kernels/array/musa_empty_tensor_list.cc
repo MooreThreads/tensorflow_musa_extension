@@ -64,8 +64,71 @@ class MusaEmptyTensorListOp : public MusaOpKernel {
 REGISTER_KERNEL_BUILDER(Name("EmptyTensorList")
                             .Device("MUSA")
                             .HostMemory("element_shape")
-                            .HostMemory("max_num_elements"),
+                            .HostMemory("max_num_elements")
+                            .HostMemory("handle"),
                         MusaEmptyTensorListOp);
 
 }  // namespace musa
 }  // namespace tensorflow
+namespace tensorflow {
+  const char TensorList::kTypeName[] = "tensorflow::TensorList";
+
+  void TensorList::Encode(VariantTensorData* data) const {
+    data->set_type_name(TypeName());
+    data->set_metadata("");
+    for (const Tensor& t : tensors()) {
+      *data->add_tensors() = t;
+    }
+  }
+
+  bool TensorList::Decode(const VariantTensorData& data) {
+    if (data.type_name() != TypeName()) {
+      return false;
+    }
+    tensors_->values_ = data.tensors();
+    return true;
+  }
+
+  TensorList::~TensorList() { if (tensors_) { tensors_->Unref(); } }
+} // namespace tensorflow
+
+namespace tensorflow {
+} // namespace tensorflow
+
+namespace tensorflow {
+  template <>
+  void EncodeVariant<TensorList>(const TensorList& value, std::string* buf) {
+    VariantTensorData data;
+    value.Encode(&data);
+    data.set_type_name(value.TypeName());
+    data.SerializeToString(buf);
+  }
+  
+  template <>
+  bool DecodeVariant<TensorList>(std::string* buf, TensorList* value) {
+    VariantTensorData data;
+    if (!data.ParseFromString(*buf)) return false;
+    return value->Decode(data);
+  }
+  
+  template <>
+  void EncodeVariant<TensorList>(const TensorList& value, VariantTensorData* data) {
+    value.Encode(data);
+    data->set_type_name(value.TypeName());
+  }
+  
+  template <>
+  bool DecodeVariant<TensorList>(VariantTensorData* data, TensorList* value) {
+    return value->Decode(*data);
+  }
+  
+  template <>
+  std::string TypeNameVariant<TensorList>(const TensorList& value) {
+    return value.TypeName();
+  }
+  
+  template <>
+  std::string DebugStringVariant<TensorList>(const TensorList& value) {
+    return "TensorList";
+  }
+} // namespace tensorflow
