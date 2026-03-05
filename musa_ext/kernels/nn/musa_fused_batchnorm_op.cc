@@ -25,7 +25,6 @@ class MusaFusedBatchNormOp : public MusaOpKernel {
     is_nhwc_ = (data_format_str == "NHWC");
   }
 
-  // BatchNorm is computationally intensive (reduction operations)
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
@@ -34,6 +33,9 @@ class MusaFusedBatchNormOp : public MusaOpKernel {
     const Tensor& offset = ctx->input(2);
     const Tensor& est_mean = ctx->input(3);
     const Tensor& est_var = ctx->input(4);
+
+    const int64_t channel_elems = scale.NumElements();
+    const size_t channel_bytes = channel_elems * sizeof(float);
 
     Tensor* y = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, x.shape(), &y));
@@ -54,15 +56,17 @@ class MusaFusedBatchNormOp : public MusaOpKernel {
     handle.SetAllowTF32(false);
 
     std::vector<Tensor> workspace_holder;
+    workspace_holder.reserve(4); 
+
     auto internal_maintainer = [&](size_t size) -> ::musa::dnn::MemoryHandler {
       if (size == 0) return ::musa::dnn::MemoryHandler(nullptr, [](void*) {});
       Tensor temp;
       Status s = ctx->allocate_temp(
           DT_UINT8, TensorShape({static_cast<int64_t>(size)}), &temp);
       if (!s.ok()) return ::musa::dnn::MemoryHandler(nullptr, [](void*) {});
-      workspace_holder.push_back(temp);
-      return ::musa::dnn::MemoryHandler(temp.flat<uint8_t>().data(),
-                                        [](void*) {});
+      workspace_holder.push_back(std::move(temp));
+      return ::musa::dnn::MemoryHandler(
+          workspace_holder.back().flat<uint8_t>().data(), [](void*) {});
     };
     auto maintainer = device->GetMemMaintainer(internal_maintainer);
 
@@ -83,17 +87,34 @@ class MusaFusedBatchNormOp : public MusaOpKernel {
 
     mStatus status;
     if (is_training_) {
-      Tensor temp_acc_mean, temp_acc_var;
-      ctx->allocate_temp(DT_FLOAT, scale.shape(), &temp_acc_mean);
-      ctx->allocate_temp(DT_FLOAT, scale.shape(), &temp_acc_var);
+      Tensor temp_acc_buf;
+      OP_REQUIRES_OK(ctx, ctx->allocate_temp(
+          DT_FLOAT, TensorShape({channel_elems * 2}), &temp_acc_buf));
 
-      musaMemsetAsync(temp_acc_mean.flat<float>().data(), 0,
-                      temp_acc_mean.NumElements() * sizeof(float), stream);
-      musaMemsetAsync(temp_acc_var.flat<float>().data(), 0,
-                      temp_acc_var.NumElements() * sizeof(float), stream);
+      float* acc_buf_ptr = temp_acc_buf.flat<float>().data();
+      float* acc_mean_ptr = acc_buf_ptr;
+      float* acc_var_ptr = acc_buf_ptr + channel_elems;
 
-      mTensor mt_acc_mean = CreateMTensor(temp_acc_mean, mFormat::NCHW);
-      mTensor mt_acc_var = CreateMTensor(temp_acc_var, mFormat::NCHW);
+      musaMemsetAsync(acc_buf_ptr, 0, channel_bytes * 2, stream);
+
+      Tensor acc_mean_view;
+      {
+        Tensor slice_base = temp_acc_buf.Slice(0, channel_elems);
+        OP_REQUIRES(ctx,
+            acc_mean_view.CopyFrom(slice_base, scale.shape()),
+            errors::Internal("Failed to create acc_mean_view from buffer"));
+      }
+
+      Tensor acc_var_view;
+      {
+        Tensor slice_base = temp_acc_buf.Slice(channel_elems, channel_elems * 2);
+        OP_REQUIRES(ctx,
+            acc_var_view.CopyFrom(slice_base, scale.shape()),
+            errors::Internal("Failed to create acc_var_view from buffer"));
+      }
+
+      mTensor mt_acc_mean = CreateMTensor(acc_mean_view, mFormat::NCHW);
+      mTensor mt_acc_var = CreateMTensor(acc_var_view, mFormat::NCHW);
 
       status =
           bn_op.RunComposite(handle, mt_y, mt_x, mt_acc_mean, mt_acc_var,
@@ -101,13 +122,20 @@ class MusaFusedBatchNormOp : public MusaOpKernel {
                              (double)exp_avg_factor_, maintainer);
 
       if (status == mStatus::SUCCESS) {
-        size_t copy_size = saved_mean->NumElements() * sizeof(float);
-        musaMemcpyAsync(batch_mean->flat<float>().data(),
-                        saved_mean->flat<float>().data(), copy_size,
-                        musaMemcpyDeviceToDevice, stream);
-        musaMemcpyAsync(batch_var->flat<float>().data(),
-                        saved_var->flat<float>().data(), copy_size,
-                        musaMemcpyDeviceToDevice, stream);
+        float* bm_ptr = batch_mean->flat<float>().data();
+        float* bv_ptr = batch_var->flat<float>().data();
+        float* sm_ptr = saved_mean->flat<float>().data();
+        float* sv_ptr = saved_var->flat<float>().data();
+        if (sv_ptr == sm_ptr + channel_elems &&
+            bv_ptr == bm_ptr + channel_elems) {
+          musaMemcpyAsync(bm_ptr, sm_ptr, channel_bytes * 2,
+                          musaMemcpyDeviceToDevice, stream);
+        } else {
+          musaMemcpyAsync(bm_ptr, sm_ptr, channel_bytes,
+                          musaMemcpyDeviceToDevice, stream);
+          musaMemcpyAsync(bv_ptr, sv_ptr, channel_bytes,
+                          musaMemcpyDeviceToDevice, stream);
+        }
       }
 
     } else {
@@ -140,7 +168,6 @@ class MusaFusedBatchNormGradOp : public MusaOpKernel {
     is_nhwc_ = (data_format_str == "NHWC");
   }
 
-  // BatchNormGrad is computationally intensive
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
@@ -150,13 +177,14 @@ class MusaFusedBatchNormGradOp : public MusaOpKernel {
     const Tensor& saved_mean = ctx->input(3);
     const Tensor& saved_var = ctx->input(4);
 
+    const int64_t channel_elems = scale.NumElements();
+
     Tensor* dx = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, x.shape(), &dx));
     Tensor* d_scale = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(1, scale.shape(), &d_scale));
     Tensor* d_offset = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(2, scale.shape(), &d_offset));
-
     Tensor* d_mean = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(3, scale.shape(), &d_mean));
     Tensor* d_var = nullptr;
@@ -167,24 +195,35 @@ class MusaFusedBatchNormGradOp : public MusaOpKernel {
     auto stream = device->GetStream();
     handle.SetAllowTF32(false);
 
-    musaMemsetAsync(d_scale->flat<float>().data(), 0,
-                    d_scale->NumElements() * sizeof(float), stream);
-    musaMemsetAsync(d_offset->flat<float>().data(), 0,
-                    d_offset->NumElements() * sizeof(float), stream);
-    musaMemsetAsync(d_mean->flat<float>().data(), 0,
-                    d_mean->NumElements() * sizeof(float), stream);
-    musaMemsetAsync(d_var->flat<float>().data(), 0,
-                    d_var->NumElements() * sizeof(float), stream);
+    float* d_scale_ptr = d_scale->flat<float>().data();
+    float* d_offset_ptr = d_offset->flat<float>().data();
+    float* d_mean_ptr = d_mean->flat<float>().data();
+    float* d_var_ptr = d_var->flat<float>().data();
+    const size_t channel_bytes = channel_elems * sizeof(float);
+
+    if (d_offset_ptr == d_scale_ptr + channel_elems &&
+        d_mean_ptr == d_offset_ptr + channel_elems &&
+        d_var_ptr == d_mean_ptr + channel_elems) {
+      musaMemsetAsync(d_scale_ptr, 0, channel_bytes * 4, stream);
+    } else {
+      musaMemsetAsync(d_scale_ptr, 0, channel_bytes, stream);
+      musaMemsetAsync(d_offset_ptr, 0, channel_bytes, stream);
+      musaMemsetAsync(d_mean_ptr, 0, channel_bytes, stream);
+      musaMemsetAsync(d_var_ptr, 0, channel_bytes, stream);
+    }
 
     std::vector<Tensor> workspace_holder;
+    workspace_holder.reserve(4);
+
     auto maintainer_func = [&](size_t size) -> ::musa::dnn::MemoryHandler {
       if (size == 0) return ::musa::dnn::MemoryHandler(nullptr, [](void*) {});
       Tensor temp;
-      ctx->allocate_temp(DT_UINT8, TensorShape({static_cast<int64_t>(size)}),
-                         &temp);
-      workspace_holder.push_back(temp);
-      return ::musa::dnn::MemoryHandler(temp.flat<uint8_t>().data(),
-                                        [](void*) {});
+      Status s = ctx->allocate_temp(
+          DT_UINT8, TensorShape({static_cast<int64_t>(size)}), &temp);
+      if (!s.ok()) return ::musa::dnn::MemoryHandler(nullptr, [](void*) {});
+      workspace_holder.push_back(std::move(temp));
+      return ::musa::dnn::MemoryHandler(
+          workspace_holder.back().flat<uint8_t>().data(), [](void*) {});
     };
     auto maintainer = device->GetMemMaintainer(maintainer_func);
 
