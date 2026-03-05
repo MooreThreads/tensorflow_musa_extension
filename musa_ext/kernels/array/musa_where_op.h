@@ -25,9 +25,8 @@ void LaunchMusaMarkFlaggedKernel(const T* input, TIndex* d_marks, int num_items,
 
 template <typename T, typename TIndex>
 void LaunchMusaSelectFlaggedKernel(const T* input, TIndex* selected_indices,
-                                   const TIndex* d_scanned, 
-                                   const TIndex* d_marks,
-                                   int num_items,
+                                   const TIndex* d_scanned,
+                                   const TIndex* d_marks, int num_items,
                                    musaStream_t stream);
 
 template <int NDIM, typename TIndex>
@@ -54,13 +53,12 @@ struct NumTrue {
     // non-zero values into a 64-bit device scalar, then copy/truncate the
     // result into the requested `TIndex` device scalar.
     Tensor count64_wrapper;
-    TF_RETURN_IF_ERROR(
-      ctx->allocate_temp(DataTypeToEnum<TIndex>::value, TensorShape({1}),
-                 &count64_wrapper));
+    TF_RETURN_IF_ERROR(ctx->allocate_temp(DataTypeToEnum<TIndex>::value,
+                                          TensorShape({1}), &count64_wrapper));
     TIndex* count_device = count64_wrapper.flat<TIndex>().data();
 
     LaunchIsNonZeroCount<T, TIndex>(input_data, count_device,
-                            static_cast<int>(input.size()), mstream);
+                                    static_cast<int>(input.size()), mstream);
 
     auto m_err = musaMemcpyAsync(num_true_data, count_device, sizeof(TIndex),
                                  musaMemcpyDeviceToHost, mstream);
@@ -109,18 +107,18 @@ struct Where {
     musaStream_t stream = GetMusaStreamByCtx(ctx);
     const int64_t num_items = input.size();
 
-    // 1. Mark matching elements (1 if match, 0 if not)
+    // Turn the inputted tensor into 0/1 flags (element-wise).
     Tensor marks_t;
     TF_RETURN_IF_ERROR(ctx->allocate_temp(DataTypeToEnum<TIndex>::value,
                                           TensorShape({num_items}), &marks_t));
     TIndex* d_marks = marks_t.flat<TIndex>().data();
-    LaunchMusaMarkFlaggedKernel<T, TIndex>(input.data(), d_marks, 
-                                            static_cast<int>(num_items), stream);
+    LaunchMusaMarkFlaggedKernel<T, TIndex>(input.data(), d_marks,
+                                           static_cast<int>(num_items), stream);
 
-    // 2. Compute Prefix Sum (Inclusive Scan) using muDNN mCum
+    // Compute Prefix Sum using muDNN mCum
     Tensor scanned_t;
-    TF_RETURN_IF_ERROR(ctx->allocate_temp(DataTypeToEnum<TIndex>::value,
-                                          TensorShape({num_items}), &scanned_t));
+    TF_RETURN_IF_ERROR(ctx->allocate_temp(
+        DataTypeToEnum<TIndex>::value, TensorShape({num_items}), &scanned_t));
     TIndex* d_scanned = scanned_t.flat<TIndex>().data();
 
     auto& handle = GetHandleByCtx(ctx);
@@ -131,7 +129,7 @@ struct Where {
     cum_op.SetMode(::musa::dnn::Cum::Mode::ADD);
     int dim = 0;
     cum_op.SetDim(dim);
-    
+
     auto* musa_device = static_cast<MusaDevice*>(ctx->device());
     std::list<Tensor> workspace_tensors;
     auto mem_alloc_func =
@@ -152,15 +150,16 @@ struct Where {
     // muDNN CumSum handles the global scan
     mStatus status = cum_op.Run(handle, t_scanned, t_marks, maintainer);
     if (status != mStatus::SUCCESS) {
-      return errors::Internal("WhereOp: muDNN CumSum failed with status ", (int)status);
+      return errors::Internal("WhereOp: muDNN CumSum failed with status ",
+                              (int)status);
     }
 
-    // 3. Extract indices based on prefix sum
+    // Extract indices based on prefix sum
     Tensor selected_indices_t;
-    TF_RETURN_IF_ERROR(
-        ctx->allocate_temp(DataTypeToEnum<TIndex>::value,
-                           TensorShape({static_cast<int64_t>(output.dimension(0))}),
-                           &selected_indices_t));
+    TF_RETURN_IF_ERROR(ctx->allocate_temp(
+        DataTypeToEnum<TIndex>::value,
+        TensorShape({static_cast<int64_t>(output.dimension(0))}),
+        &selected_indices_t));
     TIndex* selected_indices = selected_indices_t.flat<TIndex>().data();
 
     LaunchMusaSelectFlaggedKernel<T, TIndex>(

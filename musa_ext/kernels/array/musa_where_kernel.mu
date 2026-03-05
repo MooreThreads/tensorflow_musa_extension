@@ -66,12 +66,13 @@ __global__ void MusaMarkFlaggedKernel(const T* __restrict__ d_flags,
 
 template <typename TIndex>
 __global__ void MusaScatterIndicesKernel(const TIndex* __restrict__ d_marks,
-                                          const TIndex* __restrict__ d_scanned,
-                                          TIndex* d_selected_indices,
-                                          int num_items) {
+                                         const TIndex* __restrict__ d_scanned,
+                                         TIndex* d_selected_indices,
+                                         int num_items) {
   const int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < num_items && d_marks[idx] == 1) {
-    // d_scanned is inclusive sum from muDNN CumSum, so (sum - 1) is the zero-based index
+    // d_scanned is inclusive sum from muDNN CumSum, so (sum - 1) is the
+    // zero-based index
     TIndex pos = d_scanned[idx] - 1;
     if (d_selected_indices) {
       d_selected_indices[static_cast<TIndex>(pos)] = static_cast<TIndex>(idx);
@@ -81,34 +82,36 @@ __global__ void MusaScatterIndicesKernel(const TIndex* __restrict__ d_marks,
 
 template <typename T, typename TIndex>
 void LaunchMusaSelectFlaggedKernel(const T* input, TIndex* selected_indices,
-                                   const TIndex* d_scanned, 
-                                   const TIndex* d_marks,
-                                   int num_items,
+                                   const TIndex* d_scanned,
+                                   const TIndex* d_marks, int num_items,
                                    musaStream_t stream) {
   if (num_items <= 0) return;
 
   const int threads = 256;
   const int blocks = (num_items + threads - 1) / threads;
 
-  // Scatter indices keeping original order using the provided prefix sum (d_scanned)
+  // Scatter indices keeping original order using the provided prefix sum
+  // (d_scanned)
   MusaScatterIndicesKernel<<<blocks, threads, 0, stream>>>(
       d_marks, d_scanned, selected_indices, num_items);
 }
 
 // Wrapper to launch Mark kernel separately since muDNN needs to be in .h/.cc
 template <typename T, typename TIndex>
-void LaunchMusaMarkFlaggedKernel(const T* input, TIndex* d_marks, int num_items, musaStream_t stream) {
+void LaunchMusaMarkFlaggedKernel(const T* input, TIndex* d_marks, int num_items,
+                                 musaStream_t stream) {
   if (num_items <= 0) return;
   const int threads = 256;
   const int blocks = (num_items + threads - 1) / threads;
-  MusaMarkFlaggedKernel<T, TIndex><<<blocks, threads, 0, stream>>>(input, d_marks, num_items);
+  MusaMarkFlaggedKernel<T, TIndex>
+      <<<blocks, threads, 0, stream>>>(input, d_marks, num_items);
 }
 
-#define INSTANTIATE_SELECT_FLAGGED(T, TINDEX)                                  \
-  template void LaunchMusaSelectFlaggedKernel<T, TINDEX>(                      \
-      const T* input, TINDEX* selected_indices, const TINDEX* d_scanned,       \
-      const TINDEX* d_marks, int num_items, musaStream_t stream);               \
-  template void LaunchMusaMarkFlaggedKernel<T, TINDEX>(                        \
+#define INSTANTIATE_SELECT_FLAGGED(T, TINDEX)                            \
+  template void LaunchMusaSelectFlaggedKernel<T, TINDEX>(                \
+      const T* input, TINDEX* selected_indices, const TINDEX* d_scanned, \
+      const TINDEX* d_marks, int num_items, musaStream_t stream);        \
+  template void LaunchMusaMarkFlaggedKernel<T, TINDEX>(                  \
       const T* input, TINDEX* d_marks, int num_items, musaStream_t stream)
 
 #define INSTANTIATE_SELECT_FLAGGED_ALL(T) \
