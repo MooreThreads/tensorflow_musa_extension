@@ -97,6 +97,22 @@ tf.load_library("./build/libmusa_plugin.so")
 - 编译 MUSA 内核和主机代码
 - 生成动态链接库 `libmusa_plugin.so`
 
+### 3. Kernel 计时开关（Debug 模式）
+
+仅在 `./build.sh debug` 构建下生效（`MUSA_KERNEL_DEBUG=ON`）：
+
+```bash
+# 计时级别：1=仅总耗时，2=分段耗时
+export MUSA_TIMING_KERNEL_LEVEL=2
+
+# 仅打印指定 Kernel（大小写不敏感子串匹配），ALL 表示全部
+export MUSA_TIMING_KERNEL_NAME=MatMul
+# export MUSA_TIMING_KERNEL_NAME=ALL
+
+# 程序退出时打印汇总统计
+export MUSA_TIMING_KERNEL_STATS=1
+```
+
 ### 4. 加载插件
 
 编译成功后，在 TensorFlow 应用中加载插件：

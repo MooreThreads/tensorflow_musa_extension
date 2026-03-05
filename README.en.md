@@ -97,6 +97,22 @@ The build script automatically completes the following steps:
 - Compiles MUSA kernels and host code
 - Generates the dynamic library `libmusa_plugin.so`
 
+### 3. Kernel Timing Controls (Debug Build)
+
+Only effective when built with `./build.sh debug` (`MUSA_KERNEL_DEBUG=ON`):
+
+```bash
+# Timing level: 1=total only, 2=per-section breakdown
+export MUSA_TIMING_KERNEL_LEVEL=2
+
+# Print only selected kernels (case-insensitive substring), ALL for all kernels
+export MUSA_TIMING_KERNEL_NAME=MatMul
+# export MUSA_TIMING_KERNEL_NAME=ALL
+
+# Print summary statistics at process exit
+export MUSA_TIMING_KERNEL_STATS=1
+```
+
 ### 4. Plugin Loading
 
 After successful compilation, load the plugin in your TensorFlow application:

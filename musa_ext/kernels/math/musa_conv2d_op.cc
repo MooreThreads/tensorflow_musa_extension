@@ -12,6 +12,7 @@
 #include "tensorflow/core/util/padding.h"
 #include "tensorflow/core/util/tensor_format.h"
 #include "utils_op.h"
+#include "utils/logging.h"
 
 namespace tensorflow {
 namespace musa {
@@ -255,6 +256,8 @@ class MusaConv2DOp : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_KERNEL_TIMING_GUARD(ctx);
+
     const Tensor& input = ctx->input(0);
     const Tensor& filter = ctx->input(1);
 
@@ -317,12 +320,14 @@ class MusaConv2DOp : public MusaOpKernel {
     if (output->NumElements() == 0) {
       return;
     }
+    MUSA_KERNEL_TRACE("Mem Alloc");
 
     if (data_format_ == FORMAT_NHWC) {
       OP_REQUIRES_OK(
           ctx, RunMusaConv2D<T>(ctx, input, filter, output, FORMAT_NHWC,
                                 stride_h_, stride_w_, dilation_h_, dilation_w_,
                                 pad_top, pad_left, tf32_enabled_));
+      MUSA_KERNEL_TRACE("Kernel");
       return;
     }
 
@@ -338,17 +343,21 @@ class MusaConv2DOp : public MusaOpKernel {
                    ctx->allocate_temp(output->dtype(),
                                       TensorShape({batch, out_h, out_w, out_c}),
                                       &output_nhwc));
+    MUSA_KERNEL_TRACE("Mem Alloc");
 
     static const std::vector<int64_t> kPermNchwToNhwc = {0, 2, 3, 1};
     static const std::vector<int64_t> kPermNhwcToNchw = {0, 3, 1, 2};
     OP_REQUIRES_OK(
         ctx, PermuteTensorOnMusa(ctx, input, &input_nhwc, kPermNchwToNhwc));
+    MUSA_KERNEL_TRACE("Kernel");
     OP_REQUIRES_OK(
         ctx, RunMusaConv2D<T>(ctx, input_nhwc, filter, &output_nhwc,
                               FORMAT_NHWC, stride_h_, stride_w_, dilation_h_,
                               dilation_w_, pad_top, pad_left, tf32_enabled_));
+    MUSA_KERNEL_TRACE("Kernel");
     OP_REQUIRES_OK(
         ctx, PermuteTensorOnMusa(ctx, output_nhwc, output, kPermNhwcToNchw));
+    MUSA_KERNEL_TRACE("Kernel");
   }
 
  private:

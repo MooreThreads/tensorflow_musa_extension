@@ -8,6 +8,10 @@ set(CMAKE_CXX_COMPILER g++)
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Kernel debug/timing instrumentation switch.
+# OFF by default to keep production performance unchanged.
+option(MUSA_KERNEL_DEBUG "Enable MUSA kernel compute timing instrumentation" OFF)
+
 # Set MUSA path
 set(MUSA_PATH "/usr/local/musa" CACHE STRING "Path to MUSA installation")
 set(MCC_EXECUTABLE "${MUSA_PATH}/bin/mcc")
@@ -38,8 +42,12 @@ string(REPLACE "-D_GLIBCXX_USE_CXX11_ABI=1" "" TF_COMPILE_FLAGS "${TF_COMPILE_FL
 # Re-add the safest definition
 set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=0")
 
-# Add compile definitions to disable debug logging
-set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_DISABLE_DEBUG_LOGGING -DNDEBUG -DMUSA_DISABLE_TRACE_LOGGING -DMUSA_DISABLE_AUTO_TRACE")
+# Configure debug/logging-related compile definitions.
+if(MUSA_KERNEL_DEBUG)
+    set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_KERNEL_DEBUG")
+else()
+    set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_DISABLE_DEBUG_LOGGING -DNDEBUG -DMUSA_DISABLE_TRACE_LOGGING -DMUSA_DISABLE_AUTO_TRACE")
+endif()
 
 # Include paths
 include_directories("${TF_INC}" "${MUSA_PATH}/include")
@@ -126,5 +134,6 @@ list(LENGTH MU_SOURCES MU_SOURCES_COUNT)
 message(STATUS "TensorFlow MUSA Plugin Configuration:")
 message(STATUS "  MUSA Path: ${MUSA_PATH}")
 message(STATUS "  TensorFlow Include: ${TF_INC}")
+message(STATUS "  MUSA Kernel Debug: ${MUSA_KERNEL_DEBUG}")
 message(STATUS "  Source Files: ${CPP_SOURCES_COUNT} C++ files, ${MU_SOURCES_COUNT} MUSA kernels")
 message(STATUS "  Output: ${CMAKE_CURRENT_BINARY_DIR}/libmusa_plugin.so")

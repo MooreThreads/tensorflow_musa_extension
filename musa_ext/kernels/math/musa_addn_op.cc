@@ -3,6 +3,7 @@
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "../utils_op.h"
+#include "utils/logging.h"
 
 // ============================================================================
 // MUSA AddN custom kernel launcher declarations from musa_addn_kernel.mu
@@ -30,6 +31,8 @@ namespace musa {
 template <typename T>
 void AddNCompute(OpKernelContext* ctx, mFormat format,
                  void (*launcher)(const T**, T*, int, int, musaStream_t)) {
+  MUSA_KERNEL_TIMING_GUARD_WITH_NAME(ctx, "AddN");
+
   const int num_inputs = ctx->num_inputs();
   OP_REQUIRES(ctx, num_inputs >= 1,
               errors::InvalidArgument("AddN requires at least one input."));
@@ -39,12 +42,14 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
     const Tensor& input = ctx->input(0);
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &output));
+    MUSA_KERNEL_TRACE("Mem Alloc");
     if (input.NumElements() == 0) return;
     auto& handle = GetHandleByCtx(ctx);
     musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
     mStatus copy_status = MusaMemcpyAsyncD2D(
         const_cast<char*>(output->tensor_data().data()),
         input.tensor_data().data(), input.TotalBytes(), stream);
+    MUSA_KERNEL_TRACE("Mem Cpy");
     OP_REQUIRES(ctx, copy_status == mStatus::SUCCESS,
                 errors::Internal("MUSA AddN single input copy failed."));
     return;
@@ -62,6 +67,7 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
   // Allocate output
   Tensor* output = nullptr;
   OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
+  MUSA_KERNEL_TRACE("Mem Alloc");
   if (num_elements == 0) return;
 
   // Handle two inputs - use muDNN Binary
@@ -73,6 +79,7 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
     ::musa::dnn::Binary op;
     op.SetMode(::musa::dnn::Binary::Mode::ADD);
     auto status = op.Run(handle, t_out, t0, t1);
+    MUSA_KERNEL_TRACE("Kernel");
     OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
                 errors::Internal("MUSA AddN two inputs failed."));
     return;
@@ -90,14 +97,17 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
   const void** d_inputs = nullptr;
   musaMalloc(reinterpret_cast<void**>(&d_inputs),
              num_inputs * sizeof(const void*));
+  MUSA_KERNEL_TRACE("Mem Alloc");
   musaMemcpy(const_cast<void**>(d_inputs), input_ptrs.data(),
              num_inputs * sizeof(const void*), musaMemcpyHostToDevice);
+  MUSA_KERNEL_TRACE("Mem Cpy");
 
   // Launch custom kernel
   void* output_ptr = const_cast<char*>(output->tensor_data().data());
   launcher(reinterpret_cast<const T**>(d_inputs),
            reinterpret_cast<T*>(output_ptr),
            num_inputs, static_cast<int>(num_elements), stream);
+  MUSA_KERNEL_TRACE("Kernel");
 
   musaFree(const_cast<void**>(d_inputs));
 }

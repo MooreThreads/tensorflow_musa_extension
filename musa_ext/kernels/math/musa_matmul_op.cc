@@ -11,6 +11,7 @@
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/util/matmul_bcast.h"
 #include "../utils_op.h"
+#include "utils/logging.h"
 
 namespace tensorflow {
 namespace musa {
@@ -64,6 +65,8 @@ class MusaMatMulOp : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_KERNEL_TIMING_GUARD(ctx);
+
     const Tensor& in0 = ctx->input(0);
     const Tensor& in1 = ctx->input(1);
 
@@ -94,6 +97,7 @@ class MusaMatMulOp : public MusaOpKernel {
     Tensor* out = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, out_shape, &out));
     if (out->NumElements() == 0) return;
+    MUSA_KERNEL_TRACE("Mem Alloc");
 
     auto& handle = GetHandleByCtx(ctx);
     handle.SetAllowTF32(tf32_enabled_);  // Use TF32 setting from constructor
@@ -110,6 +114,7 @@ class MusaMatMulOp : public MusaOpKernel {
       op.SetBeta(0.0);
 
       status = op.Run(handle, mt_out, mt_a, mt_b);
+      MUSA_KERNEL_TRACE("Kernel");
 
       OP_REQUIRES(
           ctx, status == ::musa::dnn::Status::SUCCESS,
@@ -159,6 +164,7 @@ class MusaMatMulOp : public MusaOpKernel {
       }
 
       status = op.Run(handle, mt_out, mt_a, mt_b);
+      MUSA_KERNEL_TRACE("Kernel");
 
       OP_REQUIRES(
           ctx, status == ::musa::dnn::Status::SUCCESS,
