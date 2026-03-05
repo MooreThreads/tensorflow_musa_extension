@@ -111,8 +111,8 @@ template <typename T>
 Status RunMusaConv2D(OpKernelContext* ctx, const Tensor& input,
                      const Tensor& filter, Tensor* output,
                      TensorFormat data_format, int stride_h, int stride_w,
-                     int dilation_h, int dilation_w, int pad_top,
-                     int pad_left, bool tf32_enabled) {
+                     int dilation_h, int dilation_w, int pad_top, int pad_left,
+                     bool tf32_enabled) {
   auto& handle = GetHandleByCtx(ctx);
 
   handle.SetAllowTF32(tf32_enabled);

@@ -21,11 +21,11 @@
 // to ensure bit-wise identical results with CUDA when possible.
 
 #include "../utils/musa_guarded_philox_random.h"
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor_util.h"
-#include "../utils_op.h"
 
 // External kernel launchers from .mu files (defined in global namespace)
 // These are C++ functions with C++ linkage (name mangled)
