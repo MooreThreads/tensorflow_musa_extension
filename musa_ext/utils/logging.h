@@ -225,14 +225,19 @@ class KernelTimingScope {
     if (!active_) return;
 
     start_ns_ = NowNs();
-    last_ns_ = start_ns_;
   }
 
   ~KernelTimingScope() {
     if (!active_) return;
 
     const uint64_t end_ns = NowNs();
+    CloseUnfinishedStages(end_ns);
+
     const double total_ms = NsToMs(end_ns - start_ns_);
+    const double stage_sum_ms =
+        mem_alloc_ms_ + mem_cpy_ms_ + kernel_ms_ + sync_ms_ + other_ms_;
+    const double untraced_ms = std::max(0.0, total_ms - stage_sum_ms);
+    const double other_total_ms = other_ms_ + untraced_ms;
 
     if (level_ == 1) {
       std::lock_guard<std::mutex> lock(GetPrintMutex());
@@ -240,11 +245,21 @@ class KernelTimingScope {
                    kernel_name_.c_str(), input_shape_.c_str(), total_ms);
     } else if (level_ >= 2) {
       std::lock_guard<std::mutex> lock(GetPrintMutex());
-      std::fprintf(stderr,
-                   "[MUSA_KERNEL_TIMING] %s %s | Total(ms) %.3f | Mem Alloc "
-                   "%.3f | Mem Cpy %.3f | Kernel %.3f | Sync %.3f |\n",
-                   kernel_name_.c_str(), input_shape_.c_str(), total_ms,
-                   mem_alloc_ms_, mem_cpy_ms_, kernel_ms_, sync_ms_);
+      if (other_total_ms > 0.0005) {
+        std::fprintf(stderr,
+                     "[MUSA_KERNEL_TIMING] %s %s | Total(ms) %.3f | Mem Alloc "
+                     "%.3f | Mem Cpy %.3f | Kernel %.3f | Sync %.3f | Other "
+                     "%.3f |\n",
+                     kernel_name_.c_str(), input_shape_.c_str(), total_ms,
+                     mem_alloc_ms_, mem_cpy_ms_, kernel_ms_, sync_ms_,
+                     other_total_ms);
+      } else {
+        std::fprintf(stderr,
+                     "[MUSA_KERNEL_TIMING] %s %s | Total(ms) %.3f | Mem Alloc "
+                     "%.3f | Mem Cpy %.3f | Kernel %.3f | Sync %.3f |\n",
+                     kernel_name_.c_str(), input_shape_.c_str(), total_ms,
+                     mem_alloc_ms_, mem_cpy_ms_, kernel_ms_, sync_ms_);
+      }
     }
 
     if (stats_enabled_) {
@@ -253,26 +268,29 @@ class KernelTimingScope {
     }
   }
 
-  void Trace(const char* stage_name) {
+  void TraceStart(const char* stage_name) {
+    if (!active_ || stage_name == nullptr) return;
+    stage_start_ns_[NormalizeStage(stage_name)] = NowNs();
+  }
+
+  void TraceEnd(const char* stage_name) {
     if (!active_ || stage_name == nullptr) return;
 
-    const uint64_t now_ns = NowNs();
-    const double delta_ms = NsToMs(now_ns - last_ns_);
-    last_ns_ = now_ns;
-
     const std::string normalized = NormalizeStage(stage_name);
-    if (Contains(normalized, "alloc")) {
-      mem_alloc_ms_ += delta_ms;
-    } else if (Contains(normalized, "cpy") || Contains(normalized, "copy") ||
-               Contains(normalized, "h2d") || Contains(normalized, "d2h") ||
-               Contains(normalized, "d2d")) {
-      mem_cpy_ms_ += delta_ms;
-    } else if (Contains(normalized, "kernel") || Contains(normalized, "run") ||
-               Contains(normalized, "compute")) {
-      kernel_ms_ += delta_ms;
-    } else if (Contains(normalized, "sync")) {
-      sync_ms_ += delta_ms;
+    auto it = stage_start_ns_.find(normalized);
+    if (it == stage_start_ns_.end()) return;
+
+    const uint64_t end_ns = NowNs();
+    if (end_ns > it->second) {
+      AccumulateStage(normalized, NsToMs(end_ns - it->second));
     }
+    stage_start_ns_.erase(it);
+  }
+
+  // Backward-compatible one-shot API.
+  void Trace(const char* stage_name) {
+    TraceStart(stage_name);
+    TraceEnd(stage_name);
   }
 
  private:
@@ -304,6 +322,34 @@ class KernelTimingScope {
     return print_mu;
   }
 
+  void AccumulateStage(const std::string& normalized, double delta_ms) {
+    if (delta_ms <= 0.0) return;
+
+    if (Contains(normalized, "alloc")) {
+      mem_alloc_ms_ += delta_ms;
+    } else if (Contains(normalized, "cpy") || Contains(normalized, "copy") ||
+               Contains(normalized, "h2d") || Contains(normalized, "d2h") ||
+               Contains(normalized, "d2d")) {
+      mem_cpy_ms_ += delta_ms;
+    } else if (Contains(normalized, "kernel") || Contains(normalized, "run") ||
+               Contains(normalized, "compute")) {
+      kernel_ms_ += delta_ms;
+    } else if (Contains(normalized, "sync")) {
+      sync_ms_ += delta_ms;
+    } else {
+      other_ms_ += delta_ms;
+    }
+  }
+
+  void CloseUnfinishedStages(uint64_t end_ns) {
+    for (const auto& item : stage_start_ns_) {
+      if (end_ns > item.second) {
+        AccumulateStage(item.first, NsToMs(end_ns - item.second));
+      }
+    }
+    stage_start_ns_.clear();
+  }
+
   bool active_ = false;
   int level_ = 0;
   bool stats_enabled_ = false;
@@ -312,12 +358,13 @@ class KernelTimingScope {
   std::string input_shape_;
 
   uint64_t start_ns_ = 0;
-  uint64_t last_ns_ = 0;
+  std::unordered_map<std::string, uint64_t> stage_start_ns_;
 
   double mem_alloc_ms_ = 0.0;
   double mem_cpy_ms_ = 0.0;
   double kernel_ms_ = 0.0;
   double sync_ms_ = 0.0;
+  double other_ms_ = 0.0;
 };
 
 }  // namespace timing
@@ -331,6 +378,12 @@ class KernelTimingScope {
 #define MUSA_KERNEL_TIMING_GUARD(ctx) \
   MUSA_KERNEL_TIMING_GUARD_WITH_NAME((ctx), (this)->def().op())
 
+#define MUSA_KERNEL_TRACE_START(stage_name) \
+  __musa_kernel_timing_scope.TraceStart((stage_name))
+
+#define MUSA_KERNEL_TRACE_END(stage_name) \
+  __musa_kernel_timing_scope.TraceEnd((stage_name))
+
 #define MUSA_KERNEL_TRACE(stage_name) \
   __musa_kernel_timing_scope.Trace((stage_name))
 
@@ -342,6 +395,14 @@ class KernelTimingScope {
 
 #define MUSA_KERNEL_TIMING_GUARD(ctx) \
   do {                                \
+  } while (false)
+
+#define MUSA_KERNEL_TRACE_START(stage_name) \
+  do {                                      \
+  } while (false)
+
+#define MUSA_KERNEL_TRACE_END(stage_name) \
+  do {                                    \
   } while (false)
 
 #define MUSA_KERNEL_TRACE(stage_name) \

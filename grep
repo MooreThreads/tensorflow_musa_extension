@@ -1,0 +1,50 @@
+2026-03-05 17:33:50.660381: E tensorflow/stream_executor/cuda/cuda_driver.cc:271] failed call to cuInit: CUDA_ERROR_NO_DEVICE: no CUDA-capable device is detected
+  [█████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 1/10 ○ test_session | P:0 F:0 E:0 S:1 | 0.9 tests/s | ETA: 10s[MUSA_KERNEL_TIMING] MatMul [[10,20],[20,15]] | Total(ms) 15.893 | Mem Alloc 0.038 | Mem Cpy 0.000 | Kernel 15.779 | Sync 0.000 | Other 0.077 |
+[MUSA_KERNEL_TIMING] MatMul [[10,20],[20,15]] | Total(ms) 773.798 | Mem Alloc 0.010 | Mem Cpy 0.000 | Kernel 773.739 | Sync 0.000 | Other 0.049 |
+[MUSA_KERNEL_TIMING] MatMul [[10,20],[20,15]] | Total(ms) 0.230 | Mem Alloc 0.008 | Mem Cpy 0.000 | Kernel 0.182 | Sync 0.000 | Other 0.041 |
+  [██████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 2/10 ✓ testMatMulBasic | P:1 F:0 E:0 S:1 | 0.5 tests/s | ETA: 15s[MUSA_KERNEL_TIMING] BatchMatMulV2 [[3,4,5],[3,5,6]] | Total(ms) 0.270 | Mem Alloc 0.005 | Mem Cpy 0.000 | Kernel 0.217 | Sync 0.000 | Other 0.049 |
+  [███████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 3/10 ✓ testMatMulBatch | P:2 F:0 E:0 S:1 | 0.8 tests/s | ETA: 9s[MUSA_KERNEL_TIMING] MatMul [[5,10],[10,1]] | Total(ms) 0.183 | Mem Alloc 0.007 | Mem Cpy 0.000 | Kernel 0.156 | Sync 0.000 | Other 0.019 |
+  [████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 4/10 ✓ testMatMulMatrixVector | P:3 F:0 E:0 S:1 | 1.0 tests/s | ETA: 6s[MUSA_KERNEL_TIMING] MatMul [[32,32],[32,32]] | Total(ms) 0.062 | Mem Alloc 0.006 | Mem Cpy 0.000 | Kernel 0.039 | Sync 0.000 | Other 0.017 |
+[MUSA_KERNEL_TIMING] MatMul [[32,32],[32,32]] | Total(ms) 37.386 | Mem Alloc 0.006 | Mem Cpy 0.000 | Kernel 37.359 | Sync 0.000 | Other 0.021 |
+  [█████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░] 5/10 ✓ testMatMulSquare | P:4 F:0 E:0 S:1 | 1.3 tests/s | ETA: 4s[MUSA_KERNEL_TIMING] MatMul [[20,10],[20,15]] | Total(ms) 9.556 | Mem Alloc 0.005 | Mem Cpy 0.000 | Kernel 9.527 | Sync 0.000 | Other 0.025 |
+  [██████████████████████████████░░░░░░░░░░░░░░░░░░░░] 6/10 ✓ testMatMulTransposeA | P:5 F:0 E:0 S:1 | 1.5 tests/s | ETA: 3s[MUSA_KERNEL_TIMING] MatMul [[10,20],[15,20]] | Total(ms) 11.811 | Mem Alloc 0.005 | Mem Cpy 0.000 | Kernel 11.778 | Sync 0.000 | Other 0.028 |
+  [███████████████████████████████████░░░░░░░░░░░░░░░] 7/10 ✓ testMatMulTransposeB | P:6 F:0 E:0 S:1 | 1.8 tests/s | ETA: 2s[MUSA_KERNEL_TIMING] MatMul [[20,10],[15,20]] | Total(ms) 9.569 | Mem Alloc 0.005 | Mem Cpy 0.000 | Kernel 9.539 | Sync 0.000 | Other 0.025 |
+  [████████████████████████████████████████░░░░░░░░░░] 8/10 ✓ testMatMulTransposeBoth | P:7 F:0 E:0 S:1 | 2.0 tests/s | ETA: 1s[MUSA_KERNEL_TIMING] MatMul [[1,10],[10,5]] | Total(ms) 0.186 | Mem Alloc 0.006 | Mem Cpy 0.000 | Kernel 0.159 | Sync 0.000 | Other 0.021 |
+  [█████████████████████████████████████████████░░░░░] 9/10 ✓ testMatMulVectorMatrix | P:8 F:0 E:0 S:1 | 2.3 tests/s | ETA: 0s  [██████████████████████████████████████████████████] 10/10 ○ test_session | P:8 F:0 E:0 S:2 | 2.5 tests/s | ETA: 0s
+  Completed in 3.9s
+----------------------------------------------------------------------
+Ran 10 tests in 3.922s
+
+OK (skipped=2)
+
+========================================================================
+                           MUSA TEST SUMMARY                            
+========================================================================
+                           ✓ ALL TESTS PASSED                           
+
++----------------+-------+
+| Metric         | Value |
++----------------+-------+
+| Total Tests    |    10 |
+| Passed         |     8 |
+| Failed         |     0 |
+| Errors         |     0 |
+| Skipped        |     2 |
+| Pass Rate      | 80.0% |
+| Execution Time | 3.92s |
++----------------+-------+
+
+=================================================================================
+MUSA Kernel Debug Statistics
+=================================================================================
+Kernel Name      Input Shape          Count      Total(ms)    Avg(ms)      Min(ms)      Max(ms)     
+---------------------------------------------------------------------------------
+MatMul           [[10,20],[20,15]]    3          789.921      263.307      0.230        773.798     
+MatMul           [[32,32],[32,32]]    2          37.448       18.724       0.062        37.386      
+MatMul           [[10,20],[15,20]]    1          11.811       11.811       11.811       11.811      
+MatMul           [[20,10],[15,20]]    1          9.569        9.569        9.569        9.569       
+MatMul           [[20,10],[20,15]]    1          9.556        9.556        9.556        9.556       
+BatchMatMulV2    [[3,4,5],[3,5,6]]    1          0.270        0.270        0.270        0.270       
+MatMul           [[1,10],[10,5]]      1          0.186        0.186        0.186        0.186       
+MatMul           [[5,10],[10,1]]      1          0.183        0.183        0.183        0.183       
+=================================================================================

@@ -95,9 +95,10 @@ class MusaMatMulOp : public MusaOpKernel {
     out_shape.AddDim(n);
 
     Tensor* out = nullptr;
+    MUSA_KERNEL_TRACE_START("Mem Alloc");
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, out_shape, &out));
+    MUSA_KERNEL_TRACE_END("Mem Alloc");
     if (out->NumElements() == 0) return;
-    MUSA_KERNEL_TRACE("Mem Alloc");
 
     auto& handle = GetHandleByCtx(ctx);
     handle.SetAllowTF32(tf32_enabled_);  // Use TF32 setting from constructor
@@ -113,8 +114,9 @@ class MusaMatMulOp : public MusaOpKernel {
       op.SetAlpha(1.0);
       op.SetBeta(0.0);
 
+      MUSA_KERNEL_TRACE_START("Kernel");
       status = op.Run(handle, mt_out, mt_a, mt_b);
-      MUSA_KERNEL_TRACE("Kernel");
+      MUSA_KERNEL_TRACE_END("Kernel");
 
       OP_REQUIRES(
           ctx, status == ::musa::dnn::Status::SUCCESS,
@@ -163,8 +165,9 @@ class MusaMatMulOp : public MusaOpKernel {
          mt_out.SetNdInfo({1, m, n}, {m * n, n, 1});
       }
 
+      MUSA_KERNEL_TRACE_START("Kernel");
       status = op.Run(handle, mt_out, mt_a, mt_b);
-      MUSA_KERNEL_TRACE("Kernel");
+      MUSA_KERNEL_TRACE_END("Kernel");
 
       OP_REQUIRES(
           ctx, status == ::musa::dnn::Status::SUCCESS,
