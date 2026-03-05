@@ -17,12 +17,17 @@
 
 import logging
 import os
+<<<<<<< HEAD
 import warnings
 
 # Suppress TensorFlow tf.function retracing warnings that occur in control flow tests.
 # These warnings are expected when @tf.function is called with different Python arguments
 # in loops, and don't affect test correctness.
 logging.getLogger('tensorflow').setLevel(logging.ERROR)
+=======
+import unittest
+import tensorflow as tf
+>>>>>>> 52a33ee (fix the problem that cant detect the musa device and implement an new op)
 
 
 def load_musa_plugin():
@@ -82,7 +87,7 @@ class MUSATestCase(tf.test.TestCase):
 
     # Verify MUSA device is available (plugin already loaded at module import)
     if not tf.config.list_physical_devices('MUSA'):
-      raise RuntimeError("No MUSA devices found.")
+      raise unittest.SkipTest("No MUSA devices found.")
 
   def _test_op_device_placement(self, op_func, input_tensors, device):
     """Test operation on specified device."""
