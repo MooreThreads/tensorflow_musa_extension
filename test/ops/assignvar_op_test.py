@@ -15,37 +15,45 @@
 
 """Tests for MUSA Assign operator."""
 
-import tensorflow as tf
 import numpy as np
+import tensorflow as tf
 
-from musa_test_utils import MUSATestCase
+from musa_test_utils import load_musa_plugin
+
+# Load plugin before test discovery/runtime checks.
+load_musa_plugin()
+MUSA_DEVICES = tf.config.list_physical_devices('MUSA')
 
 
-class AssignOpTest(MUSATestCase):
+class AssignOpTest(tf.test.TestCase):
   """Tests for MUSA Assign operator."""
 
   def _test_assign(self, shape, dtype):
     """Test assign operation with given shape and dtype."""
+    if not MUSA_DEVICES:
+      self.skipTest("No MUSA devices found.")
+
     if dtype == tf.bfloat16:
       init_val_np = np.random.uniform(-1, 1, size=shape).astype(np.float32)
       new_val_np = np.random.uniform(-1, 1, size=shape).astype(np.float32)
     else:
       init_val_np = np.random.uniform(-1, 1, size=shape).astype(dtype.as_numpy_dtype)
       new_val_np = np.random.uniform(-1, 1, size=shape).astype(dtype.as_numpy_dtype)
-    
+
     init_val = tf.constant(init_val_np, dtype=dtype)
     new_val = tf.constant(new_val_np, dtype=dtype)
-    
+
     with tf.device('/device:MUSA:0'):
       var = tf.Variable(init_val)
       var.assign(new_val)
       result = var.read_value()
-    
+
     # Compare with expected value
     if dtype == tf.bfloat16:
       expected = tf.constant(new_val_np, dtype=tf.float32)
       actual = tf.cast(result, tf.float32)
-      self.assertAllClose(expected.numpy(), actual.numpy(), rtol=1e-2, atol=1e-2)
+      self.assertAllClose(
+          expected.numpy(), actual.numpy(), rtol=1e-2, atol=1e-2)
     else:
       expected = tf.constant(new_val_np, dtype=dtype)
       self.assertAllClose(expected.numpy(), result.numpy())
@@ -73,6 +81,7 @@ class AssignOpTest(MUSATestCase):
   def testAssign4D(self):
     """4D tensor assignment test."""
     self._test_assign([2, 4, 8, 16], tf.float32)
+
 
 if __name__ == "__main__":
   tf.test.main()
