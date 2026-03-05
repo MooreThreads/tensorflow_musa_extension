@@ -1,10 +1,10 @@
 #include <mudnn.h>
 
+#include "../utils_op.h"
 #include "mu/device/musa_memcpy.h"
+#include "musa_reduce_functor.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
-#include "../utils_op.h"
-#include "musa_reduce_functor.h"
 
 namespace tensorflow {
 namespace musa {
@@ -31,6 +31,8 @@ class MusaAllOp : public MusaOpKernel {
     std::vector<int> reduce_dims;
     std::vector<bool> bitmap(input.dims(), false);
 
+    // reduce dim to construct `reduce_dims`, which would be feed into
+    // ReduceFunctor (required by mReduce)
     if (num_axes > 0) {
       if (axes_tensor.dtype() == DT_INT32) {
         auto axes_flat = axes_tensor.flat<int32>();
@@ -75,22 +77,22 @@ class MusaAllOp : public MusaOpKernel {
     mTensor mt_input = CreateMTensor(input, format_);
     mTensor mt_output = CreateMTensor(*output, format_);
 
-    OP_REQUIRES_OK(context, ReduceFunctor::Compute<T>(
-                                context, &mt_output, &mt_input,
-                                ::musa::dnn::Reduce::Mode::AND,
-                                reduce_dims.data(), reduce_dims.size(),
-                                "MusaAllOp Run failed: "));
+    OP_REQUIRES_OK(
+        context,
+        ReduceFunctor::Compute<T>(
+            context, &mt_output, &mt_input, ::musa::dnn::Reduce::Mode::AND,
+            reduce_dims.data(), reduce_dims.size(), "MusaAllOp Run failed: "));
   }
 
  private:
   bool keep_dims_;
 };
 
-#define REGISTER_MUSA_ALL_KERNEL(type)                               \
-  REGISTER_KERNEL_BUILDER(Name("All")                                \
-                              .Device("MUSA")                   \
-                              .HostMemory("reduction_indices")       \
-                              .TypeConstraint<type>("T"),            \
+#define REGISTER_MUSA_ALL_KERNEL(type)                         \
+  REGISTER_KERNEL_BUILDER(Name("All")                          \
+                              .Device("MUSA")                  \
+                              .HostMemory("reduction_indices") \
+                              .TypeConstraint<type>("T"),      \
                           MusaAllOp<type>)
 
 REGISTER_MUSA_ALL_KERNEL(bool);
