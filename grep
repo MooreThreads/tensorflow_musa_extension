@@ -1,25 +1,0 @@
-2026-03-05 18:05:34.163789: E tensorflow/stream_executor/cuda/cuda_driver.cc:271] failed call to cuInit: CUDA_ERROR_NO_DEVICE: no CUDA-capable device is detected
-  [█████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 1/10 ○ test_session | P:0 F:0 E:0 S:1 | 0.9 tests/s | ETA: 10s  [██████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 2/10 ✓ testMeanAllAxes | P:1 F:0 E:0 S:1 | 0.3 tests/s | ETA: 31s  [███████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 3/10 ✓ testMeanAxisFirst | P:2 F:0 E:0 S:1 | 0.4 tests/s | ETA: 18s  [████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 4/10 ✓ testMeanAxisLast | P:3 F:0 E:0 S:1 | 0.5 tests/s | ETA: 12s  [█████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░] 5/10 ✓ testMeanAxisMiddle | P:4 F:0 E:0 S:1 | 0.6 tests/s | ETA: 8s  [██████████████████████████████░░░░░░░░░░░░░░░░░░░░] 6/10 ✓ testMeanDifferentShapes | P:5 F:0 E:0 S:1 | 0.8 tests/s | ETA: 5s  [███████████████████████████████████░░░░░░░░░░░░░░░] 7/10 ✓ testMeanKeepDims | P:6 F:0 E:0 S:1 | 0.9 tests/s | ETA: 3s  [████████████████████████████████████████░░░░░░░░░░] 8/10 ✓ testMeanLargeTensor | P:7 F:0 E:0 S:1 | 1.0 tests/s | ETA: 2s  [█████████████████████████████████████████████░░░░░] 9/10 ✓ testMeanMultipleAxes | P:8 F:0 E:0 S:1 | 1.1 tests/s | ETA: 1s  [██████████████████████████████████████████████████] 10/10 ○ test_session | P:8 F:0 E:0 S:2 | 1.2 tests/s | ETA: 0s
-  Completed in 8.1s
-----------------------------------------------------------------------
-Ran 10 tests in 8.063s
-
-OK (skipped=2)
-
-========================================================================
-                           MUSA TEST SUMMARY                            
-========================================================================
-                           ✓ ALL TESTS PASSED                           
-
-+----------------+-------+
-| Metric         | Value |
-+----------------+-------+
-| Total Tests    |    10 |
-| Passed         |     8 |
-| Failed         |     0 |
-| Errors         |     0 |
-| Skipped        |     2 |
-| Pass Rate      | 80.0% |
-| Execution Time | 8.06s |
-+----------------+-------+
-

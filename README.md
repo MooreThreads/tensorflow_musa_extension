@@ -130,39 +130,7 @@ MUSA_KERNEL_TRACE_START("State2");
 MUSA_KERNEL_TRACE_END("State2");
 ```
 
-### 4. 输出格式（当前）
-
-#### 4.1 LEVEL=2 样式
-
-```text
-[MUSA_KERNEL_TIMING] MatMul [[10,20],[20,15]], host_total_ms=16.419, device_total_ms=16.004, Kernel=15.832, Other=0.171
-```
-
-#### 4.2 告警样式（START/END 不匹配）
-
-```text
-[MUSA_KERNEL_TIMING_WARNING] END without matching START. kernel=MatMul, stage=Mem Alloc
-[MUSA_KERNEL_TIMING_WARNING] Unmatched START without END. kernel=MatMul, stage=Mem
-```
-
-#### 4.3 设备头信息
-
-```text
-[MUSA_KERNEL_TIMING_DEVICE] device_id=0, device_count=8, device_name=MTT S5000
-```
-
-#### 4.4 Summary 样式
-
-```text
-=================================================================================
-MUSA Kernel Debug Statistics
-=================================================================================
-Kernel Name      Input Shape          Count      Total(ms)    Avg(ms)      Min(ms)      Max(ms)
-...
-=================================================================================
-```
-
-### 5. 常用验证命令（MatMul）
+### 4. 常用验证命令（MatMul）
 
 ```bash
 cd /workspace/tensorflow_musa_extension
