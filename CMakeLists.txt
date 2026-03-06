@@ -44,6 +44,17 @@ set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DNDEBUG")
 # Include paths
 include_directories("${TF_INC}" "${MUSA_PATH}/include")
 
+# TensorFlow pip headers may place farmhash in different external include layouts.
+# fingerprint.h includes <farmhash.h>, so add whichever location exists.
+set(TF_FARMHASH_INC_SRC "${TF_INC}/external/farmhash_archive/src")
+set(TF_FARMHASH_INC_VIRTUAL "${TF_INC}/external/farmhash_archive/_virtual_includes/farmhash")
+if(EXISTS "${TF_FARMHASH_INC_SRC}/farmhash.h")
+    include_directories("${TF_FARMHASH_INC_SRC}")
+endif()
+if(EXISTS "${TF_FARMHASH_INC_VIRTUAL}/farmhash.h")
+    include_directories("${TF_FARMHASH_INC_VIRTUAL}")
+endif()
+
 # Define source root directory
 set(SRC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/musa_ext")
 include_directories("${SRC_ROOT}" "${SRC_ROOT}/mu" "${SRC_ROOT}/kernels" "${SRC_ROOT}/mu/graph_fusion")

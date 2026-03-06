@@ -19,7 +19,7 @@ limitations under the License.
 
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/tensor.h"
-#include "tensorflow/core/lib/hash/hash.h"
+#include "tensorflow/core/platform/fingerprint.h"
 
 namespace tensorflow {
 namespace musa {
@@ -60,7 +60,8 @@ class StringToHashBucketFastOp : public OpKernel {
     // Compute hash values directly on host
     for (int64 i = 0; i < N; ++i) {
       const tstring& s = input_flat(i);
-      uint64 hash = tensorflow::Hash64(s.data(), s.size());
+      const uint64 hash = tensorflow::Fingerprint64(
+          tensorflow::StringPiece(s.data(), s.size()));
       output_flat(i) = static_cast<int64>(hash % static_cast<uint64>(num_buckets_));
     }
   }
