@@ -103,23 +103,9 @@ tf.load_library("./build/libmusa_plugin.so")
 
 仅在 `./build.sh debug` 构建下生效（`MUSA_KERNEL_DEBUG=ON`）：
 
-#### 3.1 运行时环境变量
+运行时环境变量请见下方 [环境变量](#环境变量) 章节中的“日志调试”表格。
 
-```bash
-# 模式控制：1=仅总耗时，2=总耗时+分段耗时
-export MUSA_TIMING_KERNEL_LEVEL=1
-# export MUSA_TIMING_KERNEL_LEVEL=2
-
-# 仅打印指定 Kernel（大小写不敏感子串匹配），ALL 表示全部
-export MUSA_TIMING_KERNEL_NAME=ALL
-# export MUSA_TIMING_KERNEL_NAME=MatMul
-
-# 程序退出时打印汇总统计（1=开启，0=关闭）
-export MUSA_TIMING_KERNEL_STATS=1
-# export MUSA_TIMING_KERNEL_STATS=0
-```
-
-#### 3.2 宏使用方式
+#### 3.1 宏使用方式
 
 ```cpp
 // 基础 guard
@@ -194,30 +180,12 @@ grep "MUSA_KERNEL_TIMING" /tmp/musa_timing_logs/matmul_l2.log | head -n 80
 grep -n -A30 "MUSA Kernel Debug Statistics" /tmp/musa_timing_logs/matmul_l2.log
 ```
 
-### 6. Wukong 模型验证（已通过）
-
-```bash
-cd /workspace/tensorflow_musa_extension/tf_test_model
-python wukong/test_tf_musa_extension.py /workspace/tensorflow_musa_extension/build/libmusa_plugin.so
-```
-
-输出样式示例：
-
-```text
-/workspace/tensorflow_musa_extension/build/libmusa_plugin.so test passed!
-[MUSA_KERNEL_TIMING_DEVICE] device_id=0, device_count=8, device_name=MTT S5000
-[MUSA_KERNEL_TIMING] MatMul [[10,20],[20,15]], host_total_ms=17.041, device_total_ms=16.625, Mem Alloc=0.017, Kernel=16.375, Other=0.233
-=================================================================================
-MUSA Kernel Debug Statistics
-=================================================================================
-```
-
-### 7. 已知问题
+### 6. 已知问题
 
 - `ResourceApplyAdam` 路径在 Debug 构建下可能触发 `refcount.h` 断言崩溃。
 - 该问题在 `MUSA_TIMING_KERNEL_LEVEL=0` 下仍可复现，当前判断为算子实现路径问题，不是 timing 输出逻辑问题。
 
-### 8. 加载插件
+### 7. 加载插件
 
 编译成功后，在 TensorFlow 应用中加载插件：
 
@@ -240,6 +208,9 @@ tf.load_library("/path/to/tensorflow_musa_extension/build/libmusa_plugin.so")
 
 | 变量名 | 说明 | 示例 |
 |--------|------|------|
+| `MUSA_TIMING_KERNEL_LEVEL` | Timing 模式控制（`1`=仅总耗时，`2`=总耗时+分段耗时） | `export MUSA_TIMING_KERNEL_LEVEL=2` |
+| `MUSA_TIMING_KERNEL_NAME` | 仅打印指定 Kernel（大小写不敏感子串匹配，`ALL` 为全部） | `export MUSA_TIMING_KERNEL_NAME=MatMul` |
+| `MUSA_TIMING_KERNEL_STATS` | 进程退出时打印 timing 汇总（`1`=开启，`0`=关闭） | `export MUSA_TIMING_KERNEL_STATS=1` |
 | `TF_CPP_MIN_LOG_LEVEL` | 全局日志级别（0=INFO, 1=WARNING, 2=ERROR） | `export TF_CPP_MIN_LOG_LEVEL=1` |
 | `TF_CPP_VMODULE` | 精确控制特定文件的 VLOG 级别 | `export TF_CPP_VMODULE="musa_graph_optimizer=1,layernorm_fusion=2"` |
 

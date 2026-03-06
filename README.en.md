@@ -103,23 +103,9 @@ The build script automatically completes the following steps:
 
 Only effective when built with `./build.sh debug` (`MUSA_KERNEL_DEBUG=ON`):
 
-#### 3.1 Runtime Environment Variables
+Runtime environment variables are listed in the [Environment Variables](#environment-variables) section under "Logging and Debugging".
 
-```bash
-# Mode control: 1=total only, 2=total + per-section breakdown
-export MUSA_TIMING_KERNEL_LEVEL=1
-# export MUSA_TIMING_KERNEL_LEVEL=2
-
-# Print only selected kernels (case-insensitive substring), ALL for all kernels
-export MUSA_TIMING_KERNEL_NAME=ALL
-# export MUSA_TIMING_KERNEL_NAME=MatMul
-
-# Print summary at process exit (1=on, 0=off)
-export MUSA_TIMING_KERNEL_STATS=1
-# export MUSA_TIMING_KERNEL_STATS=0
-```
-
-#### 3.2 Macro Usage
+#### 3.1 Macro Usage
 
 ```cpp
 // Basic guard
@@ -194,37 +180,11 @@ grep "MUSA_KERNEL_TIMING" /tmp/musa_timing_logs/matmul_l2.log | head -n 80
 grep -n -A30 "MUSA Kernel Debug Statistics" /tmp/musa_timing_logs/matmul_l2.log
 ```
 
-### 6. Wukong Model Validation (Passed)
-
-```bash
-cd /workspace/tensorflow_musa_extension/tf_test_model
-python wukong/test_tf_musa_extension.py /workspace/tensorflow_musa_extension/build/libmusa_plugin.so
-```
-
-Example output:
-
-```text
-/workspace/tensorflow_musa_extension/build/libmusa_plugin.so test passed!
-[MUSA_KERNEL_TIMING_DEVICE] device_id=0, device_count=8, device_name=MTT S5000
-[MUSA_KERNEL_TIMING] MatMul [[10,20],[20,15]], host_total_ms=17.041, device_total_ms=16.625, Mem Alloc=0.017, Kernel=16.375, Other=0.233
-=================================================================================
-MUSA Kernel Debug Statistics
-=================================================================================
-```
-
-### 7. Known Issue
+### 6. Known Issue
 
 - `ResourceApplyAdam` path may hit `refcount.h` assertion in Debug build.
 - Reproduces even when `MUSA_TIMING_KERNEL_LEVEL=0`; current evidence points to operator implementation path, not timing output logic.
 
-### 8. Plugin Loading
-
-After successful compilation, load the plugin in your TensorFlow application:
-
-```python
-import tensorflow as tf
-tf.load_library("/path/to/tensorflow_musa_extension/build/libmusa_plugin.so")
-```
 
 ## Environment Variables
 
@@ -240,6 +200,9 @@ tf.load_library("/path/to/tensorflow_musa_extension/build/libmusa_plugin.so")
 
 | Variable | Description | Example |
 |----------|-------------|---------|
+| `MUSA_TIMING_KERNEL_LEVEL` | Timing mode (`1`=total only, `2`=total + per-section breakdown) | `export MUSA_TIMING_KERNEL_LEVEL=2` |
+| `MUSA_TIMING_KERNEL_NAME` | Print only selected kernels (case-insensitive substring, `ALL` for all) | `export MUSA_TIMING_KERNEL_NAME=MatMul` |
+| `MUSA_TIMING_KERNEL_STATS` | Print timing summary at process exit (`1`=on, `0`=off) | `export MUSA_TIMING_KERNEL_STATS=1` |
 | `TF_CPP_MIN_LOG_LEVEL` | Global log level (0=INFO, 1=WARNING, 2=ERROR) | `export TF_CPP_MIN_LOG_LEVEL=1` |
 | `TF_CPP_VMODULE` | Per-file VLOG level control | `export TF_CPP_VMODULE="musa_graph_optimizer=1,layernorm_fusion=2"` |
 
