@@ -180,20 +180,6 @@ grep "MUSA_KERNEL_TIMING" /tmp/musa_timing_logs/matmul_l2.log | head -n 80
 grep -n -A30 "MUSA Kernel Debug Statistics" /tmp/musa_timing_logs/matmul_l2.log
 ```
 
-### 6. 已知问题
-
-- `ResourceApplyAdam` 路径在 Debug 构建下可能触发 `refcount.h` 断言崩溃。
-- 该问题在 `MUSA_TIMING_KERNEL_LEVEL=0` 下仍可复现，当前判断为算子实现路径问题，不是 timing 输出逻辑问题。
-
-### 7. 加载插件
-
-编译成功后，在 TensorFlow 应用中加载插件：
-
-```python
-import tensorflow as tf
-tf.load_library("/path/to/tensorflow_musa_extension/build/libmusa_plugin.so")
-```
-
 ## 环境变量
 
 ### 功能控制

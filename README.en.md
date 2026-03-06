@@ -180,12 +180,6 @@ grep "MUSA_KERNEL_TIMING" /tmp/musa_timing_logs/matmul_l2.log | head -n 80
 grep -n -A30 "MUSA Kernel Debug Statistics" /tmp/musa_timing_logs/matmul_l2.log
 ```
 
-### 6. Known Issue
-
-- `ResourceApplyAdam` path may hit `refcount.h` assertion in Debug build.
-- Reproduces even when `MUSA_TIMING_KERNEL_LEVEL=0`; current evidence points to operator implementation path, not timing output logic.
-
-
 ## Environment Variables
 
 ### Feature Control
