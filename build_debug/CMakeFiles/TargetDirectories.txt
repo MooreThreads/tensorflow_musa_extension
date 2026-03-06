@@ -1,3 +1,0 @@
-/workspace/tensorflow_musa_extension/build_debug/CMakeFiles/musa_plugin.dir
-/workspace/tensorflow_musa_extension/build_debug/CMakeFiles/edit_cache.dir
-/workspace/tensorflow_musa_extension/build_debug/CMakeFiles/rebuild_cache.dir
