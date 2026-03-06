@@ -133,19 +133,12 @@ MUSA_KERNEL_TRACE_END("State2");
 ### 4. 常用验证命令（MatMul）
 
 ```bash
-cd /workspace/tensorflow_musa_extension
 ./build.sh debug
 
 export MUSA_TIMING_KERNEL_LEVEL=2
 export MUSA_TIMING_KERNEL_NAME=ALL
 export MUSA_TIMING_KERNEL_STATS=1
 
-mkdir -p /tmp/musa_timing_logs
-python test/test_runner.py --single matmul_op_test.py 2>&1 | tee /tmp/musa_timing_logs/matmul_l2.log
-
-grep "MUSA_KERNEL_TIMING_DEVICE\|MUSA_KERNEL_TIMING_WARNING" /tmp/musa_timing_logs/matmul_l2.log | head -n 20
-grep "MUSA_KERNEL_TIMING" /tmp/musa_timing_logs/matmul_l2.log | head -n 80
-grep -n -A30 "MUSA Kernel Debug Statistics" /tmp/musa_timing_logs/matmul_l2.log
 ```
 
 ## 环境变量
