@@ -58,7 +58,6 @@ cd build
 
 echo "Configuring with CMake..."
 echo "  CMAKE_BUILD_TYPE=$CMAKE_BUILD_TYPE"
-echo "  MUSA_KERNEL_DEBUG=$MUSA_KERNEL_DEBUG"
 echo ""
 
 cmake .. \
