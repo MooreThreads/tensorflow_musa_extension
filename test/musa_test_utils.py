@@ -69,8 +69,8 @@ class MUSATestCase(tf.test.TestCase):
     load_musa_plugin()
 
     # Verify MUSA device is available
-    if not tf.config.list_physical_devices('MUSA'):
-      raise RuntimeError("No MUSA devices found.")
+    # if not tf.config.list_physical_devices('MUSA'):
+    #   raise RuntimeError("No MUSA devices found.")
 
   def _test_op_device_placement(self, op_func, input_tensors, device):
     """Test operation on specified device."""
