@@ -100,6 +100,7 @@ class MusaLayerNormOp : public MusaOpKernel {
   float epsilon_;
 };
 
+// Register MUSA kernel
 #define REGISTER_MUSA_LAYERNORM(TYPE)                                 \
   REGISTER_KERNEL_BUILDER(                                            \
       Name("MusaLayerNorm").Device("MUSA").TypeConstraint<TYPE>("T"), \
