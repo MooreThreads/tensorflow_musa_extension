@@ -11,6 +11,23 @@ class MergeOpTest(MUSATestCase):
 
   _DTYPES = (tf.float32, tf.float16, tf.int32, tf.bool)
 
+  @classmethod
+  def setUpClass(cls):
+    """Disable Grappler optimizations to avoid warnings with Switch/Merge control flow."""
+    super().setUpClass()
+    # Switch/Merge control flow ops trigger Grappler warnings because
+    # dead branch elimination removes one output of Switch, but Merge
+    # still references both inputs. This is expected behavior for
+    # control flow, not an error.
+    tf.config.optimizer.set_experimental_options({
+        'dependency_optimization': False,
+        'arithmetic_optimization': False,
+        'loop_optimization': False,
+        'function_optimization': False,
+        'debug_stripper': False,
+        'disable_meta_optimizer': True,
+    })
+
   def _sample_input(self, dtype):
     if dtype == tf.bool:
       return np.array([[True, False, True], [False, True, False]], dtype=np.bool_)

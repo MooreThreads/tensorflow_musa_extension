@@ -376,13 +376,14 @@ class CustomTestRunner(unittest.TextTestRunner):
 # ============================================================================
 # Test Discovery and Execution
 # ============================================================================
-def discover_and_run_tests(test_pattern="*_op_test.py", quiet=True, detail_mode=False, log_file=None):
+def discover_and_run_tests(test_pattern="*_op_test.py", test_dir_name="ops", 
+                          quiet=True, detail_mode=False, log_file=None):
     """Discover and run all test files matching the pattern."""
-    test_dir = Path(__file__).resolve().parent / "ops"
+    test_dir = Path(__file__).resolve().parent / test_dir_name
     test_files = list(test_dir.glob(test_pattern))
 
     if not test_files:
-        print(f"{red('✗')} No test files found matching pattern: {test_pattern}")
+        print(f"{red('✗')} No test files found matching pattern: {test_pattern} in {test_dir_name}/")
         return
 
     # Add test directory to Python path
@@ -399,7 +400,7 @@ def discover_and_run_tests(test_pattern="*_op_test.py", quiet=True, detail_mode=
             module_suite = loader.loadTestsFromModule(module)
             suite.addTests(module_suite)
             if detail_mode:
-                print(f"  {green('✓')} Loaded tests from: {module_name}")
+                print(f"  {green('✓')} Loaded tests from: {test_dir_name}/{module_name}")
         except Exception as e:
             if detail_mode:
                 print(f"  {red('✗')} Failed to load {module_name}: {e}")
@@ -426,20 +427,24 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Run MUSA operator tests",
+        description="Run MUSA operator and fusion tests",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python test_runner.py                    # Run all tests (shows progress bar + summary)
+  python test_runner.py                    # Run all operator tests (shows progress bar + summary)
   python test_runner.py --quiet            # Run all tests (shows progress bar + summary, minimal details)
   python test_runner.py --detail           # Run all tests with progress bar and individual results
-  python test_runner.py --single matmul_op_test.py  # Run single test file
+  python test_runner.py --single matmul_op_test.py  # Run single test file from ops/
+  python test_runner.py --single fusion/layernorm_gelu_fusion_e2e_test.py  # Run fusion test
   python test_runner.py --pattern "*_grad*_op_test.py"  # Run gradient tests only
+  python test_runner.py --fusion           # Run all fusion tests
         """
     )
     parser.add_argument("--pattern", default="*_op_test.py",
                        help="Test file pattern (default: *_op_test.py)")
-    parser.add_argument("--single", help="Run a single test file")
+    parser.add_argument("--single", help="Run a single test file (prefix with fusion/ for fusion tests)")
+    parser.add_argument("--fusion", "-f", action="store_true",
+                       help="Run fusion tests (e2e tests) instead of operator tests")
     parser.add_argument("--detail", "-d", action="store_true",
                        help="Detail mode - show progress bar and individual results")
     parser.add_argument("--quiet", "-q", action="store_true",
@@ -462,9 +467,18 @@ Examples:
 
     if args.single:
         # Run a single test file
-        ops_dir = Path(__file__).resolve().parent / "ops"
-        sys.path.insert(0, str(ops_dir))
-        module_name = Path(args.single).stem
+        # Check if it's a fusion test (starts with 'fusion/' or contains '/')
+        single_path = args.single
+        if single_path.startswith('fusion/') or '/fusion/' in single_path:
+            # Fusion test
+            test_dir = Path(__file__).resolve().parent / "fusion"
+            module_name = Path(single_path).stem
+        else:
+            # Regular ops test
+            test_dir = Path(__file__).resolve().parent / "ops"
+            module_name = Path(single_path).stem
+        
+        sys.path.insert(0, str(test_dir))
         try:
             module = importlib.import_module(module_name)
             suite = unittest.TestLoader().loadTestsFromModule(module)
@@ -479,9 +493,18 @@ Examples:
             if detail_mode:
                 print(f"{red('✗')} Failed to run {args.single}: {e}")
             sys.exit(1)
+    elif args.fusion:
+        # Run all fusion tests (use e2e pattern by default, fallback to user pattern)
+        fusion_pattern = "*e2e_test.py" if args.pattern == "*_op_test.py" else args.pattern
+        discover_and_run_tests(fusion_pattern,
+                             test_dir_name="fusion",
+                             quiet=quiet_mode,
+                             detail_mode=detail_mode,
+                             log_file=args.log_file if detail_mode else None)
     else:
-        # Run all tests
+        # Run all operator tests
         discover_and_run_tests(args.pattern,
+                             test_dir_name="ops",
                              quiet=quiet_mode,
                              detail_mode=detail_mode,
                              log_file=args.log_file if detail_mode else None)

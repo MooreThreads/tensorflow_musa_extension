@@ -27,8 +27,10 @@ tensorflow_musa_extension/
 │   ├── mu/                 # MUSA device and optimizer implementations
 │   └── utils/              # Utility functions
 └── test/                   # Test cases
-    ├── musa_test_utils.py  # Test utilities
-    └── *_test.py           # Individual operator test files
+    ├── musa_test_utils.py  # Test utilities base class
+    ├── test_runner.py      # Test runner
+    ├── ops/                # Operator tests
+    └── fusion/             # Fusion tests (e2e)
 ```
 
 ### Prerequisites
@@ -58,11 +60,8 @@ tensorflow_musa_extension/
 git clone <repository-url>
 cd tensorflow_musa_extension
 
-# Build the plugin (Release mode, default)
+# Build the plugin
 ./build.sh
-
-# Or build Debug mode (with kernel timing)
-./build.sh debug
 
 # Load the plugin in Python
 import tensorflow as tf
@@ -71,25 +70,24 @@ tf.load_library("./build/libmusa_plugin.so")
 
 ## Build Guide
 
-### 1. Build Type Selection
+### 1. Build Type
 
-Two build modes are supported:
+Currently only Release mode is supported (optimized for performance, no debug overhead):
 
 | Mode | Command | Description |
 |------|---------|-------------|
 | **Release** | `./build.sh` or `./build.sh release` | Optimized for performance, no debug overhead |
-| **Debug** | `./build.sh debug` | Enable kernel timing for performance analysis |
 
 ### 2. Compilation Process
 
 Execute the automated build script:
 
 ```bash
-# Release mode (default, for production)
+# Release mode (default)
 ./build.sh
 
-# Debug mode (for development and performance analysis)
-./build.sh debug
+# Or explicitly specify
+./build.sh release
 ```
 
 The build script automatically completes the following steps:
@@ -106,9 +104,47 @@ import tensorflow as tf
 tf.load_library("/path/to/tensorflow_musa_extension/build/libmusa_plugin.so")
 ```
 
+## Environment Variables
+
+### Feature Control
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `MUSA_ENABLE_TF32` | Enable TF32 acceleration for MatMul/Conv | `export MUSA_ENABLE_TF32=1` |
+| `MUSA_DUMP_GRAPHDEF` | Enable graph optimization debugging | `export MUSA_DUMP_GRAPHDEF=1` |
+| `MUSA_DUMP_GRAPHDEF_DIR` | Specify GraphDef dump directory | `export MUSA_DUMP_GRAPHDEF_DIR=/tmp/graphs` |
+
+### Logging and Debugging
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `TF_CPP_MIN_LOG_LEVEL` | Global log level (0=INFO, 1=WARNING, 2=ERROR) | `export TF_CPP_MIN_LOG_LEVEL=1` |
+| `TF_CPP_VMODULE` | Per-file VLOG level control | `export TF_CPP_VMODULE="musa_graph_optimizer=1,layernorm_fusion=2"` |
+
+**Common debugging combinations:**
+
+```bash
+# 1. View detailed graph optimizer logs
+export TF_CPP_VMODULE="musa_graph_optimizer=1,fusion_pattern_manager=1"
+python -m fusion.layernorm_gelu_fusion_test
+
+# 2. View operator fusion details
+export TF_CPP_VMODULE="layernorm_fusion=2,gelu_fusion=1"
+python -m ops.layernorm_op_test
+
+# 3. Silent mode (show errors only)
+export TF_CPP_MIN_LOG_LEVEL=2
+python test_runner.py
+
+# 4. Restore default logging
+unset TF_CPP_MIN_LOG_LEVEL TF_CPP_VMODULE
+```
+
 ## Testing
 
-After building, run the test suite to verify functional correctness. Test files follow TensorFlow's official `python/kernel_tests` style, using `tf.test.TestCase` as the base class.
+After building, run the test suite to verify functional correctness. Tests are divided into **operator tests** (`test/ops/`) and **fusion tests** (`test/fusion/`).
+
+### Running Individual Tests
 
 ```bash
 cd test
@@ -117,15 +153,43 @@ cd test
 python -m ops.add_op_test
 python -m ops.matmul_op_test
 
-# Run all tests
-./run_all_tests.sh
+# Run fusion tests
+python -m fusion.layernorm_gelu_fusion_test
 ```
 
-Test file naming convention:
+### Using Test Runner
+
+```bash
+cd test
+
+# Run all operator tests (default)
+python test_runner.py
+
+# Run all fusion tests
+python test_runner.py --fusion
+
+# Run single test file
+python test_runner.py --single ops/matmul_op_test.py
+python test_runner.py --single fusion/layernorm_gelu_fusion_test.py
+
+# Detail mode (show detailed output for each test)
+python test_runner.py --detail
+
+# Quiet mode (show only progress bar and summary)
+python test_runner.py --quiet
+```
+
+### Test File Naming Convention
+
+**Operator Tests** (`test/ops/`):
 - Use `op_name_op_test.py` format
-- Inherit from `tf.test.TestCase`
+- Inherit from `MUSATestCase` (wraps plugin loading)
 - Test methods start with `test_`
-- Use `self.assert*` methods for assertions
+
+**Fusion Tests** (`test/fusion/`):
+- Use `*_fusion_test.py` format
+- Inherit from `MUSATestCase`
+- Test end-to-end graph optimization and operator fusion
 
 ## Supported Operators
 
