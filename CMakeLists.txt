@@ -38,15 +38,15 @@ string(REPLACE "-D_GLIBCXX_USE_CXX11_ABI=1" "" TF_COMPILE_FLAGS "${TF_COMPILE_FL
 # Re-add the safest definition
 set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=0")
 
-# Add compile definitions to disable debug logging
-set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_DISABLE_DEBUG_LOGGING -DNDEBUG -DMUSA_DISABLE_TRACE_LOGGING -DMUSA_DISABLE_AUTO_TRACE")
+# Add compile definitions
+set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DNDEBUG")
 
 # Include paths
 include_directories("${TF_INC}" "${MUSA_PATH}/include")
 
 # Define source root directory
 set(SRC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/musa_ext")
-include_directories("${SRC_ROOT}" "${SRC_ROOT}/mu" "${SRC_ROOT}/kernels")
+include_directories("${SRC_ROOT}" "${SRC_ROOT}/mu" "${SRC_ROOT}/kernels" "${SRC_ROOT}/mu/graph_fusion")
 
 # Validate source directory exists
 if(NOT EXISTS "${SRC_ROOT}")

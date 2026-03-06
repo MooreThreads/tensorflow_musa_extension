@@ -27,8 +27,10 @@ tensorflow_musa_extension/
 │   ├── mu/                 # MUSA 设备和优化器实现
 │   └── utils/              # 工具函数
 └── test/                   # 测试用例
-    ├── musa_test_utils.py  # 测试工具
-    └── *_test.py           # 各算子测试文件
+    ├── musa_test_utils.py  # 测试工具基类
+    ├── test_runner.py      # 测试运行器
+    ├── ops/                # 算子测试
+    └── fusion/             # 融合测试（e2e）
 ```
 
 ### 环境要求
@@ -58,11 +60,8 @@ tensorflow_musa_extension/
 git clone <repository-url>
 cd tensorflow_musa_extension
 
-# 构建插件（Release 模式，默认）
+# 构建插件
 ./build.sh
-
-# 或构建 Debug 模式（启用 Kernel 计时）
-./build.sh debug
 
 # 在 Python 中加载插件
 import tensorflow as tf
@@ -71,25 +70,24 @@ tf.load_library("./build/libmusa_plugin.so")
 
 ## 构建指南
 
-### 1. 编译模式选择
+### 1. 编译模式
 
-支持两种编译模式：
+当前仅支持 Release 模式（优化性能，无调试开销）：
 
 | 模式 | 命令 | 说明 |
 |------|------|------|
 | **Release** | `./build.sh` 或 `./build.sh release` | 优化性能，无调试开销 |
-| **Debug** | `./build.sh debug` | 启用 Kernel 计时，便于性能分析 |
 
 ### 2. 编译流程
 
 执行自动化构建脚本：
 
 ```bash
-# Release 模式（默认，用于生产环境）
+# Release 模式（默认）
 ./build.sh
 
-# Debug 模式（用于开发和性能分析）
-./build.sh debug
+# 或显式指定
+./build.sh release
 ```
 
 构建脚本将自动完成以下步骤：
@@ -106,9 +104,47 @@ import tensorflow as tf
 tf.load_library("/path/to/tensorflow_musa_extension/build/libmusa_plugin.so")
 ```
 
+## 环境变量
+
+### 功能控制
+
+| 变量名 | 说明 | 示例 |
+|--------|------|------|
+| `MUSA_ENABLE_TF32` | 启用 TF32 加速 MatMul/Conv | `export MUSA_ENABLE_TF32=1` |
+| `MUSA_DUMP_GRAPHDEF` | 启用图优化调试，dump GraphDef | `export MUSA_DUMP_GRAPHDEF=1` |
+| `MUSA_DUMP_GRAPHDEF_DIR` | 指定 GraphDef dump 目录 | `export MUSA_DUMP_GRAPHDEF_DIR=/tmp/graphs` |
+
+### 日志调试
+
+| 变量名 | 说明 | 示例 |
+|--------|------|------|
+| `TF_CPP_MIN_LOG_LEVEL` | 全局日志级别（0=INFO, 1=WARNING, 2=ERROR） | `export TF_CPP_MIN_LOG_LEVEL=1` |
+| `TF_CPP_VMODULE` | 精确控制特定文件的 VLOG 级别 | `export TF_CPP_VMODULE="musa_graph_optimizer=1,layernorm_fusion=2"` |
+
+**常用调试组合：**
+
+```bash
+# 1. 查看图优化器的详细日志
+export TF_CPP_VMODULE="musa_graph_optimizer=1,fusion_pattern_manager=1"
+python -m fusion.layernorm_gelu_fusion_test
+
+# 2. 查看算子融合详细过程
+export TF_CPP_VMODULE="layernorm_fusion=2,gelu_fusion=1"
+python -m ops.layernorm_op_test
+
+# 3. 完全静音（只显示错误）
+export TF_CPP_MIN_LOG_LEVEL=2
+python test_runner.py
+
+# 4. 恢复默认日志
+unset TF_CPP_MIN_LOG_LEVEL TF_CPP_VMODULE
+```
+
 ## 测试
 
-构建完成后，运行测试套件验证功能正确性。测试文件遵循 TensorFlow 官方 `python/kernel_tests` 风格，使用 `tf.test.TestCase` 作为基类。
+构建完成后，运行测试套件验证功能正确性。测试分为**算子测试**（`test/ops/`）和**融合测试**（`test/fusion/`）两类。
+
+### 运行单个测试
 
 ```bash
 cd test
@@ -117,15 +153,43 @@ cd test
 python -m ops.add_op_test
 python -m ops.matmul_op_test
 
-# 运行所有测试
-./run_all_tests.sh
+# 运行融合测试
+python -m fusion.layernorm_gelu_fusion_test
 ```
 
-测试文件命名规范：
+### 使用测试运行器
+
+```bash
+cd test
+
+# 运行所有算子测试（默认）
+python test_runner.py
+
+# 运行所有融合测试
+python test_runner.py --fusion
+
+# 运行单个测试文件
+python test_runner.py --single ops/matmul_op_test.py
+python test_runner.py --single fusion/layernorm_gelu_fusion_test.py
+
+# 详细模式（显示每个测试的详细输出）
+python test_runner.py --detail
+
+# 安静模式（只显示进度条和摘要）
+python test_runner.py --quiet
+```
+
+### 测试文件命名规范
+
+**算子测试**（`test/ops/`）：
 - 使用 `op_name_op_test.py` 格式
-- 继承自 `tf.test.TestCase`
+- 继承自 `MUSATestCase`（封装了插件加载）
 - 测试方法以 `test_` 开头
-- 使用 `self.assert*` 系列方法进行断言
+
+**融合测试**（`test/fusion/`）：
+- 使用 `*_fusion_test.py` 格式
+- 继承自 `MUSATestCase`
+- 测试端到端的图优化和算子融合
 
 ## 支持的算子
 

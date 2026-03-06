@@ -15,8 +15,14 @@
 
 """Utilities for MUSA kernel tests."""
 
+import logging
 import os
-import tensorflow as tf
+import warnings
+
+# Suppress TensorFlow tf.function retracing warnings that occur in control flow tests.
+# These warnings are expected when @tf.function is called with different Python arguments
+# in loops, and don't affect test correctness.
+logging.getLogger('tensorflow').setLevel(logging.ERROR)
 
 
 def load_musa_plugin():
@@ -59,16 +65,22 @@ def load_musa_plugin():
     )
 
 
+# Import tensorflow first (load_musa_plugin needs it)
+import tensorflow as tf
+
+# Load plugin immediately after importing tensorflow
+load_musa_plugin()
+
+
 class MUSATestCase(tf.test.TestCase):
   """Base test class for MUSA kernel tests."""
 
   @classmethod
   def setUpClass(cls):
-    """Set up the test class by loading the MUSA plugin."""
+    """Set up the test class."""
     super(MUSATestCase, cls).setUpClass()
-    load_musa_plugin()
 
-    # Verify MUSA device is available
+    # Verify MUSA device is available (plugin already loaded at module import)
     if not tf.config.list_physical_devices('MUSA'):
       raise RuntimeError("No MUSA devices found.")
 
