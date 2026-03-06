@@ -104,6 +104,12 @@ grep -c "MUSA_KERNEL_TIMING" /tmp/musa_timing_logs/matmul_level2.log
 grep "MUSA_KERNEL_TIMING" /tmp/musa_timing_logs/all_tests_level2.log | grep -i "matmul"
 ```
 
+输出格式（当前版本）：
+
+```text
+[MUSA_KERNEL_TIMING] <Kernel> <InputShape>, host_total_ms=<x>, device_total_ms=<y>, <StageA>=<ms>, <StageB>=<ms>, Other=<ms>
+```
+
 ---
 
 ## 6. 常见运行组合（可直接复制）

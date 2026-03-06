@@ -65,15 +65,7 @@ class MusaMatMulOp : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
-    //MUSA_KERNEL_TIMING_GUARD(ctx);
-    const auto timing_layout = MUSA_KERNEL_TIMING_LAYOUT(
-      MUSA_KERNEL_TIMING_STAGE("Mem Alloc", "ABC", false),
-      MUSA_KERNEL_TIMING_STAGE("Kernel", "BCA", false),
-      MUSA_KERNEL_TIMING_STAGE("Sync", "SYNC", true));
-    MUSA_KERNEL_TIMING_GUARD_WITH_LAYOUT(ctx, timing_layout);
-      MUSA_KERNEL_TRACE_START("BROKEN_STAGE");
-
-
+    MUSA_KERNEL_TIMING_GUARD(ctx);
 
     const Tensor& in0 = ctx->input(0);
     const Tensor& in1 = ctx->input(1);

@@ -138,13 +138,13 @@ grep "MUSA_KERNEL_TIMING" /tmp/musa_timing_logs/all_tests_level2.log | grep -i a
 ### 5.1 LEVEL=1
 
 ```text
-[MUSA_KERNEL_TIMING] MatMul [<input-shape>] | Total(ms) 0.123 |
+[MUSA_KERNEL_TIMING] MatMul [<input-shape>], host_total_ms=0.140, device_total_ms=0.123
 ```
 
 ### 5.2 LEVEL=2
 
 ```text
-[MUSA_KERNEL_TIMING] MatMul [<input-shape>] | Total(ms) 0.234 | Mem Alloc 0.010 | Mem Cpy 0.002 | Kernel 0.220 | Sync 0.000 |
+[MUSA_KERNEL_TIMING] MatMul [<input-shape>], host_total_ms=0.260, device_total_ms=0.234, Mem Alloc=0.010, Kernel=0.220, Other=0.004
 ```
 
 ### 5.3 STATS=1
@@ -156,6 +156,15 @@ grep "MUSA_KERNEL_TIMING" /tmp/musa_timing_logs/all_tests_level2.log | grep -i a
 MUSA Kernel Debug Statistics
 ...
 =================================================================================
+```
+
+### 5.4 设备信息 + 告警顺序
+
+每次进程第一次打印 timing 时，会先打印设备信息；若有告警，会紧跟在设备信息后：
+
+```text
+[MUSA_KERNEL_TIMING_DEVICE] device_id=0, device_count=1, device_name=MTT S4000, MUSA_VISIBLE_DEVICES=0
+[MUSA_KERNEL_TIMING_WARNING] END without matching START. kernel=MatMul, stage=Kernel
 ```
 
 ---

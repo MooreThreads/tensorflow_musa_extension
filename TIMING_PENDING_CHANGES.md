@@ -1,6 +1,6 @@
 # TIMING Pending Changes
 
-> 状态：待实现（先对齐 API 设计，不立即改业务逻辑）
+> 状态：设计已落地，以下内容用于记录当前实现约束与后续可选增强
 
 ## 1. 目标
 
@@ -19,7 +19,7 @@
    - 显示名
    - 是否显示 0 值
 3. 统计按“阶段标识”累计，不硬编码固定阶段。
-4. 打印按布局输出，例如：`Total | ABC | BCA`，未定义阶段归入 `Other`。
+4. 打印按布局输出，未定义阶段归入 `Other`。
 5. `MUSA_KERNEL_DEBUG=OFF` 时宏保持空实现，release 性能不变。
 
 ## 3. 为什么布局不放到每个 START/END 参数
@@ -31,7 +31,7 @@
 ## 4. 期望输出示例
 
 ```text
-[MUSA_KERNEL_TIMING] MatMul [[1,10],[10,5]] | Total(ms) 0.186 | ABC 0.120 | BCA 0.045 | Other 0.021 |
+[MUSA_KERNEL_TIMING] MatMul [[1,10],[10,5]], host_total_ms=0.201, device_total_ms=0.186, ABC=0.120, BCA=0.045, Other=0.021
 ```
 
 ## 5. 最小改动实现方向（框架优先）
