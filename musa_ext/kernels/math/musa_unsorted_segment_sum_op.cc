@@ -1,12 +1,12 @@
 #include <musa_runtime.h>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/platform/logging.h"
-#include "../utils_op.h"
 
 extern "C" {
 void LaunchUnsortedSegmentSumFloatInt32(const float* data,
