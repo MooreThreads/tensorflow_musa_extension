@@ -29,11 +29,11 @@ void LaunchResourceGatherFloatInt32(const float* params, const int* indices,
                                     int64_t inner_size, int64_t indices_size,
                                     int64_t params_stride, int limit,
                                     musaStream_t stream);
-void LaunchResourceGatherFloatInt64(const float* params,
-                                    const int64_t* indices, float* output,
-                                    int64_t batch_size, int64_t inner_size,
-                                    int64_t indices_size, int64_t params_stride,
-                                    int64_t limit, musaStream_t stream);
+void LaunchResourceGatherFloatInt64(const float* params, const int64_t* indices,
+                                    float* output, int64_t batch_size,
+                                    int64_t inner_size, int64_t indices_size,
+                                    int64_t params_stride, int64_t limit,
+                                    musaStream_t stream);
 void LaunchResourceGatherDoubleInt32(const double* params, const int* indices,
                                      double* output, int64_t batch_size,
                                      int64_t inner_size, int64_t indices_size,
