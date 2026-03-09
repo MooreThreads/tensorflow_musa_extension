@@ -40,8 +40,8 @@ void LaunchUnpackKernelBFloat16(const void* input, void** outputs, int num,
 void LaunchUnpackKernelInt32(const int* input, int** outputs, int num,
                              int before, int after, int total,
                              musaStream_t stream);
-void LaunchUnpackKernelInt64(const int64_t* input, int64_t** outputs,
-                             int num, int before, int after, int total,
+void LaunchUnpackKernelInt64(const int64_t* input, int64_t** outputs, int num,
+                             int before, int after, int total,
                              musaStream_t stream);
 }
 
@@ -171,8 +171,8 @@ void MusaPackOp<int64>::LaunchKernel(const void** inputs, void* output, int num,
                                      int before, int after, int total,
                                      musaStream_t stream) {
   LaunchPackKernelInt64(reinterpret_cast<const int64_t**>(inputs),
-                        reinterpret_cast<int64_t*>(output), num, before,
-                        after, total, stream);
+                        reinterpret_cast<int64_t*>(output), num, before, after,
+                        total, stream);
 }
 
 template <typename T>

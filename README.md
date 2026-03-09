@@ -72,22 +72,26 @@ tf.load_library("./build/libmusa_plugin.so")
 
 ### 1. 编译模式
 
-当前仅支持 Release 模式（优化性能，无调试开销）：
+支持 Release 与 Debug 两种模式：
 
 | 模式 | 命令 | 说明 |
 |------|------|------|
 | **Release** | `./build.sh` 或 `./build.sh release` | 优化性能，无调试开销 |
+| **Debug** | `./build.sh debug` | 开启 `MUSA_KERNEL_DEBUG`，启用 kernel timing 宏 |
 
 ### 2. 编译流程
 
 执行自动化构建脚本：
 
 ```bash
-# Release 模式（默认）
+# Release（默认）
 ./build.sh
 
-# 或显式指定
+# Release（显式）
 ./build.sh release
+
+# Debug（计时调试）
+./build.sh debug
 ```
 
 构建脚本将自动完成以下步骤：
@@ -95,13 +99,46 @@ tf.load_library("./build/libmusa_plugin.so")
 - 编译 MUSA 内核和主机代码
 - 生成动态链接库 `libmusa_plugin.so`
 
-### 4. 加载插件
+### 3. Kernel 计时（Debug 模式）
 
-编译成功后，在 TensorFlow 应用中加载插件：
+仅在 `./build.sh debug` 构建下生效（`MUSA_KERNEL_DEBUG=ON`）：
 
-```python
-import tensorflow as tf
-tf.load_library("/path/to/tensorflow_musa_extension/build/libmusa_plugin.so")
+运行时环境变量请见下方 [环境变量](#环境变量) 章节中的“日志调试”表格。
+
+#### 3.1 宏使用方式
+
+```cpp
+// 基础 guard
+MUSA_KERNEL_TIMING_GUARD(ctx);
+
+// 分段埋点
+MUSA_KERNEL_TRACE_START("Mem Alloc");
+// ... code block ...
+MUSA_KERNEL_TRACE_END("Mem Alloc");
+
+MUSA_KERNEL_TRACE_START("Kernel");
+// ... kernel launch ...
+MUSA_KERNEL_TRACE_END("Kernel");
+
+// 自定义阶段名
+MUSA_KERNEL_TRACE_START("State1");
+// ... allocate / pre-process ...
+MUSA_KERNEL_TRACE_END("State1");
+
+MUSA_KERNEL_TRACE_START("State2");
+// ... main kernel ...
+MUSA_KERNEL_TRACE_END("State2");
+```
+
+### 4. 常用验证命令（MatMul）
+
+```bash
+./build.sh debug
+
+export MUSA_TIMING_KERNEL_LEVEL=2
+export MUSA_TIMING_KERNEL_NAME=ALL
+export MUSA_TIMING_KERNEL_STATS=1
+
 ```
 
 ## 环境变量
@@ -118,6 +155,9 @@ tf.load_library("/path/to/tensorflow_musa_extension/build/libmusa_plugin.so")
 
 | 变量名 | 说明 | 示例 |
 |--------|------|------|
+| `MUSA_TIMING_KERNEL_LEVEL` | Timing 模式控制（`1`=仅总耗时，`2`=总耗时+分段耗时） | `export MUSA_TIMING_KERNEL_LEVEL=2` |
+| `MUSA_TIMING_KERNEL_NAME` | 仅打印指定 Kernel（大小写不敏感子串匹配，`ALL` 为全部） | `export MUSA_TIMING_KERNEL_NAME=MatMul` |
+| `MUSA_TIMING_KERNEL_STATS` | 进程退出时打印 timing 汇总（`1`=开启，`0`=关闭） | `export MUSA_TIMING_KERNEL_STATS=1` |
 | `TF_CPP_MIN_LOG_LEVEL` | 全局日志级别（0=INFO, 1=WARNING, 2=ERROR） | `export TF_CPP_MIN_LOG_LEVEL=1` |
 | `TF_CPP_VMODULE` | 精确控制特定文件的 VLOG 级别 | `export TF_CPP_VMODULE="musa_graph_optimizer=1,layernorm_fusion=2"` |
 

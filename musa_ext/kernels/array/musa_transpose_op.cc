@@ -2,6 +2,7 @@
 
 #include <vector>
 
+#include "../utils_op.h"
 #include "musa_transpose_functor.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
@@ -9,7 +10,6 @@
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/platform/logging.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {

@@ -72,22 +72,26 @@ tf.load_library("./build/libmusa_plugin.so")
 
 ### 1. Build Type
 
-Currently only Release mode is supported (optimized for performance, no debug overhead):
+Both Release and Debug modes are supported:
 
 | Mode | Command | Description |
 |------|---------|-------------|
 | **Release** | `./build.sh` or `./build.sh release` | Optimized for performance, no debug overhead |
+| **Debug** | `./build.sh debug` | Enables `MUSA_KERNEL_DEBUG` and kernel timing macros |
 
 ### 2. Compilation Process
 
 Execute the automated build script:
 
 ```bash
-# Release mode (default)
+# Release (default)
 ./build.sh
 
-# Or explicitly specify
+# Release (explicit)
 ./build.sh release
+
+# Debug (timing instrumentation)
+./build.sh debug
 ```
 
 The build script automatically completes the following steps:
@@ -95,13 +99,48 @@ The build script automatically completes the following steps:
 - Compiles MUSA kernels and host code
 - Generates the dynamic library `libmusa_plugin.so`
 
-### 4. Plugin Loading
+### 3. Kernel Timing (Debug Build)
 
-After successful compilation, load the plugin in your TensorFlow application:
+Only effective when built with `./build.sh debug` (`MUSA_KERNEL_DEBUG=ON`):
 
-```python
-import tensorflow as tf
-tf.load_library("/path/to/tensorflow_musa_extension/build/libmusa_plugin.so")
+Runtime environment variables are listed in the [Environment Variables](#environment-variables) section under "Logging and Debugging".
+
+#### 3.1 Macro Usage
+
+```cpp
+// Basic guard
+MUSA_KERNEL_TIMING_GUARD(ctx);
+
+// Section timing
+MUSA_KERNEL_TRACE_START("Mem Alloc");
+// ... code block ...
+MUSA_KERNEL_TRACE_END("Mem Alloc");
+
+MUSA_KERNEL_TRACE_START("Kernel");
+// ... kernel launch ...
+MUSA_KERNEL_TRACE_END("Kernel");
+
+// Custom section names
+MUSA_KERNEL_TRACE_START("State1");
+// ... allocate / pre-process ...
+MUSA_KERNEL_TRACE_END("State1");
+
+MUSA_KERNEL_TRACE_START("State2");
+// ... main kernel ...
+MUSA_KERNEL_TRACE_END("State2");
+```
+
+### 4. Common Validation Commands (MatMul)
+
+```bash
+./build.sh debug
+
+export MUSA_TIMING_KERNEL_LEVEL=2
+export MUSA_TIMING_KERNEL_NAME=ALL
+export MUSA_TIMING_KERNEL_STATS=1
+
+mkdir -p /tmp/musa_timing_logs
+python test/test_runner.py --single matmul_op_test.py 2>&1 | tee /tmp/musa_timing_logs/matmul_l2.log
 ```
 
 ## Environment Variables
@@ -118,6 +157,9 @@ tf.load_library("/path/to/tensorflow_musa_extension/build/libmusa_plugin.so")
 
 | Variable | Description | Example |
 |----------|-------------|---------|
+| `MUSA_TIMING_KERNEL_LEVEL` | Timing mode (`1`=total only, `2`=total + per-section breakdown) | `export MUSA_TIMING_KERNEL_LEVEL=2` |
+| `MUSA_TIMING_KERNEL_NAME` | Print only selected kernels (case-insensitive substring, `ALL` for all) | `export MUSA_TIMING_KERNEL_NAME=MatMul` |
+| `MUSA_TIMING_KERNEL_STATS` | Print timing summary at process exit (`1`=on, `0`=off) | `export MUSA_TIMING_KERNEL_STATS=1` |
 | `TF_CPP_MIN_LOG_LEVEL` | Global log level (0=INFO, 1=WARNING, 2=ERROR) | `export TF_CPP_MIN_LOG_LEVEL=1` |
 | `TF_CPP_VMODULE` | Per-file VLOG level control | `export TF_CPP_VMODULE="musa_graph_optimizer=1,layernorm_fusion=2"` |
 
@@ -130,7 +172,7 @@ python -m fusion.layernorm_gelu_fusion_test
 
 # 2. View operator fusion details
 export TF_CPP_VMODULE="layernorm_fusion=2,gelu_fusion=1"
-python -m ops.layernorm_op_test
+python -m fusion.layernorm_gelu_fusion_test
 
 # 3. Silent mode (show errors only)
 export TF_CPP_MIN_LOG_LEVEL=2

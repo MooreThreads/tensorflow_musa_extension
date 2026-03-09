@@ -1,7 +1,7 @@
+#include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/lib/core/errors.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {

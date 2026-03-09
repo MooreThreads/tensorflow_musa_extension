@@ -1,7 +1,7 @@
+#include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -19,9 +19,9 @@ class MusaExpandDimsOp : public MusaOpKernel {
 
   void Compute(OpKernelContext* context) override {
     // Reject Variant type early to align with TensorFlow official behavior.
-    OP_REQUIRES(context, context->input(0).dtype() != DT_VARIANT,
-                errors::InvalidArgument(
-                    "ExpandDims on Variant type is not supported"));
+    OP_REQUIRES(
+        context, context->input(0).dtype() != DT_VARIANT,
+        errors::InvalidArgument("ExpandDims on Variant type is not supported"));
     const Tensor& input = context->input(0);
     const Tensor& dim_tensor = context->input(1);
 
@@ -60,11 +60,11 @@ class MusaExpandDimsOp : public MusaOpKernel {
     // otherwise it will allocate and copy the data.
     Tensor* output = nullptr;
     OP_REQUIRES_OK(context, context->allocate_output(0, out_shape, &output));
-    OP_REQUIRES(
-        context, output->CopyFrom(input, out_shape),
-        errors::Internal("Could not expand dimension: shape mismatch. Input shape: ",
-                         input.shape().DebugString(), ", output shape: ",
-                         out_shape.DebugString()));
+    OP_REQUIRES(context, output->CopyFrom(input, out_shape),
+                errors::Internal(
+                    "Could not expand dimension: shape mismatch. Input shape: ",
+                    input.shape().DebugString(),
+                    ", output shape: ", out_shape.DebugString()));
   }
 };
 
