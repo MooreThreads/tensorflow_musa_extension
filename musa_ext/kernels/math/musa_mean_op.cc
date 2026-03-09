@@ -3,6 +3,7 @@
 #include <functional>
 #include <memory>
 
+#include "../utils_op.h"
 #include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/bounds_check.h"
 #include "tensorflow/core/framework/common_shape_fns.h"
@@ -10,7 +11,6 @@
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/shape_inference.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {

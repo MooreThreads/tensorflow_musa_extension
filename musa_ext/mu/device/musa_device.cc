@@ -123,7 +123,8 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
   musaError_t stream_err = musaStreamCreate(&stream_);
   if (stream_err != musaSuccess) {
     LOG(ERROR) << ">>> [MUSA] ERROR: Device " << device_id_
-               << " failed to create stream: " << musaGetErrorString(stream_err);
+               << " failed to create stream: "
+               << musaGetErrorString(stream_err);
     stream_ = nullptr;
     device_context_ = nullptr;
     musa_allocator_ = nullptr;
@@ -163,7 +164,7 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
     musa_allocator_ = nullptr;
     return;
   }
-  
+
   // Set stream for muBLAS
   blas_err = mublasSetStream(mublas_handle_, stream_);
   if (blas_err != MUBLAS_STATUS_SUCCESS) {
@@ -194,7 +195,7 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
   gpu_device_info_.gpu_id = device_id_;
 
   set_tensorflow_gpu_device_info(&gpu_device_info_);
-  
+
   VLOG(1) << ">>> [MUSA] Device " << device_id_ << " initialized successfully";
 }
 
