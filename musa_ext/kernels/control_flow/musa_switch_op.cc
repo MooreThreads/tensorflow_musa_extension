@@ -1,5 +1,5 @@
-#include "mu/device/musa_device.h"
 #include "../utils_op.h"
+#include "mu/device/musa_device.h"
 
 namespace tensorflow {
 namespace musa {

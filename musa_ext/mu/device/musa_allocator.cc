@@ -113,7 +113,7 @@ void* MusaBFCAllocator::AllocateRaw(size_t alignment, size_t num_bytes) {
   //
   // Expected performance improvement: 10-25% for allocation-heavy workloads
   void* ptr = nullptr;
-  
+
   // Fast path: try to acquire lock without blocking
   if (mu_.try_lock()) {
     auto it = pools_.find(size_class);
@@ -126,8 +126,8 @@ void* MusaBFCAllocator::AllocateRaw(size_t alignment, size_t num_bytes) {
       allocated_bytes_ += size_class;
       num_allocs_++;
       mu_.unlock();
-      
-      VLOG(2) << "BFCAllocator: Fast-path reused " << size_class 
+
+      VLOG(2) << "BFCAllocator: Fast-path reused " << size_class
               << " bytes from pool at " << ptr;
       return ptr;
     }
@@ -137,7 +137,7 @@ void* MusaBFCAllocator::AllocateRaw(size_t alignment, size_t num_bytes) {
   // Slow path: blocking lock and potential allocation
   {
     mutex_lock l(mu_);
-    
+
     // Double-check after acquiring lock
     auto it = pools_.find(size_class);
     if (it != pools_.end() && !it->second.empty()) {
@@ -148,8 +148,8 @@ void* MusaBFCAllocator::AllocateRaw(size_t alignment, size_t num_bytes) {
       allocated_sizes_[ptr] = size_class;
       allocated_bytes_ += size_class;
       num_allocs_++;
-      
-      VLOG(2) << "BFCAllocator: Slow-path reused " << size_class 
+
+      VLOG(2) << "BFCAllocator: Slow-path reused " << size_class
               << " bytes from pool at " << ptr;
       return ptr;
     }
