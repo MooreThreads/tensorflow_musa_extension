@@ -2,12 +2,12 @@
 
 #include <list>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bounds_check.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
