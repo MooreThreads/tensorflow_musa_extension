@@ -1,4 +1,5 @@
 // musa_assign_op.cc
+#include "../utils_op.h"
 #include "mu/device/musa_device.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
@@ -6,7 +7,6 @@
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/platform/types.h"
-#include "../utils_op.h"
 namespace tensorflow {
 namespace musa {
 

@@ -120,9 +120,9 @@ class MusaExpm1IntOp : public MusaOpKernel {
 };
 
 // Register kernels for floating point types
-#define REGISTER_MUSA_EXPM1(TYPE)                                \
-  REGISTER_KERNEL_BUILDER(                                       \
-      Name("Expm1").Device("MUSA").TypeConstraint<TYPE>("T"),    \
+#define REGISTER_MUSA_EXPM1(TYPE)                             \
+  REGISTER_KERNEL_BUILDER(                                    \
+      Name("Expm1").Device("MUSA").TypeConstraint<TYPE>("T"), \
       MusaExpm1Op<TYPE>);
 
 REGISTER_MUSA_EXPM1(float);
@@ -133,9 +133,9 @@ REGISTER_MUSA_EXPM1(bfloat16);
 #undef REGISTER_MUSA_EXPM1
 
 // Register kernels for integer types
-#define REGISTER_MUSA_EXPM1_INT(TYPE)                            \
-  REGISTER_KERNEL_BUILDER(                                       \
-      Name("Expm1").Device("MUSA").TypeConstraint<TYPE>("T"),    \
+#define REGISTER_MUSA_EXPM1_INT(TYPE)                         \
+  REGISTER_KERNEL_BUILDER(                                    \
+      Name("Expm1").Device("MUSA").TypeConstraint<TYPE>("T"), \
       MusaExpm1IntOp<TYPE>);
 
 REGISTER_MUSA_EXPM1_INT(int32);

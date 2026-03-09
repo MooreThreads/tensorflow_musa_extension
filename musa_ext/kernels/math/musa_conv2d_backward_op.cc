@@ -93,11 +93,12 @@ Status ComputeOutputAndPadding2D(int64_t in_h, int64_t in_w, int64_t filter_h,
 }
 
 template <typename T>
-Status RunMusaConv2DBackpropInput(OpKernelContext* ctx, const Tensor& out_backprop,
-                                   const Tensor& filter, Tensor* in_backprop,
-                                   TensorFormat data_format, int stride_h,
-                                   int stride_w, int dilation_h, int dilation_w,
-                                   int pad_top, int pad_left) {
+Status RunMusaConv2DBackpropInput(OpKernelContext* ctx,
+                                  const Tensor& out_backprop,
+                                  const Tensor& filter, Tensor* in_backprop,
+                                  TensorFormat data_format, int stride_h,
+                                  int stride_w, int dilation_h, int dilation_w,
+                                  int pad_top, int pad_left) {
   auto& handle = GetHandleByCtx(ctx);
 
   handle.SetAllowTF32(false);
@@ -155,7 +156,8 @@ Status RunMusaConv2DBackpropInput(OpKernelContext* ctx, const Tensor& out_backpr
   }
 
   size_t workspace_size = 0;
-  status = conv.GetBackwardDataWorkspaceSize(handle, workspace_size, dx, dy, w, algo);
+  status = conv.GetBackwardDataWorkspaceSize(handle, workspace_size, dx, dy, w,
+                                             algo);
   if (status != mStatus::SUCCESS) {
     return errors::Internal(
         "muDNN Convolution::GetBackwardDataWorkspaceSize failed. status=",
@@ -184,9 +186,8 @@ Status RunMusaConv2DBackpropInput(OpKernelContext* ctx, const Tensor& out_backpr
         dynamic_ptr == nullptr) {
       return ::musa::dnn::MemoryHandler(nullptr, [](void*) {});
     }
-    return ::musa::dnn::MemoryHandler(dynamic_ptr, [](void* p) {
-      MusaFree(p);
-    });
+    return ::musa::dnn::MemoryHandler(dynamic_ptr,
+                                      [](void* p) { MusaFree(p); });
   };
 
   status = conv.RunBwdData(handle, dx, dy, w, algo, maintainer);
@@ -200,7 +201,8 @@ Status RunMusaConv2DBackpropInput(OpKernelContext* ctx, const Tensor& out_backpr
 }
 
 template <typename T>
-Status RunMusaConv2DBackpropFilter(OpKernelContext* ctx, const Tensor& out_backprop,
+Status RunMusaConv2DBackpropFilter(OpKernelContext* ctx,
+                                   const Tensor& out_backprop,
                                    const Tensor& input, Tensor* filter_backprop,
                                    TensorFormat data_format, int stride_h,
                                    int stride_w, int dilation_h, int dilation_w,
@@ -254,7 +256,8 @@ Status RunMusaConv2DBackpropFilter(OpKernelContext* ctx, const Tensor& out_backp
   status = conv.GetRecommendBackwardFilterAlgorithm(handle, algo, dw, x, dy);
   if (status != mStatus::SUCCESS) {
     return errors::Internal(
-        "muDNN Convolution::GetRecommendBackwardFilterAlgorithm failed. status=",
+        "muDNN Convolution::GetRecommendBackwardFilterAlgorithm failed. "
+        "status=",
         static_cast<int>(status), ", data_format=NHWC",
         ", out_backprop_shape=", out_backprop.shape().DebugString(),
         ", input_shape=", input.shape().DebugString(),
@@ -262,7 +265,8 @@ Status RunMusaConv2DBackpropFilter(OpKernelContext* ctx, const Tensor& out_backp
   }
 
   size_t workspace_size = 0;
-  status = conv.GetBackwardFilterWorkspaceSize(handle, workspace_size, dw, x, dy, algo);
+  status = conv.GetBackwardFilterWorkspaceSize(handle, workspace_size, dw, x,
+                                               dy, algo);
   if (status != mStatus::SUCCESS) {
     return errors::Internal(
         "muDNN Convolution::GetBackwardFilterWorkspaceSize failed. status=",
@@ -291,9 +295,8 @@ Status RunMusaConv2DBackpropFilter(OpKernelContext* ctx, const Tensor& out_backp
         dynamic_ptr == nullptr) {
       return ::musa::dnn::MemoryHandler(nullptr, [](void*) {});
     }
-    return ::musa::dnn::MemoryHandler(dynamic_ptr, [](void* p) {
-      MusaFree(p);
-    });
+    return ::musa::dnn::MemoryHandler(dynamic_ptr,
+                                      [](void* p) { MusaFree(p); });
   };
 
   status = conv.RunBwdFilter(handle, dw, x, dy, algo, maintainer);
@@ -316,7 +319,8 @@ Status RunMusaConv2DBackpropFilter(OpKernelContext* ctx, const Tensor& out_backp
 template <typename T>
 class MusaConv2DBackpropInputOp : public MusaOpKernel {
  public:
-  explicit MusaConv2DBackpropInputOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {
+  explicit MusaConv2DBackpropInputOp(OpKernelConstruction* ctx)
+      : MusaOpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("strides", &strides_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("dilations", &dilations_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("padding", &padding_str_));
@@ -433,15 +437,18 @@ class MusaConv2DBackpropInputOp : public MusaOpKernel {
 
     OP_REQUIRES(ctx, out_backprop.dim_size(n_idx) == batch,
                 errors::InvalidArgument("out_backprop batch mismatch."));
-    OP_REQUIRES(ctx, out_backprop.dim_size(h_idx) == out_h,
-                errors::InvalidArgument("out_backprop height mismatch: expected ",
-                                        out_h, ", got ", out_backprop.dim_size(h_idx)));
-    OP_REQUIRES(ctx, out_backprop.dim_size(w_idx) == out_w,
-                errors::InvalidArgument("out_backprop width mismatch: expected ",
-                                        out_w, ", got ", out_backprop.dim_size(w_idx)));
-    OP_REQUIRES(ctx, out_backprop.dim_size(c_idx) == out_c,
-                errors::InvalidArgument("out_backprop channel mismatch: expected ",
-                                        out_c, ", got ", out_backprop.dim_size(c_idx)));
+    OP_REQUIRES(
+        ctx, out_backprop.dim_size(h_idx) == out_h,
+        errors::InvalidArgument("out_backprop height mismatch: expected ",
+                                out_h, ", got ", out_backprop.dim_size(h_idx)));
+    OP_REQUIRES(
+        ctx, out_backprop.dim_size(w_idx) == out_w,
+        errors::InvalidArgument("out_backprop width mismatch: expected ", out_w,
+                                ", got ", out_backprop.dim_size(w_idx)));
+    OP_REQUIRES(
+        ctx, out_backprop.dim_size(c_idx) == out_c,
+        errors::InvalidArgument("out_backprop channel mismatch: expected ",
+                                out_c, ", got ", out_backprop.dim_size(c_idx)));
 
     // Allocate output tensor for input gradient
     TensorShape in_backprop_shape;
@@ -452,18 +459,17 @@ class MusaConv2DBackpropInputOp : public MusaOpKernel {
     }
 
     Tensor* in_backprop = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, in_backprop_shape, &in_backprop));
+    OP_REQUIRES_OK(ctx,
+                   ctx->allocate_output(0, in_backprop_shape, &in_backprop));
     if (in_backprop->NumElements() == 0) {
       return;
     }
 
     if (data_format_ == FORMAT_NHWC) {
-      OP_REQUIRES_OK(
-          ctx, RunMusaConv2DBackpropInput<T>(ctx, out_backprop, filter,
-                                              in_backprop, FORMAT_NHWC,
-                                              stride_h_, stride_w_,
-                                              dilation_h_, dilation_w_,
-                                              pad_top, pad_left));
+      OP_REQUIRES_OK(ctx, RunMusaConv2DBackpropInput<T>(
+                              ctx, out_backprop, filter, in_backprop,
+                              FORMAT_NHWC, stride_h_, stride_w_, dilation_h_,
+                              dilation_w_, pad_top, pad_left));
       return;
     }
 
@@ -481,16 +487,15 @@ class MusaConv2DBackpropInputOp : public MusaOpKernel {
 
     static const std::vector<int64_t> kPermNchwToNhwc = {0, 2, 3, 1};
     static const std::vector<int64_t> kPermNhwcToNchw = {0, 3, 1, 2};
-    OP_REQUIRES_OK(
-        ctx, PermuteTensorOnMusa(ctx, out_backprop, &out_backprop_nhwc, kPermNchwToNhwc));
-    OP_REQUIRES_OK(
-        ctx, RunMusaConv2DBackpropInput<T>(ctx, out_backprop_nhwc, filter,
-                                           &in_backprop_nhwc, FORMAT_NHWC,
-                                           stride_h_, stride_w_,
-                                           dilation_h_, dilation_w_,
-                                           pad_top, pad_left));
-    OP_REQUIRES_OK(
-        ctx, PermuteTensorOnMusa(ctx, in_backprop_nhwc, in_backprop, kPermNhwcToNchw));
+    OP_REQUIRES_OK(ctx,
+                   PermuteTensorOnMusa(ctx, out_backprop, &out_backprop_nhwc,
+                                       kPermNchwToNhwc));
+    OP_REQUIRES_OK(ctx, RunMusaConv2DBackpropInput<T>(
+                            ctx, out_backprop_nhwc, filter, &in_backprop_nhwc,
+                            FORMAT_NHWC, stride_h_, stride_w_, dilation_h_,
+                            dilation_w_, pad_top, pad_left));
+    OP_REQUIRES_OK(ctx, PermuteTensorOnMusa(ctx, in_backprop_nhwc, in_backprop,
+                                            kPermNhwcToNchw));
   }
 
  private:
@@ -515,7 +520,8 @@ class MusaConv2DBackpropInputOp : public MusaOpKernel {
 template <typename T>
 class MusaConv2DBackpropFilterOp : public MusaOpKernel {
  public:
-  explicit MusaConv2DBackpropFilterOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {
+  explicit MusaConv2DBackpropFilterOp(OpKernelConstruction* ctx)
+      : MusaOpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("strides", &strides_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("dilations", &dilations_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("padding", &padding_str_));
@@ -625,33 +631,35 @@ class MusaConv2DBackpropFilterOp : public MusaOpKernel {
     // Verify out_backprop shape matches expected output shape
     OP_REQUIRES(ctx, out_backprop.dim_size(n_idx) == batch,
                 errors::InvalidArgument("out_backprop batch mismatch."));
-    OP_REQUIRES(ctx, out_backprop.dim_size(h_idx) == out_h,
-                errors::InvalidArgument("out_backprop height mismatch: expected ",
-                                        out_h, ", got ", out_backprop.dim_size(h_idx)));
-    OP_REQUIRES(ctx, out_backprop.dim_size(w_idx) == out_w,
-                errors::InvalidArgument("out_backprop width mismatch: expected ",
-                                        out_w, ", got ", out_backprop.dim_size(w_idx)));
+    OP_REQUIRES(
+        ctx, out_backprop.dim_size(h_idx) == out_h,
+        errors::InvalidArgument("out_backprop height mismatch: expected ",
+                                out_h, ", got ", out_backprop.dim_size(h_idx)));
+    OP_REQUIRES(
+        ctx, out_backprop.dim_size(w_idx) == out_w,
+        errors::InvalidArgument("out_backprop width mismatch: expected ", out_w,
+                                ", got ", out_backprop.dim_size(w_idx)));
     OP_REQUIRES(ctx, out_backprop.dim_size(c_idx) == filter_oc,
-                errors::InvalidArgument("out_backprop channel mismatch: expected ",
-                                        filter_oc, ", got ", out_backprop.dim_size(c_idx)));
+                errors::InvalidArgument(
+                    "out_backprop channel mismatch: expected ", filter_oc,
+                    ", got ", out_backprop.dim_size(c_idx)));
 
     // Allocate output tensor for filter gradient
     TensorShape filter_backprop_shape =
         TensorShape({filter_h, filter_w, filter_ic, filter_oc});
 
     Tensor* filter_backprop = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, filter_backprop_shape, &filter_backprop));
+    OP_REQUIRES_OK(
+        ctx, ctx->allocate_output(0, filter_backprop_shape, &filter_backprop));
     if (filter_backprop->NumElements() == 0) {
       return;
     }
 
     if (data_format_ == FORMAT_NHWC) {
-      OP_REQUIRES_OK(
-          ctx, RunMusaConv2DBackpropFilter<T>(ctx, out_backprop, input,
-                                               filter_backprop, FORMAT_NHWC,
-                                               stride_h_, stride_w_,
-                                               dilation_h_, dilation_w_,
-                                               pad_top, pad_left));
+      OP_REQUIRES_OK(ctx, RunMusaConv2DBackpropFilter<T>(
+                              ctx, out_backprop, input, filter_backprop,
+                              FORMAT_NHWC, stride_h_, stride_w_, dilation_h_,
+                              dilation_w_, pad_top, pad_left));
       return;
     }
 
@@ -662,22 +670,21 @@ class MusaConv2DBackpropFilterOp : public MusaOpKernel {
                    ctx->allocate_temp(input.dtype(),
                                       TensorShape({batch, in_h, in_w, in_c}),
                                       &input_nhwc));
-    OP_REQUIRES_OK(ctx,
-                   ctx->allocate_temp(out_backprop.dtype(),
-                                      TensorShape({batch, out_h, out_w, filter_oc}),
-                                      &out_backprop_nhwc));
+    OP_REQUIRES_OK(
+        ctx, ctx->allocate_temp(out_backprop.dtype(),
+                                TensorShape({batch, out_h, out_w, filter_oc}),
+                                &out_backprop_nhwc));
 
     static const std::vector<int64_t> kPermNchwToNhwc = {0, 2, 3, 1};
     OP_REQUIRES_OK(
         ctx, PermuteTensorOnMusa(ctx, input, &input_nhwc, kPermNchwToNhwc));
-    OP_REQUIRES_OK(
-        ctx, PermuteTensorOnMusa(ctx, out_backprop, &out_backprop_nhwc, kPermNchwToNhwc));
-    OP_REQUIRES_OK(
-        ctx, RunMusaConv2DBackpropFilter<T>(ctx, out_backprop_nhwc, input_nhwc,
-                                            filter_backprop, FORMAT_NHWC,
-                                            stride_h_, stride_w_,
-                                            dilation_h_, dilation_w_,
-                                            pad_top, pad_left));
+    OP_REQUIRES_OK(ctx,
+                   PermuteTensorOnMusa(ctx, out_backprop, &out_backprop_nhwc,
+                                       kPermNchwToNhwc));
+    OP_REQUIRES_OK(ctx, RunMusaConv2DBackpropFilter<T>(
+                            ctx, out_backprop_nhwc, input_nhwc, filter_backprop,
+                            FORMAT_NHWC, stride_h_, stride_w_, dilation_h_,
+                            dilation_w_, pad_top, pad_left));
   }
 
  private:
@@ -694,13 +701,13 @@ class MusaConv2DBackpropFilterOp : public MusaOpKernel {
   int dilation_w_ = 1;
 };
 
-#define REGISTER_MUSA_CONV2D_BACKPROP_INPUT(TYPE)                     \
-  REGISTER_KERNEL_BUILDER(                                             \
+#define REGISTER_MUSA_CONV2D_BACKPROP_INPUT(TYPE)                           \
+  REGISTER_KERNEL_BUILDER(                                                  \
       Name("Conv2DBackpropInput").Device("MUSA").TypeConstraint<TYPE>("T"), \
       MusaConv2DBackpropInputOp<TYPE>)
 
-#define REGISTER_MUSA_CONV2D_BACKPROP_FILTER(TYPE)                     \
-  REGISTER_KERNEL_BUILDER(                                             \
+#define REGISTER_MUSA_CONV2D_BACKPROP_FILTER(TYPE)                           \
+  REGISTER_KERNEL_BUILDER(                                                   \
       Name("Conv2DBackpropFilter").Device("MUSA").TypeConstraint<TYPE>("T"), \
       MusaConv2DBackpropFilterOp<TYPE>)
 

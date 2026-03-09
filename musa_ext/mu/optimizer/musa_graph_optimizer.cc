@@ -33,8 +33,17 @@ limitations under the License.
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/platform/logging.h"
 
+#include "mu/graph_fusion/fusion_pattern_manager.h"
+#include "mu/graph_fusion/layernorm_fusion.h"
+#include "mu/graph_fusion/gelu_fusion.h"
+#include "mu/optimizer/graph_utils.h"
+
 namespace tensorflow {
 namespace grappler {
+
+// Import musa namespace for graph utils
+using namespace ::tensorflow::grappler::musa;
+
 namespace {
 
 // Device type for MUSA
@@ -277,10 +286,14 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
                   GraphDef* optimized_graph) override {
     *optimized_graph = item.graph;
 
+    // Initialize dumper for this optimization run
+    GraphDefDumper dumper("musa_optimizer");
+    dumper.DumpInitial(*optimized_graph);
+
     // Skip optimization if graph doesn't contain MUSA nodes
     if (!GraphHasMusaNodes(*optimized_graph)) {
-      VLOG(2)
-          << "MusaGraphOptimizer: No MUSA nodes found, skipping optimization";
+      VLOG(2) << "MusaGraphOptimizer: No MUSA nodes found, skipping optimization";
+      dumper.DumpFinal(*optimized_graph);
       return Status::OK();
     }
 
@@ -289,26 +302,131 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
 
     // Step 1: Layout optimization (NHWC -> NCHW)
     if (configs_.layout_optimizer != TriState::kOff) {
+      dumper.DumpBeforePass(*optimized_graph, "layout");
       OptimizeLayout(optimized_graph);
+      dumper.DumpAfterPass(*optimized_graph, "layout");
     }
 
     // Step 2: AMP optimization (FP32 -> FP16)
     if (configs_.auto_mixed_precision != TriState::kOff) {
+      dumper.DumpBeforePass(*optimized_graph, "amp");
       OptimizeAMP(optimized_graph);
+      dumper.DumpAfterPass(*optimized_graph, "amp");
+    }
+
+    // Step 3: Fusion optimization (LayerNorm, GELU, etc.)
+    if (configs_.remapping != TriState::kOff) {
+      dumper.DumpBeforePass(*optimized_graph, "fusion");
+      TF_RETURN_IF_ERROR(OptimizeFusion(optimized_graph));
+      dumper.DumpAfterPass(*optimized_graph, "fusion");
     }
 
     VLOG(1) << "MusaGraphOptimizer: Optimization complete, graph now has "
             << optimized_graph->node_size() << " nodes";
 
+    // Dump final graph
+    dumper.DumpFinal(*optimized_graph);
+
+    // Debug: print all node names and check for consumers of fused node
+    if (VLOG_IS_ON(2)) {
+      VLOG(2) << "MusaGraphOptimizer: Nodes in optimized graph:";
+      for (const auto& node : optimized_graph->node()) {
+        VLOG(2) << "  - " << node.name() << " (" << node.op() << ")";
+      }
+    }
+
     return Status::OK();
   }
 
-  // Feedback method removed - not available in TF 2.6.1 CustomGraphOptimizer interface
-  // void Feedback(Cluster* cluster, const GrapplerItem& item,
+  // Feedback method removed - not available in TF 2.6.1 CustomGraphOptimizer
+  // interface void Feedback(Cluster* cluster, const GrapplerItem& item,
   //               const GraphDef& optimized_graph, double result) override {}
 
   // Get optimizer configurations - used for coordination with other optimizers
   const MusaOptimizerConfigs& GetConfigs() const { return configs_; }
+
+  // Fusion optimization - applies registered fusion patterns
+  Status OptimizeFusion(GraphDef* graph) {
+    using namespace ::tensorflow::grappler::musa_fusion;
+
+    VLOG(1) << "MusaGraphOptimizer: Starting fusion optimization";
+
+    auto& pattern_manager = FusionPatternManager::GetInstance();
+    auto patterns = pattern_manager.GetSortedPatterns();
+
+    if (patterns.empty()) {
+      VLOG(1) << "MusaGraphOptimizer: No fusion patterns registered";
+      return Status::OK();
+    }
+
+    VLOG(1) << "MusaGraphOptimizer: Applying " << patterns.size()
+            << " fusion patterns";
+
+    int fusion_applied_count = 0;
+    int fusion_fallback_count = 0;
+
+    bool graph_modified = true;
+    int iteration = 0;
+    const int kMaxIterations = 10;  // Prevent infinite loops
+
+    while (graph_modified && iteration < kMaxIterations) {
+      graph_modified = false;
+      iteration++;
+
+      for (int node_idx = 0; node_idx < graph->node_size(); ++node_idx) {
+        for (const auto* pattern : patterns) {
+          if (!pattern->IsEnabled()) {
+            continue;
+          }
+
+          auto match_result = pattern->Match(*graph, node_idx);
+
+          if (match_result.matched) {
+            // Check kernel availability
+            if (!pattern->IsKernelAvailable()) {
+              VLOG(1) << "MusaGraphOptimizer: Pattern '" << pattern->GetName()
+                      << "' matched at node " << node_idx
+                      << " but kernel not available - using fallback";
+
+              // Call Apply anyway to allow pattern to handle fallback
+              Status status = pattern->Apply(graph, match_result);
+              if (!status.ok()) {
+                LOG(WARNING) << "MusaGraphOptimizer: Fallback for pattern '"
+                            << pattern->GetName() << "' failed: " << status;
+              }
+              fusion_fallback_count++;
+              continue;
+            }
+
+            VLOG(1) << "MusaGraphOptimizer: Applying pattern '" << pattern->GetName()
+                    << "' at node " << node_idx;
+
+            Status status = pattern->Apply(graph, match_result);
+            if (status.ok()) {
+              graph_modified = true;
+              fusion_applied_count++;
+              VLOG(1) << "MusaGraphOptimizer: Pattern '" << pattern->GetName()
+                      << "' applied successfully";
+              break;  // Restart scanning since graph was modified
+            } else {
+              LOG(WARNING) << "MusaGraphOptimizer: Pattern '" << pattern->GetName()
+                          << "' apply failed: " << status;
+            }
+          }
+        }
+
+        if (graph_modified) {
+          break;  // Restart from beginning after modification
+        }
+      }
+    }
+
+    VLOG(1) << "MusaGraphOptimizer: Fusion optimization complete. "
+            << "Applied: " << fusion_applied_count
+            << ", Fallbacks: " << fusion_fallback_count;
+
+    return Status::OK();
+  }
 
  private:
   MusaAmpConfig amp_config_;

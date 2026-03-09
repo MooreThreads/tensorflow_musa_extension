@@ -45,7 +45,7 @@ class MusaBFCAllocator : public Allocator {
   static constexpr size_t kMinAllocationSize = 256;
   static constexpr size_t kMaxPoolSize = 1ULL << 30;  // 1GB max per pool
   static constexpr size_t kAllocationAlignment = 256;
-  static constexpr size_t kSmallSizeThreshold = 65536;  // 64KB
+  static constexpr size_t kSmallSizeThreshold = 65536;              // 64KB
   static constexpr size_t kLargeSizeThreshold = 256 * 1024 * 1024;  // 256MB
 
   // Round up to alignment
@@ -61,7 +61,8 @@ class MusaBFCAllocator : public Allocator {
   bool TryAllocateFromPool(size_t size_class, void** ptr);
 
   // Slow path allocation with full locking
-  void* AllocateRawLocked(size_t alignment, size_t num_bytes, size_t size_class);
+  void* AllocateRawLocked(size_t alignment, size_t num_bytes,
+                          size_t size_class);
 
   // Direct allocation for large sizes
   void* AllocateDirect(size_t alignment, size_t num_bytes);
