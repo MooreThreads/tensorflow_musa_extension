@@ -1,10 +1,10 @@
+#include "../utils_op.h"
 #include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/framework/types.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -95,11 +95,11 @@ class MusaReshapeOp : public MusaOpKernel {
     OP_REQUIRES_OK(
         ctx, ctx->forward_input_or_allocate_output({0}, 0, shape, &output));
 
-    // copy data if forwarding failed (output and input point to different memory)
+    // copy data if forwarding failed (output and input point to different
+    // memory)
     if (output->tensor_data().data() != input.tensor_data().data()) {
       auto& handle = GetHandleByCtx(ctx);
-      musaStream_t stream =
-          reinterpret_cast<musaStream_t>(handle.GetStream());
+      musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 
       mStatus status = MusaMemcpyAsyncD2D(
           const_cast<char*>(output->tensor_data().data()),

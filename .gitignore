@@ -2,3 +2,5 @@ __pycache__
 build
 *.log
 .vscode/**
+# crash dumps
+core.*

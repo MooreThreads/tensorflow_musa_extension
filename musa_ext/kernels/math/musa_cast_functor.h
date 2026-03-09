@@ -1,10 +1,10 @@
 #include <functional>
 #include <memory>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/core/status.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {

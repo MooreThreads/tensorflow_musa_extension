@@ -1,5 +1,5 @@
-#include "tensorflow/core/framework/bfloat16.h"
 #include "../utils_op.h"
+#include "tensorflow/core/framework/bfloat16.h"
 
 namespace tensorflow {
 namespace musa {

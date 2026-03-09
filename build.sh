@@ -4,11 +4,12 @@ set -e
 # ============================================================================
 # MUSA Plugin Build Script
 # Usage:
-#   ./build.sh [release]
+#   ./build.sh [release|debug]
 #
 # Examples:
 #   ./build.sh           # Default: release mode
 #   ./build.sh release   # Release mode (optimized)
+#   ./build.sh debug     # Debug mode (kernel timing enabled)
 # ============================================================================
 
 # Parse build type from command line argument
@@ -18,7 +19,7 @@ BUILD_TYPE=$(echo "$BUILD_TYPE" | tr '[:upper:]' '[:lower:]')
 case "$BUILD_TYPE" in
     release)
         CMAKE_BUILD_TYPE="Release"
-        MUSA_KERNEL_DEBUG="0"
+        MUSA_KERNEL_DEBUG="OFF"
         echo "=========================================="
         echo "Building MUSA Plugin - RELEASE Mode"
         echo "=========================================="
@@ -27,12 +28,24 @@ case "$BUILD_TYPE" in
         echo "  • No debug overhead"
         echo ""
         ;;
+    debug)
+        CMAKE_BUILD_TYPE="Debug"
+        MUSA_KERNEL_DEBUG="ON"
+        echo "=========================================="
+        echo "Building MUSA Plugin - DEBUG Mode"
+        echo "=========================================="
+        echo "Features:"
+        echo "  • Kernel timing instrumentation enabled"
+        echo "  • Use env vars MUSA_TIMING_KERNEL_* to control output"
+        echo ""
+        ;;
     *)
         echo "Error: Unknown build type '$BUILD_TYPE'"
-        echo "Usage: ./build.sh [release]"
+        echo "Usage: ./build.sh [release|debug]"
         echo ""
         echo "Options:"
         echo "  release  - Optimized release build (default)"
+        echo "  debug    - Enable MUSA kernel debug/timing macros"
         exit 1
         ;;
 esac
@@ -49,6 +62,7 @@ echo ""
 
 cmake .. \
     -DCMAKE_BUILD_TYPE=$CMAKE_BUILD_TYPE \
+    -DMUSA_KERNEL_DEBUG=$MUSA_KERNEL_DEBUG \
     -DPYTHON_EXECUTABLE=$(which python3) 2>&1 | tee cmake_output.log
 
 echo ""
