@@ -16,7 +16,6 @@ class MusaProdOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("keep_dims", &keep_dims_));
   }
 
-  // Prod is a reduction operation - computationally intensive
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
@@ -73,19 +72,17 @@ class MusaProdOp : public MusaOpKernel {
       }
     }
 
+    // Zero-Copy for identity case
+    if (reduce_elements == 1) {
+      ctx->set_output(0, input);
+      return;
+    }
+
     Tensor* out = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &out));
     if (out->NumElements() == 0 || reduce_elements == 0) return;
 
     auto& handle = GetHandleByCtx(ctx);
-    musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
-
-    if (reduce_elements == 1) {
-      MusaMemcpyAsyncD2D(const_cast<char*>(out->tensor_data().data()),
-                         input.tensor_data().data(), input.TotalBytes(),
-                         stream);
-      return;
-    }
 
     Tensor out_reshaped(out->dtype());
     OP_REQUIRES(ctx, out_reshaped.CopyFrom(*out, musa_output_shape),

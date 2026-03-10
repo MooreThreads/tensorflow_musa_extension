@@ -52,6 +52,7 @@ class StringToHashBucketFastOp : public OpKernel {
     const auto& input_flat = input_tensor->flat<tstring>();
     const int64 N = input_tensor->NumElements();
 
+<<<<<<< HEAD
     // Allocate output tensor (host memory since HostMemory("output") is set)
     Tensor* output_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input_tensor->shape(), &output_tensor));
@@ -64,6 +65,30 @@ class StringToHashBucketFastOp : public OpKernel {
           tensorflow::StringPiece(s.data(), s.size()));
       output_flat(i) = static_cast<int64>(hash % static_cast<uint64>(num_buckets_));
     }
+=======
+    // CRITICAL PERFORMANCE FIX: Removed stream synchronization after memcpy.
+    //
+    // The original code called musaStreamSynchronize here, which blocked the
+    // host until the H2D transfer completed. This completely serialized the
+    // execution and prevented any overlap with subsequent operations.
+    //
+    // CORRECT APPROACH: Issue async copy and return immediately.
+    // TensorFlow's executor will ensure that any operations depending on
+    // this output won't start until the copy completes, through stream
+    // ordering and dependency tracking.
+    //
+    // This is a pure CPU->GPU data transfer with no dependencies on other
+    // GPU operations, so there's no need to wait here.
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
+    mStatus status = MusaMemcpyAsyncH2D(device_ptr, host_output.data(),
+                                        N * sizeof(int64), stream);
+
+    OP_REQUIRES(ctx, status == mStatus::SUCCESS,
+                errors::Internal("MUSA StringToHashBucketFast: memcpy failed"));
+
+    // REMOVED: musaStreamSynchronize(stream) was here causing host blocking.
+    // Let TF's dependency tracking handle synchronization naturally.
+>>>>>>> 67d1bb7 (feat: refactor with streamExecutor and optimize memcpy for some kernels)
   }
 
  private:

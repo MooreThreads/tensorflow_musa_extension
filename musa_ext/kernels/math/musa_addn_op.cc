@@ -5,10 +5,6 @@
 #include "../utils_op.h"
 #include "utils/logging.h"
 
-// ============================================================================
-// MUSA AddN custom kernel launcher declarations from musa_addn_kernel.mu
-// ============================================================================
-
 extern "C" {
   void LaunchAddNKernelFloat(const float** inputs, float* output, int num_inputs,
                              int size, musaStream_t stream);
@@ -27,7 +23,6 @@ extern "C" {
 namespace tensorflow {
 namespace musa {
 
-// Common implementation for AddN Compute
 template <typename T>
 void AddNCompute(OpKernelContext* ctx, mFormat format,
                  void (*launcher)(const T**, T*, int, int, musaStream_t)) {
@@ -37,23 +32,12 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
   OP_REQUIRES(ctx, num_inputs >= 1,
               errors::InvalidArgument("AddN requires at least one input."));
 
-  // Handle single input - direct copy
+  // PERFORMANCE OPTIMIZATION: Zero-Copy for single input case
+  // When AddN has only one input: output = input[0]
+  // Use set_output instead of allocating and copying
   if (num_inputs == 1) {
     const Tensor& input = ctx->input(0);
-    Tensor* output = nullptr;
-    MUSA_KERNEL_TRACE_START("Mem Alloc");
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &output));
-    MUSA_KERNEL_TRACE_END("Mem Alloc");
-    if (input.NumElements() == 0) return;
-    auto& handle = GetHandleByCtx(ctx);
-    musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
-    MUSA_KERNEL_TRACE_START("Mem Cpy");
-    mStatus copy_status = MusaMemcpyAsyncD2D(
-        const_cast<char*>(output->tensor_data().data()),
-        input.tensor_data().data(), input.TotalBytes(), stream);
-    MUSA_KERNEL_TRACE_END("Mem Cpy");
-    OP_REQUIRES(ctx, copy_status == mStatus::SUCCESS,
-                errors::Internal("MUSA AddN single input copy failed."));
+    ctx->set_output(0, input);
     return;
   }
 
@@ -89,11 +73,10 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
     return;
   }
 
-  // OPTIMIZED: 3+ inputs - custom kernel (SINGLE LAUNCH!)
+  // 3+ inputs - custom kernel
   musaStream_t stream = reinterpret_cast<musaStream_t>(
       GetHandleByCtx(ctx).GetStream());
 
-  // Build device pointer array
   std::vector<const void*> input_ptrs(num_inputs);
   for (int i = 0; i < num_inputs; ++i)
     input_ptrs[i] = ctx->input(i).tensor_data().data();
@@ -108,7 +91,6 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
              num_inputs * sizeof(const void*), musaMemcpyHostToDevice);
   MUSA_KERNEL_TRACE_END("Mem Cpy");
 
-  // Launch custom kernel
   void* output_ptr = const_cast<char*>(output->tensor_data().data());
   MUSA_KERNEL_TRACE_START("Kernel");
   launcher(reinterpret_cast<const T**>(d_inputs),
@@ -119,16 +101,11 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
   musaFree(const_cast<void**>(d_inputs));
 }
 
-// ============================================================================
-// AddN operator class
-// ============================================================================
-
 template <typename T>
 class MusaAddNOp : public MusaOpKernel {
  public:
   explicit MusaAddNOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
-  // AddN is element-wise - lightweight
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
@@ -136,13 +113,8 @@ class MusaAddNOp : public MusaOpKernel {
   }
 
  private:
-  // Getter for the appropriate launcher function
   static void (*GetLauncher())(const T**, T*, int, int, musaStream_t);
 };
-
-// ============================================================================
-// Launcher function getters - specialized for each type
-// ============================================================================
 
 #define DEFINE_ADDN_LAUNCHER_GETTER(T, launcher, input_cast, output_cast)       \
   template <>                                                                   \
@@ -154,23 +126,18 @@ class MusaAddNOp : public MusaOpKernel {
     };                                                                          \
   }
 
-// Float and double - direct casts
 DEFINE_ADDN_LAUNCHER_GETTER(float, LaunchAddNKernelFloat,
                             reinterpret_cast<const float**>,
                             reinterpret_cast<float*>)
 DEFINE_ADDN_LAUNCHER_GETTER(double, LaunchAddNKernelDouble,
                             reinterpret_cast<const double**>,
                             reinterpret_cast<double*>)
-
-// Half and BFloat16 - need reinterpret_cast to void**
 DEFINE_ADDN_LAUNCHER_GETTER(Eigen::half, LaunchAddNKernelHalf,
                             reinterpret_cast<const void**>,
                             reinterpret_cast<void*>)
 DEFINE_ADDN_LAUNCHER_GETTER(bfloat16, LaunchAddNKernelBFloat16,
                             reinterpret_cast<const void**>,
                             reinterpret_cast<void*>)
-
-// Int32 and Int64 - direct casts
 DEFINE_ADDN_LAUNCHER_GETTER(int32, LaunchAddNKernelInt32,
                             reinterpret_cast<const int**>,
                             reinterpret_cast<int*>)

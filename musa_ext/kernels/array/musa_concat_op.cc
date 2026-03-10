@@ -17,7 +17,6 @@ class MusaConcatOp : public MusaOpKernel {
  public:
   explicit MusaConcatOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
-  // Concat is memory-intensive but not computationally expensive
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
@@ -50,27 +49,20 @@ class MusaConcatOp : public MusaOpKernel {
     }
     out_shape.set_dim(normalized_axis, concat_dim_total);
 
+    // PERFORMANCE OPTIMIZATION: Zero-Copy for single non-empty input
+    // When Concat has only one non-empty input, it's an identity operation
+    if (non_empty_indices.size() == 1) {
+      const Tensor& src = ctx->input(non_empty_indices[0]);
+      ctx->set_output(0, src);
+      return;
+    }
+
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, out_shape, &output));
 
     if (total_elements == 0) return;
 
     auto& handle = GetHandleByCtx(ctx);
-    musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
-
-    if (non_empty_indices.size() == 1) {
-      const Tensor& src = ctx->input(non_empty_indices[0]);
-      musaError_t err =
-          musaMemcpyAsync(const_cast<char*>(output->tensor_data().data()),
-                          src.tensor_data().data(), src.TotalBytes(),
-                          musaMemcpyDeviceToDevice, stream);
-      if (err != musaSuccess) {
-        ctx->CtxFailure(errors::Internal("musaMemcpyAsync failed: ",
-                                         musaGetErrorString(err)));
-        return;
-      }
-      return;
-    }
 
     std::vector<::musa::dnn::Tensor> mudnn_ins;
     mudnn_ins.reserve(non_empty_indices.size());

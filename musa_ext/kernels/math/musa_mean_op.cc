@@ -31,9 +31,6 @@ class MusaMeanOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("keep_dims", &keep_dims_));
   }
 
-  // Mean is computationally intensive (reduction operation)
-  // Mark as expensive to enable optimal scheduling (async execution)
-  // Expected improvement: Better overlapping with other operations
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
@@ -50,10 +47,9 @@ class MusaMeanOp : public MusaOpKernel {
     gtl::InlinedVector<bool, 4> bitmap(input.dims(), false);
 
     if (num_axes == 0) {
-      for (int i = 0; i < input.dims(); ++i) {
-        bitmap[i] = true;
-        reduce_dims.push_back(i);
-      }
+      // Zero-Copy for no-reduction case
+      ctx->set_output(0, input);
+      return;
     } else {
       auto axes_flat = axes_tensor.flat<Tidx>();
       for (int64_t i = 0; i < num_axes; i++) {
@@ -81,20 +77,18 @@ class MusaMeanOp : public MusaOpKernel {
       }
     }
 
+    // Zero-Copy for identity reduction
+    if (reduce_elements == 1) {
+      ctx->set_output(0, input);
+      return;
+    }
+
     Tensor* out = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &out));
 
     if (out->NumElements() == 0 || reduce_elements == 0) return;
 
     auto& handle = GetHandleByCtx(ctx);
-
-    if (reduce_elements == 1) {
-      musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
-      MusaMemcpyAsyncD2D(const_cast<char*>(out->tensor_data().data()),
-                         input.tensor_data().data(), input.TotalBytes(),
-                         stream);
-      return;
-    }
 
     Tensor out_reshaped(out->dtype());
     OP_REQUIRES(ctx, out_reshaped.CopyFrom(*out, musa_output_shape),

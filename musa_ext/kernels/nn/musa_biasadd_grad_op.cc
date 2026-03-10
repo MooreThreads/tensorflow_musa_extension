@@ -38,6 +38,13 @@ class MusaBiasAddGradOp : public MusaOpKernel {
         ctx, channel_dim >= 0 && channel_dim < output_backprop.dims(),
         errors::InvalidArgument("Invalid channel dimension calculation."));
 
+    // PERFORMANCE OPTIMIZATION: Zero-Copy when no reduction needed
+    // When reduce_dims is empty (1D input), it's an identity operation
+    if (output_backprop.dims() == 1) {
+      ctx->set_output(0, output_backprop);
+      return;
+    }
+
     TensorShape output_shape({output_backprop.dim_size(channel_dim)});
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
@@ -53,14 +60,6 @@ class MusaBiasAddGradOp : public MusaOpKernel {
     }
 
     auto& handle = GetHandleByCtx(ctx);
-
-    if (reduce_dims.empty()) {
-      musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
-      MusaMemcpyAsyncD2D(const_cast<char*>(output->tensor_data().data()),
-                         output_backprop.tensor_data().data(),
-                         output_backprop.TotalBytes(), stream);
-      return;
-    }
 
     TensorShape mudnn_output_shape = output_backprop.shape();
     for (int dim : reduce_dims) {

@@ -77,7 +77,6 @@ class MusaUniqueOp : public MusaOpKernel {
                 errors::Internal("MUSA muDNN Unique execution failed. Status: ",
                                  (int)status));
 
-    // Use async memcpy with stream for D2H copy
     musaStream_t stream = GetMusaStreamByCtx(ctx);
     std::vector<OutIdxT> host_counts(num_elements);
     mStatus memcpy_status = MusaMemcpyAsyncD2H(host_counts.data(),
@@ -108,7 +107,6 @@ class MusaUniqueOp : public MusaOpKernel {
           data_bytes, stream);
       OP_REQUIRES(ctx, d2d_status == mStatus::SUCCESS,
                   errors::Internal("MUSA Unique: MusaMemcpyAsyncD2D failed"));
-      musaStreamSynchronize(stream);
     }
   }
 };

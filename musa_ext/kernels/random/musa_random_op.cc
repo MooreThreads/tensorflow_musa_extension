@@ -1,4 +1,6 @@
-#include "mu/device/musa_executor.h"
+#include <musa_runtime.h>
+
+#include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_shape.h"
@@ -10,7 +12,14 @@ namespace tensorflow {
 namespace musa {
 
 using random::PhiloxRandom;
-using stream_executor::musa::FromMusaStatus;
+
+// Helper function to convert MUSA memcpy status to Status
+inline Status FromMusaMemcpyStatus(mStatus s) {
+  if (s == mStatus::SUCCESS) {
+    return Status::OK();
+  }
+  return errors::Internal("MUSA memcpy operation failed");
+}
 
 namespace {
 
@@ -115,7 +124,7 @@ class MusaRandomOp : public MusaOpKernel {
     musaStream_t stream = GetMusaStreamByCtx(ctx);
     mStatus s = tensorflow::musa::MusaMemcpyAsyncH2D(
         output->data(), tmp_host.data(), num_elements * sizeof(T), stream);
-    OP_REQUIRES_OK(ctx, FromMusaStatus(s));
+    OP_REQUIRES_OK(ctx, FromMusaMemcpyStatus(s));
     // REMOVED: musaStreamSynchronize(stream);
     // TensorFlow will ensure synchronization when needed through its
     // stream dependency tracking and callback system.

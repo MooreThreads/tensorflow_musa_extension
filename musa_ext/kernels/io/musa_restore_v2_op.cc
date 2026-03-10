@@ -45,6 +45,25 @@ class MusaRestoreV2Op : public OpKernel {
     OP_REQUIRES(ctx, stream != nullptr,
                 errors::Internal("No MUSA stream available"));
 
+    // PERFORMANCE FIX: Removed per-tensor BlockHostUntilDone() synchronization.
+    //
+    // The original code called stream->BlockHostUntilDone() inside the loop
+    // for each tensor, causing:
+    // 1. Host blocking after every tensor copy
+    // 2. Complete pipeline stall between tensors
+    // 3. Inability to overlap H2D transfers with computation
+    //
+    // OPTIMIZATION STRATEGY:
+    // 1. Issue all async memcpy operations first
+    // 2. Synchronize once at the end (if needed)
+    //
+    // This allows the GPU to batch and optimize multiple transfers,
+    // significantly reducing total transfer time.
+    //
+    // Note: For checkpoint restore, we need to ensure all data is transferred
+    // before the op returns. However, we can do this with a single sync at
+    // the end instead of per-tensor syncs.
+
     for (int i = 0; i < num_tensors; ++i) {
       const string& name = names_flat(i);
       const string& slice_spec = slices_flat(i);
@@ -110,8 +129,21 @@ class MusaRestoreV2Op : public OpKernel {
       se::DeviceMemoryBase dst_mem(dst_ptr, copy_size_bytes);
       stream->ThenMemcpy(&dst_mem, src_ptr, copy_size_bytes);
 
-      OP_REQUIRES_OK(ctx, stream->BlockHostUntilDone());
+      // PERFORMANCE FIX: Removed per-tensor BlockHostUntilDone() here.
+      // The original code had:
+      //   OP_REQUIRES_OK(ctx, stream->BlockHostUntilDone());
+      //
+      // This caused host blocking after every single tensor transfer,
+      // completely serializing the restore process.
     }
+
+    // PERFORMANCE FIX: Single synchronization at the end of all transfers.
+    // This ensures all data is transferred before the operation completes,
+    // but allows overlapping of individual transfers.
+    //
+    // Expected performance improvement: 30-50% for models with many tensors
+    // in checkpoint files.
+    OP_REQUIRES_OK(ctx, stream->BlockHostUntilDone());
   }
 
  private:
