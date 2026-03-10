@@ -175,6 +175,17 @@ class FusionGraphUtils {
   
   // Remove a node from the graph
   static void RemoveNode(GraphDef* graph, int node_idx);
+
+  // Check whether a node still has consumers outside a removable node set.
+  static bool HasExternalConsumers(
+      const GraphDef& graph, const std::string& node_name,
+      const std::unordered_set<std::string>& removable_node_names);
+
+  // Remove nodes that are no longer referenced outside the removable set.
+  // Protected nodes are excluded from deletion even if listed in node_names.
+  static int RemoveNodesIfUnused(
+      GraphDef* graph, const std::vector<std::string>& node_names,
+      const std::unordered_set<std::string>& protected_node_names = {});
   
   // Redirect all inputs referencing old_node to new_node
   static void RedirectInputs(GraphDef* graph, const std::string& old_node_name,
