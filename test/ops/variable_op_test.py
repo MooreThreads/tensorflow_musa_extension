@@ -18,10 +18,14 @@
 import numpy as np
 import tensorflow as tf
 
-from musa_test_utils import MUSATestCase
+from musa_test_utils import load_musa_plugin
+
+# Load plugin before test discovery/runtime checks.
+load_musa_plugin()
+MUSA_DEVICES = tf.config.list_physical_devices('MUSA')
 
 
-class VariableV2OpTest(MUSATestCase):
+class VariableV2OpTest(tf.test.TestCase):
   """Tests for MUSA Variable operator (using ResourceVariable)."""
 
   def _make_value_np(self, shape, dtype):
@@ -40,6 +44,9 @@ class VariableV2OpTest(MUSATestCase):
 
   def _test_variable_basic(self, shape, dtype):
     """Basic create+assign+read compare between CPU and MUSA."""
+    if not MUSA_DEVICES:
+      self.skipTest("No MUSA devices found.")
+
     value_np = self._make_value_np(shape, dtype)
     init_val = tf.constant(value_np, dtype=dtype)
 
@@ -64,7 +71,8 @@ class VariableV2OpTest(MUSATestCase):
     else:
       rtol = 1e-5
       atol = 1e-8
-      self.assertAllClose(cpu_result.numpy(), musa_result.numpy(), rtol=rtol, atol=atol)
+      self.assertAllClose(
+          cpu_result.numpy(), musa_result.numpy(), rtol=rtol, atol=atol)
 
   def testVariableV2AssignRead1D(self):
     """Test Variable + Assign + Read for 1D tensors."""

@@ -14,6 +14,9 @@ namespace musa {
 
 std::string TensorToSummary(OpKernelContext* c, const Tensor& device_tensor,
                             int summarize) {
+  if (device_tensor.dtype() == DT_STRING || device_tensor.dtype() == DT_VARIANT) {
+    return device_tensor.SummarizeValue(summarize);
+  }
   Tensor cpu_tensor(device_tensor.dtype(), device_tensor.shape());
   MusaMemcpyD2H(const_cast<char*>(cpu_tensor.tensor_data().data()),
                 device_tensor.tensor_data().data(), device_tensor.TotalBytes());

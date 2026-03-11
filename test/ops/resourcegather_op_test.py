@@ -17,7 +17,10 @@
 
 import numpy as np
 import tensorflow as tf
-from musa_test_utils import MUSATestCase
+from musa_test_utils import MUSATestCase, load_musa_plugin
+
+# Load plugin at import time so device factory is registered before TF context settles.
+load_musa_plugin()
 
 class ResourceOpTest(MUSATestCase):
     """

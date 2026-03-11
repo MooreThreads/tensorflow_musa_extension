@@ -22,6 +22,7 @@ class MusaSoftplusOp : public MusaOpKernel {
  public:
   explicit MusaSoftplusOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
+  bool IsExpensive() override { return true; }
   void Compute(OpKernelContext* ctx) override {
     const Tensor& x = ctx->input(0);
 
@@ -48,14 +49,15 @@ class MusaSoftplusOp : public MusaOpKernel {
   }
 };
 
-#define REGISTER_MUSA_SOFTPLUS(TYPE)                                   \
-  REGISTER_KERNEL_BUILDER(                                             \
-      Name("Softplus").Device(DEVICE_MTGPU).TypeConstraint<TYPE>("T"), \
+#define REGISTER_MUSA_SOFTPLUS(TYPE)                                     \
+  REGISTER_KERNEL_BUILDER(                                               \
+      Name("Softplus").Device(DEVICE_MTGPU).TypeConstraint<TYPE>("T"),   \
       MusaSoftplusOp<TYPE>);
 
 REGISTER_MUSA_SOFTPLUS(float);
 REGISTER_MUSA_SOFTPLUS(Eigen::half);
 REGISTER_MUSA_SOFTPLUS(bfloat16);
+
 
 #undef REGISTER_MUSA_SOFTPLUS
 
