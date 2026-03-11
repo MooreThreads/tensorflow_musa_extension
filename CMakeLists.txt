@@ -53,7 +53,7 @@ endif()
 include_directories("${TF_INC}" "${MUSA_PATH}/include")
 
 # TensorFlow pip headers may place farmhash in different external include layouts.
-# fingerprint.h includes <farmhash.h>, so add whichever location exists.
+# fingerprint.h includes <farmhash.h>, so add whichever location exists.new fix
 set(TF_FARMHASH_INC_SRC "${TF_INC}/external/farmhash_archive/src")
 set(TF_FARMHASH_INC_VIRTUAL "${TF_INC}/external/farmhash_archive/_virtual_includes/farmhash")
 if(EXISTS "${TF_FARMHASH_INC_SRC}/farmhash.h")
