@@ -73,21 +73,21 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
   MUSA_KERNEL_TRACE_END("Mem Alloc");
   if (num_elements == 0) return;
 
-  // Handle two inputs - use muDNN Binary
-  if (num_inputs == 2) {
-    auto& handle = GetHandleByCtx(ctx);
-    mTensor t0 = CreateMTensor(input0, format);
-    mTensor t1 = CreateMTensor(ctx->input(1), format);
-    mTensor t_out = CreateMTensor(*output, format);
-    ::musa::dnn::Binary op;
-    op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    MUSA_KERNEL_TRACE_START("Kernel");
-    auto status = op.Run(handle, t_out, t0, t1);
-    MUSA_KERNEL_TRACE_END("Kernel");
-    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
-                errors::Internal("MUSA AddN two inputs failed."));
-    return;
-  }
+  // // Handle two inputs - use muDNN Binary
+  // if (num_inputs == 2) {
+  //   auto& handle = GetHandleByCtx(ctx);
+  //   mTensor t0 = CreateMTensor(input0, format);
+  //   mTensor t1 = CreateMTensor(ctx->input(1), format);
+  //   mTensor t_out = CreateMTensor(*output, format);
+  //   ::musa::dnn::Binary op;
+  //   op.SetMode(::musa::dnn::Binary::Mode::ADD);
+  //   MUSA_KERNEL_TRACE_START("Kernel");
+  //   auto status = op.Run(handle, t_out, t0, t1);
+  //   MUSA_KERNEL_TRACE_END("Kernel");
+  //   OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
+  //               errors::Internal("MUSA AddN two inputs failed."));
+  //   return;
+  // }
 
   // OPTIMIZED: 3+ inputs - custom kernel (SINGLE LAUNCH!)
   musaStream_t stream =
