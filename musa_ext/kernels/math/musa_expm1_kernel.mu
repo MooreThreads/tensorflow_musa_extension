@@ -155,7 +155,8 @@ template void LaunchExpm1<bfloat16>(const bfloat16*, bfloat16*, int, musaStream_
 
 // Explicit template instantiation for integer types
 template void LaunchExpm1Int<int32>(const int32*, int32*, int, musaStream_t);
-template void LaunchExpm1Int<int64>(const int64*, int64*, int, musaStream_t);
+template void LaunchExpm1Int<long>(const long*, long*, int, musaStream_t);
+template void LaunchExpm1Int<long long>(const long long*, long long*, int, musaStream_t);
 
 }  // namespace musa
 }  // namespace tensorflow
