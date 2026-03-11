@@ -56,24 +56,58 @@ class MusaReverseV2Op : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &output));
     if (output->NumElements() == 0) return;
 
-    std::vector<int64_t> starts(dims, 0);
-    std::vector<int64_t> strides(dims, 1);
+    auto& handle = GetHandleByCtx(ctx);
+    musaStream_t stream =
+        reinterpret_cast<musaStream_t>(handle.GetStream());
+
+    std::vector<int> axes_to_reverse;
     for (int i = 0; i < dims; ++i) {
-      if (reverse_flags[i]) {
-        starts[i] = input.dim_size(i) - 1;
-        strides[i] = -1;
-      }
+      if (reverse_flags[i]) axes_to_reverse.push_back(i);
     }
 
-    auto& handle = GetHandleByCtx(ctx);
-    auto in_mt = CreateMTensor(input);
-    auto out_mt = CreateMTensor(*output);
-    ::musa::dnn::Permute op;
+    Tensor tmp;
+    if (axes_to_reverse.size() > 1) {
+      OP_REQUIRES_OK(
+          ctx, ctx->allocate_temp(input.dtype(), input.shape(), &tmp));
+    }
 
-    MTOP_CHECK_OK(op.ConfigDimStrideForSlice(out_mt, in_mt, starts.data(),
-                                             strides.data()),
-                  "ReverseV2 ConfigDimStrideForSlice", ctx);
-    MTOP_CHECK_OK_RUN(op.Run(handle, out_mt, in_mt), "ReverseV2 Run", ctx);
+    for (size_t idx = 0; idx < axes_to_reverse.size(); ++idx) {
+      int ax = axes_to_reverse[idx];
+      int64_t axis_size = input.dim_size(ax);
+
+      const Tensor& src =
+          (idx == 0) ? input : ((idx % 2 == 1) ? *output : tmp);
+      Tensor* dst = (idx % 2 == 0) ? output : &tmp;
+
+      Tensor idx_tensor;
+      OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_INT32,
+                                             TensorShape({axis_size}),
+                                             &idx_tensor));
+      std::vector<int32> idx_host(axis_size);
+      for (int64_t j = 0; j < axis_size; ++j) {
+        idx_host[j] = static_cast<int32>(axis_size - 1 - j);
+      }
+      musaMemcpyAsync(idx_tensor.data(), idx_host.data(),
+                      axis_size * sizeof(int32), musaMemcpyHostToDevice,
+                      stream);
+      musaStreamSynchronize(stream);
+
+      auto in_mt = CreateMTensor(src);
+      auto out_mt = CreateMTensor(*dst);
+      auto idx_mt = CreateMTensor(idx_tensor);
+
+      mGatherX gather_op;
+      gather_op.SetMode(mGatherX::Mode::GATHER);
+      gather_op.SetAxis(ax);
+
+      MTOP_CHECK_OK_RUN(gather_op.Run(handle, out_mt, idx_mt, in_mt),
+                        "ReverseV2 GatherX Run", ctx);
+    }
+
+    if (axes_to_reverse.size() > 1 && axes_to_reverse.size() % 2 == 0) {
+      musaMemcpyAsync(output->data(), tmp.data(), tmp.TotalBytes(),
+                      musaMemcpyDeviceToDevice, stream);
+    }
   }
 };
 
