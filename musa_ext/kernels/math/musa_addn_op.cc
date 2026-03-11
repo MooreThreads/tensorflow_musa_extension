@@ -1,8 +1,8 @@
+#include "../utils_op.h"
 #include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
-#include "../utils_op.h"
 #include "utils/logging.h"
 
 // ============================================================================
@@ -10,18 +10,18 @@
 // ============================================================================
 
 extern "C" {
-  void LaunchAddNKernelFloat(const float** inputs, float* output, int num_inputs,
-                             int size, musaStream_t stream);
-  void LaunchAddNKernelDouble(const double** inputs, double* output,
-                              int num_inputs, int size, musaStream_t stream);
-  void LaunchAddNKernelHalf(const void** inputs, void* output, int num_inputs,
-                            int size, musaStream_t stream);
-  void LaunchAddNKernelBFloat16(const void** inputs, void* output,
-                                int num_inputs, int size, musaStream_t stream);
-  void LaunchAddNKernelInt32(const int** inputs, int* output, int num_inputs,
-                             int size, musaStream_t stream);
-  void LaunchAddNKernelInt64(const int64_t** inputs, int64_t* output,
-                             int num_inputs, int size, musaStream_t stream);
+void LaunchAddNKernelFloat(const float** inputs, float* output, int num_inputs,
+                           int size, musaStream_t stream);
+void LaunchAddNKernelDouble(const double** inputs, double* output,
+                            int num_inputs, int size, musaStream_t stream);
+void LaunchAddNKernelHalf(const void** inputs, void* output, int num_inputs,
+                          int size, musaStream_t stream);
+void LaunchAddNKernelBFloat16(const void** inputs, void* output, int num_inputs,
+                              int size, musaStream_t stream);
+void LaunchAddNKernelInt32(const int** inputs, int* output, int num_inputs,
+                           int size, musaStream_t stream);
+void LaunchAddNKernelInt64(const int64_t** inputs, int64_t* output,
+                           int num_inputs, int size, musaStream_t stream);
 }
 
 namespace tensorflow {
@@ -90,33 +90,37 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
   }
 
   // OPTIMIZED: 3+ inputs - custom kernel (SINGLE LAUNCH!)
-  musaStream_t stream = reinterpret_cast<musaStream_t>(
-      GetHandleByCtx(ctx).GetStream());
+  musaStream_t stream =
+      reinterpret_cast<musaStream_t>(GetHandleByCtx(ctx).GetStream());
 
   // Build device pointer array
   std::vector<const void*> input_ptrs(num_inputs);
   for (int i = 0; i < num_inputs; ++i)
     input_ptrs[i] = ctx->input(i).tensor_data().data();
 
-  const void** d_inputs = nullptr;
+  Tensor d_inputs_tensor;
   MUSA_KERNEL_TRACE_START("Mem Alloc");
-  musaMalloc(reinterpret_cast<void**>(&d_inputs),
-             num_inputs * sizeof(const void*));
+  OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_UINT64, TensorShape({num_inputs}),
+                                         &d_inputs_tensor));
+  const void** d_inputs =
+      reinterpret_cast<const void**>(d_inputs_tensor.flat<uint64>().data());
   MUSA_KERNEL_TRACE_END("Mem Alloc");
+
   MUSA_KERNEL_TRACE_START("Mem Cpy");
-  musaMemcpy(const_cast<void**>(d_inputs), input_ptrs.data(),
-             num_inputs * sizeof(const void*), musaMemcpyHostToDevice);
+  mStatus status =
+      MusaMemcpyAsyncH2D(const_cast<void**>(d_inputs), input_ptrs.data(),
+                         num_inputs * sizeof(const void*), stream);
+  OP_REQUIRES(ctx, status == mStatus::SUCCESS,
+              errors::Internal("MUSA AddN input pointers copy failed."));
   MUSA_KERNEL_TRACE_END("Mem Cpy");
 
   // Launch custom kernel
   void* output_ptr = const_cast<char*>(output->tensor_data().data());
   MUSA_KERNEL_TRACE_START("Kernel");
   launcher(reinterpret_cast<const T**>(d_inputs),
-           reinterpret_cast<T*>(output_ptr),
-           num_inputs, static_cast<int>(num_elements), stream);
+           reinterpret_cast<T*>(output_ptr), num_inputs,
+           static_cast<int>(num_elements), stream);
   MUSA_KERNEL_TRACE_END("Kernel");
-
-  musaFree(const_cast<void**>(d_inputs));
 }
 
 // ============================================================================
@@ -144,14 +148,15 @@ class MusaAddNOp : public MusaOpKernel {
 // Launcher function getters - specialized for each type
 // ============================================================================
 
-#define DEFINE_ADDN_LAUNCHER_GETTER(T, launcher, input_cast, output_cast)       \
-  template <>                                                                   \
-  void (*MusaAddNOp<T>::GetLauncher())(const T**, T*, int, int, musaStream_t) { \
-    return [](const T** inputs, T* output, int num_inputs, int size,            \
-              musaStream_t stream) {                                            \
-      launcher(input_cast(inputs), output_cast(output),                         \
-               num_inputs, size, stream);                                       \
-    };                                                                          \
+#define DEFINE_ADDN_LAUNCHER_GETTER(T, launcher, input_cast, output_cast) \
+  template <>                                                             \
+  void (*MusaAddNOp<T>::GetLauncher())(const T**, T*, int, int,           \
+                                       musaStream_t) {                    \
+    return [](const T** inputs, T* output, int num_inputs, int size,      \
+              musaStream_t stream) {                                      \
+      launcher(input_cast(inputs), output_cast(output), num_inputs, size, \
+               stream);                                                   \
+    };                                                                    \
   }
 
 // Float and double - direct casts
