@@ -52,8 +52,6 @@ endif()
 # Include paths
 include_directories("${TF_INC}" "${MUSA_PATH}/include")
 
-
-
 # Define source root directory
 set(SRC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/musa_ext")
 include_directories("${SRC_ROOT}" "${SRC_ROOT}/mu" "${SRC_ROOT}/kernels")
