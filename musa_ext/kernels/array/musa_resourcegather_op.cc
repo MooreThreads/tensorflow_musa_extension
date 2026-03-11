@@ -91,6 +91,8 @@ class MusaResourceGatherOp : public MusaOpKernel {
     OP_REQUIRES_OK(c, c->GetAttr("batch_dims", &batch_dims_));
   }
 
+  bool IsExpensive() override { return true; }
+
   void Compute(OpKernelContext* c) override {
     core::RefCountPtr<Var> v;
     Status s = LookupResource(c, HandleFromInput(c, 0), &v);
@@ -214,6 +216,8 @@ template <typename T, typename Index>
 class MusaResourceScatterAddOp : public MusaOpKernel {
  public:
   using MusaOpKernel::MusaOpKernel;
+  bool IsExpensive() override { return true; }
+
   void Compute(OpKernelContext* c) override {
     core::RefCountPtr<Var> v;
     OP_REQUIRES_OK(c, LookupResource(c, HandleFromInput(c, 0), &v));
@@ -265,6 +269,8 @@ template <typename T, mBinary::Mode BMODE>
 class MusaAssignUpdateVariableOp : public MusaOpKernel {
  public:
   using MusaOpKernel::MusaOpKernel;
+  bool IsExpensive() override { return true; }
+
   void Compute(OpKernelContext* c) override {
     core::RefCountPtr<Var> variable;
     OP_REQUIRES_OK(c, LookupResource(c, HandleFromInput(c, 0), &variable));
