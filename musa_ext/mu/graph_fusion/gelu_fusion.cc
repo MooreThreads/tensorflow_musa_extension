@@ -276,6 +276,8 @@ bool MatchPow3(const NodeDef* node, const GraphDef& graph,
 bool MatchApproximateFactor(const NodeDef* factor, const GraphDef& graph,
                             const NodeDef* expected_input,
                             std::vector<const NodeDef*>* matched_nodes) {
+  // Keep the tanh path isolated from the exact-erf path so approximate GELU
+  // can be enabled, debugged, or constrained independently later.
   if (!factor || !IsAddOp(*factor) || factor->input_size() != 2) {
     return false;
   }
@@ -531,6 +533,8 @@ FusionMatchResult MusaGeluFusion::Match(const GraphDef& graph,
     return FusionMatchResult{};
   }
 
+  // Prefer exact-erf GELU first because it is the dominant pattern in the
+  // current MLP-style graphs we are targeting.
   FusionMatchResult result = MatchStandardPattern(graph, start_node_idx);
   if (result.IsValid()) {
     VLOG(1) << "MusaGeluFusion: matched exact GELU at node "
@@ -538,6 +542,8 @@ FusionMatchResult MusaGeluFusion::Match(const GraphDef& graph,
     return result;
   }
 
+  // Keep the tanh-approximate path as an explicit fallback matcher rather
+  // than interleaving it with the exact logic.
   result = MatchApproximatePattern(graph, start_node_idx);
   if (result.IsValid()) {
     VLOG(1) << "MusaGeluFusion: matched approximate GELU at node "
@@ -550,6 +556,7 @@ FusionMatchResult MusaGeluFusion::Match(const GraphDef& graph,
 
 FusionMatchResult MusaGeluFusion::MatchStandardPattern(
     const GraphDef& graph, int start_node_idx) const {
+  // Exact GELU appears either as erf(x / sqrt(2)) or as erfc(-x / sqrt(2)).
   FusionMatchResult result =
       MatchByFactor(graph, start_node_idx, false, MatchExactErfFactor);
   if (result.IsValid()) {
@@ -561,6 +568,7 @@ FusionMatchResult MusaGeluFusion::MatchStandardPattern(
 
 FusionMatchResult MusaGeluFusion::MatchApproximatePattern(
     const GraphDef& graph, int start_node_idx) const {
+  // Approximate GELU is intentionally matched in its own path.
   return MatchByFactor(graph, start_node_idx, true, MatchApproximateFactor);
 }
 

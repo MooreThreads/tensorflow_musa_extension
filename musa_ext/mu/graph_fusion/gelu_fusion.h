@@ -26,8 +26,9 @@ namespace grappler {
 namespace musa_fusion {
 
 // GELU fusion pattern.
-// Matches standard exact GELU and tanh-approximate GELU subgraphs and
-// replaces them with MusaGelu.
+// The exact-erf path is the primary target in current large-model graphs.
+// The tanh-approximate path is kept in a separate matcher so it can be
+// reasoned about and debugged independently.
 
 class MusaGeluFusion : public FusionPattern {
  public:
@@ -50,12 +51,12 @@ class MusaGeluFusion : public FusionPattern {
   std::string GetFallbackReason() const override { return ""; }
 
  private:
-  // Match exact GELU patterns:
+  // Match exact GELU patterns used by TensorFlow's erf-based formulation:
   //   0.5 * x * (1 + erf(x / sqrt(2)))
   //   0.5 * x * erfc(-x / sqrt(2)))
   FusionMatchResult MatchStandardPattern(const GraphDef& graph, int start_node_idx) const;
   
-  // Match approximate GELU pattern:
+  // Match the optional tanh-approximate GELU path:
   //   0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
   FusionMatchResult MatchApproximatePattern(const GraphDef& graph, int start_node_idx) const;
 
