@@ -367,7 +367,7 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
 
     bool graph_modified = true;
     int iteration = 0;
-    const int kMaxIterations = 10;  // Prevent infinite loops
+    const int kMaxIterations = 20;  // Prevent infinite loops
 
     while (graph_modified && iteration < kMaxIterations) {
       graph_modified = false;
