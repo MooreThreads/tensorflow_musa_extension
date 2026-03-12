@@ -79,7 +79,9 @@ class MusaProdOp : public MusaOpKernel {
       OP_REQUIRES(ctx, success,
                   errors::Internal("MUSA Reduce: Tensor::CopyFrom failed."));
       ctx->set_output(0, output);
-      return;  // 直接返回，彻底绕过后续的内存分配和算子执行！
+      // return early for this trivial case to avoid unnecessary setup and
+      // kernel launch
+      return;
     }
 
     Tensor* out = nullptr;

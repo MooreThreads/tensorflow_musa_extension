@@ -88,7 +88,8 @@ class MusaMinOp : public MusaOpKernel {
 
     if (reduce_elements == 1) {
       Tensor output;
-      // 零拷贝：赋予新的 output_shape，底层显存依然指向 input
+      // zero-copy: assign new output_shape, but underlying GPU memory still
+      // points to input
       bool success = output.CopyFrom(input, output_shape);
       OP_REQUIRES(ctx, success,
                   errors::Internal("MUSA Reduce: Tensor::CopyFrom failed."));

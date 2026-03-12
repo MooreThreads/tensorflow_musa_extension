@@ -32,11 +32,10 @@ class MusaConstOp : public OpKernel {
       return;
     }
 
-    // 线程安全的按需初始化 (Lazy Initialization)
+    // Lazy Initialization
     {
       mutex_lock lock(mu_);
       if (!initialized_) {
-        // 在 GPU 上分配持久化的 Temp Tensor
         AllocatorAttributes attr;
         attr.set_on_host(false);
         OP_REQUIRES_OK(
@@ -48,7 +47,7 @@ class MusaConstOp : public OpKernel {
             reinterpret_cast<musaStream_t>(handle.GetStream());
         size_t total_bytes = cpu_tensor_.TotalBytes();
 
-        // 仅在首次执行一次 H2D 拷贝
+        // only perform H2D copy once during the first execution
         musaError_t err =
             musaMemcpyAsync(const_cast<char*>(gpu_tensor_.tensor_data().data()),
                             cpu_tensor_.tensor_data().data(), total_bytes,
