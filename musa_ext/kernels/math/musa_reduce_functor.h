@@ -4,7 +4,7 @@
 #include <functional>
 #include <memory>
 
-#include "../math/musa_cast_functor.h"
+#include "musa_cast_functor.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/core/status.h"
@@ -50,12 +50,10 @@ struct ReduceFunctor {
 // This conversion is aligned with tensorflow's convention of promoting bf16 to
 // fp32 for ReduceFunctor.
 template <>
-Status ReduceFunctor::Compute<bfloat16>(OpKernelContext* ctx,
-                                        mTensor* output_mt, mTensor* input_mt,
-                                        ::musa::dnn::Reduce::Mode mode,
-                                        const int* reduce_dims,
-                                        int reduce_dim_count,
-                                        const char* error_prefix) {
+inline Status ReduceFunctor::Compute<bfloat16>(
+    OpKernelContext* ctx, mTensor* output_mt, mTensor* input_mt,
+    ::musa::dnn::Reduce::Mode mode, const int* reduce_dims,
+    int reduce_dim_count, const char* error_prefix) {
   mTensor input_fp32;
   TF_RETURN_IF_ERROR(CastFunctor(ctx, *input_mt, &input_fp32));
 
