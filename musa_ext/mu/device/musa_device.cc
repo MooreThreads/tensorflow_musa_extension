@@ -65,9 +65,7 @@ void MusaDeviceContext::PollingLoop() const {
     }
 
     if (payload) {
-      // 非阻塞查询 GPU 状态
       if (musaEventQuery(payload->sync_event) == musaSuccess) {
-        // 关键：通知 TF 框架这块内存可以用啦，立刻放行下游算子
         payload->done(Status::OK());
         musaEventDestroy(payload->sync_event);
         delete payload;
@@ -77,7 +75,6 @@ void MusaDeviceContext::PollingLoop() const {
         continue;
       }
     }
-    // 让出 CPU 切片，防止空转拉高负载
     std::this_thread::sleep_for(std::chrono::microseconds(20));
   }
 }
