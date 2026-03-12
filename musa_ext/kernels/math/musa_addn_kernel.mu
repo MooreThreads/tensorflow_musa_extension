@@ -15,6 +15,7 @@ __global__ void AddNKernelFloat(const float** inputs, float* output, int num_inp
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < size) {
     float sum = inputs[0][idx];
+    #pragma unroll
     for (int i = 1; i < num_inputs; ++i) {
       sum += inputs[i][idx];
     }
@@ -27,6 +28,7 @@ __global__ void AddNKernelDouble(const double** inputs, double* output, int num_
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < size) {
     double sum = inputs[0][idx];
+    #pragma unroll
     for (int i = 1; i < num_inputs; ++i) {
       sum += inputs[i][idx];
     }
@@ -39,6 +41,7 @@ __global__ void AddNKernelHalf(const half** inputs, half* output, int num_inputs
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < size) {
     half sum = inputs[0][idx];
+    #pragma unroll
     for (int i = 1; i < num_inputs; ++i) {
       sum += inputs[i][idx];
     }
@@ -53,6 +56,7 @@ __global__ void AddNKernelBFloat16(const __mt_bfloat16** inputs,
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < size) {
     float sum = __bfloat162float(inputs[0][idx]);
+    #pragma unroll
     for (int i = 1; i < num_inputs; ++i) {
       sum += __bfloat162float(inputs[i][idx]);
     }
@@ -65,6 +69,7 @@ __global__ void AddNKernelInt32(const int** inputs, int* output, int num_inputs,
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < size) {
     int sum = inputs[0][idx];
+    #pragma unroll
     for (int i = 1; i < num_inputs; ++i) {
       sum += inputs[i][idx];
     }
@@ -77,6 +82,7 @@ __global__ void AddNKernelInt64(const int64_t** inputs, int64_t* output, int num
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < size) {
     int64_t sum = inputs[0][idx];
+    #pragma unroll
     for (int i = 1; i < num_inputs; ++i) {
       sum += inputs[i][idx];
     }
