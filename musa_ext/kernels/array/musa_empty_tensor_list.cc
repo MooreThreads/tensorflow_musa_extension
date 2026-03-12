@@ -58,6 +58,8 @@ class MusaEmptyTensorListOp : public MusaOpKernel {
     result->scalar<Variant>()() = std::move(empty);
   }
 
+  bool IsExpensive() override { return false; }
+
  private:
   DataType element_dtype_;
 };
