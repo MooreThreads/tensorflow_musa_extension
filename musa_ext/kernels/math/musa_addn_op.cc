@@ -14,18 +14,24 @@
 // MUSA AddN custom kernel launcher declarations from musa_addn_kernel.mu
 // ============================================================================
 
+#define MAX_INLINE_ADDN_INPUTS 8
+
+struct InlinePointers {
+  const void* ptrs[MAX_INLINE_ADDN_INPUTS];
+};
+
 extern "C" {
-void LaunchAddNKernelFloat(const float** inputs, float* output, int num_inputs,
+void LaunchAddNKernelFloat(const float** inputs, InlinePointers inline_inputs, float* output, int num_inputs,
                            int size, musaStream_t stream);
-void LaunchAddNKernelDouble(const double** inputs, double* output,
+void LaunchAddNKernelDouble(const double** inputs, InlinePointers inline_inputs, double* output,
                             int num_inputs, int size, musaStream_t stream);
-void LaunchAddNKernelHalf(const void** inputs, void* output, int num_inputs,
+void LaunchAddNKernelHalf(const void** inputs, InlinePointers inline_inputs, void* output, int num_inputs,
                           int size, musaStream_t stream);
-void LaunchAddNKernelBFloat16(const void** inputs, void* output, int num_inputs,
+void LaunchAddNKernelBFloat16(const void** inputs, InlinePointers inline_inputs, void* output, int num_inputs,
                               int size, musaStream_t stream);
-void LaunchAddNKernelInt32(const int** inputs, int* output, int num_inputs,
+void LaunchAddNKernelInt32(const int** inputs, InlinePointers inline_inputs, int* output, int num_inputs,
                            int size, musaStream_t stream);
-void LaunchAddNKernelInt64(const int64_t** inputs, int64_t* output,
+void LaunchAddNKernelInt64(const int64_t** inputs, InlinePointers inline_inputs, int64_t* output,
                            int num_inputs, int size, musaStream_t stream);
 }
 
@@ -108,8 +114,9 @@ inline mStatus MusaZeroMemoryAsync(void* ptr, size_t size,
 // Common implementation for AddN Compute
 template <typename T>
 void AddNCompute(OpKernelContext* ctx, mFormat format,
-                 void (*launcher)(const T**, T*, int, int, musaStream_t)) {
+                 void (*launcher)(const T**, InlinePointers, T*, int, int, musaStream_t)) {
   MUSA_KERNEL_TIMING_GUARD_WITH_NAME(ctx, "AddN");
+  MUSA_KERNEL_TRACE_START("FULL");
 
   const int num_inputs = ctx->num_inputs();
   OP_REQUIRES(ctx, num_inputs >= 1,
@@ -135,6 +142,7 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
     MUSA_KERNEL_TRACE_END("Mem Cpy");
     OP_REQUIRES(ctx, copy_status == mStatus::SUCCESS,
                 errors::Internal("MUSA AddN single input copy failed."));
+    MUSA_KERNEL_TRACE_END("FULL");
     return;
   }
 
@@ -166,7 +174,6 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
 
   // Allocate output tensor
   Tensor* output = nullptr;
-  MUSA_KERNEL_TRACE_START("Mem Alloc");
   OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
 
   if (num_elements == 0) return;
@@ -201,6 +208,7 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
       MUSA_KERNEL_TRACE_END("Kernel");
       OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
                   errors::Internal("MUSA AddN two inputs (muDNN) failed."));
+      MUSA_KERNEL_TRACE_END("FULL");
       return;
     }
 
@@ -210,29 +218,35 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
     for (int i = 0; i < num_inputs; ++i)
       input_ptrs[i] = ctx->input(i).tensor_data().data();
 
-    Tensor d_inputs_tensor;
-    MUSA_KERNEL_TRACE_START("Mem Alloc");
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_UINT64, TensorShape({num_inputs}),
-                                           &d_inputs_tensor));
-    const void** d_inputs =
-        reinterpret_cast<const void**>(d_inputs_tensor.flat<uint64>().data());
-    MUSA_KERNEL_TRACE_END("Mem Alloc");
+    const void** d_inputs = nullptr;
+    InlinePointers inline_inputs;
 
-    MUSA_KERNEL_TRACE_START("Mem Cpy");
-    mStatus status =
-        MusaMemcpyAsyncH2D(const_cast<void**>(d_inputs), input_ptrs.data(),
-                           num_inputs * sizeof(const void*), stream);
-    OP_REQUIRES(ctx, status == mStatus::SUCCESS,
-                errors::Internal("MUSA AddN input pointers copy failed."));
-    MUSA_KERNEL_TRACE_END("Mem Cpy");
+    if (num_inputs <= MAX_INLINE_ADDN_INPUTS) {
+      for (int i = 0; i < num_inputs; ++i) {
+        inline_inputs.ptrs[i] = input_ptrs[i];
+      }
+    } else {
+      Tensor d_inputs_tensor;
+      OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_UINT64, TensorShape({num_inputs}),
+                                             &d_inputs_tensor));
+      d_inputs =
+          reinterpret_cast<const void**>(d_inputs_tensor.flat<uint64>().data());
+
+      mStatus status =
+          MusaMemcpyAsyncH2D(const_cast<void**>(d_inputs), input_ptrs.data(),
+                             num_inputs * sizeof(const void*), stream);
+      OP_REQUIRES(ctx, status == mStatus::SUCCESS,
+                  errors::Internal("MUSA AddN input pointers copy failed."));
+    }
 
     // Launch custom kernel
     void* output_ptr = const_cast<char*>(output->tensor_data().data());
     MUSA_KERNEL_TRACE_START("Kernel");
-    launcher(reinterpret_cast<const T**>(d_inputs),
+    launcher(reinterpret_cast<const T**>(d_inputs), inline_inputs,
              reinterpret_cast<T*>(output_ptr), num_inputs,
              static_cast<int>(num_elements), stream);
     MUSA_KERNEL_TRACE_END("Kernel");
+    MUSA_KERNEL_TRACE_END("FULL");
   } else {
     // ----------------------------------------------------------------------
     // FALLBACK PATH: Broadcasting required.
@@ -264,6 +278,7 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
               "MUSA AddN broadcast fallback: muDNN Binary failed at input %d",
               i));
     }
+    MUSA_KERNEL_TRACE_END("FULL");
   }
 }
 
@@ -281,7 +296,7 @@ class MusaAddNOp : public MusaOpKernel {
   }
 
  private:
-  static void (*GetLauncher())(const T**, T*, int, int, musaStream_t);
+  static void (*GetLauncher())(const T**, InlinePointers, T*, int, int, musaStream_t);
 };
 
 // ============================================================================
@@ -290,11 +305,11 @@ class MusaAddNOp : public MusaOpKernel {
 
 #define DEFINE_ADDN_LAUNCHER_GETTER(T, launcher, input_cast, output_cast) \
   template <>                                                             \
-  void (*MusaAddNOp<T>::GetLauncher())(const T**, T*, int, int,           \
+  void (*MusaAddNOp<T>::GetLauncher())(const T**, InlinePointers, T*, int, int, \
                                        musaStream_t) {                    \
-    return [](const T** inputs, T* output, int num_inputs, int size,      \
+    return [](const T** inputs, InlinePointers inline_inputs, T* output, int num_inputs, int size, \
               musaStream_t stream) {                                      \
-      launcher(input_cast(inputs), output_cast(output), num_inputs, size, \
+      launcher(input_cast(inputs), inline_inputs, output_cast(output), num_inputs, size, \
                stream);                                                   \
     };                                                                    \
   }
