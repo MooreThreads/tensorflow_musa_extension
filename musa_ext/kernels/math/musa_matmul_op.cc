@@ -94,7 +94,10 @@ class MusaMatMulOp : public MusaOpKernel {
     Tensor* out = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, out_shape, &out));
     if (out->NumElements() == 0) return;
-
+    if (in0.NumElements() == 0 || in1.NumElements() == 0) {
+      auto flat_out = out->flat<T>();
+      return;
+    }
     auto& handle = GetHandleByCtx(ctx);
     handle.SetAllowTF32(tf32_enabled_);  // Use TF32 setting from constructor
     mTensor mt_a = CreateMTensor(in0);

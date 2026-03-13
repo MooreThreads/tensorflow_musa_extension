@@ -23,7 +23,6 @@ class MusaReshapeOp : public MusaOpKernel {
     const Tensor& input = ctx->input(0);
     const Tensor& sizes = ctx->input(1);
 
-    // 解析目标 shape
     TensorShape shape;
     int64 unknown_index = -1;
     int64 product = 1;
@@ -73,17 +72,21 @@ class MusaReshapeOp : public MusaOpKernel {
     }
 
     if (unknown_index != -1) {
-      int64 input_num_elements = input.NumElements();
-      OP_REQUIRES(ctx, product > 0,
-                  errors::InvalidArgument(
-                      "Cannot infer -1 dimension with zero product"));
-      OP_REQUIRES(ctx, input_num_elements % product == 0,
-                  errors::InvalidArgument(
-                      "Input has ", input_num_elements,
-                      " elements, which isn't divisible by ", product));
-      int64 inferred_dim = input_num_elements / product;
-      shape.set_dim(unknown_index, inferred_dim);
-    }
+  int64 input_num_elements = input.NumElements();
+  
+  if (input_num_elements > 0) {
+    OP_REQUIRES(ctx, product > 0,
+                errors::InvalidArgument(
+                    "Cannot infer -1 dimension with zero product"));
+    OP_REQUIRES(ctx, input_num_elements % product == 0,
+                errors::InvalidArgument(
+                    "Input has ", input_num_elements,
+                    " elements, which isn't divisible by ", product));
+    shape.set_dim(unknown_index, input_num_elements / product);
+  } else {
+    shape.set_dim(unknown_index, 0);
+  }
+}
 
     OP_REQUIRES(ctx, input.NumElements() == shape.num_elements(),
                 errors::InvalidArgument("Input has ", input.NumElements(),
