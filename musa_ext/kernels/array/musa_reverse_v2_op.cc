@@ -1,12 +1,12 @@
 #include <cstdint>
 #include <vector>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/lib/core/errors.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -36,9 +36,9 @@ class MusaReverseV2Op : public MusaOpKernel {
     for (int64_t i = 0; i < axis_num; ++i) {
       int64_t axis = static_cast<int64_t>(axis_flat(i));
       OP_REQUIRES(ctx, axis >= -dims && axis < dims,
-                  errors::InvalidArgument(
-                      "axis[", i, "] = ", axis, " is out of valid range [",
-                      -dims, ", ", dims, ")."));
+                  errors::InvalidArgument("axis[", i, "] = ", axis,
+                                          " is out of valid range [", -dims,
+                                          ", ", dims, ")."));
       if (axis < 0) axis += dims;
       OP_REQUIRES(
           ctx, !reverse_flags[axis],
@@ -57,8 +57,7 @@ class MusaReverseV2Op : public MusaOpKernel {
     if (output->NumElements() == 0) return;
 
     auto& handle = GetHandleByCtx(ctx);
-    musaStream_t stream =
-        reinterpret_cast<musaStream_t>(handle.GetStream());
+    musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 
     std::vector<int> axes_to_reverse;
     for (int i = 0; i < dims; ++i) {
@@ -67,21 +66,19 @@ class MusaReverseV2Op : public MusaOpKernel {
 
     Tensor tmp;
     if (axes_to_reverse.size() > 1) {
-      OP_REQUIRES_OK(
-          ctx, ctx->allocate_temp(input.dtype(), input.shape(), &tmp));
+      OP_REQUIRES_OK(ctx,
+                     ctx->allocate_temp(input.dtype(), input.shape(), &tmp));
     }
 
     for (size_t idx = 0; idx < axes_to_reverse.size(); ++idx) {
       int ax = axes_to_reverse[idx];
       int64_t axis_size = input.dim_size(ax);
 
-      const Tensor& src =
-          (idx == 0) ? input : ((idx % 2 == 1) ? *output : tmp);
+      const Tensor& src = (idx == 0) ? input : ((idx % 2 == 1) ? *output : tmp);
       Tensor* dst = (idx % 2 == 0) ? output : &tmp;
 
       Tensor idx_tensor;
-      OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_INT32,
-                                             TensorShape({axis_size}),
+      OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_INT32, TensorShape({axis_size}),
                                              &idx_tensor));
       std::vector<int32> idx_host(axis_size);
       for (int64_t j = 0; j < axis_size; ++j) {
@@ -111,18 +108,18 @@ class MusaReverseV2Op : public MusaOpKernel {
   }
 };
 
-#define REGISTER_MUSA_REVERSE_V2(T)                                 \
-  REGISTER_KERNEL_BUILDER(Name("ReverseV2")                         \
-                              .Device("MUSA")                       \
-                              .TypeConstraint<T>("T")               \
-                              .TypeConstraint<int32>("Tidx")        \
-                              .HostMemory("axis"),                  \
-                          MusaReverseV2Op<T, int32>);               \
-  REGISTER_KERNEL_BUILDER(Name("ReverseV2")                         \
-                              .Device("MUSA")                       \
-                              .TypeConstraint<T>("T")               \
-                              .TypeConstraint<int64>("Tidx")        \
-                              .HostMemory("axis"),                  \
+#define REGISTER_MUSA_REVERSE_V2(T)                          \
+  REGISTER_KERNEL_BUILDER(Name("ReverseV2")                  \
+                              .Device("MUSA")                \
+                              .TypeConstraint<T>("T")        \
+                              .TypeConstraint<int32>("Tidx") \
+                              .HostMemory("axis"),           \
+                          MusaReverseV2Op<T, int32>);        \
+  REGISTER_KERNEL_BUILDER(Name("ReverseV2")                  \
+                              .Device("MUSA")                \
+                              .TypeConstraint<T>("T")        \
+                              .TypeConstraint<int64>("Tidx") \
+                              .HostMemory("axis"),           \
                           MusaReverseV2Op<T, int64>);
 
 REGISTER_MUSA_REVERSE_V2(float);

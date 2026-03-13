@@ -18,7 +18,8 @@ template <>
 bool DecodeVariant<TensorList>(std::string* buf, TensorList* value);
 
 template <>
-void EncodeVariant<TensorList>(const TensorList& value, VariantTensorData* data);
+void EncodeVariant<TensorList>(const TensorList& value,
+                               VariantTensorData* data);
 
 template <>
 bool DecodeVariant<TensorList>(VariantTensorData* data, TensorList* value);

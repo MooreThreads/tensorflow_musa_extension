@@ -1,3 +1,5 @@
+#include "../utils_op.h"
+#include "tensorflow/core/common_runtime/dma_helper.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -5,8 +7,6 @@
 #include "tensorflow/core/framework/variant.h"
 #include "tensorflow/core/kernels/tensor_list.h"
 #include "tensorflow/core/lib/core/errors.h"
-#include "../utils_op.h"
-#include "tensorflow/core/common_runtime/dma_helper.h"
 
 namespace tensorflow {
 namespace musa {
@@ -54,9 +54,8 @@ Status TensorShapeFromTensorMusa(const Tensor& t, PartialTensorShape* out) {
     return Status::OK();
   }
 
-  return errors::InvalidArgument(
-      "element_shape must be int32 or int64, got ",
-      DataTypeString(t.dtype()));
+  return errors::InvalidArgument("element_shape must be int32 or int64, got ",
+                                 DataTypeString(t.dtype()));
 }
 
 }  // namespace
@@ -74,8 +73,8 @@ class MusaTensorListFromTensorOp : public MusaOpKernel {
     AllocatorAttributes attr;
     attr.set_on_host(true);
 
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, TensorShape({}),
-                                             &output_tensor, attr));
+    OP_REQUIRES_OK(
+        ctx, ctx->allocate_output(0, TensorShape({}), &output_tensor, attr));
 
     const Tensor& input_tensor = ctx->input(0);
     const Tensor& element_shape_tensor = ctx->input(1);
@@ -88,32 +87,28 @@ class MusaTensorListFromTensorOp : public MusaOpKernel {
             element_shape_tensor.shape().DebugString()));
 
     PartialTensorShape element_shape;
-    OP_REQUIRES_OK(ctx,
-                   TensorShapeFromTensorMusa(element_shape_tensor,
-                                            &element_shape));
+    OP_REQUIRES_OK(
+        ctx, TensorShapeFromTensorMusa(element_shape_tensor, &element_shape));
 
-    OP_REQUIRES(
-        ctx, TensorShapeUtils::IsVectorOrHigher(input_tensor.shape()),
-        errors::InvalidArgument(
-            "Tensor must be at least a vector, but saw shape: ",
-            input_tensor.shape().DebugString()));
+    OP_REQUIRES(ctx, TensorShapeUtils::IsVectorOrHigher(input_tensor.shape()),
+                errors::InvalidArgument(
+                    "Tensor must be at least a vector, but saw shape: ",
+                    input_tensor.shape().DebugString()));
 
     TensorShape expected_element_shape(input_tensor.shape());
     expected_element_shape.RemoveDim(0);
 
-    OP_REQUIRES(
-        ctx, element_shape.IsCompatibleWith(expected_element_shape),
-        errors::InvalidArgument(
-            "Specified a list with shape ", element_shape.DebugString(),
-            " from a tensor with shape ",
-            expected_element_shape.DebugString()));
+    OP_REQUIRES(ctx, element_shape.IsCompatibleWith(expected_element_shape),
+                errors::InvalidArgument("Specified a list with shape ",
+                                        element_shape.DebugString(),
+                                        " from a tensor with shape ",
+                                        expected_element_shape.DebugString()));
 
     TensorList output_list;
     output_list.element_dtype = input_tensor.dtype();
     output_list.element_shape = element_shape;
     output_list.tensors().reserve(input_tensor.shape().dim_size(0));
 
-    
     auto& h = GetHandleByCtx(ctx);
     musaStream_t stream = reinterpret_cast<musaStream_t>(h.GetStream());
 
@@ -124,45 +119,40 @@ class MusaTensorListFromTensorOp : public MusaOpKernel {
 
     for (int64_t i = 0; i < num_slices; ++i) {
       Tensor tmp = input_tensor.SubSlice(i);
-    
+
       Tensor aligned;
       OP_REQUIRES_OK(ctx,
                      ctx->allocate_temp(tmp.dtype(), tmp.shape(), &aligned));
-    
+
       const size_t bytes =
           static_cast<size_t>(tmp.NumElements()) * DataTypeSize(tmp.dtype());
-    
+
       if (bytes > 0) {
         void* dst = tensorflow::DMAHelper::base(&aligned);
         const void* src = tensorflow::DMAHelper::base(&tmp);
-    
+
         OP_REQUIRES(ctx, dst != nullptr,
                     errors::Internal("DMAHelper::base(&aligned) is nullptr"));
         OP_REQUIRES(ctx, src != nullptr,
                     errors::Internal("DMAHelper::base(&tmp) is nullptr"));
-    
-        auto err = musaMemcpyAsync(
-            dst,
-            src,
-            bytes,
-            musaMemcpyDeviceToDevice,
-            stream);
-    
+
+        auto err =
+            musaMemcpyAsync(dst, src, bytes, musaMemcpyDeviceToDevice, stream);
+
         OP_REQUIRES(
             ctx, err == musaSuccess,
             errors::Internal(
                 "musaMemcpyAsync failed in TensorListFromTensor, error code: ",
                 static_cast<int>(err)));
-    
+
         // 调试阶段先强制同步，确认不是时序问题
         err = musaStreamSynchronize(stream);
-        OP_REQUIRES(
-            ctx, err == musaSuccess,
-            errors::Internal(
-                "musaStreamSynchronize failed in TensorListFromTensor, error code: ",
-                static_cast<int>(err)));
+        OP_REQUIRES(ctx, err == musaSuccess,
+                    errors::Internal("musaStreamSynchronize failed in "
+                                     "TensorListFromTensor, error code: ",
+                                     static_cast<int>(err)));
       }
-    
+
       output_list.tensors().push_back(aligned);
     }
 
@@ -170,14 +160,13 @@ class MusaTensorListFromTensorOp : public MusaOpKernel {
   }
 };
 
-#define REGISTER_MUSA_TENSOR_LIST_FROM_TENSOR(TYPE)                    \
-  REGISTER_KERNEL_BUILDER(                                             \
-      Name("TensorListFromTensor")                                     \
-          .Device("MUSA")                                              \
-          .HostMemory("element_shape")                                 \
-          .HostMemory("output_handle")                                 \
-          .TypeConstraint<TYPE>("element_dtype"),                      \
-      MusaTensorListFromTensorOp<TYPE>)
+#define REGISTER_MUSA_TENSOR_LIST_FROM_TENSOR(TYPE)                   \
+  REGISTER_KERNEL_BUILDER(Name("TensorListFromTensor")                \
+                              .Device("MUSA")                         \
+                              .HostMemory("element_shape")            \
+                              .HostMemory("output_handle")            \
+                              .TypeConstraint<TYPE>("element_dtype"), \
+                          MusaTensorListFromTensorOp<TYPE>)
 
 REGISTER_MUSA_TENSOR_LIST_FROM_TENSOR(float);
 REGISTER_MUSA_TENSOR_LIST_FROM_TENSOR(double);
@@ -186,7 +175,6 @@ REGISTER_MUSA_TENSOR_LIST_FROM_TENSOR(bfloat16);
 REGISTER_MUSA_TENSOR_LIST_FROM_TENSOR(int32);
 REGISTER_MUSA_TENSOR_LIST_FROM_TENSOR(int64);
 REGISTER_MUSA_TENSOR_LIST_FROM_TENSOR(uint8);
-
 
 #undef REGISTER_MUSA_TENSOR_LIST_FROM_TENSOR
 

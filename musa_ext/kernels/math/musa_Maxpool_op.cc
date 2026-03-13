@@ -90,10 +90,9 @@ Status ComputeOutputAndPadding2D(int64_t in_h, int64_t in_w, int64_t window_h,
 }
 
 template <typename T>
-Status RunMusaMaxPool(OpKernelContext* ctx, const Tensor& input,
-                      Tensor* output, TensorFormat data_format,
-                      int window_h, int window_w, int stride_h, int stride_w,
-                      int pad_top, int pad_left) {
+Status RunMusaMaxPool(OpKernelContext* ctx, const Tensor& input, Tensor* output,
+                      TensorFormat data_format, int window_h, int window_w,
+                      int stride_h, int stride_w, int pad_top, int pad_left) {
   auto& handle = GetHandleByCtx(ctx);
 
   mTensor x = CreateMTensor(input, mFormat::NHWC);
@@ -137,9 +136,10 @@ class MusaMaxPoolOp : public MusaOpKernel {
     OP_REQUIRES(ctx, FormatFromString(data_format_str_, &data_format_),
                 errors::InvalidArgument("Invalid MaxPool data_format: ",
                                         data_format_str_));
-    OP_REQUIRES(ctx, data_format_ == FORMAT_NHWC || data_format_ == FORMAT_NCHW,
-                errors::InvalidArgument("MaxPool only supports NHWC/NCHW, got: ",
-                                        data_format_str_));
+    OP_REQUIRES(
+        ctx, data_format_ == FORMAT_NHWC || data_format_ == FORMAT_NCHW,
+        errors::InvalidArgument("MaxPool only supports NHWC/NCHW, got: ",
+                                data_format_str_));
 
     OP_REQUIRES_OK(ctx, GetPaddingFromString(padding_str_, &padding_));
     OP_REQUIRES(
@@ -169,10 +169,12 @@ class MusaMaxPoolOp : public MusaOpKernel {
     OP_REQUIRES(ctx, stride_n == 1 && stride_c == 1,
                 errors::InvalidArgument("MaxPool does not support strides on "
                                         "batch/channel dims."));
-    OP_REQUIRES(ctx, window_h_ > 0 && window_w_ > 0,
-                errors::InvalidArgument("MaxPool spatial window sizes must be > 0."));
-    OP_REQUIRES(ctx, stride_h_ > 0 && stride_w_ > 0,
-                errors::InvalidArgument("MaxPool spatial strides must be > 0."));
+    OP_REQUIRES(
+        ctx, window_h_ > 0 && window_w_ > 0,
+        errors::InvalidArgument("MaxPool spatial window sizes must be > 0."));
+    OP_REQUIRES(
+        ctx, stride_h_ > 0 && stride_w_ > 0,
+        errors::InvalidArgument("MaxPool spatial strides must be > 0."));
   }
 
   bool IsExpensive() override { return true; }
@@ -200,11 +202,10 @@ class MusaMaxPoolOp : public MusaOpKernel {
     int pad_bottom = 0;
     int pad_left = 0;
     int pad_right = 0;
-    OP_REQUIRES_OK(
-        ctx, ComputeOutputAndPadding2D(
-                 in_h, in_w, window_h_, window_w_, stride_h_, stride_w_,
-                 padding_, &out_h, &out_w, &pad_top, &pad_bottom, &pad_left,
-                 &pad_right));
+    OP_REQUIRES_OK(ctx, ComputeOutputAndPadding2D(
+                            in_h, in_w, window_h_, window_w_, stride_h_,
+                            stride_w_, padding_, &out_h, &out_w, &pad_top,
+                            &pad_bottom, &pad_left, &pad_right));
 
     // Current muDNN SetNdInfo uses symmetric pad value per spatial dimension.
     OP_REQUIRES(ctx, pad_top == pad_bottom && pad_left == pad_right,
@@ -228,10 +229,9 @@ class MusaMaxPoolOp : public MusaOpKernel {
     }
 
     if (data_format_ == FORMAT_NHWC) {
-      OP_REQUIRES_OK(
-          ctx, RunMusaMaxPool<T>(ctx, input, output, FORMAT_NHWC, window_h_,
-                                 window_w_, stride_h_, stride_w_, pad_top,
-                                 pad_left));
+      OP_REQUIRES_OK(ctx, RunMusaMaxPool<T>(ctx, input, output, FORMAT_NHWC,
+                                            window_h_, window_w_, stride_h_,
+                                            stride_w_, pad_top, pad_left));
       return;
     }
 
@@ -252,9 +252,9 @@ class MusaMaxPoolOp : public MusaOpKernel {
     OP_REQUIRES_OK(
         ctx, PermuteTensorOnMusa(ctx, input, &input_nhwc, kPermNchwToNhwc));
     OP_REQUIRES_OK(
-        ctx, RunMusaMaxPool<T>(ctx, input_nhwc, &output_nhwc, FORMAT_NHWC,
-                               window_h_, window_w_, stride_h_, stride_w_,
-                               pad_top, pad_left));
+        ctx,
+        RunMusaMaxPool<T>(ctx, input_nhwc, &output_nhwc, FORMAT_NHWC, window_h_,
+                          window_w_, stride_h_, stride_w_, pad_top, pad_left));
     OP_REQUIRES_OK(
         ctx, PermuteTensorOnMusa(ctx, output_nhwc, output, kPermNhwcToNchw));
   }
