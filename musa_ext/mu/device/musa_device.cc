@@ -47,33 +47,55 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
   size_t bytes = cpu_tensor->TotalBytes();
 
   if (bytes > 0) {
-    // PERFORMANCE FIX: Always use async copy to avoid host blocking.
-    // Synchronous musaMemcpy blocks the host CPU, causing severe
-    // performance degradation by preventing overlapping data transfer
-    // with computation.
-    //
-    // Expected performance improvement: 20-50% for data-bound workloads
-    // especially with frequent small transfers (e.g., gradients, parameters)
+    // Correctness first: TensorFlow expects the callback to run only after the
+    // destination tensor is ready for downstream compute. Since this device
+    // context does not yet have event-driven callback wiring, complete the copy
+    // synchronously before invoking done().
     mStatus m_stat = MusaMemcpyAsyncH2D(dst, src, bytes, stream_handle_);
     if (m_stat != mStatus::SUCCESS) {
       done(errors::Internal("MUSA H2D async copy failed."));
       return;
     }
 
-    // Only synchronize if explicitly requested by TensorFlow runtime
-    // This is typically only needed for synchronous operations or
-    // when cross-device dependencies require it.
-    if (sync_dst_compute) {
-      musaError_t sync_err = musaStreamSynchronize(stream_handle_);
-      if (sync_err != musaSuccess) {
-        done(errors::Internal("MUSA H2D stream sync failed: ",
-                              musaGetErrorString(sync_err)));
-        return;
-      }
+    musaError_t sync_err = musaStreamSynchronize(stream_handle_);
+    if (sync_err != musaSuccess) {
+      done(errors::Internal("MUSA H2D stream sync failed: ",
+                            musaGetErrorString(sync_err)));
+      return;
     }
-    // Otherwise, let TensorFlow's stream dependency tracking handle
-    // synchronization naturally through the execution graph
   }
+  done(Status::OK());
+}
+
+void MusaDeviceContext::CopyTensorInSameDevice(const Tensor* input_tensor,
+                                               Device* device,
+                                               Tensor* output_tensor,
+                                               StatusCallback done) const {
+  auto* musa_dev = static_cast<MusaDevice*>(device);
+  musaSetDevice(musa_dev->get_device_id());
+
+  const void* src = input_tensor->tensor_data().data();
+  void* dst = const_cast<char*>(output_tensor->tensor_data().data());
+  size_t bytes = input_tensor->TotalBytes();
+  if (bytes > output_tensor->TotalBytes()) {
+    bytes = output_tensor->TotalBytes();
+  }
+
+  if (bytes > 0) {
+    mStatus m_stat = MusaMemcpyAsyncD2D(dst, src, bytes, stream_handle_);
+    if (m_stat != mStatus::SUCCESS) {
+      done(errors::Internal("MUSA D2D async copy failed."));
+      return;
+    }
+
+    musaError_t sync_err = musaStreamSynchronize(stream_handle_);
+    if (sync_err != musaSuccess) {
+      done(errors::Internal("MUSA D2D stream sync failed: ",
+                            musaGetErrorString(sync_err)));
+      return;
+    }
+  }
+
   done(Status::OK());
 }
 
@@ -105,9 +127,13 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
       done(errors::Internal("MUSA D2H async copy failed."));
       return;
     }
-    // Note: We don't synchronize here - let TensorFlow's callback
-    // mechanism ensure proper ordering. The done() callback will only
-    // be invoked when the data is actually ready.
+
+    musaError_t sync_err = musaStreamSynchronize(stream_handle_);
+    if (sync_err != musaSuccess) {
+      done(errors::Internal("MUSA D2H stream sync failed: ",
+                            musaGetErrorString(sync_err)));
+      return;
+    }
   }
   done(Status::OK());
 }

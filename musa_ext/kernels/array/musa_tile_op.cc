@@ -1,5 +1,4 @@
 #include <mudnn.h>
-#include <mudnn_tensor.h>
 
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
