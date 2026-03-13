@@ -127,22 +127,7 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
 
   // Handle single input - direct copy
   if (num_inputs == 1) {
-    const Tensor& input = ctx->input(0);
-    Tensor* output = nullptr;
-    MUSA_KERNEL_TRACE_START("Mem Alloc");
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &output));
-    MUSA_KERNEL_TRACE_END("Mem Alloc");
-    if (input.NumElements() == 0) return;
-    auto& handle = GetHandleByCtx(ctx);
-    musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
-    MUSA_KERNEL_TRACE_START("Mem Cpy");
-    mStatus copy_status = MusaMemcpyAsyncD2D(
-        const_cast<char*>(output->tensor_data().data()),
-        input.tensor_data().data(), input.TotalBytes(), stream);
-    MUSA_KERNEL_TRACE_END("Mem Cpy");
-    OP_REQUIRES(ctx, copy_status == mStatus::SUCCESS,
-                errors::Internal("MUSA AddN single input copy failed."));
-    MUSA_KERNEL_TRACE_END("FULL");
+    ctx->set_output(0, ctx->input(0));
     return;
   }
 
@@ -174,8 +159,10 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
 
   // Allocate output tensor
   Tensor* output = nullptr;
-  OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
-
+  MUSA_KERNEL_TRACE_START("Mem Alloc");
+  OP_REQUIRES_OK(ctx, ctx->forward_input_or_allocate_output(
+                          {0}, 0, output_shape, &output));
+  MUSA_KERNEL_TRACE_END("Mem Alloc");
   if (num_elements == 0) return;
 
   // ==========================================================================

@@ -1,11 +1,11 @@
 #include <mudnn.h>
 
+#include "../utils_op.h"
 #include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/bounds_check.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -80,6 +80,17 @@ class MusaSumOp : public MusaOpKernel {
       }
     }
 
+    if (reduce_elements == 1) {
+      Tensor output;
+      // zero-copy: assign new output_shape, underlying GPU memory still points
+      // to input
+      bool success = output.CopyFrom(input, output_shape);
+      OP_REQUIRES(ctx, success,
+                  errors::Internal("MUSA Reduce: Tensor::CopyFrom failed."));
+      ctx->set_output(0, output);
+      return;
+    }
+
     Tensor* out = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &out));
 
@@ -89,13 +100,6 @@ class MusaSumOp : public MusaOpKernel {
 
     auto& handle = GetHandleByCtx(ctx);
     musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
-
-    if (reduce_elements == 1) {
-      MusaMemcpyAsyncD2D(const_cast<char*>(out->tensor_data().data()),
-                         input.tensor_data().data(), input.TotalBytes(),
-                         stream);
-      return;
-    }
 
     Tensor out_reshaped(out->dtype());
     OP_REQUIRES(ctx, out_reshaped.CopyFrom(*out, musa_output_shape),
