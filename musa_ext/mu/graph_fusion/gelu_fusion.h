@@ -25,19 +25,10 @@ namespace tensorflow {
 namespace grappler {
 namespace musa_fusion {
 
-// GELU fusion pattern
-// Matches a subgraph that implements GELU activation and would replace it with MusaGelu op
-//
-// GELU formula: 0.5 * x * (1 + erf(x / sqrt(2)))
-//
-// Pattern structure (TF implementation):
-//   input -> Div(sqrt(2)) -> Erf -> Add(1) -> Mul(x) -> Mul(0.5)
-//   input --------------------------------------->
-//
-// The fused version (NOT YET IMPLEMENTED - for fallback testing):
-//   input -> MusaGelu -> output
-//
-// This pattern is used to test the fallback mechanism when kernel is not available
+// GELU fusion pattern.
+// The exact-erf path is the primary target in current large-model graphs.
+// The tanh-approximate path is kept in a separate matcher so it can be
+// reasoned about and debugged independently.
 
 class MusaGeluFusion : public FusionPattern {
  public:
@@ -47,35 +38,29 @@ class MusaGeluFusion : public FusionPattern {
   // Match the GELU pattern starting from a node
   FusionMatchResult Match(const GraphDef& graph, int start_node_idx) const override;
   
-  // Apply the fusion: would replace matched subgraph with MusaGelu
-  // NOTE: Currently this returns OK but does NOT apply the fusion since kernel
-  // is not implemented. This is intentional for fallback mechanism testing.
+  // Apply the fusion by replacing the matched output with MusaGelu.
   Status Apply(GraphDef* graph, const FusionMatchResult& match_result) const override;
   
   // Priority: same as other activation fusions
   int GetPriority() const override { return 90; }
   
-  // Kernel is NOT available (gelu not yet implemented)
-  // This is intentional for testing the fallback mechanism
   bool IsKernelAvailable() const override;
   
   std::string GetName() const override { return "MusaGeluFusion"; }
   
-  std::string GetFallbackReason() const override {
-    return "MusaGelu kernel not yet implemented - using fallback to standard ops";
-  }
+  std::string GetFallbackReason() const override { return ""; }
 
  private:
-  // Match standard GELU pattern
+  // Match exact GELU patterns used by TensorFlow's erf-based formulation:
+  //   0.5 * x * (1 + erf(x / sqrt(2)))
+  //   0.5 * x * erfc(-x / sqrt(2)))
   FusionMatchResult MatchStandardPattern(const GraphDef& graph, int start_node_idx) const;
   
-  // Match approximate GELU pattern (using tanh approximation)
+  // Match the optional tanh-approximate GELU path:
+  //   0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
   FusionMatchResult MatchApproximatePattern(const GraphDef& graph, int start_node_idx) const;
-  
-  // Helper: Check if a node is part of sqrt(2) computation
-  bool IsSqrt2Div(const NodeDef& node, const GraphDef& graph) const;
-  
-  mutable bool kernel_available_ = false;  // Not implemented yet
+
+  mutable bool kernel_available_ = true;
   mutable bool kernel_checked_ = false;
 };
 

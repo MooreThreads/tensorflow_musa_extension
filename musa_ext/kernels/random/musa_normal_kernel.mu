@@ -8,7 +8,6 @@
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/tensor_types.h"
 #include "tensorflow/core/platform/types.h"
-#include "tensorflow/stream_executor/stream.h"
 #pragma GCC diagnostic pop
 
 namespace tensorflow {

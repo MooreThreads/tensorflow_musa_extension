@@ -14,18 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
 import os
+import time
+import unittest
+import warnings
+from pathlib import Path
+import sys
+
 # Set TensorFlow logging level to reduce verbose output
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
-import unittest
-import sys
-import importlib
-import warnings
-from pathlib import Path
 import tensorflow as tf
-import time
-from datetime import datetime
 
 # Set logging levels
 tf.get_logger().setLevel('ERROR')
@@ -345,7 +345,7 @@ class CustomTestRunner(unittest.TextTestRunner):
             self.dual_output = DualOutput(log_file_handle)
             sys.stdout = self.dual_output
 
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
             print(f"Test run started at: {timestamp}\n")
 
         start_time = time.time()
