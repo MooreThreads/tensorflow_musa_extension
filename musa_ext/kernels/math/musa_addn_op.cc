@@ -1,8 +1,8 @@
+#include "../utils_op.h"
 #include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
-#include "../utils_op.h"
 #include "utils/logging.h"
 
 // ============================================================================
@@ -10,18 +10,18 @@
 // ============================================================================
 
 extern "C" {
-  void LaunchAddNKernelFloat(const float** inputs, float* output, int num_inputs,
-                             int size, musaStream_t stream);
-  void LaunchAddNKernelDouble(const double** inputs, double* output,
-                              int num_inputs, int size, musaStream_t stream);
-  void LaunchAddNKernelHalf(const void** inputs, void* output, int num_inputs,
-                            int size, musaStream_t stream);
-  void LaunchAddNKernelBFloat16(const void** inputs, void* output,
-                                int num_inputs, int size, musaStream_t stream);
-  void LaunchAddNKernelInt32(const int** inputs, int* output, int num_inputs,
-                             int size, musaStream_t stream);
-  void LaunchAddNKernelInt64(const int64_t** inputs, int64_t* output,
-                             int num_inputs, int size, musaStream_t stream);
+void LaunchAddNKernelFloat(const float** inputs, float* output, int num_inputs,
+                           int size, musaStream_t stream);
+void LaunchAddNKernelDouble(const double** inputs, double* output,
+                            int num_inputs, int size, musaStream_t stream);
+void LaunchAddNKernelHalf(const void** inputs, void* output, int num_inputs,
+                          int size, musaStream_t stream);
+void LaunchAddNKernelBFloat16(const void** inputs, void* output, int num_inputs,
+                              int size, musaStream_t stream);
+void LaunchAddNKernelInt32(const int** inputs, int* output, int num_inputs,
+                           int size, musaStream_t stream);
+void LaunchAddNKernelInt64(const int64_t** inputs, int64_t* output,
+                           int num_inputs, int size, musaStream_t stream);
 }
 
 namespace tensorflow {
@@ -37,23 +37,8 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
   OP_REQUIRES(ctx, num_inputs >= 1,
               errors::InvalidArgument("AddN requires at least one input."));
 
-  // Handle single input - direct copy
   if (num_inputs == 1) {
-    const Tensor& input = ctx->input(0);
-    Tensor* output = nullptr;
-    MUSA_KERNEL_TRACE_START("Mem Alloc");
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &output));
-    MUSA_KERNEL_TRACE_END("Mem Alloc");
-    if (input.NumElements() == 0) return;
-    auto& handle = GetHandleByCtx(ctx);
-    musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
-    MUSA_KERNEL_TRACE_START("Mem Cpy");
-    mStatus copy_status = MusaMemcpyAsyncD2D(
-        const_cast<char*>(output->tensor_data().data()),
-        input.tensor_data().data(), input.TotalBytes(), stream);
-    MUSA_KERNEL_TRACE_END("Mem Cpy");
-    OP_REQUIRES(ctx, copy_status == mStatus::SUCCESS,
-                errors::Internal("MUSA AddN single input copy failed."));
+    ctx->set_output(0, ctx->input(0));
     return;
   }
 
@@ -69,7 +54,8 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
   // Allocate output
   Tensor* output = nullptr;
   MUSA_KERNEL_TRACE_START("Mem Alloc");
-  OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
+  OP_REQUIRES_OK(ctx, ctx->forward_input_or_allocate_output(
+                          {0}, 0, output_shape, &output));
   MUSA_KERNEL_TRACE_END("Mem Alloc");
   if (num_elements == 0) return;
 
@@ -90,8 +76,8 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
   }
 
   // OPTIMIZED: 3+ inputs - custom kernel (SINGLE LAUNCH!)
-  musaStream_t stream = reinterpret_cast<musaStream_t>(
-      GetHandleByCtx(ctx).GetStream());
+  musaStream_t stream =
+      reinterpret_cast<musaStream_t>(GetHandleByCtx(ctx).GetStream());
 
   // Build device pointer array
   std::vector<const void*> input_ptrs(num_inputs);
@@ -112,8 +98,8 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
   void* output_ptr = const_cast<char*>(output->tensor_data().data());
   MUSA_KERNEL_TRACE_START("Kernel");
   launcher(reinterpret_cast<const T**>(d_inputs),
-           reinterpret_cast<T*>(output_ptr),
-           num_inputs, static_cast<int>(num_elements), stream);
+           reinterpret_cast<T*>(output_ptr), num_inputs,
+           static_cast<int>(num_elements), stream);
   MUSA_KERNEL_TRACE_END("Kernel");
 
   musaFree(const_cast<void**>(d_inputs));
@@ -144,14 +130,15 @@ class MusaAddNOp : public MusaOpKernel {
 // Launcher function getters - specialized for each type
 // ============================================================================
 
-#define DEFINE_ADDN_LAUNCHER_GETTER(T, launcher, input_cast, output_cast)       \
-  template <>                                                                   \
-  void (*MusaAddNOp<T>::GetLauncher())(const T**, T*, int, int, musaStream_t) { \
-    return [](const T** inputs, T* output, int num_inputs, int size,            \
-              musaStream_t stream) {                                            \
-      launcher(input_cast(inputs), output_cast(output),                         \
-               num_inputs, size, stream);                                       \
-    };                                                                          \
+#define DEFINE_ADDN_LAUNCHER_GETTER(T, launcher, input_cast, output_cast) \
+  template <>                                                             \
+  void (*MusaAddNOp<T>::GetLauncher())(const T**, T*, int, int,           \
+                                       musaStream_t) {                    \
+    return [](const T** inputs, T* output, int num_inputs, int size,      \
+              musaStream_t stream) {                                      \
+      launcher(input_cast(inputs), output_cast(output), num_inputs, size, \
+               stream);                                                   \
+    };                                                                    \
   }
 
 // Float and double - direct casts

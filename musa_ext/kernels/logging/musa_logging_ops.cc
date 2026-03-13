@@ -1,5 +1,6 @@
 #include <musa_runtime.h>
 
+#include "../utils_op.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "mu/device/musa_memcpy.h"
@@ -7,13 +8,16 @@
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
 
 std::string TensorToSummary(OpKernelContext* c, const Tensor& device_tensor,
                             int summarize) {
+  if (device_tensor.dtype() == DT_STRING ||
+      device_tensor.dtype() == DT_VARIANT) {
+    return device_tensor.SummarizeValue(summarize);
+  }
   Tensor cpu_tensor(device_tensor.dtype(), device_tensor.shape());
   MusaMemcpyD2H(const_cast<char*>(cpu_tensor.tensor_data().data()),
                 device_tensor.tensor_data().data(), device_tensor.TotalBytes());

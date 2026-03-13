@@ -22,6 +22,7 @@ class MusaSoftplusOp : public MusaOpKernel {
  public:
   explicit MusaSoftplusOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
+  bool IsExpensive() override { return true; }
   void Compute(OpKernelContext* ctx) override {
     const Tensor& x = ctx->input(0);
 
