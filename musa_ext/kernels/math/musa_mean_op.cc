@@ -89,10 +89,13 @@ class MusaMeanOp : public MusaOpKernel {
     auto& handle = GetHandleByCtx(ctx);
 
     if (reduce_elements == 1) {
-      musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
-      MusaMemcpyAsyncD2D(const_cast<char*>(out->tensor_data().data()),
-                         input.tensor_data().data(), input.TotalBytes(),
-                         stream);
+      Tensor output;
+      // zero-copy: assign new output_shape, underlying GPU memory still points
+      // to input
+      bool success = output.CopyFrom(input, output_shape);
+      OP_REQUIRES(ctx, success,
+                  errors::Internal("MUSA Mean: Tensor::CopyFrom failed."));
+      ctx->set_output(0, output);
       return;
     }
 

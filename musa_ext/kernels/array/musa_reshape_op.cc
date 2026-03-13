@@ -15,8 +15,6 @@ class MusaReshapeOp : public MusaOpKernel {
   explicit MusaReshapeOp(OpKernelConstruction* context)
       : MusaOpKernel(context) {}
 
-  // Reshape is a metadata-only operation (zero copy when possible)
-  // Marking as inexpensive enables TensorFlow executor inline scheduling
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
@@ -90,24 +88,14 @@ class MusaReshapeOp : public MusaOpKernel {
                                         " elements, but target shape has ",
                                         shape.num_elements(), " elements."));
 
-    // try buffer forwarding (zero-copy) first
-    Tensor* output = nullptr;
-    OP_REQUIRES_OK(
-        ctx, ctx->forward_input_or_allocate_output({0}, 0, shape, &output));
+    // zero-copy core logic: construct a new Tensor that shares the underlying
+    // GPU memory buffer, only replacing the shape view
+    Tensor output;
+    bool success = output.CopyFrom(input, shape);
+    OP_REQUIRES(ctx, success,
+                errors::Internal("MUSA Reshape: Tensor::CopyFrom failed."));
 
-    // copy data if forwarding failed (output and input point to different
-    // memory)
-    if (output->tensor_data().data() != input.tensor_data().data()) {
-      auto& handle = GetHandleByCtx(ctx);
-      musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
-
-      mStatus status = MusaMemcpyAsyncD2D(
-          const_cast<char*>(output->tensor_data().data()),
-          input.tensor_data().data(), input.TotalBytes(), stream);
-
-      OP_REQUIRES(ctx, status == mStatus::SUCCESS,
-                  errors::Internal("MUSA Reshape: async copy failed"));
-    }
+    ctx->set_output(0, output);
   }
 };
 

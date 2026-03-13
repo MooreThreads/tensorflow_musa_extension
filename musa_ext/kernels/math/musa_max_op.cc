@@ -33,14 +33,7 @@ class MusaMaxOp : public MusaOpKernel {
     const int64_t num_axes = axes_tensor.NumElements();
 
     if (num_axes == 0) {
-      Tensor* out = nullptr;
-      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &out));
-      if (out->NumElements() == 0) return;
-
-      auto& handle = GetHandleByCtx(ctx);
-      musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
-      MusaMemcpyAsyncD2D(const_cast<char*>(out->tensor_data().data()),
-                         input.tensor_data().data(), out->TotalBytes(), stream);
+      ctx->set_output(0, input);
       return;
     }
 
@@ -94,8 +87,13 @@ class MusaMaxOp : public MusaOpKernel {
     musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 
     if (reduce_elements == 1) {
-      MusaMemcpyAsyncD2D(const_cast<char*>(out->tensor_data().data()),
-                         input.tensor_data().data(), out->TotalBytes(), stream);
+      Tensor output;
+      // zero-copy: assign new output_shape, underlying GPU memory still points
+      // to input
+      bool success = output.CopyFrom(input, output_shape);
+      OP_REQUIRES(ctx, success,
+                  errors::Internal("MUSA Max: Tensor::CopyFrom failed."));
+      ctx->set_output(0, output);
       return;
     }
 
