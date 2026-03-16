@@ -8,16 +8,10 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   validate:
     runs-on: [self-hosted, musa-gpu]
-
-    permissions:
-      issues: write
-      pull-requests: write
-      contents: read
 
     env:
       PR_PATH: /home/runner/pr_test_${{ github.run_id }}_${{ github.run_attempt }}
@@ -41,7 +35,7 @@ jobs:
       - name: Check code formatting (clang-format)
         id: run-format
         run: |
-          if docker exec $CONTAINER bash -c "cd $PR_PATH && find . -regex '.*\.\(cpp\|hpp\|c\|h\|cu\)' | xargs clang-format --Werror --dry-run"; then
+          if docker exec $CONTAINER bash -c "cd $PR_PATH && find . -regex '.*\.\(cpp\|hpp\|c\|h\|cu\)' -print0 | xargs -0 clang-format --Werror --dry-run"; then
             echo "status=success" >> $GITHUB_OUTPUT
           else
             echo "status=failure" >> $GITHUB_OUTPUT
@@ -81,74 +75,19 @@ jobs:
       # ==============================
       - name: Clean up container workspace
         if: always()
-        run: docker exec $CONTAINER rm -rf $PR_PATH
+        run: |
+          docker exec $CONTAINER rm -rf $PR_PATH
 
-      # =====================================================
-      # ⭐ 修改点 1：只允许内部 PR 才执行评论
-      # =====================================================
-      - name: Comment PR with result
-        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        uses: actions/github-script@v6
-        with:
-          script: |
-            // 如果是 workflow_dispatch 没有 PR，直接退出
-            const issueNumber = context.issue.number || (context.payload.pull_request && context.payload.pull_request.number);
-            if (!issueNumber) {
-              console.log('No PR context found (likely workflow_dispatch). Skipping PR comment.');
-              return;
-            }
-
-            const formatStatus = '${{ steps.run-format.outputs.status }}';
-            const buildStatus = '${{ steps.run-build.outputs.status }}';
-            const testStatus = '${{ steps.run-integration.outputs.status }}';
-
-            const isSuccess = formatStatus === 'success' && buildStatus === 'success' && testStatus === 'success';
-
-            const { owner, repo } = context.repo;
-            const runUrl = `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`;
-
-            if (isSuccess) {
-              await github.rest.issues.createComment({
-                issue_number: issueNumber,
-                owner,
-                repo,
-                body: `✅ **CI Passed**
-
-                - Format check: passed
-                - Build: passed
-                - Tests: passed
-
-                [View logs](${runUrl})`
-              });
-
-              // =====================================================
-              // ⭐ 修改点 2：Label 也只在内部 PR 添加
-              // =====================================================
-              await github.rest.issues.addLabels({
-                issue_number: issueNumber,
-                owner,
-                repo,
-                labels: ['ci-passed']
-              });
-
-            } else {
-              await github.rest.issues.createComment({
-                issue_number: issueNumber,
-                owner,
-                repo,
-                body: `❌ **CI Failed**
-
-                - Format check: ${formatStatus}
-                - Build: ${buildStatus}
-                - Tests: ${testStatus}
-
-                [View detailed logs to fix errors](${runUrl})`
-                              });
-
-              await github.rest.issues.addLabels({
-                issue_number: issueNumber,
-                owner,
-                repo,
-                labels: ['ci-failed']
-              });
-            }
+      # ==============================
+      # CI 总结输出
+      # ==============================
+      - name: CI Summary
+        if: always()
+        run: |
+          echo "## CI Result" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Step | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Format | ${{ steps.run-format.outputs.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ steps.run-build.outputs.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Integration Test | ${{ steps.run-integration.outputs.status }} |" >> $GITHUB_STEP_SUMMARY
