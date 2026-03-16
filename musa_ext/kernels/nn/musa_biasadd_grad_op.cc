@@ -1,10 +1,10 @@
 #include <mudnn.h>
 
+#include "../utils_op.h"
 #include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/util/tensor_format.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -55,10 +55,7 @@ class MusaBiasAddGradOp : public MusaOpKernel {
     auto& handle = GetHandleByCtx(ctx);
 
     if (reduce_dims.empty()) {
-      musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
-      MusaMemcpyAsyncD2D(const_cast<char*>(output->tensor_data().data()),
-                         output_backprop.tensor_data().data(),
-                         output_backprop.TotalBytes(), stream);
+      ctx->set_output(0, output_backprop);
       return;
     }
 

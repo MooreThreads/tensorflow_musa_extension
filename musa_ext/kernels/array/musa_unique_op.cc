@@ -1,10 +1,10 @@
 #include <list>
 #include <vector>
 
+#include "../utils_op.h"
 #include "mu/device/musa_device.h"
 #include "mu/device/musa_memcpy.h"
 #include "mu/device/musa_memset.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -80,9 +80,9 @@ class MusaUniqueOp : public MusaOpKernel {
     // Use async memcpy with stream for D2H copy
     musaStream_t stream = GetMusaStreamByCtx(ctx);
     std::vector<OutIdxT> host_counts(num_elements);
-    mStatus memcpy_status = MusaMemcpyAsyncD2H(host_counts.data(),
-                                                tmp_counts.flat<OutIdxT>().data(),
-                                                counts_bytes, stream);
+    mStatus memcpy_status = MusaMemcpyAsyncD2H(
+        host_counts.data(), tmp_counts.flat<OutIdxT>().data(), counts_bytes,
+        stream);
     OP_REQUIRES(ctx, memcpy_status == mStatus::SUCCESS,
                 errors::Internal("MUSA Unique: MusaMemcpyAsyncD2H failed"));
     musaStreamSynchronize(stream);
@@ -101,14 +101,12 @@ class MusaUniqueOp : public MusaOpKernel {
         ctx, ctx->allocate_output(0, TensorShape({unique_count}), &out_values));
 
     if (unique_count > 0) {
-      size_t data_bytes = unique_count * sizeof(T);
-      // Use async D2D memcpy
-      mStatus d2d_status = MusaMemcpyAsyncD2D(
-          out_values->flat<T>().data(), temp_out_values.flat<T>().data(),
-          data_bytes, stream);
-      OP_REQUIRES(ctx, d2d_status == mStatus::SUCCESS,
-                  errors::Internal("MUSA Unique: MusaMemcpyAsyncD2D failed"));
-      musaStreamSynchronize(stream);
+      Tensor final_out = temp_out_values.Slice(0, unique_count);
+      ctx->set_output(0, final_out);
+    } else {
+      Tensor* empty_out = nullptr;
+      OP_REQUIRES_OK(ctx,
+                     ctx->allocate_output(0, TensorShape({0}), &empty_out));
     }
   }
 };

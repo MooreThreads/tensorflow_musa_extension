@@ -25,16 +25,16 @@ class MusaTokenMixerOp : public MusaOpKernel {
 
   void Compute(OpKernelContext* ctx) override {
     const Tensor& input = ctx->input(0);
-    
-    OP_REQUIRES(ctx, input.dims() == 3,
-                errors::InvalidArgument("Input must be rank 3, got ",
-                                        input.dims()));
+
+    OP_REQUIRES(
+        ctx, input.dims() == 3,
+        errors::InvalidArgument("Input must be rank 3, got ", input.dims()));
     const int64 B = input.dim_size(0);
     const int64 T = input.dim_size(1);
     const int64 D = input.dim_size(2);
-    OP_REQUIRES(ctx, T == num_T_,
-                errors::InvalidArgument(
-                    "dim 1 must be num_T=", num_T_, ", got ", T));
+    OP_REQUIRES(
+        ctx, T == num_T_,
+        errors::InvalidArgument("dim 1 must be num_T=", num_T_, ", got ", T));
     OP_REQUIRES(ctx, D == num_H_ * d_k_,
                 errors::InvalidArgument(
                     "dim 2 must be num_H*d_k=", num_H_ * d_k_, ", got ", D));
@@ -49,15 +49,16 @@ class MusaTokenMixerOp : public MusaOpKernel {
     // ---- Zero-copy 4D views for the Permute operation ----
     // Input view: (B, T, H, d_k) — first Reshape, no data movement
     Tensor input_4d(input.dtype());
-    OP_REQUIRES(ctx,
-                input_4d.CopyFrom(input, TensorShape({B, num_T_, num_H_, d_k_})),
-                errors::Internal("Failed to create 4D view of input"));
+    OP_REQUIRES(
+        ctx, input_4d.CopyFrom(input, TensorShape({B, num_T_, num_H_, d_k_})),
+        errors::Internal("Failed to create 4D view of input"));
 
     // Output view: (B, H, T, d_k) — before the final Reshape, no data movement
     Tensor output_4d(output->dtype());
-    OP_REQUIRES(ctx,
-                output_4d.CopyFrom(*output, TensorShape({B, num_H_, num_T_, d_k_})),
-                errors::Internal("Failed to create 4D view of output"));
+    OP_REQUIRES(
+        ctx,
+        output_4d.CopyFrom(*output, TensorShape({B, num_H_, num_T_, d_k_})),
+        errors::Internal("Failed to create 4D view of output"));
 
     // ---- Transpose [0,2,1,3] via muDNN Permute ----
     mTensor in_mt = CreateMTensor(input_4d);
@@ -110,9 +111,8 @@ REGISTER_OP("MusaTokenMixer")
       TF_RETURN_IF_ERROR(c->GetAttr("num_T", &num_T));
 
       auto batch_dim = c->Dim(c->input(0), 0);
-      c->set_output(0, c->MakeShape({batch_dim,
-                                      c->MakeDim(num_H),
-                                      c->MakeDim(num_T * d_k)}));
+      c->set_output(0, c->MakeShape({batch_dim, c->MakeDim(num_H),
+                                     c->MakeDim(num_T * d_k)}));
       return Status::OK();
     });
 

@@ -31,9 +31,13 @@ template void MusaDiagPartkernelLauncher<float>(musaStream_t, uint64_t,
 template void MusaDiagPartkernelLauncher<double>(musaStream_t, uint64_t,
                                                  const double*, double*);
 template void MusaDiagPartkernelLauncher<int32>(musaStream_t, uint64_t,
-                                                const int*, int*);
-template void MusaDiagPartkernelLauncher<int64>(musaStream_t, uint64_t,
-                                                const int64*, int64*);
+                                                const int32*, int32*);
+template void MusaDiagPartkernelLauncher<long long>(musaStream_t, uint64_t,
+                                                    const long long*,
+                                                    long long*);
+template void MusaDiagPartkernelLauncher<long>(musaStream_t, uint64_t,
+                                               const long*,
+                                               long*);
 template void MusaDiagPartkernelLauncher<Eigen::half>(musaStream_t, uint64_t,
                                                       const Eigen::half*,
                                                       Eigen::half*);

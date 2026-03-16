@@ -1,5 +1,5 @@
-#include "../utils_op.h"
 #include "../../utils/musa_tensor_list_utils.h"
+#include "../utils_op.h"
 #include "tensorflow/core/kernels/tensor_list.h"
 
 namespace tensorflow {
@@ -57,6 +57,8 @@ class MusaEmptyTensorListOp : public MusaOpKernel {
     empty.element_shape = element_shape;
     result->scalar<Variant>()() = std::move(empty);
   }
+
+  bool IsExpensive() override { return false; }
 
  private:
   DataType element_dtype_;
