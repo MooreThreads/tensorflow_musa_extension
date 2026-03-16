@@ -1,4 +1,4 @@
-// Copyright 2026 The TensorFlow MUSA Authors. All Rights Reserved.
+// Copyright 20261 The TensorFlow MUSA Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -38,7 +38,7 @@ namespace musa {
 // - Input: list of tensors
 // - Cond: function that takes same inputs and returns scalar boolean
 // - Body: function that takes same inputs and returns same number of tensors
-// - Output: final loop variables after cond returns false
+// - Output: final loop variables after cond returns false231
 
 class MusaStatelessWhileOp : public OpKernel {
  public:
