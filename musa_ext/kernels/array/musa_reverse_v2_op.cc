@@ -84,10 +84,12 @@ class MusaReverseV2Op : public MusaOpKernel {
       for (int64_t j = 0; j < axis_size; ++j) {
         idx_host[j] = static_cast<int32>(axis_size - 1 - j);
       }
+      // Use async memcpy with pinned memory for better performance
+      // The kernel launch will naturally wait for the memcpy to complete
+      // as they are on the same stream
       musaMemcpyAsync(idx_tensor.data(), idx_host.data(),
                       axis_size * sizeof(int32), musaMemcpyHostToDevice,
                       stream);
-      musaStreamSynchronize(stream);
 
       auto in_mt = CreateMTensor(src);
       auto out_mt = CreateMTensor(*dst);

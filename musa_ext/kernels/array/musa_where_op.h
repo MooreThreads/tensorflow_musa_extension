@@ -60,15 +60,13 @@ struct NumTrue {
     LaunchIsNonZeroCount<T, TIndex>(input_data, count_device,
                                     static_cast<int>(input.size()), mstream);
 
-    auto m_err = musaMemcpyAsync(num_true_data, count_device, sizeof(TIndex),
-                                 musaMemcpyDeviceToHost, mstream);
+    // Use synchronous memcpy for small data (single scalar)
+    // This is acceptable because the data size is tiny (sizeof(TIndex))
+    // and we need the result immediately on CPU for subsequent allocations
+    auto m_err = musaMemcpy(num_true_data, count_device, sizeof(TIndex),
+                            musaMemcpyDeviceToHost);
     if (m_err != musaSuccess) {
-      return errors::Internal("WhereOp: musaMemcpyAsync failed: ",
-                              musaGetErrorString(m_err));
-    }
-    m_err = musaStreamSynchronize(mstream);
-    if (m_err != musaSuccess) {
-      return errors::Internal("WhereOp: musaStreamSynchronize failed: ",
+      return errors::Internal("WhereOp: musaMemcpy failed: ",
                               musaGetErrorString(m_err));
     }
 

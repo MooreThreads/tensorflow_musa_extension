@@ -314,6 +314,20 @@ void MusaUnpackOp<int64>::LaunchKernel(const void* input, void** outputs,
       Name("Unpack").Device(DEVICE_MTGPU).TypeConstraint<type>("T"), \
       MusaUnpackOp<type>);
 
+#define REGISTER_MUSA_STACK_KERNELS_HOST(type)           \
+  REGISTER_KERNEL_BUILDER(Name("Pack")                   \
+                              .Device(DEVICE_MTGPU)      \
+                              .TypeConstraint<type>("T") \
+                              .HostMemory("values")      \
+                              .HostMemory("output"),     \
+                          MusaPackOp<type>);             \
+  REGISTER_KERNEL_BUILDER(Name("Unpack")                 \
+                              .Device(DEVICE_MTGPU)      \
+                              .TypeConstraint<type>("T") \
+                              .HostMemory("value")       \
+                              .HostMemory("output"),     \
+                          MusaUnpackOp<type>);
+
 REGISTER_MUSA_STACK_KERNELS(float);
 REGISTER_MUSA_STACK_KERNELS(double);
 REGISTER_MUSA_STACK_KERNELS(int32);
