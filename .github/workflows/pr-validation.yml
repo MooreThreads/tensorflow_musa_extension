@@ -17,7 +17,7 @@ jobs:
     # 🌟 优化点 1：提取全局环境变量，修改时只需改一处
     permissions:
       issues: write
-      pull-request: write
+      pull-requests: write
       contents: read
     env:
       # 加入 run_attempt 防止网页端手动点重跑时目录冲突
