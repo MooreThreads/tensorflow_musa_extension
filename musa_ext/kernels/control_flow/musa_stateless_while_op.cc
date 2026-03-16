@@ -15,11 +15,11 @@
 
 #include <vector>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/function.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/platform/status.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -42,8 +42,7 @@ namespace musa {
 
 class MusaStatelessWhileOp : public OpKernel {
  public:
-  explicit MusaStatelessWhileOp(OpKernelConstruction* ctx)
-      : OpKernel(ctx) {
+  explicit MusaStatelessWhileOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("cond", &cond_func_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("body", &body_func_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("T", &t_types_));
@@ -77,10 +76,12 @@ class MusaStatelessWhileOp : public OpKernel {
     FunctionLibraryRuntime::Handle cond_handle;
     FunctionLibraryRuntime::Handle body_handle;
 
-    Status s = flr->Instantiate(cond_func_.name(), AttrSlice(&cond_func_.attr()), &cond_handle);
+    Status s = flr->Instantiate(cond_func_.name(),
+                                AttrSlice(&cond_func_.attr()), &cond_handle);
     OP_REQUIRES_OK(ctx, s);
 
-    s = flr->Instantiate(body_func_.name(), AttrSlice(&body_func_.attr()), &body_handle);
+    s = flr->Instantiate(body_func_.name(), AttrSlice(&body_func_.attr()),
+                         &body_handle);
     OP_REQUIRES_OK(ctx, s);
 
     // Create runtime options
@@ -103,8 +104,8 @@ class MusaStatelessWhileOp : public OpKernel {
       s = flr->RunSync(opts, cond_handle, current_inputs, &cond_outputs);
 
       if (!s.ok()) {
-        ctx->CtxFailure(errors::Internal("Cond function execution failed: ",
-                                         s.ToString()));
+        ctx->CtxFailure(
+            errors::Internal("Cond function execution failed: ", s.ToString()));
         return;
       }
 
@@ -129,8 +130,8 @@ class MusaStatelessWhileOp : public OpKernel {
       s = flr->RunSync(opts, body_handle, current_inputs, &body_outputs);
 
       if (!s.ok()) {
-        ctx->CtxFailure(errors::Internal("Body function execution failed: ",
-                                         s.ToString()));
+        ctx->CtxFailure(
+            errors::Internal("Body function execution failed: ", s.ToString()));
         return;
       }
 
@@ -146,8 +147,8 @@ class MusaStatelessWhileOp : public OpKernel {
 
     if (iteration >= max_iterations) {
       ctx->CtxFailure(errors::ResourceExhausted(
-          "StatelessWhile loop exceeded maximum iterations (",
-          max_iterations, ")"));
+          "StatelessWhile loop exceeded maximum iterations (", max_iterations,
+          ")"));
       return;
     }
 

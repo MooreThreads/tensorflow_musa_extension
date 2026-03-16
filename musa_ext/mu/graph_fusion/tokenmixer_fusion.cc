@@ -13,8 +13,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-/// fusion pattern: reshape ([-1, T, H, d_k]) -> transpose (perm=[0, 2, 1, 3]) -> reshape ([-1, H, T*d_k])
+/// fusion pattern: reshape ([-1, T, H, d_k]) -> transpose (perm=[0, 2, 1, 3])
+/// -> reshape ([-1, H, T*d_k])
 #include "mu/graph_fusion/tokenmixer_fusion.h"
+
 #include "fusion_pattern_manager.h"
 #include "tensorflow/core/framework/attr_value.pb.h"
 #include "tensorflow/core/framework/tensor.pb.h"
@@ -65,8 +67,8 @@ bool GetConstIntValues(const NodeDef& node, std::vector<int64>* values) {
         values->push_back(static_cast<int64>(tensor_proto.int_val(i)));
       }
     } else if (!tensor_proto.tensor_content().empty()) {
-      const int32* data = reinterpret_cast<const int32*>(
-          tensor_proto.tensor_content().data());
+      const int32* data =
+          reinterpret_cast<const int32*>(tensor_proto.tensor_content().data());
       int num = tensor_proto.tensor_content().size() / sizeof(int32);
       for (int i = 0; i < num; ++i) {
         values->push_back(static_cast<int64>(data[i]));
@@ -78,8 +80,8 @@ bool GetConstIntValues(const NodeDef& node, std::vector<int64>* values) {
         values->push_back(tensor_proto.int64_val(i));
       }
     } else if (!tensor_proto.tensor_content().empty()) {
-      const int64* data = reinterpret_cast<const int64*>(
-          tensor_proto.tensor_content().data());
+      const int64* data =
+          reinterpret_cast<const int64*>(tensor_proto.tensor_content().data());
       int num = tensor_proto.tensor_content().size() / sizeof(int64);
       for (int i = 0; i < num; ++i) {
         values->push_back(data[i]);
@@ -127,8 +129,7 @@ bool MusaTokenMixerFusion::IsKernelAvailable() const {
 }
 
 FusionMatchResult MusaTokenMixerFusion::Match(const GraphDef& graph,
-                                               int start_node_idx) const {
-
+                                              int start_node_idx) const {
   if (start_node_idx < 0 || start_node_idx >= graph.node_size()) {
     return FusionMatchResult{};
   }
@@ -148,22 +149,20 @@ FusionMatchResult MusaTokenMixerFusion::MatchFromReshapeNode(
   const NodeDef& reshape2_node = graph.node(reshape_node_idx);
 
   if (!IsOp(reshape2_node, "Reshape") || reshape2_node.input_size() < 2) {
-    printf("MusaTokenMixerFusion: MatchFromReshapeNode: Invalid Reshape node\n");
+    printf(
+        "MusaTokenMixerFusion: MatchFromReshapeNode: Invalid Reshape node\n");
     return result;
   }
   // Step 0: Output Reshape must have downstream consumers
   const std::string& name = reshape2_node.name();
-  if (name.size() > 9 &&
-      name.substr(name.size() - 9) == "_original") {
-    VLOG(2) << "MusaTokenMixer: Node '" << name
-            << "' already fused, skipping";
+  if (name.size() > 9 && name.substr(name.size() - 9) == "_original") {
+    VLOG(2) << "MusaTokenMixer: Node '" << name << "' already fused, skipping";
     return result;
   }
   // =========================================================================
   // Step 1: The last Reshape's data input (input[0]) must be a Transpose
   // =========================================================================
-  const NodeDef* transpose_node =
-      FindProducer(graph, reshape2_node.input(0));
+  const NodeDef* transpose_node = FindProducer(graph, reshape2_node.input(0));
   if (!transpose_node || !IsOp(*transpose_node, "Transpose")) {
     return result;
   }
@@ -184,15 +183,13 @@ FusionMatchResult MusaTokenMixerFusion::MatchFromReshapeNode(
   }
 
   if (perm_values.empty() && transpose_node->input_size() >= 2) {
-    const NodeDef* perm_node =
-        FindProducer(graph, transpose_node->input(1));
+    const NodeDef* perm_node = FindProducer(graph, transpose_node->input(1));
     if (perm_node) {
       GetConstIntValues(*perm_node, &perm_values);
     }
   }
 
-  if (perm_values.size() != 4 ||
-      perm_values[0] != 0 || perm_values[1] != 2 ||
+  if (perm_values.size() != 4 || perm_values[0] != 0 || perm_values[1] != 2 ||
       perm_values[2] != 1 || perm_values[3] != 3) {
     return result;
   }
@@ -204,14 +201,14 @@ FusionMatchResult MusaTokenMixerFusion::MatchFromReshapeNode(
   // =========================================================================
   if (transpose_node->input_size() < 1) return result;
 
-  const NodeDef* reshape1_node =
-      FindProducer(graph, transpose_node->input(0));
+  const NodeDef* reshape1_node = FindProducer(graph, transpose_node->input(0));
   if (!reshape1_node || !IsOp(*reshape1_node, "Reshape")) {
     return result;
   }
 
   if (reshape1_node->input_size() < 2) {
-    printf("MusaTokenMixerFusion: MatchFromReshapeNode: Invalid Reshape node\n");
+    printf(
+        "MusaTokenMixerFusion: MatchFromReshapeNode: Invalid Reshape node\n");
     return result;
   }
   // =========================================================================
@@ -230,8 +227,7 @@ FusionMatchResult MusaTokenMixerFusion::MatchFromReshapeNode(
   // =========================================================================
   // Step 5: Extract shape from the first Reshape -> expect [-1, T, H, d_k]
   // =========================================================================
-  const NodeDef* shape1_node =
-      FindProducer(graph, reshape1_node->input(1));
+  const NodeDef* shape1_node = FindProducer(graph, reshape1_node->input(1));
   if (!shape1_node) return result;
 
   std::vector<int64> shape1_values;
@@ -251,21 +247,19 @@ FusionMatchResult MusaTokenMixerFusion::MatchFromReshapeNode(
 
   int64 num_T = shape1_values[1];
   int64 num_H = shape1_values[2];
-  int64 d_k   = shape1_values[3];
+  int64 d_k = shape1_values[3];
 
   if (num_T <= 0 || num_H <= 0 || d_k <= 0) {
     return result;
   }
 
-  VLOG(2) << "MusaTokenMixer: First Reshape shape=["
-          << shape1_values[0] << ", " << num_T << ", "
-          << num_H << ", " << d_k << "]";
+  VLOG(2) << "MusaTokenMixer: First Reshape shape=[" << shape1_values[0] << ", "
+          << num_T << ", " << num_H << ", " << d_k << "]";
 
   // =========================================================================
   // Step 6: Validate the last Reshape's shape -> expect [-1, H, T*d_k]
   // =========================================================================
-  const NodeDef* shape2_node =
-      FindProducer(graph, reshape2_node.input(1));
+  const NodeDef* shape2_node = FindProducer(graph, reshape2_node.input(1));
   if (!shape2_node) return result;
 
   std::vector<int64> shape2_values;
@@ -286,17 +280,17 @@ FusionMatchResult MusaTokenMixerFusion::MatchFromReshapeNode(
   if (shape2_values[1] != num_H || shape2_values[2] != num_T * d_k) {
     VLOG(2) << "MusaTokenMixer: Last Reshape shape mismatch. "
             << "Expected [-1, " << num_H << ", " << num_T * d_k << "], "
-            << "got [" << shape2_values[0] << ", " << shape2_values[1]
-            << ", " << shape2_values[2] << "]";
+            << "got [" << shape2_values[0] << ", " << shape2_values[1] << ", "
+            << shape2_values[2] << "]";
     return result;
   }
 
   // =========================================================================
   // Step 7: Validate dtype consistency across the chain
   // =========================================================================
-  DataType dt_reshape1  = GetNodeDType(*reshape1_node);
+  DataType dt_reshape1 = GetNodeDType(*reshape1_node);
   DataType dt_transpose = GetNodeDType(*transpose_node);
-  DataType dt_reshape2  = GetNodeDType(reshape2_node);
+  DataType dt_reshape2 = GetNodeDType(reshape2_node);
 
   if (dt_reshape1 != DT_INVALID && dt_transpose != DT_INVALID &&
       dt_reshape2 != DT_INVALID) {
@@ -308,8 +302,7 @@ FusionMatchResult MusaTokenMixerFusion::MatchFromReshapeNode(
   // =========================================================================
   // Step 8: Validate first Reshape's input is 3D with D == H * d_k
   // =========================================================================
-  const NodeDef* input_node =
-      FindProducer(graph, reshape1_node->input(0));
+  const NodeDef* input_node = FindProducer(graph, reshape1_node->input(0));
   if (!input_node) return result;
 
   // Check _output_shapes attribute (present in most frozen/optimized graphs)
@@ -375,24 +368,23 @@ FusionMatchResult MusaTokenMixerFusion::MatchFromReshapeNode(
   result.matched_nodes.push_back(transpose_node);
   result.matched_nodes.push_back(&reshape2_node);
 
-
   if (input_node) {
     result.captured_nodes["input"] = input_node;
   }
 
-  result.captured_nodes["reshape1"]  = reshape1_node;
+  result.captured_nodes["reshape1"] = reshape1_node;
   result.captured_nodes["transpose"] = transpose_node;
-  result.captured_nodes["reshape2"]  = &reshape2_node;
-  result.captured_nodes["output"]    = &reshape2_node;
+  result.captured_nodes["reshape2"] = &reshape2_node;
+  result.captured_nodes["output"] = &reshape2_node;
 
   result.captured_attrs["num_T"] = std::to_string(num_T);
   result.captured_attrs["num_H"] = std::to_string(num_H);
-  result.captured_attrs["d_k"]   = std::to_string(d_k);
+  result.captured_attrs["d_k"] = std::to_string(d_k);
 
   VLOG(1) << "MusaTokenMixer: Matched pattern "
           << "input->reshape->transpose->reshape "
-          << "(num_T=" << num_T << ", num_H=" << num_H
-          << ", d_k=" << d_k << ")";
+          << "(num_T=" << num_T << ", num_H=" << num_H << ", d_k=" << d_k
+          << ")";
 
   return result;
 }
@@ -400,8 +392,7 @@ FusionMatchResult MusaTokenMixerFusion::MatchFromReshapeNode(
 Status MusaTokenMixerFusion::Apply(
     GraphDef* graph, const FusionMatchResult& match_result) const {
   if (!match_result.IsValid()) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Invalid TokenMixer match result");
+    return Status(error::INVALID_ARGUMENT, "Invalid TokenMixer match result");
   }
 
   if (!IsKernelAvailable()) {
@@ -409,8 +400,8 @@ Status MusaTokenMixerFusion::Apply(
   }
 
   // ---- Retrieve captured nodes ----
-  auto output_it   = match_result.captured_nodes.find("output");
-  auto input_it    = match_result.captured_nodes.find("input");
+  auto output_it = match_result.captured_nodes.find("output");
+  auto input_it = match_result.captured_nodes.find("input");
   auto reshape1_it = match_result.captured_nodes.find("reshape1");
 
   if (output_it == match_result.captured_nodes.end()) {
@@ -423,18 +414,18 @@ Status MusaTokenMixerFusion::Apply(
   // ---- Extract num_T / num_H / d_k ----
   auto num_T_it = match_result.captured_attrs.find("num_T");
   auto num_H_it = match_result.captured_attrs.find("num_H");
-  auto d_k_it   = match_result.captured_attrs.find("d_k");
+  auto d_k_it = match_result.captured_attrs.find("d_k");
 
   if (num_T_it == match_result.captured_attrs.end() ||
       num_H_it == match_result.captured_attrs.end() ||
-      d_k_it   == match_result.captured_attrs.end()) {
+      d_k_it == match_result.captured_attrs.end()) {
     return Status(error::INVALID_ARGUMENT,
                   "Missing shape attributes in TokenMixer pattern");
   }
 
   int64 num_T = std::stoll(num_T_it->second);
   int64 num_H = std::stoll(num_H_it->second);
-  int64 d_k   = std::stoll(d_k_it->second);
+  int64 d_k = std::stoll(d_k_it->second);
 
   // ---- Duplicate-fusion guard ----
   std::string base_name = output_node->name();
@@ -452,8 +443,7 @@ Status MusaTokenMixerFusion::Apply(
   }
 
   // ---- Create fused MusaTokenMixer node ----
-  std::string fused_node_name =
-      output_node->name() + "_fused_tokenmixer";
+  std::string fused_node_name = output_node->name() + "_fused_tokenmixer";
   VLOG(1) << "MusaTokenMixer: Creating fused node: " << fused_node_name;
 
   NodeDef* fused_node = graph->add_node();
@@ -462,13 +452,11 @@ Status MusaTokenMixerFusion::Apply(
   fused_node->set_device(output_node->device());
 
   // Input: directly reuse reshape1's data input (preserves port info)
-  if (reshape1_it != match_result.captured_nodes.end() &&
-      reshape1_it->second &&
+  if (reshape1_it != match_result.captured_nodes.end() && reshape1_it->second &&
       reshape1_it->second->input_size() > 0) {
     fused_node->add_input(reshape1_it->second->input(0));
   } else {
-    return Status(error::INVALID_ARGUMENT,
-                  "Cannot determine TokenMixer input");
+    return Status(error::INVALID_ARGUMENT, "Cannot determine TokenMixer input");
   }
 
   // Attributes
@@ -485,72 +473,71 @@ Status MusaTokenMixerFusion::Apply(
   (*attr)["num_H"].set_i(num_H);
   (*attr)["d_k"].set_i(d_k);
 
-// 1. rename origial output node
-    std::string original_name = output_node->name();
-    const_cast<NodeDef*>(output_node)->set_name(original_name + "_original");
+  // 1. rename origial output node
+  std::string original_name = output_node->name();
+  const_cast<NodeDef*>(output_node)->set_name(original_name + "_original");
 
-// 2. rename fused node to original name
-    fused_node->set_name(original_name);
-    VLOG(1) << "MusaTokenMixer: Fused node created as " << original_name
-            << " (num_T=" << num_T << ", num_H=" << num_H
-            << ", d_k=" << d_k << ")";
-    std::set<std::string> nodes_to_remove;
+  // 2. rename fused node to original name
+  fused_node->set_name(original_name);
+  VLOG(1) << "MusaTokenMixer: Fused node created as " << original_name
+          << " (num_T=" << num_T << ", num_H=" << num_H << ", d_k=" << d_k
+          << ")";
+  std::set<std::string> nodes_to_remove;
 
-    // 被重命名的 output（reshape2）节点
-    nodes_to_remove.insert(original_name + "_original");
+  // 被重命名的 output（reshape2）节点
+  nodes_to_remove.insert(original_name + "_original");
 
-    // reshape1 和 transpose
-    auto transpose_it = match_result.captured_nodes.find("transpose");
-    if (transpose_it != match_result.captured_nodes.end()) {
+  // reshape1 和 transpose
+  auto transpose_it = match_result.captured_nodes.find("transpose");
+  if (transpose_it != match_result.captured_nodes.end()) {
     nodes_to_remove.insert(transpose_it->second->name());
-    }
-    if (reshape1_it != match_result.captured_nodes.end()) {
+  }
+  if (reshape1_it != match_result.captured_nodes.end()) {
     nodes_to_remove.insert(reshape1_it->second->name());
-    }
+  }
 
-    // 关联的 Const 节点（shape/perm）——仅在无其他消费者时删除
-    // reshape1 的 shape const (input[1])
-    if (reshape1_it != match_result.captured_nodes.end() &&
-        reshape1_it->second->input_size() >= 2) {
+  // 关联的 Const 节点（shape/perm）——仅在无其他消费者时删除
+  // reshape1 的 shape const (input[1])
+  if (reshape1_it != match_result.captured_nodes.end() &&
+      reshape1_it->second->input_size() >= 2) {
     std::string shape1_name = GetProducerName(reshape1_it->second->input(1));
     if (CountConsumers(*graph, shape1_name) <= 1) {
-        nodes_to_remove.insert(shape1_name);
+      nodes_to_remove.insert(shape1_name);
     }
-    }
+  }
 
-    // transpose 的 perm const (input[1])
-    if (transpose_it != match_result.captured_nodes.end() &&
-        transpose_it->second->input_size() >= 2) {
+  // transpose 的 perm const (input[1])
+  if (transpose_it != match_result.captured_nodes.end() &&
+      transpose_it->second->input_size() >= 2) {
     std::string perm_name = GetProducerName(transpose_it->second->input(1));
     if (CountConsumers(*graph, perm_name) <= 1) {
-        nodes_to_remove.insert(perm_name);
+      nodes_to_remove.insert(perm_name);
     }
-    }
+  }
 
-    // reshape2 的 shape const (input[1])
-    // 注意：原始 output_node 就是 reshape2
-    if (output_node->input_size() >= 2) {
+  // reshape2 的 shape const (input[1])
+  // 注意：原始 output_node 就是 reshape2
+  if (output_node->input_size() >= 2) {
     std::string shape2_name = GetProducerName(output_node->input(1));
     if (CountConsumers(*graph, shape2_name) <= 1) {
-        nodes_to_remove.insert(shape2_name);
+      nodes_to_remove.insert(shape2_name);
     }
-    }
+  }
 
-    // 4. 从后往前删除节点（避免索引移位问题）
-    // 先收集索引，然后按降序删除
-    std::vector<int> indices_to_remove;
-    for (int i = 0; i < graph->node_size(); ++i) {
+  // 4. 从后往前删除节点（避免索引移位问题）
+  // 先收集索引，然后按降序删除
+  std::vector<int> indices_to_remove;
+  for (int i = 0; i < graph->node_size(); ++i) {
     if (nodes_to_remove.count(graph->node(i).name()) > 0) {
-        indices_to_remove.push_back(i);
+      indices_to_remove.push_back(i);
     }
-    }
-    std::sort(indices_to_remove.rbegin(), indices_to_remove.rend());
+  }
+  std::sort(indices_to_remove.rbegin(), indices_to_remove.rend());
 
-    for (int idx : indices_to_remove) {
+  for (int idx : indices_to_remove) {
     VLOG(2) << "MusaTokenMixer: Removing node: " << graph->node(idx).name();
     FusionGraphUtils::RemoveNode(graph, idx);
-    }
-
+  }
 
   return Status::OK();
 }

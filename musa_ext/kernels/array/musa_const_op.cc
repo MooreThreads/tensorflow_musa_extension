@@ -1,16 +1,18 @@
+#include "../utils_op.h"
 #include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/platform/mutex.h"
 #include "tensorflow/core/public/version.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
 
 class MusaConstOp : public OpKernel {
  public:
-  explicit MusaConstOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
+  explicit MusaConstOp(OpKernelConstruction* ctx)
+      : OpKernel(ctx), initialized_(false) {
     const TensorProto* proto = nullptr;
     OP_REQUIRES_OK(ctx, ctx->GetAttr("value", &proto));
     OP_REQUIRES(ctx, cpu_tensor_.FromProto(*proto),
@@ -18,60 +20,54 @@ class MusaConstOp : public OpKernel {
     OP_REQUIRES(
         ctx, cpu_tensor_.dtype() == ctx->output_type(0),
         errors::InvalidArgument("Type mismatch between value and output"));
-
-    // Delayed initialization flag
-    gpu_buffer_initialized_ = false;
-    gpu_buffer_ = nullptr;
   }
 
-  // Const op is inexpensive (simple D2D memcpy after first initialization)
-  // Marking as inexpensive enables TensorFlow executor inline scheduling
   bool IsExpensive() override { return false; }
 
-  ~MusaConstOp() override {
-    if (gpu_buffer_ != nullptr) {
-      musaFree(gpu_buffer_);
-    }
-  }
-
   void Compute(OpKernelContext* ctx) override {
-    Tensor* output = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, cpu_tensor_.shape(), &output));
-    if (output->NumElements() == 0) return;
-
-    auto& handle = GetHandleByCtx(ctx);
-    void* dst_ptr = const_cast<char*>(output->tensor_data().data());
-    size_t total_bytes = cpu_tensor_.TotalBytes();
-
-    // Delayed initialization: allocate GPU memory and copy on the first call
-    if (!gpu_buffer_initialized_) {
-      musaError_t err = musaMalloc(&gpu_buffer_, total_bytes);
-      OP_REQUIRES(ctx, err == musaSuccess,
-                  errors::Internal("MUSA Const malloc failed: ",
-                                   musaGetErrorString(err)));
-
-      err = musaMemcpy(gpu_buffer_, cpu_tensor_.tensor_data().data(),
-                       total_bytes, musaMemcpyHostToDevice);
-      OP_REQUIRES(ctx, err == musaSuccess,
-                  errors::Internal("MUSA Const H2D Memcpy failed: ",
-                                   musaGetErrorString(err)));
-
-      gpu_buffer_initialized_ = true;
+    if (cpu_tensor_.NumElements() == 0) {
+      Tensor* output = nullptr;
+      OP_REQUIRES_OK(ctx,
+                     ctx->allocate_output(0, cpu_tensor_.shape(), &output));
+      return;
     }
 
-    // 使用 D2D 拷贝，性能优于 H2D
-    musaError_t err =
-        musaMemcpyAsync(dst_ptr, gpu_buffer_, total_bytes, musaMemcpyDeviceToDevice,
-                        (musaStream_t)handle.GetStream());
-    OP_REQUIRES(ctx, err == musaSuccess,
-                errors::Internal("MUSA Const D2D Memcpy failed: ",
-                                 musaGetErrorString(err)));
+    // Lazy Initialization
+    {
+      mutex_lock lock(mu_);
+      if (!initialized_) {
+        AllocatorAttributes attr;
+        attr.set_on_host(false);
+        OP_REQUIRES_OK(
+            ctx, ctx->allocate_temp(cpu_tensor_.dtype(), cpu_tensor_.shape(),
+                                    &gpu_tensor_, attr));
+
+        auto& handle = GetHandleByCtx(ctx);
+        musaStream_t stream =
+            reinterpret_cast<musaStream_t>(handle.GetStream());
+        size_t total_bytes = cpu_tensor_.TotalBytes();
+
+        // only perform H2D copy once during the first execution
+        musaError_t err =
+            musaMemcpyAsync(const_cast<char*>(gpu_tensor_.tensor_data().data()),
+                            cpu_tensor_.tensor_data().data(), total_bytes,
+                            musaMemcpyHostToDevice, stream);
+
+        OP_REQUIRES(ctx, err == musaSuccess,
+                    errors::Internal("MUSA Const H2D Memcpy failed: ",
+                                     musaGetErrorString(err)));
+        initialized_ = true;
+      }
+    }
+
+    ctx->set_output(0, gpu_tensor_);
   }
 
  private:
   Tensor cpu_tensor_;
-  void* gpu_buffer_;
-  bool gpu_buffer_initialized_;
+  Tensor gpu_tensor_;
+  bool initialized_;
+  mutex mu_;
 };
 
 #define REGISTER_MUSA_CONST(type)                                       \

@@ -1,5 +1,5 @@
-#include "../utils_op.h"
 #include "../../utils/musa_tensor_list_utils.h"
+#include "../utils_op.h"
 #include "tensorflow/core/kernels/tensor_list.h"
 
 namespace tensorflow {

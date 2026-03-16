@@ -21,6 +21,10 @@ from musa_test_utils import MUSATestCase
 class ReverseV2OpTest(MUSATestCase):
   """Tests for MUSA ReverseV2 operator."""
 
+  @staticmethod
+  def _reverse_v2_op(tensor, axis):
+    return tf.raw_ops.ReverseV2(tensor=tensor, axis=axis)
+
   def _test_reverse_v2(self, shape, axis_values, axis_dtype, data_dtype):
     np_dtype = np.float32 if data_dtype == tf.bfloat16 else data_dtype.as_numpy_dtype
     x_np = np.random.uniform(-3.0, 3.0, size=shape).astype(np_dtype)
@@ -30,7 +34,7 @@ class ReverseV2OpTest(MUSATestCase):
     rtol = 1e-2 if data_dtype in [tf.float16, tf.bfloat16] else 1e-5
     atol = 1e-2 if data_dtype in [tf.float16, tf.bfloat16] else 1e-8
     self._compare_cpu_musa_results(
-        tf.raw_ops.ReverseV2, [x, axis], dtype=data_dtype, rtol=rtol, atol=atol
+        self._reverse_v2_op, [x, axis], dtype=data_dtype, rtol=rtol, atol=atol
     )
 
   def testReverseV2MultiAxis(self):
@@ -42,7 +46,7 @@ class ReverseV2OpTest(MUSATestCase):
         x = tf.constant(x_np, dtype=data_dtype)
         axis = tf.constant([3, 4], dtype=tf.int32)
         self._compare_cpu_musa_results(
-            tf.raw_ops.ReverseV2, [x, axis], dtype=data_dtype, rtol=0.0, atol=0.0
+            self._reverse_v2_op, [x, axis], dtype=data_dtype, rtol=0.0, atol=0.0
         )
       else:
         self._test_reverse_v2(shape, [3, 4], tf.int32, data_dtype)
@@ -53,13 +57,17 @@ class ReverseV2OpTest(MUSATestCase):
     for axis_dtype in [tf.int32, tf.int64]:
       self._test_reverse_v2(shape, [-1, -3], axis_dtype, tf.float32)
 
+  def testReverseV2SingleAxis(self):
+    """Test reverse on a single positive axis."""
+    self._test_reverse_v2([3, 4, 5], [1], tf.int32, tf.float32)
+
   def testReverseV2EmptyAxis(self):
     """Test empty axis (should be identity)."""
     x_np = np.random.uniform(-1.0, 1.0, size=[8, 9]).astype(np.float32)
     x = tf.constant(x_np, dtype=tf.float32)
     axis = tf.constant([], dtype=tf.int64)
     self._compare_cpu_musa_results(
-        tf.raw_ops.ReverseV2, [x, axis], dtype=tf.float32, rtol=1e-5, atol=1e-8
+        self._reverse_v2_op, [x, axis], dtype=tf.float32, rtol=1e-5, atol=1e-8
     )
 
   def testReverseV2DuplicateAxisRaises(self):
@@ -86,7 +94,15 @@ class ReverseV2OpTest(MUSATestCase):
     x = tf.constant(3.25, dtype=tf.float32)
     axis = tf.constant([], dtype=tf.int32)
     self._compare_cpu_musa_results(
-        tf.raw_ops.ReverseV2, [x, axis], dtype=tf.float32, rtol=1e-5, atol=1e-8
+        self._reverse_v2_op, [x, axis], dtype=tf.float32, rtol=1e-5, atol=1e-8
+    )
+
+  def testReverseV2EmptyTensor(self):
+    """Test empty tensor fast path with non-empty axis."""
+    x = tf.constant(np.empty([2, 0, 4], dtype=np.float32), dtype=tf.float32)
+    axis = tf.constant([1], dtype=tf.int32)
+    self._compare_cpu_musa_results(
+        self._reverse_v2_op, [x, axis], dtype=tf.float32, rtol=1e-5, atol=1e-8
     )
 
 

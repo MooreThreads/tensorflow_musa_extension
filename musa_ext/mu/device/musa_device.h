@@ -6,7 +6,11 @@
 #include <mudnn.h>
 #include <musa_runtime.h>
 
+#include <atomic>
 #include <memory>
+#include <mutex>
+#include <queue>
+#include <thread>
 
 #include "mudnn_base.h"
 #include "musa_allocator.h"
@@ -18,9 +22,14 @@
 namespace tensorflow {
 namespace musa {
 
+struct AsyncCopyPayload {
+  StatusCallback done;
+  musaEvent_t sync_event;
+};
+
 class MusaDeviceContext : public DeviceContext {
  public:
-  explicit MusaDeviceContext(musaStream_t stream,
+  explicit MusaDeviceContext(musaStream_t stream, musaStream_t h2d_stream,
                              ::stream_executor::StreamExecutor* executor);
   ~MusaDeviceContext() override;
 
@@ -38,14 +47,21 @@ class MusaDeviceContext : public DeviceContext {
 
  private:
   musaStream_t stream_handle_;
+  musaStream_t h2d_stream_;
   ::stream_executor::internal::StreamInterface* implementation_;
   ::stream_executor::Stream* official_stream_;
+
+  mutable std::mutex cleanup_mu_;
+  mutable std::queue<AsyncCopyPayload*> cleanup_queue_;
+  mutable std::atomic<bool> stop_polling_{false};
+  mutable std::thread polling_thread_;
+  void PollingLoop() const;
 };
 
 class MusaDevice : public Device {
  public:
   MusaDevice(Env* env, const DeviceAttributes& attributes, int device_id,
-             ::stream_executor::StreamExecutor* executor);  // <--- 新增这个参数
+             ::stream_executor::StreamExecutor* executor);
   ~MusaDevice() override;
 
   const GpuDeviceInfo* tensorflow_gpu_device_info() const override {
@@ -69,6 +85,7 @@ class MusaDevice : public Device {
  private:
   int device_id_;
   musaStream_t stream_;
+  musaStream_t h2d_stream_;
   MusaDeviceContext* device_context_;
   Allocator* musa_allocator_;
   GpuDeviceInfo gpu_device_info_;
