@@ -87,7 +87,10 @@ jobs:
       # ⭐ 修改点 1：只允许内部 PR 才执行评论
       # =====================================================
       - name: Comment PR with result
-        if: always() && github.event.pull_request.head.repo.fork == false
+        if: |
+          always() &&
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/github-script@v6
         with:
           script: |
