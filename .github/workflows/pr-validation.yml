@@ -17,7 +17,7 @@ jobs:
     # 🌟 优化点 1：提取全局环境变量，修改时只需改一处
     permissions:
       issues: write
-      pull-request: write
+      pull-requests: write
       contents: read
     env:
       # 加入 run_attempt 防止网页端手动点重跑时目录冲突
@@ -81,6 +81,13 @@ jobs:
         uses: actions/github-script@v6
         with:
           script: |
+            // 修复 Bug：如果是 workflow_dispatch 手动触发的，没有 PR 编号，直接退出
+            const issueNumber = context.issue.number || (context.payload.pull_request && context.payload.pull_request.number);
+            if (!issueNumber) {
+              console.log('No PR context found (likely workflow_dispatch). Skipping PR comment and labels.');
+              return;
+            }
+
             const formatStatus = '${{ steps.run-format.outputs.status }}';
             const buildStatus = '${{ steps.run-build.outputs.status }}';
             const testStatus = '${{ steps.run-integration.outputs.status }}';
