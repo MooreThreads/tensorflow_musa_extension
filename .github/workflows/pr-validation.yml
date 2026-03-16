@@ -1,0 +1,98 @@
+name: PR Validation (MUSA GPU)
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+    types: [ opened, synchronize, reopened ]
+ 
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  validate:
+    runs-on: [self-hosted, musa-gpu]
+    # 🌟 优化点 1：提取全局环境变量，修改时只需改一处
+    env:
+      # 加入 run_attempt 防止网页端手动点重跑时目录冲突
+      PR_PATH: /home/runner/pr_test_${{ github.run_id }}_${{ github.run_attempt }}
+      CONTAINER: Runner
+ 
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+ 
+      - name: Copy code into running container
+        run: |
+          docker exec $CONTAINER mkdir -p $PR_PATH
+          docker cp . $CONTAINER:$PR_PATH
+          echo "✅ Code copied to container path: $PR_PATH"
+ 
+      # 🌟 新增：clang-format 代码格式规范检查
+      - name: Check code formatting (clang-format)
+        id: run-format
+        run: |
+          # 查找 C/C++ 相关文件，并执行干跑检查（如果有格式不规范的代码，直接抛出错误）
+          if docker exec $CONTAINER bash -c "cd $PR_PATH && find . -regex '.*\.\(cpp\|hpp\|c\|h\|cu\)' | xargs clang-format --Werror --dry-run"; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      - name: Run build script
+        id: run-build
+        if: steps.run-format.outputs.status == 'success'
+        run: |
+          if docker exec $CONTAINER bash -c "cd $PR_PATH && ./build.sh"; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+ 
+      - name: Run integration tests
+        id: run-integration
+        if: steps.run-build.outputs.status == 'success'
+        run: |
+          if docker exec $CONTAINER bash -c "cd $PR_PATH && python test_runner.py"; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      # 🌟 优化点 2：无论成功失败，确保清理垃圾
+      - name: Clean up container workspace
+        if: always() 
+        run: docker exec $CONTAINER rm -rf $PR_PATH
+ 
+      # 🌟 优化点 3：整合状态判断逻辑
+      - name: Comment PR with result
+        if: always() # 必须 always，然后在脚本内部判断是成功还是失败
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const formatStatus = '${{ steps.run-format.outputs.status }}';
+            const buildStatus = '${{ steps.run-build.outputs.status }}';
+            const testStatus = '${{ steps.run-integration.outputs.status }}';
+            
+            const isSuccess = formatStatus === 'success' && buildStatus === 'success' && testStatus === 'success';
+            const { owner, repo } = context.repo;
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`;
+            
+            if (isSuccess) {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number, owner, repo,
+                body: `✅ **CI Passed**\n\n- Format check: passed\n- Build: passed\n- Tests: passed\n\n[View logs](${runUrl})`
+              });
+              await github.rest.issues.addLabels({ issue_number: context.issue.number, owner, repo, labels: ['ci-passed'] });
+            } else {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number, owner, repo,
+                body: `❌ **CI Failed**\n\n- Format check: ${formatStatus}\n- Build: ${buildStatus}\n- Tests: ${testStatus}\n\n[View detailed logs to fix errors](${runUrl})`
+              });
+              await github.rest.issues.addLabels({ issue_number: context.issue.number, owner, repo, labels: ['ci-failed'] });
+            }
