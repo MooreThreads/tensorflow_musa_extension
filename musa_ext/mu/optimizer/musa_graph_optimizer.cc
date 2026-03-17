@@ -13,6 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <algorithm>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -240,6 +241,54 @@ bool GraphHasMusaNodes(const GraphDef& graph) {
   return false;
 }
 
+bool IsFusionResidualConst(const NodeDef& node) {
+  if (node.op() != "Const") {
+    return false;
+  }
+  return node.name().find("/Gelu/") != string::npos ||
+         node.name().find("/LayerNorm/") != string::npos;
+}
+
+int RemoveIsolatedFusionConstNodes(GraphDef* graph) {
+  // Fusion may leave behind folded scalar constants that no longer feed any
+  // live node. Prune them here so the dumped graph reflects the final shape
+  // of the executable graph more closely.
+  int removed_count = 0;
+
+  while (true) {
+    std::unordered_set<string> referenced_nodes;
+    referenced_nodes.reserve(graph->node_size());
+    for (const auto& node : graph->node()) {
+      for (int i = 0; i < node.input_size(); ++i) {
+        referenced_nodes.insert(
+            ::tensorflow::grappler::musa_fusion::FusionGraphUtils::
+                GetProducerNodeName(node.input(i)));
+      }
+    }
+
+    std::vector<int> isolated_const_indices;
+    for (int i = 0; i < graph->node_size(); ++i) {
+      const auto& node = graph->node(i);
+      if (IsFusionResidualConst(node) &&
+          referenced_nodes.find(node.name()) == referenced_nodes.end()) {
+        isolated_const_indices.push_back(i);
+      }
+    }
+
+    if (isolated_const_indices.empty()) {
+      return removed_count;
+    }
+
+    std::sort(isolated_const_indices.begin(), isolated_const_indices.end(),
+              std::greater<int>());
+    for (int node_idx : isolated_const_indices) {
+      ::tensorflow::grappler::musa_fusion::FusionGraphUtils::RemoveNode(graph,
+                                                                        node_idx);
+      removed_count++;
+    }
+  }
+}
+
 }  // namespace
 
 // Unified MUSA Graph Optimizer
@@ -318,6 +367,13 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
     if (configs_.remapping != TriState::kOff) {
       dumper.DumpBeforePass(*optimized_graph, "fusion");
       TF_RETURN_IF_ERROR(OptimizeFusion(optimized_graph));
+      const int removed_isolated_consts =
+          RemoveIsolatedFusionConstNodes(optimized_graph);
+      if (removed_isolated_consts > 0) {
+        VLOG(1) << "MusaGraphOptimizer: Removed "
+                << removed_isolated_consts
+                << " isolated fusion Const node(s) after fusion";
+      }
       dumper.DumpAfterPass(*optimized_graph, "fusion");
     }
 

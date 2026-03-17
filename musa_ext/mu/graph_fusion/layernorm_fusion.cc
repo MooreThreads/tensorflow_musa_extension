@@ -16,6 +16,7 @@ limitations under the License.
 #include "mu/graph_fusion/layernorm_fusion.h"
 
 #include <cmath>
+#include <unordered_set>
 
 #include "tensorflow/core/framework/attr_value.pb.h"
 #include "tensorflow/core/platform/logging.h"
@@ -32,6 +33,13 @@ constexpr float kDefaultEpsilon = 1e-6f;
 // Helper to check if node has specific op type
 bool IsOp(const NodeDef& node, const std::string& op_type) {
   return node.op() == op_type;
+}
+
+bool HasOriginalSuffix(const std::string& node_name) {
+  static const std::string kOriginalSuffix = "_original";
+  return node_name.size() >= kOriginalSuffix.size() &&
+         node_name.compare(node_name.size() - kOriginalSuffix.size(),
+                           kOriginalSuffix.size(), kOriginalSuffix) == 0;
 }
 
 // Helper to find node's input producer
@@ -77,6 +85,9 @@ FusionMatchResult MusaLayerNormFusion::Match(const GraphDef& graph, int start_no
   }
   
   const NodeDef& start_node = graph.node(start_node_idx);
+  if (HasOriginalSuffix(start_node.name())) {
+    return FusionMatchResult{};
+  }
   
   // Strategy: Look for AddV2/Add node and trace backwards
   if (IsOp(start_node, "AddV2") || IsOp(start_node, "Add")) {
@@ -229,6 +240,8 @@ Status MusaLayerNormFusion::Apply(GraphDef* graph, const FusionMatchResult& matc
   }
   
   const NodeDef* output_node = output_it->second;
+  const std::string original_name = output_node->name();
+  const std::string original_output_name = original_name + "_original";
   
   // Get gamma and beta nodes if available
   const NodeDef* gamma_node = nullptr;
@@ -256,107 +269,111 @@ Status MusaLayerNormFusion::Apply(GraphDef* graph, const FusionMatchResult& matc
   if (epsilon_it != match_result.captured_attrs.end()) {
     epsilon = std::stof(epsilon_it->second);
   }
-  
-  // Create new MusaLayerNorm node
-  std::string fused_node_name = output_node->name() + "_fused_layernorm";
-  
-  // Check if this output node has already been fused (avoid duplicates)
-  // Extract the base name (remove trailing "_original" suffix if present)
-  std::string base_name = output_node->name();
-  if (base_name.size() > 9 && base_name.substr(base_name.size() - 9) == "_original") {
-    base_name = base_name.substr(0, base_name.size() - 9);
+
+  std::vector<std::string> removable_node_names;
+  removable_node_names.reserve(match_result.matched_nodes.size());
+  const std::string input_name =
+      (input_it != match_result.captured_nodes.end() && input_it->second)
+          ? input_it->second->name()
+          : "";
+  for (const NodeDef* matched_node : match_result.matched_nodes) {
+    if (!matched_node) continue;
+    if (!input_name.empty() && matched_node->name() == input_name) {
+      continue;
+    }
+    if (matched_node->name() == original_name) {
+      removable_node_names.push_back(original_output_name);
+    } else {
+      removable_node_names.push_back(matched_node->name());
+    }
   }
-  
+
   // Check if there's already a MusaLayerNorm node with the base name
   for (const auto& node : graph->node()) {
-    if (node.name() == base_name && node.op() == "MusaLayerNorm") {
-      VLOG(1) << "MusaLayerNorm: Output node " << base_name 
+    if (node.name() == original_name && node.op() == "MusaLayerNorm") {
+      VLOG(1) << "MusaLayerNorm: Output node " << original_name
               << " is already a fused node, skipping";
       return Status::OK();
     }
   }
-  
-  VLOG(1) << "MusaLayerNorm: Creating fused node: " << fused_node_name;
-  
-  NodeDef* fused_node = graph->add_node();
-  fused_node->set_name(fused_node_name);
-  fused_node->set_op("MusaLayerNorm");
-  fused_node->set_device(output_node->device());
-  
-  // Set inputs: x, gamma, beta
-  if (input_it != match_result.captured_nodes.end() && input_it->second) {
-    fused_node->add_input(input_it->second->name());
-  } else {
+
+  int output_node_idx = -1;
+  for (int i = 0; i < graph->node_size(); ++i) {
+    if (graph->node(i).name() == original_name) {
+      output_node_idx = i;
+      break;
+    }
+  }
+  if (output_node_idx < 0) {
+    return Status(error::INVALID_ARGUMENT,
+                  "Failed to find output node in graph: " + original_name);
+  }
+
+  NodeDef* original_output_node = graph->mutable_node(output_node_idx);
+  const std::string output_device = original_output_node->device();
+  AttrValue output_dtype;
+  const auto dtype_it = original_output_node->attr().find("T");
+  const bool has_output_dtype =
+      dtype_it != original_output_node->attr().end();
+  if (has_output_dtype) {
+    output_dtype = dtype_it->second;
+  }
+
+  std::string fused_input_name = input_name;
+  if (fused_input_name.empty()) {
     auto mean_it = match_result.captured_nodes.find("mean");
-    if (mean_it != match_result.captured_nodes.end() && mean_it->second && 
+    if (mean_it != match_result.captured_nodes.end() && mean_it->second &&
         mean_it->second->input_size() > 0) {
-      fused_node->add_input(mean_it->second->input(0));
+      fused_input_name = mean_it->second->input(0);
     } else {
       return Status(error::INVALID_ARGUMENT, "Cannot determine LayerNorm input");
     }
   }
+  const std::string gamma_name = gamma_node ? gamma_node->name() : fused_input_name;
+  const std::string beta_name = beta_node ? beta_node->name() : fused_input_name;
+  original_output_node->set_name(original_output_name);
+
+  NodeDef* fused_node = graph->add_node();
+  fused_node->set_name(original_name);
+  fused_node->set_op("MusaLayerNorm");
+  fused_node->set_device(output_device);
+  
+  // Set inputs: x, gamma, beta
+  fused_node->add_input(fused_input_name);
   
   // Gamma input
-  if (gamma_node) {
-    fused_node->add_input(gamma_node->name());
-  } else {
-    fused_node->add_input(fused_node->input(0));
-  }
+  fused_node->add_input(gamma_name);
   
   // Beta input
-  if (beta_node) {
-    fused_node->add_input(beta_node->name());
-  } else {
-    fused_node->add_input(fused_node->input(0));
-  }
+  fused_node->add_input(beta_name);
   
   // Set attributes
   auto* attr = fused_node->mutable_attr();
   
-  auto dtype_it = output_node->attr().find("T");
-  if (dtype_it != output_node->attr().end()) {
-    (*attr)["T"] = dtype_it->second;
+  if (has_output_dtype) {
+    (*attr)["T"] = output_dtype;
   } else {
     (*attr)["T"].set_type(DT_FLOAT);
   }
   
   (*attr)["epsilon"].set_f(epsilon);
-  
-  // Redirect all inputs from the output node to the fused node
-  for (int i = 0; i < graph->node_size(); ++i) {
-    NodeDef* node = graph->mutable_node(i);
-    if (node->name() == fused_node_name) continue;
-    
-    for (int j = 0; j < node->input_size(); ++j) {
-      if (node->input(j) == output_node->name()) {
-        node->set_input(j, fused_node_name);
-      } else if (node->input(j).find(output_node->name() + ":") == 0) {
-        std::string suffix = node->input(j).substr(output_node->name().length());
-        node->set_input(j, fused_node_name + suffix);
-      }
-    }
+
+  std::unordered_set<std::string> protected_node_names = {original_name};
+  if (!input_name.empty()) {
+    protected_node_names.insert(input_name);
   }
-  
-  // Rename the original output node and give the fused node the original name
-  // This ensures that direct fetches of the output tensor get the fused result
-  std::string original_name = output_node->name();
-  const_cast<NodeDef*>(output_node)->set_name(original_name + "_original");
-  fused_node->set_name(original_name);
-  
-  // Also update any references to the renamed original node
-  for (int i = 0; i < graph->node_size(); ++i) {
-    NodeDef* node = graph->mutable_node(i);
-    if (node->name() == original_name) continue;  // Skip the fused node (now has original name)
-    
-    for (int j = 0; j < node->input_size(); ++j) {
-      if (node->input(j) == original_name + "_original") {
-        // These should point to the fused node (which now has the original name)
-        node->set_input(j, original_name);
-      }
-    }
+  if (!gamma_name.empty()) {
+    protected_node_names.insert(gamma_name);
   }
-  
-  VLOG(1) << "MusaLayerNorm: Renamed fused node to " << original_name;
+  if (!beta_name.empty()) {
+    protected_node_names.insert(beta_name);
+  }
+
+  const int removed_count = FusionGraphUtils::RemoveNodesIfUnused(
+      graph, removable_node_names, protected_node_names);
+
+  VLOG(1) << "MusaLayerNorm: Replaced '" << original_name
+          << "' with MusaLayerNorm (removed_nodes=" << removed_count << ")";
   
   return Status::OK();
 }
