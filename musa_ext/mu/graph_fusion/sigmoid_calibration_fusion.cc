@@ -169,6 +169,11 @@ Status MusaSigmoidCalibrationFusion::Apply(GraphDef* graph, const FusionMatchRes
   }
 
   const NodeDef* real_div_node = match_result.matched_nodes[0];
+  const NodeDef* add_node = match_result.matched_nodes[1];
+  const NodeDef* mul_node = match_result.matched_nodes[2];
+  const NodeDef* sub_node = match_result.matched_nodes[3];
+  const NodeDef* sigmoid_node = match_result.matched_nodes[4];
+  
   const NodeDef* scale_const_node = match_result.captured_nodes.at("scale");
   const NodeDef* input_node = match_result.captured_nodes.at("input");
 
@@ -178,28 +183,38 @@ Status MusaSigmoidCalibrationFusion::Apply(GraphDef* graph, const FusionMatchRes
     dtype = it->second.type();
   }
 
-  // Create MusaSigmoidCalibrationFusion node
-  NodeDef* sigmoid_calibration_node = graph->add_node();
-  sigmoid_calibration_node->set_name(real_div_node->name() + "_fused_sigmoid_calibration");
-  sigmoid_calibration_node->set_op("MusaSigmoidCalibration");
-  sigmoid_calibration_node->set_device(real_div_node->device());
-  sigmoid_calibration_node->add_input(sigmoid_node_input_name(match_result));
-  sigmoid_calibration_node->add_input(scale_const_node->name());
-  (*sigmoid_calibration_node->mutable_attr())["T"].set_type(dtype);
+  // 1. Rename existing output node (the RealDiv)
+  std::string original_name = real_div_node->name();
+  const_cast<NodeDef*>(real_div_node)->set_name(original_name + "_original");
 
-  // Update consumers of RealDiv to use MusaSigmoidCalibration instead
-  std::string old_name = real_div_node->name();
-  std::string new_name = sigmoid_calibration_node->name();
+  // 2. Create MusaSigmoidCalibration node with the original name
+  NodeDef* fused_node = graph->add_node();
+  fused_node->set_name(original_name);
+  fused_node->set_op("MusaSigmoidCalibration");
+  fused_node->set_device(real_div_node->device());
+  fused_node->add_input(sigmoid_node_input_name(match_result));
+  fused_node->add_input(scale_const_node->name());
+  (*fused_node->mutable_attr())["T"].set_type(dtype);
 
+  // 3. Mark nodes for removal
+  std::unordered_set<std::string> nodes_to_remove;
+  nodes_to_remove.insert(original_name + "_original");
+  nodes_to_remove.insert(add_node->name());
+  nodes_to_remove.insert(mul_node->name());
+  nodes_to_remove.insert(sub_node->name());
+  nodes_to_remove.insert(sigmoid_node->name());
+
+  // 4. Remove nodes from graph in reverse order
+  std::vector<int> indices_to_remove;
   for (int i = 0; i < graph->node_size(); ++i) {
-    NodeDef* node = graph->mutable_node(i);
-    for (int j = 0; j < node->input_size(); ++j) {
-      if (node->input(j) == old_name) {
-        node->set_input(j, new_name);
-      } else if (node->input(j) == old_name + ":0") {
-        node->set_input(j, new_name + ":0");
-      }
+    if (nodes_to_remove.count(graph->node(i).name()) > 0) {
+      indices_to_remove.push_back(i);
     }
+  }
+  std::sort(indices_to_remove.rbegin(), indices_to_remove.rend());
+
+  for (int idx : indices_to_remove) {
+    FusionGraphUtils::RemoveNode(graph, idx);
   }
 
   return Status::OK();
@@ -212,6 +227,12 @@ std::string MusaSigmoidCalibrationFusion::sigmoid_node_input_name(const FusionMa
   }
   return "";
 }
+
+// 注册融合模式
+REGISTER_FUSION_PATTERN(MusaSigmoidCalibrationFusion);
+
+// 注册 kernel 可用性
+REGISTER_FUSION_KERNEL(MusaSigmoidCalibrationFusion, []() { return true; });
 
 }  // namespace musa_fusion
 }  // namespace grappler
