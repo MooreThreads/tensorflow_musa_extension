@@ -22,7 +22,6 @@ jobs:
     runs-on: [self-hosted, musa-gpu]
 
     env:
-      CONTAINER: Runner
       COMMIT_ID: ${{ github.event.pull_request.head.sha || github.sha }}
       LOG_BASE: /workspace/ci_logs
       WORKSPACE: /workspace/action-runner/_work/${{ github.event.repository.name }}/${{ github.event.repository.name }}
@@ -36,30 +35,6 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ env.COMMIT_ID }}
-
-      # - name: Checkout code
-      #   run: |
-      #     echo "Updating existing repository..."
-      #     # 确保目录存在且是个 git 仓库
-      #     mkdir -p . && git init        
-      #     # 添加远程仓库（如果不存在）
-      #     git remote add origin https://github.com/${{ github.repository }}.git || true         
-      #     # 只抓取当前 PR 和目标分支，不拉取其他无关分支
-      #     git fetch origin ${{ env.COMMIT_ID }} --depth=50
-      #     git fetch origin ${{ github.base_ref || 'main' }} --depth=50
-      #     # 强制重置到目标 Commit
-      #     git checkout -f ${{ env.COMMIT_ID }}
-      #     git clean -xfd # 清理未追踪的垃圾文件
-
-      # ==============================
-      # 检查容器
-      # ==============================
-      - name: Check container status
-        run: |
-          docker ps --format '{{.Names}}' | grep -w "$CONTAINER" || {
-            echo "❌ Container $CONTAINER not running"
-            exit 1
-          }
 
       # ==============================
       # 创建日志目录
@@ -79,7 +54,8 @@ jobs:
 
           LOG_DIR="$LOG_BASE/$TYPE/$ID"
 
-          docker exec "$CONTAINER" mkdir -p "$LOG_DIR"
+          # 因为已经是 runner 用户，直接原生执行 mkdir 即可！
+          mkdir -p "$LOG_DIR"
 
           echo "LOG_DIR=$LOG_DIR" >> $GITHUB_ENV
           echo "TYPE=$TYPE" >> $GITHUB_ENV
@@ -106,12 +82,12 @@ jobs:
       - name: Check code formatting
         id: run-format
         run: |
-          set +e # 关闭遇到错误立即退出的默认行为
+          set +e 
 
           exit_code=0
-          docker exec $CONTAINER bash -c "
+          # 使用 bash -l -c 模拟登录，自动激活 Conda 环境
+          bash -l -c "
             set -o pipefail
-            source /root/miniconda/etc/profile.d/conda.sh && conda activate runner &&
             cd $WORKSPACE &&
             LOG_FILE='$LOG_DIR/format.log' &&
             find . \( -path ./build -o -path ./.git \) -prune -o \
@@ -136,8 +112,7 @@ jobs:
           set +e 
 
           exit_code=0
-          docker exec $CONTAINER bash -c "
-            source /root/miniconda/etc/profile.d/conda.sh && conda activate runner &&
+          bash -l -c "
             cd $WORKSPACE &&
             LOG_FILE='$LOG_DIR/build.log' &&
             rm -rf ./build &&
@@ -161,8 +136,7 @@ jobs:
           set +e
 
           exit_code=0
-          docker exec $CONTAINER bash -c "
-            source /root/miniconda/etc/profile.d/conda.sh && conda activate runner &&
+          bash -l -c "
             cd $WORKSPACE/test &&
             LOG_FILE='$LOG_DIR/test.log' &&
             timeout 30m python test_runner.py > \$LOG_FILE 2>&1
@@ -182,14 +156,12 @@ jobs:
       - name: Save Summary
         if: always()
         run: |
-          docker exec $CONTAINER bash -c "
-            source /root/miniconda/etc/profile.d/conda.sh && conda activate runner &&
-            SUMMARY='$LOG_DIR/summary.md'
-            echo '# CI Report - $COMMIT_ID' > \$SUMMARY
-            echo '- Format: ${{ steps.run-format.outputs.status || 'skipped' }}' >> \$SUMMARY
-            echo '- Build: ${{ steps.run-build.outputs.status || 'skipped' }}' >> \$SUMMARY
-            echo '- Test: ${{ steps.run-integration.outputs.status || 'skipped' }}' >> \$SUMMARY
-          "
+          # 仅仅写一个 markdown 文件，不需要 Conda 环境，去掉所有包裹，直接写！
+          SUMMARY="$LOG_DIR/summary.md"
+          echo '# CI Report - $COMMIT_ID' > "$SUMMARY"
+          echo "- Format: ${{ steps.run-format.outputs.status || 'skipped' }}" >> "$SUMMARY"
+          echo "- Build: ${{ steps.run-build.outputs.status || 'skipped' }}" >> "$SUMMARY"
+          echo "- Test: ${{ steps.run-integration.outputs.status || 'skipped' }}" >> "$SUMMARY"
 
       # ==============================
       # CI Summary（GitHub UI）
