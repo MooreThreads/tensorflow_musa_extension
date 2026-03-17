@@ -45,11 +45,12 @@ class MusaLinearReluOp : public MusaOpKernel {
     mm_out_shape.AddDim(m);
     mm_out_shape.AddDim(n);
 
-    Tensor* mm_out = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value, mm_out_shape, &mm_out));
-    
-    if (mm_out->NumElements() == 0) {
-      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, mm_out_shape, &mm_out));
+    Tensor mm_out_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(in0.dtype(), mm_out_shape, &mm_out_tensor));
+
+    if (mm_out_tensor.NumElements() == 0) {
+      Tensor* final_output = nullptr;
+      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, mm_out_shape, &final_output));
       return;
     }
 
@@ -57,7 +58,7 @@ class MusaLinearReluOp : public MusaOpKernel {
     handle.SetAllowTF32(tf32_enabled_);
     mTensor mt_a = CreateMTensor(in0);
     mTensor mt_b = CreateMTensor(in1);
-    mTensor mt_mm_out = CreateMTensor(*mm_out);
+    mTensor mt_mm_out = CreateMTensor(mm_out_tensor);
 
     ::musa::dnn::Status status;
 
@@ -80,8 +81,9 @@ class MusaLinearReluOp : public MusaOpKernel {
         int64_t cols = t.dim_size(dims - 1);
         int64_t batch = t.NumElements() / (rows * cols);
         if (dims != 3 || (batch == 1 && out_batch > 1)) {
-           mt.SetNdInfo({batch == 1 && out_batch > 1 ? out_batch : batch, rows, cols}, 
-                        {batch == 1 && out_batch > 1 ? 0 : rows * cols, cols, 1});
+          mt.SetNdInfo(
+              {batch == 1 && out_batch > 1 ? out_batch : batch, rows, cols},
+              {batch == 1 && out_batch > 1 ? 0 : rows * cols, cols, 1});
         }
       };
       ReshapeTo3D(mt_a, in0);
@@ -91,7 +93,8 @@ class MusaLinearReluOp : public MusaOpKernel {
     }
 
     OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
-                errors::Internal("MUSA MatMul/BatchMatMul execution failed in LinearRelu."));
+                errors::Internal(
+                    "MUSA MatMul/BatchMatMul execution failed in LinearRelu."));
 
     // 2. BiasAdd
     Tensor* output = nullptr;
@@ -101,8 +104,9 @@ class MusaLinearReluOp : public MusaOpKernel {
     mTensor mt_out = CreateMTensor(*output);
 
     int channel_dim = mm_out_shape.dims() - 1;
-    OP_REQUIRES(ctx, bias_input.dim_size(0) == mm_out_shape.dim_size(channel_dim),
-                errors::InvalidArgument("Dimension mismatch in BiasAdd of LinearRelu"));
+    OP_REQUIRES(
+        ctx, bias_input.dim_size(0) == mm_out_shape.dim_size(channel_dim),
+        errors::InvalidArgument("Dimension mismatch in BiasAdd of LinearRelu"));
 
     int dims_cnt = mm_out_shape.dims();
     std::vector<int64_t> b_dims(dims_cnt, 1);
@@ -136,5 +140,26 @@ class MusaLinearReluOp : public MusaOpKernel {
   bool tf32_enabled_ = false;  // TF32 acceleration enabled by default
 };
 
+#define REGISTER_MUSA_LINEAR_RELU(TYPE)                                \
+  REGISTER_KERNEL_BUILDER(                                             \
+      Name("MusaLinearRelu").Device("MUSA").TypeConstraint<TYPE>("T"), \
+      MusaLinearReluOp<TYPE>);
+
+REGISTER_MUSA_LINEAR_RELU(float);
+REGISTER_MUSA_LINEAR_RELU(Eigen::half);
+REGISTER_MUSA_LINEAR_RELU(bfloat16);
+
+#undef REGISTER_MUSA_LINEAR_RELU
 }  // namespace musa
+
+REGISTER_OP("MusaLinearRelu")
+    .Input("a: T")
+    .Input("b: T")
+    .Input("bias: T")
+    .Output("product: T")
+    .Attr("T: {float, half, bfloat16}")
+    .Attr("transpose_a: bool = false")
+    .Attr("transpose_b: bool = false")
+    .SetShapeFn(::tensorflow::shape_inference::MatMulShape);
+
 }  // namespace tensorflow

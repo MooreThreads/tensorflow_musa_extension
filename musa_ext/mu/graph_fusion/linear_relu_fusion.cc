@@ -17,34 +17,29 @@ bool IsOp(const NodeDef& node, const std::string& op_type) {
 // Helper to find node's input producer
 const NodeDef* FindProducer(const GraphDef& graph, const std::string& input) {
   if (input.empty()) return nullptr;
-
-  std::string node_name = input;
-  if (node_name[0] == '^') {
-    node_name = node_name.substr(1);
+  
+  std::string producer_name = input;
+  if (input[0] == '^') {
+    producer_name = input.substr(1);
   }
-  size_t colon_pos = node_name.find(':');
+  size_t colon_pos = producer_name.find(':');
   if (colon_pos != std::string::npos) {
-    node_name = node_name.substr(0, colon_pos);
+    producer_name = producer_name.substr(0, colon_pos);
   }
-
-  for (int i = 0; i < graph.node_size(); ++i) {
-    if (graph.node(i).name() == node_name) {
-      return &graph.node(i);
-    }
+  
+  for (const auto& node : graph.node()) {
+    if (node.name() == producer_name) return &node;
   }
   return nullptr;
 }
 
-}  // namespace
+} // namespace
 
-// =============================================================================
-// LinearReluFusion Implementation
-// =============================================================================
 bool LinearReluFusion::IsKernelAvailable() const {
-  if (!kernel_checked_) {
-    kernel_available_ = true;
-    kernel_checked_ = true;
-  }
+  if (kernel_checked_) return kernel_available_;
+  
+  kernel_available_ = FusionKernelRegistry::GetInstance().IsKernelAvailable(GetName());
+  kernel_checked_ = true;
   return kernel_available_;
 }
 
@@ -99,14 +94,6 @@ FusionMatchResult LinearReluFusion::Match(const GraphDef& graph,
   result.captured_nodes["matmul"] = matmul_node;
   if (bias_node) {
     result.captured_nodes["bias"] = bias_node;
-  }
-
-  // capture the inputs of Matmul
-  for (int i = 0; i < matmul_node->input_size(); ++i) {
-    const NodeDef* input_node = FindProducer(graph, matmul_node->input(i));
-    if (input_node) {
-      result.captured_nodes["input_" + std::to_string(i)] = input_node;
-    }
   }
 
   return result;
@@ -166,7 +153,15 @@ Status LinearReluFusion::Apply(GraphDef* graph, const FusionMatchResult& match_r
   }
   // 2. Add Bias input
   if (bias_it != match_result.captured_nodes.end() && bias_it->second) {
-    fused_node->add_input(match_result.captured_nodes.at("bias_add")->input(1));
+    const NodeDef* biasAdd_node = match_result.captured_nodes.at("bias_add");
+    // Assume MatMul is input 0 and Bias is input 1 for BiasAdd
+    // Find which input is the bias
+    for (int i = 0; i < biasAdd_node->input_size(); ++i) {
+      if (biasAdd_node->input(i) != matmul_node->name()) {
+         fused_node->add_input(biasAdd_node->input(i));
+         break;
+      }
+    }
   }
 
   // Copy essential attributes
@@ -193,7 +188,6 @@ Status LinearReluFusion::Apply(GraphDef* graph, const FusionMatchResult& match_r
   }
 
   // Rename the original output node and give the fused node the original name
-  // This ensures that direct fetches of the output tensor get the fused result
   std::string original_name = output_node->name();
   const_cast<NodeDef*>(output_node)->set_name(original_name + "_original");
   fused_node->set_name(original_name);
@@ -201,11 +195,10 @@ Status LinearReluFusion::Apply(GraphDef* graph, const FusionMatchResult& match_r
   // Also update any references to the renamed original node
   for (int i = 0; i < graph->node_size(); ++i) {
     NodeDef* node = graph->mutable_node(i);
-    if (node->name() == original_name) continue;  // Skip the fused node (now has original name)
+    if (node->name() == original_name) continue;
     
     for (int j = 0; j < node->input_size(); ++j) {
       if (node->input(j) == original_name + "_original") {
-        // These should point to the fused node (which now has the original name)
         node->set_input(j, original_name);
       }
     }
@@ -215,6 +208,12 @@ Status LinearReluFusion::Apply(GraphDef* graph, const FusionMatchResult& match_r
   
   return Status::OK();
 }
+
+// Register the pattern
+REGISTER_FUSION_PATTERN(LinearReluFusion);
+
+// Register kernel availability
+REGISTER_FUSION_KERNEL(LinearReluFusion, []() { return true; });
 
 }  // namespace musa_fusion
 }  // namespace grappler
