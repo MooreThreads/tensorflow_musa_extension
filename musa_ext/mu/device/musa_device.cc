@@ -14,8 +14,9 @@ namespace tensorflow {
 namespace musa {
 
 MusaDeviceContext::MusaDeviceContext(
-    musaStream_t stream, ::stream_executor::StreamExecutor* executor)
-    : stream_handle_(stream) {
+    musaStream_t stream, musaStream_t h2d_stream,
+    ::stream_executor::StreamExecutor* executor)
+    : stream_handle_(stream), h2d_stream_(h2d_stream) {
   implementation_ = new ::stream_executor::musa::MusaStream(stream);
 
   official_stream_ = new ::stream_executor::Stream(executor, implementation_);
@@ -141,7 +142,13 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
 MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
                        int device_id,
                        ::stream_executor::StreamExecutor* executor)
-    : Device(env, attributes), device_id_(device_id) {
+    : Device(env, attributes),
+      device_id_(device_id),
+      stream_(nullptr),
+      h2d_stream_(nullptr),
+      device_context_(nullptr),
+      musa_allocator_(nullptr),
+      mublas_handle_(nullptr) {
   // Set device
   musaSetDevice(device_id_);
 
@@ -157,6 +164,16 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
     return;
   }
 
+  musaError_t h2d_err = musaStreamCreate(&h2d_stream_);
+  if (h2d_err != musaSuccess) {
+    LOG(ERROR) << ">>> [MUSA] ERROR: Device " << device_id_
+               << " failed to create h2d stream: "
+               << musaGetErrorString(h2d_err);
+    musaStreamDestroy(stream_);
+    stream_ = nullptr;
+    return;
+  }
+
   // Initialize muDNN handle
   mudnn_handle_.reset(new ::musa::dnn::Handle());
   ::musa::dnn::Status s = mudnn_handle_->SetStream(stream_);
@@ -166,6 +183,8 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
                << static_cast<int>(s);
     mudnn_handle_.reset();
     // Cleanup stream on failure
+    musaStreamDestroy(h2d_stream_);
+    h2d_stream_ = nullptr;
     musaStreamDestroy(stream_);
     stream_ = nullptr;
     device_context_ = nullptr;
@@ -181,6 +200,10 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
                << static_cast<int>(blas_err);
     mublas_handle_ = nullptr;
     // Cleanup on failure
+    if (h2d_stream_) {
+      musaStreamDestroy(h2d_stream_);
+      h2d_stream_ = nullptr;
+    }
     if (stream_) {
       musaStreamDestroy(stream_);
       stream_ = nullptr;
@@ -200,6 +223,10 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
     // Cleanup on failure
     mublasDestroy(mublas_handle_);
     mublas_handle_ = nullptr;
+    if (h2d_stream_) {
+      musaStreamDestroy(h2d_stream_);
+      h2d_stream_ = nullptr;
+    }
     if (stream_) {
       musaStreamDestroy(stream_);
       stream_ = nullptr;
@@ -211,7 +238,7 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
   }
 
   // Initialize Context
-  device_context_ = new MusaDeviceContext(stream_, executor);
+  device_context_ = new MusaDeviceContext(stream_, h2d_stream_, executor);
 
   // Use BFC allocator for better performance with memory pooling
   musa_allocator_ = new MusaBFCAllocator(device_id_);
@@ -235,6 +262,9 @@ MusaDevice::~MusaDevice() {
   }
   if (musa_allocator_) {
     delete musa_allocator_;
+  }
+  if (h2d_stream_) {
+    musaStreamDestroy(h2d_stream_);
   }
   if (stream_) {
     musaStreamDestroy(stream_);
