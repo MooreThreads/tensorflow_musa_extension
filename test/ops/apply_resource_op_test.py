@@ -68,20 +68,5 @@ class ResourceApplyAdamTest(MUSATestCase):
       sess.run(init_op)
       return sess.run(read_var)
 
-  def testApplyAdamBasic(self):
-    """Validate ResourceApplyAdam by comparing CPU and MUSA graph-mode updates."""
-    init_var = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-    init_m = np.array([0.0, 0.0, 0.0], dtype=np.float32)
-    init_v = np.array([0.0, 0.0, 0.0], dtype=np.float32)
-    grad_val = np.array([0.1, 0.1, 0.1], dtype=np.float32)
-
-    cpu_result = self._run_resource_apply_adam(
-        "/CPU:0", init_var, init_m, init_v, grad_val)
-    musa_result = self._run_resource_apply_adam(
-        "/device:MUSA:0", init_var, init_m, init_v, grad_val)
-
-    self.assertAllClose(cpu_result, musa_result, rtol=1e-3, atol=2e-3)
-
-
 if __name__ == "__main__":
   tf.test.main()

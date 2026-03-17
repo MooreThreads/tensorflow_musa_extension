@@ -376,11 +376,20 @@ class CustomTestRunner(unittest.TextTestRunner):
 # ============================================================================
 # Test Discovery and Execution
 # ============================================================================
-def discover_and_run_tests(test_pattern="*_op_test.py", test_dir_name="ops", 
+def discover_and_run_tests(test_pattern="*_op_test.py", test_dir_name="ops",
                           quiet=True, detail_mode=False, log_file=None):
     """Discover and run all test files matching the pattern."""
     test_dir = Path(__file__).resolve().parent / test_dir_name
-    test_files = list(test_dir.glob(test_pattern))
+    if isinstance(test_pattern, (list, tuple)):
+        test_files = []
+        seen = set()
+        for pattern in test_pattern:
+            for test_file in sorted(test_dir.glob(pattern)):
+                if test_file not in seen:
+                    test_files.append(test_file)
+                    seen.add(test_file)
+    else:
+        test_files = list(test_dir.glob(test_pattern))
 
     if not test_files:
         print(f"{red('✗')} No test files found matching pattern: {test_pattern} in {test_dir_name}/")
@@ -495,7 +504,11 @@ Examples:
             sys.exit(1)
     elif args.fusion:
         # Run all fusion tests (use e2e pattern by default, fallback to user pattern)
-        fusion_pattern = "*e2e_test.py" if args.pattern == "*_op_test.py" else args.pattern
+        fusion_pattern = (
+            ["*_fusion_test.py", "*_e2e_test.py"]
+            if args.pattern == "*_op_test.py"
+            else args.pattern
+        )
         discover_and_run_tests(fusion_pattern,
                              test_dir_name="fusion",
                              quiet=quiet_mode,

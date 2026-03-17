@@ -14,23 +14,68 @@ namespace tensorflow {
 namespace musa {
 
 MusaDeviceContext::MusaDeviceContext(
-    musaStream_t stream, ::stream_executor::StreamExecutor* executor)
-    : stream_handle_(stream) {
+    musaStream_t stream, musaStream_t h2d_stream,
+    ::stream_executor::StreamExecutor* executor)
+    : stream_handle_(stream), h2d_stream_(h2d_stream) {
   implementation_ = new ::stream_executor::musa::MusaStream(stream);
-
   official_stream_ = new ::stream_executor::Stream(executor, implementation_);
 
-  // 初始化 Stream
+  // init stream
   official_stream_->Init();
+
+  // launch H2D Async Copy Polling Thread to avoid Eager deadlock
+  polling_thread_ = std::thread(&MusaDeviceContext::PollingLoop, this);
 }
 
 MusaDeviceContext::~MusaDeviceContext() {
+  // close polling thread to prevent new tasks from being added to the queue
+  stop_polling_ = true;
+  if (polling_thread_.joinable()) {
+    polling_thread_.join();
+  }
+  {
+    std::lock_guard<std::mutex> lock(cleanup_mu_);
+    while (!cleanup_queue_.empty()) {
+      auto* payload = cleanup_queue_.front();
+      cleanup_queue_.pop();
+      // force to wait for any remaining tasks to complete,
+      // ensuring safe release of TF memory
+      musaEventSynchronize(payload->sync_event);
+      payload->done(Status::OK());
+      musaEventDestroy(payload->sync_event);
+      delete payload;
+    }
+  }
+
   if (official_stream_) {
-    // Wait for all async operations to complete
     official_stream_->BlockHostUntilDone().IgnoreError();
     delete official_stream_;
-    // Note: official_stream_ owns implementation_, so we don't delete it
-    // separately to avoid double-free
+  }
+}
+
+// host thread polling loop to avoid Eager deadlock
+void MusaDeviceContext::PollingLoop() const {
+  while (!stop_polling_) {
+    AsyncCopyPayload* payload = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(cleanup_mu_);
+      if (!cleanup_queue_.empty()) {
+        payload = cleanup_queue_.front();
+      }
+    }
+
+    if (payload) {
+      if (musaEventQuery(payload->sync_event) == musaSuccess) {
+        payload->done(Status::OK());
+        musaEventDestroy(payload->sync_event);
+        delete payload;
+
+        std::lock_guard<std::mutex> lock(cleanup_mu_);
+        cleanup_queue_.pop();
+        continue;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::microseconds(20));
   }
 }
 
@@ -47,56 +92,30 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
   size_t bytes = cpu_tensor->TotalBytes();
 
   if (bytes > 0) {
-    // Correctness first: TensorFlow expects the callback to run only after the
-    // destination tensor is ready for downstream compute. Since this device
-    // context does not yet have event-driven callback wiring, complete the copy
-    // synchronously before invoking done().
-    mStatus m_stat = MusaMemcpyAsyncH2D(dst, src, bytes, stream_handle_);
-    if (m_stat != mStatus::SUCCESS) {
-      done(errors::Internal("MUSA H2D async copy failed."));
-      return;
-    }
+    // 1. fallback to stream_handle_ for copy submission, as MusaBFCAllocator
+    // lacks cross-stream tracking,  only issuing on compute stream can
+    // naturally ensure no reuse memory is being used by previous ops in the
+    // same stream.
+    MusaMemcpyAsyncH2D(dst, src, bytes, stream_handle_);
 
-    musaError_t sync_err = musaStreamSynchronize(stream_handle_);
-    if (sync_err != musaSuccess) {
-      done(errors::Internal("MUSA H2D stream sync failed: ",
-                            musaGetErrorString(sync_err)));
-      return;
+    // 2. create and record completion event (recorded on stream_handle_)
+    musaEvent_t copy_done_event;
+    musaEventCreate(&copy_done_event);
+    musaEventRecord(copy_done_event, stream_handle_);
+
+    // 3. Hand over the done closure to the asynchronous polling thread
+    // Never call musaStreamSynchronize here to completely free up the
+    // CPU scheduler
+    AsyncCopyPayload* payload =
+        new AsyncCopyPayload{std::move(done), copy_done_event};
+
+    {
+      std::lock_guard<std::mutex> lock(cleanup_mu_);
+      cleanup_queue_.push(payload);
     }
+  } else {
+    done(Status::OK());
   }
-  done(Status::OK());
-}
-
-void MusaDeviceContext::CopyTensorInSameDevice(const Tensor* input_tensor,
-                                               Device* device,
-                                               Tensor* output_tensor,
-                                               StatusCallback done) const {
-  auto* musa_dev = static_cast<MusaDevice*>(device);
-  musaSetDevice(musa_dev->get_device_id());
-
-  const void* src = input_tensor->tensor_data().data();
-  void* dst = const_cast<char*>(output_tensor->tensor_data().data());
-  size_t bytes = input_tensor->TotalBytes();
-  if (bytes > output_tensor->TotalBytes()) {
-    bytes = output_tensor->TotalBytes();
-  }
-
-  if (bytes > 0) {
-    mStatus m_stat = MusaMemcpyAsyncD2D(dst, src, bytes, stream_handle_);
-    if (m_stat != mStatus::SUCCESS) {
-      done(errors::Internal("MUSA D2D async copy failed."));
-      return;
-    }
-
-    musaError_t sync_err = musaStreamSynchronize(stream_handle_);
-    if (sync_err != musaSuccess) {
-      done(errors::Internal("MUSA D2D stream sync failed: ",
-                            musaGetErrorString(sync_err)));
-      return;
-    }
-  }
-
-  done(Status::OK());
 }
 
 void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
@@ -116,18 +135,13 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
   }
 
   if (bytes > 0) {
-    // PERFORMANCE FIX: Always use async copy to enable non-blocking D2H.
-    // The TensorFlow runtime will properly synchronize when the CPU
-    // actually needs to access the data through its dependency tracking.
-    //
-    // Expected performance improvement: 15-40% for inference workloads
-    // with frequent result retrieval.
     mStatus m_stat = MusaMemcpyAsyncD2H(dst, src, bytes, stream_handle_);
     if (m_stat != mStatus::SUCCESS) {
       done(errors::Internal("MUSA D2H async copy failed."));
       return;
     }
-
+    // force sync to ensure immediate availability of small control flow data,
+    // preventing Eager crashes on zero-element tensors
     musaError_t sync_err = musaStreamSynchronize(stream_handle_);
     if (sync_err != musaSuccess) {
       done(errors::Internal("MUSA D2H stream sync failed: ",
@@ -142,78 +156,54 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
                        int device_id,
                        ::stream_executor::StreamExecutor* executor)
     : Device(env, attributes), device_id_(device_id) {
-  // Set device
   musaSetDevice(device_id_);
 
-  // Create stream - use default flags for proper synchronization behavior
+  // init main compute stream
   musaError_t stream_err = musaStreamCreate(&stream_);
   if (stream_err != musaSuccess) {
     LOG(ERROR) << ">>> [MUSA] ERROR: Device " << device_id_
-               << " failed to create stream: "
-               << musaGetErrorString(stream_err);
-    stream_ = nullptr;
-    device_context_ = nullptr;
-    musa_allocator_ = nullptr;
+               << " failed to create stream";
     return;
   }
 
-  // Initialize muDNN handle
+  // init h2d_stream for prefetch
+  musaError_t h2d_err = musaStreamCreate(&h2d_stream_);
+  if (h2d_err != musaSuccess) {
+    LOG(ERROR) << ">>> [MUSA] ERROR: Device " << device_id_
+               << " failed to create h2d_stream";
+    return;
+  }
+
   mudnn_handle_.reset(new ::musa::dnn::Handle());
   ::musa::dnn::Status s = mudnn_handle_->SetStream(stream_);
   if (s != ::musa::dnn::Status::SUCCESS) {
-    LOG(ERROR) << ">>> [MUSA] ERROR: Device " << device_id_
-               << " failed to bind muDNN handle! Error code: "
-               << static_cast<int>(s);
     mudnn_handle_.reset();
-    // Cleanup stream on failure
     musaStreamDestroy(stream_);
-    stream_ = nullptr;
-    device_context_ = nullptr;
-    musa_allocator_ = nullptr;
+    musaStreamDestroy(h2d_stream_);
     return;
   }
 
-  // Initialize muBLAS handle
   mublasStatus_t blas_err = mublasCreate(&mublas_handle_);
   if (blas_err != MUBLAS_STATUS_SUCCESS) {
-    LOG(ERROR) << ">>> [MUSA] ERROR: Device " << device_id_
-               << " failed to create muBLAS handle! Error code: "
-               << static_cast<int>(blas_err);
     mublas_handle_ = nullptr;
-    // Cleanup on failure
-    if (stream_) {
-      musaStreamDestroy(stream_);
-      stream_ = nullptr;
-    }
+    musaStreamDestroy(stream_);
+    musaStreamDestroy(h2d_stream_);
     mudnn_handle_.reset();
-    device_context_ = nullptr;
-    musa_allocator_ = nullptr;
     return;
   }
 
-  // Set stream for muBLAS
   blas_err = mublasSetStream(mublas_handle_, stream_);
   if (blas_err != MUBLAS_STATUS_SUCCESS) {
-    LOG(ERROR) << ">>> [MUSA] ERROR: Device " << device_id_
-               << " failed to set muBLAS stream! Error code: "
-               << static_cast<int>(blas_err);
-    // Cleanup on failure
     mublasDestroy(mublas_handle_);
     mublas_handle_ = nullptr;
-    if (stream_) {
-      musaStreamDestroy(stream_);
-      stream_ = nullptr;
-    }
+    musaStreamDestroy(stream_);
+    musaStreamDestroy(h2d_stream_);
     mudnn_handle_.reset();
-    device_context_ = nullptr;
-    musa_allocator_ = nullptr;
     return;
   }
 
-  // Initialize Context
-  device_context_ = new MusaDeviceContext(stream_, executor);
-
-  // Use BFC allocator for better performance with memory pooling
+  // pass new h2d_stream_ to Context
+  device_context_ = new MusaDeviceContext(stream_, h2d_stream_, executor);
   musa_allocator_ = new MusaBFCAllocator(device_id_);
 
   gpu_device_info_.stream = device_context_->stream();
@@ -221,8 +211,6 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
   gpu_device_info_.gpu_id = device_id_;
 
   set_tensorflow_gpu_device_info(&gpu_device_info_);
-
-  VLOG(1) << ">>> [MUSA] Device " << device_id_ << " initialized successfully";
 }
 
 MusaDevice::~MusaDevice() {
@@ -236,6 +224,10 @@ MusaDevice::~MusaDevice() {
   if (musa_allocator_) {
     delete musa_allocator_;
   }
+  // release h2d_stream
+  if (h2d_stream_) {
+    musaStreamDestroy(h2d_stream_);
+  }
   if (stream_) {
     musaStreamDestroy(stream_);
   }
@@ -247,7 +239,9 @@ Allocator* MusaDevice::GetAllocator(AllocatorAttributes attr) {
 
 Status MusaDevice::Sync() {
   musaSetDevice(device_id_);
-  musaError_t err = musaStreamSynchronize(stream_);
+  // sync device to ensure all preceding operations are completed,
+  // providing a safe lifecycle boundary
+  musaError_t err = musaDeviceSynchronize();
   return (err == musaSuccess) ? Status::OK()
                               : errors::Internal("MUSA Device Sync Failed");
 }

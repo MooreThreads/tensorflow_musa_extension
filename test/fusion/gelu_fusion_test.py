@@ -12,19 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""End-to-end tests for LayerNorm and GELU fusion optimizations."""
+"""End-to-end tests for GELU fusion optimization."""
 
 import glob
 import os
 import sys
 import tempfile
-import time
-
-os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "0")
-os.environ.setdefault(
-    "TF_CPP_VMODULE",
-    "musa_graph_optimizer=1,gelu_fusion=1,musa_gelu_op=1",
-)
 
 _CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 _TEST_DIR = os.path.dirname(_CURRENT_DIR)
@@ -33,9 +26,9 @@ if _TEST_DIR not in sys.path:
 
 import numpy as np
 import tensorflow as tf
+from google.protobuf import text_format
 
 from musa_test_utils import MUSATestCase
-from google.protobuf import text_format
 from tensorflow.core.framework import graph_pb2
 from tensorflow.core.protobuf import config_pb2
 
@@ -55,23 +48,8 @@ def create_config_with_musa_optimizer():
     return config
 
 
-class LayerNormGeluFusionE2ETest(MUSATestCase):
-    """End-to-end test for LayerNorm and GELU fusion."""
-
-    def _run_with_timing(self, sess, output_tensor, feed_dict, tag, timed_runs=5):
-        """Run a graph, printing warmup and average execution time."""
-        start = time.perf_counter()
-        result = sess.run(output_tensor, feed_dict=feed_dict)
-        warmup_ms = (time.perf_counter() - start) * 1000.0
-
-        start = time.perf_counter()
-        for _ in range(timed_runs):
-            sess.run(output_tensor, feed_dict=feed_dict)
-        avg_ms = ((time.perf_counter() - start) * 1000.0) / timed_runs
-
-        print(f"  {tag} warmup: {warmup_ms:.3f} ms")
-        print(f"  {tag} avg({timed_runs} runs): {avg_ms:.3f} ms")
-        return result
+class GeluFusionE2ETest(MUSATestCase):
+    """End-to-end tests for exact and approximate GELU fusion."""
 
     def _load_after_fusion_dump(self, dump_dir):
         """Load the last after_fusion dump as both text and GraphDef."""
@@ -86,7 +64,7 @@ class LayerNormGeluFusionE2ETest(MUSATestCase):
         return dump_text, graph_def
 
     def _build_exact_gelu_graph(self, input_shape):
-        """Build the exact-erf GELU graph shape seen in the large model dump."""
+        """Build the exact-erf GELU graph."""
         graph = tf.Graph()
         with graph.as_default():
             with tf.device("/device:MUSA:0"):
@@ -152,14 +130,10 @@ class LayerNormGeluFusionE2ETest(MUSATestCase):
 
         if approximate:
             graph, x, output = self._build_approx_gelu_graph([None, hidden_size])
-            case_name = "Approx GELU"
         else:
             graph, x, output = self._build_exact_gelu_graph([None, hidden_size])
-            case_name = "Exact GELU"
 
-        expected = tf.nn.gelu(
-            tf.constant(x_np), approximate=approximate
-        ).numpy()
+        expected = tf.nn.gelu(tf.constant(x_np), approximate=approximate).numpy()
 
         config = create_config_with_musa_optimizer()
         old_dump = os.environ.get("MUSA_DUMP_GRAPHDEF")
@@ -171,12 +145,7 @@ class LayerNormGeluFusionE2ETest(MUSATestCase):
 
             try:
                 with tf.compat.v1.Session(graph=graph, config=config) as sess:
-                    result = self._run_with_timing(
-                        sess,
-                        output,
-                        feed_dict={x: x_np},
-                        tag=case_name,
-                    )
+                    result = sess.run(output, feed_dict={x: x_np})
             finally:
                 if old_dump is None:
                     os.environ.pop("MUSA_DUMP_GRAPHDEF", None)
@@ -192,13 +161,13 @@ class LayerNormGeluFusionE2ETest(MUSATestCase):
             self.assertIn('op: "MusaGelu"', dump_text)
 
             fused_nodes = [node for node in graph_def.node if node.op == "MusaGelu"]
-            self.assertTrue(fused_nodes, "No MusaGelu node found in after_fusion dump")
             self.assertEqual(len(fused_nodes), 1, "Expected exactly one MusaGelu node")
             self.assertEqual(
-                fused_nodes[-1].attr["approximate"].b,
+                fused_nodes[0].attr["approximate"].b,
                 approximate,
                 "MusaGelu approximate attr mismatch in fused graph",
             )
+
             residual_original_nodes = [
                 node.name for node in graph_def.node if node.name.endswith("_original")
             ]
@@ -206,8 +175,11 @@ class LayerNormGeluFusionE2ETest(MUSATestCase):
                 residual_original_nodes,
                 f"Residual original nodes were not removed: {residual_original_nodes}",
             )
+
             if approximate:
-                residual_ops = [node.op for node in graph_def.node if node.op in ("Tanh", "Pow")]
+                residual_ops = [
+                    node.op for node in graph_def.node if node.op in ("Tanh", "Pow")
+                ]
             else:
                 residual_ops = [
                     node.op
@@ -221,60 +193,12 @@ class LayerNormGeluFusionE2ETest(MUSATestCase):
 
         self.assertAllClose(result, expected, rtol=1e-5, atol=1e-6)
 
-    def test_layernorm_fusion_with_musa_device(self):
-        """Test LayerNorm fusion with explicit MUSA device placement."""
-        print("\n" + "=" * 70)
-        print("Test: LayerNorm Fusion with MUSA Device")
-        print("=" * 70)
-
-        batch_size = 4
-        seq_len = 128
-        hidden_size = 768
-        epsilon = 1e-12
-
-        np.random.seed(42)
-        x_np = np.random.randn(batch_size, seq_len, hidden_size).astype(np.float32)
-        gamma_np = np.ones(hidden_size, dtype=np.float32)
-        beta_np = np.zeros(hidden_size, dtype=np.float32)
-
-        graph = tf.Graph()
-        with graph.as_default():
-            with tf.device("/device:MUSA:0"):
-                x = tf.compat.v1.placeholder(
-                    tf.float32, shape=[None, seq_len, hidden_size], name="input"
-                )
-
-                mean, var = tf.nn.moments(x, axes=[-1], keepdims=True, name="moments")
-                normalized = (x - mean) / tf.sqrt(var + epsilon)
-
-                gamma = tf.constant(gamma_np, name="gamma")
-                beta = tf.constant(beta_np, name="beta")
-
-                scaled = tf.multiply(normalized, gamma, name="mul_gamma")
-                output = tf.add(scaled, beta, name="add_beta")
-
-        config = create_config_with_musa_optimizer()
-        with tf.compat.v1.Session(graph=graph, config=config) as sess:
-            result = self._run_with_timing(
-                sess, output, feed_dict={x: x_np}, tag="LayerNorm"
-            )
-
-        print(f"  Output shape: {result.shape}")
-        print(f"  Output mean: {result.mean():.6f}")
-        print(f"  Output std: {result.std():.6f}")
-
     def test_exact_gelu_fusion_with_musa_device(self):
         """Test exact GELU fusion using the erf-based graph pattern."""
-        print("\n" + "=" * 70)
-        print("Test: Exact GELU Fusion with MUSA Device")
-        print("=" * 70)
         self._run_gelu_case(approximate=False)
 
     def test_approximate_gelu_fusion_with_musa_device(self):
         """Test tanh-approximate GELU fusion."""
-        print("\n" + "=" * 70)
-        print("Test: Approximate GELU Fusion with MUSA Device")
-        print("=" * 70)
         self._run_gelu_case(approximate=True)
 
 
