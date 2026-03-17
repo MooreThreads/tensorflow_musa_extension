@@ -260,6 +260,73 @@ void FusionGraphUtils::RemoveNode(GraphDef* graph, int node_idx) {
   graph->mutable_node()->RemoveLast();
 }
 
+bool FusionGraphUtils::HasExternalConsumers(
+    const GraphDef& graph, const std::string& node_name,
+    const std::unordered_set<std::string>& removable_node_names) {
+  for (const auto& node : graph.node()) {
+    if (node.name() == node_name) {
+      continue;
+    }
+
+    for (int i = 0; i < node.input_size(); ++i) {
+      if (GetProducerNodeName(node.input(i)) != node_name) {
+        continue;
+      }
+      if (removable_node_names.find(node.name()) == removable_node_names.end()) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+int FusionGraphUtils::RemoveNodesIfUnused(
+    GraphDef* graph, const std::vector<std::string>& node_names,
+    const std::unordered_set<std::string>& protected_node_names) {
+  std::vector<std::string> ordered_candidates;
+  std::unordered_set<std::string> removable_node_names;
+
+  for (const auto& node_name : node_names) {
+    if (node_name.empty() ||
+        protected_node_names.find(node_name) != protected_node_names.end()) {
+      continue;
+    }
+    if (removable_node_names.insert(node_name).second) {
+      ordered_candidates.push_back(node_name);
+    }
+  }
+
+  int removed_count = 0;
+  bool changed = true;
+  while (changed) {
+    changed = false;
+
+    for (const auto& node_name : ordered_candidates) {
+      if (removable_node_names.find(node_name) == removable_node_names.end()) {
+        continue;
+      }
+
+      const int node_idx = FindNodeIndex(*graph, node_name);
+      if (node_idx < 0) {
+        removable_node_names.erase(node_name);
+        continue;
+      }
+
+      if (HasExternalConsumers(*graph, node_name, removable_node_names)) {
+        continue;
+      }
+
+      RemoveNode(graph, node_idx);
+      removable_node_names.erase(node_name);
+      removed_count++;
+      changed = true;
+    }
+  }
+
+  return removed_count;
+}
+
 void FusionGraphUtils::RedirectInputs(GraphDef* graph, const std::string& old_node_name,
                                       const std::string& new_node_name) {
   for (int i = 0; i < graph->node_size(); ++i) {

@@ -18,9 +18,8 @@ __device__ __forceinline__ long long atomicAdd(long long* address, long long val
   return (long long)atomicAddInt64((int64_t*)address, (int64_t)val);
 }
 
-// Handle 'long' type when it's different from 'long long'
-#if defined(__x86_64__) && !defined(__APPLE__)
-// On Linux x86_64, long is 64-bit but distinct from long long in C++ type system
+// Handle toolchains where int64_t is an alias of long rather than long long.
+#if (defined(__x86_64__) || defined(__aarch64__)) && !defined(__APPLE__)
 __device__ __forceinline__ long atomicAdd(long* address, long val) {
   return (long)atomicAddInt64((int64_t*)address, (int64_t)val);
 }

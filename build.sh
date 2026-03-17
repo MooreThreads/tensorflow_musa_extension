@@ -36,6 +36,7 @@ case "$BUILD_TYPE" in
         echo "=========================================="
         echo "Features:"
         echo "  • Kernel timing instrumentation enabled"
+        echo "  • TensorFlow ABI/DCHECK compatibility preserved (-DNDEBUG)"
         echo "  • Use env vars MUSA_TIMING_KERNEL_* to control output"
         echo ""
         ;;

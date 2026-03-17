@@ -14,18 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
 import os
+import time
+import unittest
+import warnings
+from pathlib import Path
+import sys
+
 # Set TensorFlow logging level to reduce verbose output
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
-import unittest
-import sys
-import importlib
-import warnings
-from pathlib import Path
 import tensorflow as tf
-import time
-from datetime import datetime
 
 # Set logging levels
 tf.get_logger().setLevel('ERROR')
@@ -345,7 +345,7 @@ class CustomTestRunner(unittest.TextTestRunner):
             self.dual_output = DualOutput(log_file_handle)
             sys.stdout = self.dual_output
 
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
             print(f"Test run started at: {timestamp}\n")
 
         start_time = time.time()
@@ -376,11 +376,20 @@ class CustomTestRunner(unittest.TextTestRunner):
 # ============================================================================
 # Test Discovery and Execution
 # ============================================================================
-def discover_and_run_tests(test_pattern="*_op_test.py", test_dir_name="ops", 
+def discover_and_run_tests(test_pattern="*_op_test.py", test_dir_name="ops",
                           quiet=True, detail_mode=False, log_file=None):
     """Discover and run all test files matching the pattern."""
     test_dir = Path(__file__).resolve().parent / test_dir_name
-    test_files = list(test_dir.glob(test_pattern))
+    if isinstance(test_pattern, (list, tuple)):
+        test_files = []
+        seen = set()
+        for pattern in test_pattern:
+            for test_file in sorted(test_dir.glob(pattern)):
+                if test_file not in seen:
+                    test_files.append(test_file)
+                    seen.add(test_file)
+    else:
+        test_files = list(test_dir.glob(test_pattern))
 
     if not test_files:
         print(f"{red('✗')} No test files found matching pattern: {test_pattern} in {test_dir_name}/")
@@ -495,7 +504,11 @@ Examples:
             sys.exit(1)
     elif args.fusion:
         # Run all fusion tests (use e2e pattern by default, fallback to user pattern)
-        fusion_pattern = "*e2e_test.py" if args.pattern == "*_op_test.py" else args.pattern
+        fusion_pattern = (
+            ["*_fusion_test.py", "*_e2e_test.py"]
+            if args.pattern == "*_op_test.py"
+            else args.pattern
+        )
         discover_and_run_tests(fusion_pattern,
                              test_dir_name="fusion",
                              quiet=quiet_mode,
