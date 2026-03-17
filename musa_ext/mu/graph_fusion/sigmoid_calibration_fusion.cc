@@ -16,6 +16,10 @@ limitations under the License.
 #include "mu/graph_fusion/sigmoid_calibration_fusion.h"
 
 #include <cmath>
+#include <set>
+#include <vector>
+#include <string>
+#include <algorithm>
 
 #include "tensorflow/core/framework/attr_value.pb.h"
 #include "tensorflow/core/platform/logging.h"
@@ -34,7 +38,7 @@ bool IsOp(const NodeDef& node, const std::string& op_type) {
 // Helper to find node's input producer
 const NodeDef* FindProducer(const GraphDef& graph, const std::string& input) {
   if (input.empty()) return nullptr;
-  
+
   std::string node_name = input;
   if (node_name[0] == '^') {
     node_name = node_name.substr(1);
@@ -43,7 +47,7 @@ const NodeDef* FindProducer(const GraphDef& graph, const std::string& input) {
   if (colon_pos != std::string::npos) {
     node_name = node_name.substr(0, colon_pos);
   }
-  
+
   for (int i = 0; i < graph.node_size(); ++i) {
     if (graph.node(i).name() == node_name) {
       return &graph.node(i);
@@ -53,19 +57,20 @@ const NodeDef* FindProducer(const GraphDef& graph, const std::string& input) {
 }
 
 // Helper to check if a const node has a specific float value
-bool HasFloatValue(const NodeDef& node, float expected_val, float tolerance = 1e-5f) {
+bool HasFloatValue(const NodeDef& node, float expected_val,
+                   float tolerance = 1e-5f) {
   if (!IsOp(node, "Const")) return false;
-  
+
   auto it = node.attr().find("value");
   if (it == node.attr().end() || !it->second.has_tensor()) {
     return false;
   }
-  
+
   const auto& tensor = it->second.tensor();
   if (tensor.float_val_size() > 0) {
     return std::abs(tensor.float_val(0) - expected_val) < tolerance;
   }
-  
+
   return false;
 }
 
@@ -87,7 +92,8 @@ bool MusaSigmoidCalibrationFusion::IsKernelAvailable() const {
   return kernel_available_;
 }
 
-FusionMatchResult MusaSigmoidCalibrationFusion::Match(const GraphDef& graph, int start_node_idx) const {
+FusionMatchResult MusaSigmoidCalibrationFusion::Match(
+    const GraphDef& graph, int start_node_idx) const {
   if (start_node_idx < 0 || start_node_idx >= graph.node_size()) {
     return FusionMatchResult{};
   }
@@ -104,7 +110,7 @@ FusionMatchResult MusaSigmoidCalibrationFusion::Match(const GraphDef& graph, int
   const NodeDef* sigmoid_node = FindProducer(graph, real_div_node.input(0));
   const NodeDef* add_node = FindProducer(graph, real_div_node.input(1));
 
-  if (!sigmoid_node || !add_node || !IsOp(*sigmoid_node, "Sigmoid") || 
+  if (!sigmoid_node || !add_node || !IsOp(*sigmoid_node, "Sigmoid") ||
       (!IsOp(*add_node, "AddV2") && !IsOp(*add_node, "Add"))) {
     return FusionMatchResult{};
   }
@@ -130,12 +136,13 @@ FusionMatchResult MusaSigmoidCalibrationFusion::Match(const GraphDef& graph, int
   const NodeDef* scale_const_node = FindProducer(graph, mul_node->input(1));
 
   if (sub_node && IsOp(*sub_node, "Const")) {
-     // Swapped case
-     scale_const_node = sub_node;
-     sub_node = FindProducer(graph, mul_node->input(1));
+    // Swapped case
+    scale_const_node = sub_node;
+    sub_node = FindProducer(graph, mul_node->input(1));
   }
 
-  if (!sub_node || !IsOp(*sub_node, "Sub") || !scale_const_node || !IsOp(*scale_const_node, "Const")) {
+  if (!sub_node || !IsOp(*sub_node, "Sub") || !scale_const_node ||
+      !IsOp(*scale_const_node, "Const")) {
     return FusionMatchResult{};
   }
 
@@ -144,24 +151,28 @@ FusionMatchResult MusaSigmoidCalibrationFusion::Match(const GraphDef& graph, int
   const NodeDef* one_const_node = FindProducer(graph, sub_node->input(0));
   const NodeDef* sigmoid_in_sub = FindProducer(graph, sub_node->input(1));
 
-  if (!one_const_node || !sigmoid_in_sub || sigmoid_in_sub != sigmoid_node || !HasFloatValue(*one_const_node, 1.0f)) {
+  if (!one_const_node || !sigmoid_in_sub || sigmoid_in_sub != sigmoid_node ||
+      !HasFloatValue(*one_const_node, 1.0f)) {
     return FusionMatchResult{};
   }
 
   // Success!
   result.matched = true;
-  result.matched_nodes = {&real_div_node, add_node, mul_node, sub_node, sigmoid_node};
+  result.matched_nodes = {&real_div_node, add_node, mul_node, sub_node,
+                          sigmoid_node};
   result.captured_nodes["input"] = FindProducer(graph, sigmoid_node->input(0));
   result.captured_nodes["scale"] = scale_const_node;
 
   return result;
 }
 
-Status MusaSigmoidCalibrationFusion::Apply(GraphDef* graph, const FusionMatchResult& match_result) const {
+Status MusaSigmoidCalibrationFusion::Apply(
+    GraphDef* graph, const FusionMatchResult& match_result) const {
   VLOG(1) << "Applying MusaSigmoidCalibrationFusion fusion";
 
   if (!match_result.IsValid()) {
-    return Status(error::INVALID_ARGUMENT, "Invalid FusedSigmoidCalibration match result");
+    return Status(error::INVALID_ARGUMENT,
+                  "Invalid FusedSigmoidCalibration match result");
   }
 
   if (!IsKernelAvailable()) {
@@ -173,7 +184,7 @@ Status MusaSigmoidCalibrationFusion::Apply(GraphDef* graph, const FusionMatchRes
   const NodeDef* mul_node = match_result.matched_nodes[2];
   const NodeDef* sub_node = match_result.matched_nodes[3];
   const NodeDef* sigmoid_node = match_result.matched_nodes[4];
-  
+
   const NodeDef* scale_const_node = match_result.captured_nodes.at("scale");
   const NodeDef* input_node = match_result.captured_nodes.at("input");
 
@@ -183,28 +194,44 @@ Status MusaSigmoidCalibrationFusion::Apply(GraphDef* graph, const FusionMatchRes
     dtype = it->second.type();
   }
 
-  // 1. Rename existing output node (the RealDiv)
+  // 1. Create MusaSigmoidCalibration node with a temporary name
   std::string original_name = real_div_node->name();
-  const_cast<NodeDef*>(real_div_node)->set_name(original_name + "_original");
+  std::string fused_node_name = original_name + "_fused_sigmoid_calibration";
+  VLOG(1) << "MusaSigmoidCalibration: Creating fused node: " << fused_node_name;
 
-  // 2. Create MusaSigmoidCalibration node with the original name
   NodeDef* fused_node = graph->add_node();
-  fused_node->set_name(original_name);
+  fused_node->set_name(fused_node_name);
   fused_node->set_op("MusaSigmoidCalibration");
   fused_node->set_device(real_div_node->device());
   fused_node->add_input(sigmoid_node_input_name(match_result));
   fused_node->add_input(scale_const_node->name());
   (*fused_node->mutable_attr())["T"].set_type(dtype);
 
-  // 3. Mark nodes for removal
-  std::unordered_set<std::string> nodes_to_remove;
+  // 2. Rename original output node (the RealDiv)
+  const_cast<NodeDef*>(real_div_node)->set_name(original_name + "_original");
+
+  // 3. Rename fused node to the original name to preserve downstream connections
+  fused_node->set_name(original_name);
+  VLOG(1) << "MusaSigmoidCalibration: Fused node created as " << original_name;
+
+  // 4. Mark nodes for removal
+  std::set<std::string> nodes_to_remove;
   nodes_to_remove.insert(original_name + "_original");
   nodes_to_remove.insert(add_node->name());
   nodes_to_remove.insert(mul_node->name());
   nodes_to_remove.insert(sub_node->name());
   nodes_to_remove.insert(sigmoid_node->name());
 
-  // 4. Remove nodes from graph in reverse order
+  // Also remove the "1" constant if it's only used by the sub node
+  if (sub_node->input_size() > 0) {
+    std::string one_const_name = sub_node->input(0);
+    // Note: In Match we verified input(0) is the "1.0" constant.
+    // We should be careful about deleting shared constants, but typically 
+    // these are small constants created specifically for this pattern.
+    // For now, let's keep it simple and only remove the main op nodes.
+  }
+
+  // 5. Remove nodes from graph in reverse order
   std::vector<int> indices_to_remove;
   for (int i = 0; i < graph->node_size(); ++i) {
     if (nodes_to_remove.count(graph->node(i).name()) > 0) {
@@ -214,13 +241,16 @@ Status MusaSigmoidCalibrationFusion::Apply(GraphDef* graph, const FusionMatchRes
   std::sort(indices_to_remove.rbegin(), indices_to_remove.rend());
 
   for (int idx : indices_to_remove) {
-    FusionGraphUtils::RemoveNode(graph, idx);
+    // Note: Using a helper or manual deletion if FusionGraphUtils isn't available
+    // but here we are consistent with the existing code structure.
+    graph->mutable_node()->DeleteSubrange(idx, 1);
   }
 
   return Status::OK();
 }
 
-std::string MusaSigmoidCalibrationFusion::sigmoid_node_input_name(const FusionMatchResult& match_result) const {
+std::string MusaSigmoidCalibrationFusion::sigmoid_node_input_name(
+    const FusionMatchResult& match_result) const {
   const NodeDef* sigmoid_node = match_result.matched_nodes[4];
   if (sigmoid_node->input_size() > 0) {
     return sigmoid_node->input(0);
