@@ -8,6 +8,9 @@ namespace tensorflow {
 namespace musa {
 
 template <typename T>
+void LaunchBiasAddReluKernel(const T*, const T*, T*, int, musaStream_t);
+
+template <typename T>
 class MusaLinearReluOp : public MusaOpKernel {
  public:
   explicit MusaLinearReluOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {
@@ -46,7 +49,8 @@ class MusaLinearReluOp : public MusaOpKernel {
     mm_out_shape.AddDim(n);
 
     Tensor mm_out_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(in0.dtype(), mm_out_shape, &mm_out_tensor));
+    OP_REQUIRES_OK(
+        ctx, ctx->allocate_temp(in0.dtype(), mm_out_shape, &mm_out_tensor));
 
     if (mm_out_tensor.NumElements() == 0) {
       Tensor* final_output = nullptr;
@@ -96,7 +100,7 @@ class MusaLinearReluOp : public MusaOpKernel {
                 errors::Internal(
                     "MUSA MatMul/BatchMatMul execution failed in LinearRelu."));
 
-    // 2. BiasAdd
+    // 2. BiasAdd + Relu
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, mm_out_shape, &output));
 
