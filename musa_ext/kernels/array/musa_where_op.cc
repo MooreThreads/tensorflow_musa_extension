@@ -23,8 +23,8 @@ class MusaWhereOp : public MusaOpKernel {
     if (input.NumElements() == 0) {
       // Handle the case where there are no elements in the input tensor.
       Tensor* out = nullptr;
-      OP_REQUIRES_OK(
-          context, context->allocate_output(0, TensorShape({0, input_dims}), &out));
+      OP_REQUIRES_OK(context, context->allocate_output(
+                                  0, TensorShape({0, input_dims}), &out));
       return;
     }
 
@@ -57,8 +57,8 @@ class MusaWhereOp : public MusaOpKernel {
     const int64 num_true = *num_true_tensor.flat<int64>().data();
     if (num_true == 0) {
       Tensor* out = nullptr;
-      OP_REQUIRES_OK(
-          context, context->allocate_output(0, TensorShape({0, input_dims}), &out));
+      OP_REQUIRES_OK(context, context->allocate_output(
+                                  0, TensorShape({0, input_dims}), &out));
       return;
     }
 
@@ -80,15 +80,16 @@ class MusaWhereOp : public MusaOpKernel {
   } break
     switch (input_dims) {
       case 0:
-        break; // For a scalar input, output shape is [num_true, 0]. No coordinates to write.
-      HANDLE_DIM(1);
-      HANDLE_DIM(2);
-      HANDLE_DIM(3);
-      HANDLE_DIM(4);
-      HANDLE_DIM(5);
-      HANDLE_DIM(6);
-      HANDLE_DIM(7);
-      HANDLE_DIM(8);
+        break;  // For a scalar input, output shape is [num_true, 0]. No
+                // coordinates to write.
+        HANDLE_DIM(1);
+        HANDLE_DIM(2);
+        HANDLE_DIM(3);
+        HANDLE_DIM(4);
+        HANDLE_DIM(5);
+        HANDLE_DIM(6);
+        HANDLE_DIM(7);
+        HANDLE_DIM(8);
       default:
         OP_REQUIRES(context, false,
                     errors::InvalidArgument(

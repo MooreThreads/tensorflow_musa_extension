@@ -28,9 +28,9 @@ class StringToHashBucketFastOp : public OpKernel {
  public:
   explicit StringToHashBucketFastOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("num_buckets", &num_buckets_));
-    OP_REQUIRES(ctx, num_buckets_ > 0,
-                errors::InvalidArgument("num_buckets must be > 0, got ",
-                                        num_buckets_));
+    OP_REQUIRES(
+        ctx, num_buckets_ > 0,
+        errors::InvalidArgument("num_buckets must be > 0, got ", num_buckets_));
   }
 
   // String hashing is compute-intensive, mark as expensive to allow
@@ -44,8 +44,8 @@ class StringToHashBucketFastOp : public OpKernel {
     // Handle empty tensor case
     if (input_tensor->NumElements() == 0) {
       Tensor* output_tensor = nullptr;
-      OP_REQUIRES_OK(ctx,
-                     ctx->allocate_output(0, input_tensor->shape(), &output_tensor));
+      OP_REQUIRES_OK(
+          ctx, ctx->allocate_output(0, input_tensor->shape(), &output_tensor));
       return;
     }
 
@@ -54,7 +54,8 @@ class StringToHashBucketFastOp : public OpKernel {
 
     // Allocate output tensor (host memory since HostMemory("output") is set)
     Tensor* output_tensor = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input_tensor->shape(), &output_tensor));
+    OP_REQUIRES_OK(
+        ctx, ctx->allocate_output(0, input_tensor->shape(), &output_tensor));
     auto output_flat = output_tensor->flat<int64>();
 
     // Compute hash values directly on host
@@ -62,7 +63,8 @@ class StringToHashBucketFastOp : public OpKernel {
       const tstring& s = input_flat(i);
       const uint64 hash = tensorflow::Fingerprint64(
           tensorflow::StringPiece(s.data(), s.size()));
-      output_flat(i) = static_cast<int64>(hash % static_cast<uint64>(num_buckets_));
+      output_flat(i) =
+          static_cast<int64>(hash % static_cast<uint64>(num_buckets_));
     }
   }
 
@@ -73,11 +75,11 @@ class StringToHashBucketFastOp : public OpKernel {
 // Register the kernel with HostMemory for both input and output.
 // String tensors are always stored in host memory, and the hash computation
 // is performed on the CPU.
-#define REGISTER_MUSA_KERNEL()                                             \
-  REGISTER_KERNEL_BUILDER(Name("StringToHashBucketFast")                  \
-                              .Device("MUSA")                             \
-                              .HostMemory("input")                        \
-                              .HostMemory("output"),                      \
+#define REGISTER_MUSA_KERNEL()                           \
+  REGISTER_KERNEL_BUILDER(Name("StringToHashBucketFast") \
+                              .Device("MUSA")            \
+                              .HostMemory("input")       \
+                              .HostMemory("output"),     \
                           StringToHashBucketFastOp);
 
 REGISTER_MUSA_KERNEL();

@@ -1,3 +1,4 @@
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -5,7 +6,6 @@
 #include "tensorflow/core/framework/variant.h"
 #include "tensorflow/core/kernels/tensor_list.h"
 #include "tensorflow/core/lib/core/errors.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -36,10 +36,10 @@ class MusaTensorListReserveOp : public MusaOpKernel {
     PartialTensorShape element_shape;
 
     if (element_shape_tensor.NumElements() > 0) {
-      OP_REQUIRES(
-          ctx, element_shape_tensor.dtype() == DT_INT32,
-          errors::InvalidArgument("element_shape must be int32, got ",
-                                  DataTypeString(element_shape_tensor.dtype())));
+      OP_REQUIRES(ctx, element_shape_tensor.dtype() == DT_INT32,
+                  errors::InvalidArgument(
+                      "element_shape must be int32, got ",
+                      DataTypeString(element_shape_tensor.dtype())));
 
       auto vec = element_shape_tensor.vec<int32>();
       std::vector<int64_t> dims(vec.size());
@@ -48,14 +48,14 @@ class MusaTensorListReserveOp : public MusaOpKernel {
       }
 
       OP_REQUIRES_OK(
-          ctx,
-          PartialTensorShape::MakePartialShape(
-              dims.data(), static_cast<int>(dims.size()), &element_shape));
+          ctx, PartialTensorShape::MakePartialShape(
+                   dims.data(), static_cast<int>(dims.size()), &element_shape));
     }
 
     int64_t num_elements = 0;
     if (num_elements_tensor.dtype() == DT_INT32) {
-      num_elements = static_cast<int64_t>(num_elements_tensor.scalar<int32>()());
+      num_elements =
+          static_cast<int64_t>(num_elements_tensor.scalar<int32>()());
     } else if (num_elements_tensor.dtype() == DT_INT64) {
       num_elements = num_elements_tensor.scalar<int64_t>()();
     } else {
@@ -66,8 +66,8 @@ class MusaTensorListReserveOp : public MusaOpKernel {
     }
 
     OP_REQUIRES(ctx, num_elements >= 0,
-                errors::InvalidArgument("num_elements must be non-negative, got ",
-                                        num_elements));
+                errors::InvalidArgument(
+                    "num_elements must be non-negative, got ", num_elements));
 
     Tensor* output_handle = nullptr;
     OP_REQUIRES_OK(ctx,
@@ -77,7 +77,6 @@ class MusaTensorListReserveOp : public MusaOpKernel {
     output_list.element_dtype = element_dtype_;
     output_list.element_shape = element_shape;
 
-    
     output_list.tensors().resize(num_elements);
 
     output_handle->scalar<Variant>()() = std::move(output_list);
@@ -87,13 +86,12 @@ class MusaTensorListReserveOp : public MusaOpKernel {
   DataType element_dtype_;
 };
 
-REGISTER_KERNEL_BUILDER(
-    Name("TensorListReserve")
-        .Device("MUSA")
-        .HostMemory("element_shape")
-        .HostMemory("num_elements")
-        .HostMemory("handle"),
-    MusaTensorListReserveOp);
+REGISTER_KERNEL_BUILDER(Name("TensorListReserve")
+                            .Device("MUSA")
+                            .HostMemory("element_shape")
+                            .HostMemory("num_elements")
+                            .HostMemory("handle"),
+                        MusaTensorListReserveOp);
 
 }  // namespace musa
 }  // namespace tensorflow

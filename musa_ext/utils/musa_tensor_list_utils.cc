@@ -22,10 +22,10 @@ bool TensorList::Decode(const VariantTensorData& data) {
   return true;
 }
 
-TensorList::~TensorList() { 
-  if (tensors_) { 
-    tensors_->Unref(); 
-  } 
+TensorList::~TensorList() {
+  if (tensors_) {
+    tensors_->Unref();
+  }
 }
 
 // Variant registration functions for TensorList
@@ -46,7 +46,8 @@ bool DecodeVariant<TensorList>(std::string* buf, TensorList* value) {
 }
 
 template <>
-void EncodeVariant<TensorList>(const TensorList& value, VariantTensorData* data) {
+void EncodeVariant<TensorList>(const TensorList& value,
+                               VariantTensorData* data) {
   value.Encode(data);
   data->set_type_name(value.TypeName());
 }
