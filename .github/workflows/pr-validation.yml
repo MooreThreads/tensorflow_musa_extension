@@ -23,8 +23,8 @@ jobs:
 
     env:
       COMMIT_ID: ${{ github.event.pull_request.head.sha || github.sha }}
-      LOG_BASE: /workspace/ci_logs
-      WORKSPACE: /workspace/action-runner/_work/${{ github.event.repository.name }}/${{ github.event.repository.name }}
+      LOG_BASE: /home/runner/ci_logs
+      WORKSPACE: /homre/runner/action-runner/_work/${{ github.event.repository.name }}/${{ github.event.repository.name }}
 
     steps:
       # ==============================
@@ -156,7 +156,6 @@ jobs:
       - name: Save Summary
         if: always()
         run: |
-          # 仅仅写一个 markdown 文件，不需要 Conda 环境，去掉所有包裹，直接写！
           SUMMARY="$LOG_DIR/summary.md"
           echo '# CI Report - $COMMIT_ID' > "$SUMMARY"
           echo "- Format: ${{ steps.run-format.outputs.status || 'skipped' }}" >> "$SUMMARY"
