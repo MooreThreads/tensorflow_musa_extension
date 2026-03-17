@@ -1,3 +1,4 @@
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -5,7 +6,6 @@
 #include "tensorflow/core/framework/variant.h"
 #include "tensorflow/core/kernels/tensor_list.h"
 #include "tensorflow/core/lib/core/errors.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -31,17 +31,15 @@ class MusaTensorListStackOp : public MusaOpKernel {
     const Variant& variant = input_handle.scalar<Variant>()();
     const TensorList* tensor_list = variant.get<TensorList>();
 
-    OP_REQUIRES(
-        ctx, tensor_list != nullptr,
-        errors::InvalidArgument(
-            "input_handle does not contain a valid TensorList."));
+    OP_REQUIRES(ctx, tensor_list != nullptr,
+                errors::InvalidArgument(
+                    "input_handle does not contain a valid TensorList."));
 
     OP_REQUIRES(
         ctx, tensor_list->element_dtype == element_dtype_,
-        errors::InvalidArgument("Invalid data types: op expects ",
-                                DataTypeString(element_dtype_),
-                                " but list contains ",
-                                DataTypeString(tensor_list->element_dtype)));
+        errors::InvalidArgument(
+            "Invalid data types: op expects ", DataTypeString(element_dtype_),
+            " but list contains ", DataTypeString(tensor_list->element_dtype)));
 
     if (num_elements_ != -1) {
       OP_REQUIRES(
@@ -60,10 +58,10 @@ class MusaTensorListStackOp : public MusaOpKernel {
     PartialTensorShape partial_element_shape;
 
     if (element_shape_tensor.NumElements() > 0) {
-      OP_REQUIRES(
-          ctx, element_shape_tensor.dtype() == DT_INT32,
-          errors::InvalidArgument("element_shape must be int32, got ",
-                                  DataTypeString(element_shape_tensor.dtype())));
+      OP_REQUIRES(ctx, element_shape_tensor.dtype() == DT_INT32,
+                  errors::InvalidArgument(
+                      "element_shape must be int32, got ",
+                      DataTypeString(element_shape_tensor.dtype())));
 
       auto vec = element_shape_tensor.vec<int32>();
       std::vector<int64_t> dims(vec.size());
@@ -71,10 +69,9 @@ class MusaTensorListStackOp : public MusaOpKernel {
         dims[i] = static_cast<int64_t>(vec(i));
       }
 
-      OP_REQUIRES_OK(
-          ctx, PartialTensorShape::MakePartialShape(
-                   dims.data(), static_cast<int>(dims.size()),
-                   &partial_element_shape));
+      OP_REQUIRES_OK(ctx, PartialTensorShape::MakePartialShape(
+                              dims.data(), static_cast<int>(dims.size()),
+                              &partial_element_shape));
     }
 
     if (partial_element_shape.dims() == -1 &&
@@ -83,9 +80,8 @@ class MusaTensorListStackOp : public MusaOpKernel {
     } else if (partial_element_shape.dims() != -1 &&
                tensor_list->element_shape.dims() != -1) {
       PartialTensorShape merged_shape;
-      OP_REQUIRES_OK(
-          ctx, partial_element_shape.MergeWith(tensor_list->element_shape,
-                                               &merged_shape));
+      OP_REQUIRES_OK(ctx, partial_element_shape.MergeWith(
+                              tensor_list->element_shape, &merged_shape));
       partial_element_shape = merged_shape;
     }
 
@@ -96,8 +92,7 @@ class MusaTensorListStackOp : public MusaOpKernel {
         } else {
           PartialTensorShape merged_shape;
           OP_REQUIRES_OK(
-              ctx, partial_element_shape.MergeWith(t.shape(),
-                                                   &merged_shape));
+              ctx, partial_element_shape.MergeWith(t.shape(), &merged_shape));
           partial_element_shape = merged_shape;
         }
       }
@@ -163,12 +158,12 @@ class MusaTensorListStackOp : public MusaOpKernel {
         src_tensor = &zeros;
       }
 
-      OP_REQUIRES(
-          ctx, src_tensor->shape().IsSameSize(element_shape),
-          errors::InvalidArgument("TensorListStack expects each element to have "
-                                  "shape ", element_shape.DebugString(),
-                                  " but got ",
-                                  src_tensor->shape().DebugString()));
+      OP_REQUIRES(ctx, src_tensor->shape().IsSameSize(element_shape),
+                  errors::InvalidArgument(
+                      "TensorListStack expects each element to have "
+                      "shape ",
+                      element_shape.DebugString(), " but got ",
+                      src_tensor->shape().DebugString()));
 
       const T* src_base = src_tensor->flat<T>().data();
       const size_t bytes = src_tensor->TotalBytes();
@@ -190,14 +185,13 @@ class MusaTensorListStackOp : public MusaOpKernel {
   DataType element_dtype_;
 };
 
-#define REGISTER_MUSA_TENSOR_LIST_STACK(TYPE)                              \
-  REGISTER_KERNEL_BUILDER(                                                 \
-      Name("TensorListStack")                                              \
-          .Device("MUSA")                                                  \
-          .HostMemory("input_handle")                                      \
-          .HostMemory("element_shape")                                     \
-          .TypeConstraint<TYPE>("element_dtype"),                          \
-      MusaTensorListStackOp<TYPE>)
+#define REGISTER_MUSA_TENSOR_LIST_STACK(TYPE)                         \
+  REGISTER_KERNEL_BUILDER(Name("TensorListStack")                     \
+                              .Device("MUSA")                         \
+                              .HostMemory("input_handle")             \
+                              .HostMemory("element_shape")            \
+                              .TypeConstraint<TYPE>("element_dtype"), \
+                          MusaTensorListStackOp<TYPE>)
 
 REGISTER_MUSA_TENSOR_LIST_STACK(float);
 REGISTER_MUSA_TENSOR_LIST_STACK(double);

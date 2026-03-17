@@ -3,13 +3,13 @@
 #include <functional>
 #include <numeric>
 
+#include "../utils_op.h"
 #include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/lib/core/errors.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -33,14 +33,7 @@ class MusaMinOp : public MusaOpKernel {
     const int64_t num_axes = axes_tensor.NumElements();
 
     if (num_axes == 0) {
-      Tensor* out = nullptr;
-      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &out));
-      if (out->NumElements() == 0) return;
-
-      auto& handle = GetHandleByCtx(ctx);
-      musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
-      MusaMemcpyAsyncD2D(const_cast<char*>(out->tensor_data().data()),
-                         input.tensor_data().data(), out->TotalBytes(), stream);
+      ctx->set_output(0, input);
       return;
     }
 
@@ -94,8 +87,13 @@ class MusaMinOp : public MusaOpKernel {
     musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 
     if (reduce_elements == 1) {
-      MusaMemcpyAsyncD2D(const_cast<char*>(out->tensor_data().data()),
-                         input.tensor_data().data(), out->TotalBytes(), stream);
+      Tensor output;
+      // zero-copy: assign new output_shape, but underlying GPU memory still
+      // points to input
+      bool success = output.CopyFrom(input, output_shape);
+      OP_REQUIRES(ctx, success,
+                  errors::Internal("MUSA Reduce: Tensor::CopyFrom failed."));
+      ctx->set_output(0, output);
       return;
     }
 
@@ -140,13 +138,13 @@ class MusaMinOp : public MusaOpKernel {
 };
 
 #define REGISTER_MUSA_MIN(TYPE)                                 \
-  REGISTER_KERNEL_BUILDER(Name("Min")                            \
+  REGISTER_KERNEL_BUILDER(Name("Min")                           \
                               .Device("MUSA")                   \
                               .TypeConstraint<TYPE>("T")        \
                               .TypeConstraint<int32>("Tidx")    \
                               .HostMemory("reduction_indices"), \
                           MusaMinOp<TYPE>);                     \
-  REGISTER_KERNEL_BUILDER(Name("Min")                            \
+  REGISTER_KERNEL_BUILDER(Name("Min")                           \
                               .Device("MUSA")                   \
                               .TypeConstraint<TYPE>("T")        \
                               .TypeConstraint<int64>("Tidx")    \

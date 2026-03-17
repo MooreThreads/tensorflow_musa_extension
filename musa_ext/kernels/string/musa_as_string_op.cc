@@ -119,10 +119,10 @@ std::string FormatComplex(std::complex<T> value, int32 precision,
                           bool scientific, bool shortest, int32 width,
                           const string& fill) {
   std::ostringstream oss;
-  oss << "(" << FormatValueImpl(value.real(), precision, scientific, shortest,
-                                -1, "")
-      << "," << FormatValueImpl(value.imag(), precision, scientific, shortest,
-                                -1, "")
+  oss << "("
+      << FormatValueImpl(value.real(), precision, scientific, shortest, -1, "")
+      << ","
+      << FormatValueImpl(value.imag(), precision, scientific, shortest, -1, "")
       << ")";
   return oss.str();
 }
@@ -228,11 +228,11 @@ std::string MusaAsStringOp<bfloat16>::FormatValue(bfloat16 value) {
 // Register the kernel for all supported types
 // Note: This is a CPU-only operation, so we use HostMemory for input and output
 
-#define REGISTER_AS_STRING_KERNEL(T)                \
-  REGISTER_KERNEL_BUILDER(Name("AsString")          \
-                              .Device("MUSA")       \
-                              .HostMemory("input")  \
-                              .HostMemory("output") \
+#define REGISTER_AS_STRING_KERNEL(T)                   \
+  REGISTER_KERNEL_BUILDER(Name("AsString")             \
+                              .Device("MUSA")          \
+                              .HostMemory("input")     \
+                              .HostMemory("output")    \
                               .TypeConstraint<T>("T"), \
                           MusaAsStringOp<T>);
 
