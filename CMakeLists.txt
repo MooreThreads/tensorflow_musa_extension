@@ -43,8 +43,18 @@ string(REPLACE "-D_GLIBCXX_USE_CXX11_ABI=1" "" TF_COMPILE_FLAGS "${TF_COMPILE_FL
 set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=0")
 
 # Configure debug/logging-related compile definitions.
+#
+# Important: this plugin links against the pip TensorFlow wheel, which is built
+# in release mode. Some TensorFlow headers (for example refcount.h) contain
+# inline DCHECK-dependent side effects. If the plugin is compiled without
+# NDEBUG while libtensorflow_framework is compiled with NDEBUG, the plugin and
+# framework can disagree on RefCounted teardown semantics and trigger false
+# refcount aborts during session/resource destruction.
+#
+# Keep NDEBUG enabled in every build to match the TensorFlow wheel, and use
+# MUSA_KERNEL_DEBUG only for plugin-local timing/debug instrumentation.
 if(MUSA_KERNEL_DEBUG)
-    set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_KERNEL_DEBUG")
+    set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_KERNEL_DEBUG -DNDEBUG")
 else()
     set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_DISABLE_DEBUG_LOGGING -DNDEBUG -DMUSA_DISABLE_TRACE_LOGGING -DMUSA_DISABLE_AUTO_TRACE")
 endif()
@@ -87,6 +97,19 @@ file(GLOB_RECURSE CPP_SOURCES
 # Automatically collect MUSA Kernel files
 file(GLOB_RECURSE MU_SOURCES "${SRC_ROOT}/kernels/*.mu")
 
+# TensorFlow headers pulled into `.mu` compilation require C++17, and mcc's
+# aarch64 host predefines can incorrectly trigger NEON-only host headers.
+set(MCC_COMMON_FLAGS
+    -O3
+    -fPIC
+    -std=c++17
+    -DEIGEN_DONT_VECTORIZE
+    -U__ARM_NEON
+    -U__ARM_NEON__
+    -I${MUSA_PATH}/include
+    -I${TF_INC}
+)
+
 # MCC compile MUSA Kernel
 set(MU_OBJECTS "")
 foreach(mu_file ${MU_SOURCES})
@@ -100,8 +123,7 @@ foreach(mu_file ${MU_SOURCES})
 
         add_custom_command(
             OUTPUT ${obj_file}
-            COMMAND ${MCC_EXECUTABLE} -c ${mu_full_path} -o ${obj_file}
-            -O3 -fPIC -I${MUSA_PATH}/include -I${TF_INC}
+            COMMAND ${MCC_EXECUTABLE} -c ${mu_full_path} -o ${obj_file} ${MCC_COMMON_FLAGS}
             DEPENDS ${mu_full_path}
             COMMENT "Compiling MUSA kernel: ${filename}"
         )

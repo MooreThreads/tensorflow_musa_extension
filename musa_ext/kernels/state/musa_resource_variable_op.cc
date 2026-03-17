@@ -2,6 +2,7 @@
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/resource_mgr.h"
 #include "tensorflow/core/framework/resource_var.h"
+#include "tensorflow/core/lib/core/notification.h"
 #include "../utils_op.h"
 
 namespace tensorflow {
@@ -9,39 +10,101 @@ namespace musa {
 
 using Var = ::tensorflow::Var;
 
+Status CopyTensorWithDeviceContext(OpKernelContext* ctx, const Tensor& src,
+                                   Tensor* dst) {
+  if (src.TotalBytes() == 0) {
+    return Status::OK();
+  }
+
+  auto* device_context = ctx->op_device_context();
+  if (device_context == nullptr) {
+    return errors::Internal("Resource variable op: null op device context.");
+  }
+
+  Device* device = static_cast<Device*>(ctx->device());
+  Notification n;
+  Status status;
+  device_context->CopyTensorInSameDevice(
+      &src, device, dst, [&n, &status](const Status& s) {
+        status = s;
+        n.Notify();
+      });
+  n.WaitForNotification();
+  return status;
+}
+
 class MusaVarHandleOp : public OpKernel {
  public:
   explicit MusaVarHandleOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("container", &container_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("shared_name", &shared_name_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("dtype", &dtype_and_shape_.dtype));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("shape", &dtype_and_shape_.shape));
+
+    // Match TensorFlow's resource-variable behavior: if shared_name is empty,
+    // each VarHandleOp instance must get its own unique resource name.
+    if (shared_name_.empty()) {
+      shared_name_ = ctx->def().name();
+    }
+
+    is_anonymous_ = shared_name_ == ResourceHandle::ANONYMOUS_NAME;
+
+    if (!is_anonymous_) {
+      AllocatorAttributes attr;
+      attr.set_on_host(true);
+      OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_RESOURCE, TensorShape({}),
+                                             &resource_, attr));
+      resource_.scalar<ResourceHandle>()() = MakeResourceHandle<Var>(
+          ctx, container_, shared_name_,
+          std::vector<DtypeAndPartialTensorShape>{dtype_and_shape_});
+    }
   }
 
   // VarHandleOp is a lightweight metadata operation
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
-    Tensor* out;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, TensorShape({}), &out));
-    ResourceHandle handle =
-        MakeResourceHandle<Var>(ctx, container_, shared_name_);
-    out->flat<ResourceHandle>()(0) = handle;
+    if (is_anonymous_) {
+      AllocatorAttributes attr;
+      attr.set_on_host(true);
+      Tensor handle;
+      OP_REQUIRES_OK(
+          ctx, ctx->allocate_temp(DT_RESOURCE, TensorShape({}), &handle, attr));
+      handle.scalar<ResourceHandle>()() = MakeResourceHandle<Var>(
+          ctx, container_, shared_name_,
+          std::vector<DtypeAndPartialTensorShape>{dtype_and_shape_},
+          ctx->stack_trace());
+      ctx->set_output(0, handle);
+    } else {
+      ctx->set_output(0, resource_);
+    }
   }
 
  private:
   string container_;
   string shared_name_;
+  DtypeAndPartialTensorShape dtype_and_shape_;
+  bool is_anonymous_;
+  Tensor resource_;
 };
 
 template <typename T>
 class MusaAssignVariableOp : public OpKernel {
  public:
-  explicit MusaAssignVariableOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
+  explicit MusaAssignVariableOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("dtype", &dtype_));
+  }
 
   // AssignVariableOp is a lightweight operation (just pointer/reference passing)
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
     const Tensor& value = ctx->input(1);
+    OP_REQUIRES(ctx, dtype_ == value.dtype(),
+                errors::InvalidArgument(
+                    "Variable and value dtypes don't match; respectively, ",
+                    DataTypeString(dtype_), " and ",
+                    DataTypeString(value.dtype())));
 
     if (ctx->num_outputs() > 0) {
       ctx->set_output(0, ctx->input(0));
@@ -50,29 +113,49 @@ class MusaAssignVariableOp : public OpKernel {
     core::RefCountPtr<Var> var;
     OP_REQUIRES_OK(ctx, LookupOrCreateResource<Var>(
                             ctx, HandleFromInput(ctx, 0), &var, [&](Var** ptr) {
-                              *ptr = new Var(value.dtype());
+                              *ptr = new Var(dtype_);
+                              *(*ptr)->tensor() = value;
+                              (*ptr)->is_initialized = true;
                               return Status::OK();
                             }));
 
     mutex_lock lock(*var->mu());
 
-    // Use CopyFrom instead of operator= for better performance
-    // CopyFrom will forward the buffer if possible (ref count == 1),
-    // otherwise it will perform a proper device-to-device copy
-    OP_REQUIRES(
-        ctx,
-        var->tensor()->CopyFrom(value, value.shape()),
-        errors::Internal("Failed to assign value to variable. Expected shape: ",
-                         var->tensor()->shape().DebugString(),
-                         ", got shape: ", value.shape().DebugString()));
+    OP_REQUIRES(ctx,
+                (var->tensor()->dtype() == DT_INVALID && !var->is_initialized) ||
+                    var->tensor()->dtype() == dtype_,
+                errors::InvalidArgument(
+                    "Trying to assign variable with wrong dtype. Expected ",
+                    DataTypeString(var->tensor()->dtype()), " got ",
+                    DataTypeString(dtype_)));
+
+    if (var->copy_on_read_mode.load()) {
+      AllocatorAttributes alloc_attr;
+      alloc_attr.set_gpu_compatible(true);
+      alloc_attr.set_nic_compatible(true);
+
+      Tensor copied_value;
+      OP_REQUIRES_OK(ctx, ctx->allocate_temp(value.dtype(), value.shape(),
+                                             &copied_value, alloc_attr));
+      OP_REQUIRES_OK(ctx, CopyTensorWithDeviceContext(ctx, value, &copied_value));
+
+      *var->tensor() = copied_value;
+    } else {
+      *var->tensor() = value;
+    }
 
     var->is_initialized = true;
   }
+
+ private:
+  DataType dtype_;
 };
 
 class MusaReadVariableOp : public OpKernel {
  public:
-  explicit MusaReadVariableOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
+  explicit MusaReadVariableOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("dtype", &dtype_));
+  }
 
   // ReadVariableOp is a zero-copy metadata operation
   bool IsExpensive() override { return false; }
@@ -96,12 +179,23 @@ class MusaReadVariableOp : public OpKernel {
     }
 
     const Tensor& t = *var->tensor();
+    if (!var->copy_on_read_mode.load()) {
+      OP_REQUIRES(ctx, dtype_ == t.dtype(),
+                  errors::InvalidArgument(
+                      "Trying to read variable with wrong dtype. Expected ",
+                      DataTypeString(dtype_), " got ",
+                      DataTypeString(t.dtype())));
+      ctx->set_output(0, t);
+      return;
+    }
 
-    // OPTIMIZATION: set_output creates a shallow copy (alias) of the tensor
-    // This is zero-copy - it only increments the reference count of the buffer
-    // The actual data remains in GPU memory without any memcpy
-    ctx->set_output(0, t);
+    Tensor* out = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, t.shape(), &out));
+    OP_REQUIRES_OK(ctx, CopyTensorWithDeviceContext(ctx, t, out));
   }
+
+ private:
+  DataType dtype_;
 };
 
 REGISTER_KERNEL_BUILDER(
@@ -131,13 +225,23 @@ class MusaVarIsInitializedOp : public OpKernel {
 
 class MusaDestroyResourceOp : public OpKernel {
  public:
-  explicit MusaDestroyResourceOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
+  explicit MusaDestroyResourceOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
+    OP_REQUIRES_OK(ctx,
+                   ctx->GetAttr("ignore_lookup_error", &ignore_lookup_error_));
+  }
 
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
-    DeleteResource(ctx, HandleFromInput(ctx, 0));
+    Status status = DeleteResource(ctx, HandleFromInput(ctx, 0));
+    if (ignore_lookup_error_ && errors::IsNotFound(status)) {
+      return;
+    }
+    OP_REQUIRES_OK(ctx, status);
   }
+
+ private:
+  bool ignore_lookup_error_;
 };
 
 #define REGISTER_MUSA_VAR_MANAGEMENT(T)                    \
