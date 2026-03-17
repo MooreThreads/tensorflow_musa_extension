@@ -65,6 +65,8 @@ class LinearReluFusionTest(MUSATestCase):
             mm = tf.matmul(x_tf, w_tf)
             bias = tf.nn.bias_add(mm, b_tf)
             expected_out = tf.nn.relu(bias)
+            # Add a consumer to ensure it's not pruned and has someone to redirect to
+            expected_out = expected_out * 2.0
 
         # Build graph with explicit MUSA device placement
         graph = tf.Graph()
@@ -77,7 +79,9 @@ class LinearReluFusionTest(MUSATestCase):
                 # This pattern should be matched by LinearReluFusion
                 mm_musa = tf.matmul(x, w)
                 bias_musa = tf.nn.bias_add(mm_musa, b)
-                output = tf.nn.relu(bias_musa)
+                relu_out = tf.nn.relu(bias_musa)
+                # Add a consumer node
+                output = relu_out * 2.0
 
         config = create_config_with_musa_optimizer()
 
@@ -103,7 +107,9 @@ class LinearReluFusionTest(MUSATestCase):
                 
                 mm_musa = tf.matmul(x, w)
                 bias_musa = tf.nn.bias_add(mm_musa, b)
-                output = tf.nn.relu(bias_musa)
+                relu_out = tf.nn.relu(bias_musa)
+                # Add a consumer node
+                output = relu_out * 2.0
 
         config = create_config_with_musa_optimizer()
         run_options = tf.compat.v1.RunOptions(output_partition_graphs=True)

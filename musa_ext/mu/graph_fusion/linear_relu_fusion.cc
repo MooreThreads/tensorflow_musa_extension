@@ -1,13 +1,16 @@
 #include "mu/graph_fusion/linear_relu_fusion.h"
 
+#include <algorithm>
+#include <vector>
+
+#include "tensorflow/core/framework/attr_value.pb.h"
+#include "tensorflow/core/platform/logging.h"
+
 namespace tensorflow {
 namespace grappler {
 namespace musa_fusion {
 
 namespace {
-
-// Epsilon value for LayerNorm
-constexpr float kDefaultEpsilon = 1e-6f;
 
 // Helper to check if node has specific op type
 bool IsOp(const NodeDef& node, const std::string& op_type) {
@@ -17,34 +20,44 @@ bool IsOp(const NodeDef& node, const std::string& op_type) {
 // Helper to find node's input producer
 const NodeDef* FindProducer(const GraphDef& graph, const std::string& input) {
   if (input.empty()) return nullptr;
-  
-  std::string producer_name = input;
-  if (input[0] == '^') {
-    producer_name = input.substr(1);
+
+  std::string node_name = input;
+  if (node_name[0] == '^') {
+    node_name = node_name.substr(1);
   }
-  size_t colon_pos = producer_name.find(':');
+  const size_t colon_pos = node_name.find(':');
   if (colon_pos != std::string::npos) {
-    producer_name = producer_name.substr(0, colon_pos);
+    node_name = node_name.substr(0, colon_pos);
   }
-  
-  for (const auto& node : graph.node()) {
-    if (node.name() == producer_name) return &node;
+
+  for (int i = 0; i < graph.node_size(); ++i) {
+    if (graph.node(i).name() == node_name) {
+      return &graph.node(i);
+    }
   }
   return nullptr;
 }
 
-} // namespace
+bool HasOriginalSuffix(const std::string& node_name) {
+  static const std::string kOriginalSuffix = "_original";
+  return node_name.size() >= kOriginalSuffix.size() &&
+         node_name.compare(node_name.size() - kOriginalSuffix.size(),
+                           kOriginalSuffix.size(), kOriginalSuffix) == 0;
+}
+
+}  // namespace
 
 bool LinearReluFusion::IsKernelAvailable() const {
   if (kernel_checked_) return kernel_available_;
-  
-  kernel_available_ = FusionKernelRegistry::GetInstance().IsKernelAvailable(GetName());
+
+  kernel_available_ =
+      FusionKernelRegistry::GetInstance().IsKernelAvailable(GetName());
   kernel_checked_ = true;
   return kernel_available_;
 }
 
 FusionMatchResult LinearReluFusion::Match(const GraphDef& graph,
-                                        int start_node_idx) const {
+                                         int start_node_idx) const {
   FusionMatchResult result;
   if (start_node_idx < 0 || start_node_idx >= graph.node_size()) {
     return result;
@@ -54,56 +67,61 @@ FusionMatchResult LinearReluFusion::Match(const GraphDef& graph,
 
   // match start with relu node
   if (!IsOp(relu_node, "Relu")) return result;
+  if (HasOriginalSuffix(relu_node.name())) return result;
 
   // find BiasAdd node
-  const NodeDef* biasAdd_node = nullptr;
+  const NodeDef* bias_add_node = nullptr;
 
-  for (int i = 0; i < relu_node.input_size(); ++i) {
-    const NodeDef* input_node = FindProducer(graph, relu_node.input(i));
-    if (!input_node) continue;
-
-    if (IsOp(*input_node, "BiasAdd")) biasAdd_node = input_node;
+  if (relu_node.input_size() > 0) {
+    const NodeDef* input_node = FindProducer(graph, relu_node.input(0));
+    if (input_node && (IsOp(*input_node, "BiasAdd") || IsOp(*input_node, "Add") || IsOp(*input_node, "AddV2"))) {
+      bias_add_node = input_node;
+    }
   }
 
-  if (!biasAdd_node) return result;
+  if (!bias_add_node) {
+    return result;
+  }
 
   // find Matmul node
   const NodeDef* matmul_node = nullptr;
   const NodeDef* bias_node = nullptr;
-  for (int i = 0; i < biasAdd_node->input_size(); ++i) {
-    const NodeDef* input_node = FindProducer(graph, biasAdd_node->input(i));
-    if (!input_node) continue;
 
-    if (IsOp(*input_node, "MatMul")) {
-      matmul_node = input_node;
-    } else {
-      bias_node = input_node;
+  if (bias_add_node->input_size() >= 2) {
+    const NodeDef* in0 = FindProducer(graph, bias_add_node->input(0));
+    const NodeDef* in1 = FindProducer(graph, bias_add_node->input(1));
+
+    if (in0 && IsOp(*in0, "MatMul")) {
+      matmul_node = in0;
+      bias_node = in1;
+    } else if (in1 && IsOp(*in1, "MatMul")) {
+      matmul_node = in1;
+      bias_node = in0;
     }
   }
 
-  if (!matmul_node) return result;
+  if (!matmul_node || !bias_node) return result;
 
   // record into result
   result.matched = true;
   result.matched_nodes.push_back(&relu_node);
-  result.matched_nodes.push_back(biasAdd_node);
+  result.matched_nodes.push_back(bias_add_node);
   result.matched_nodes.push_back(matmul_node);
 
   result.captured_nodes["output"] = &relu_node;
-  result.captured_nodes["bias_add"] = biasAdd_node;
+  result.captured_nodes["bias_add"] = bias_add_node;
   result.captured_nodes["matmul"] = matmul_node;
-  if (bias_node) {
-    result.captured_nodes["bias"] = bias_node;
-  }
+  result.captured_nodes["bias"] = bias_node;
 
   return result;
 }
 
-Status LinearReluFusion::Apply(GraphDef* graph, const FusionMatchResult& match_result) const {
+Status LinearReluFusion::Apply(GraphDef* graph,
+                               const FusionMatchResult& match_result) const {
   if (!match_result.IsValid()) {
     return Status(error::INVALID_ARGUMENT, "Invalid LinearRelu match result");
   }
-  
+
   if (!IsKernelAvailable()) {
     return Status::OK();
   }
@@ -112,100 +130,106 @@ Status LinearReluFusion::Apply(GraphDef* graph, const FusionMatchResult& match_r
   auto output_it = match_result.captured_nodes.find("output");
   auto matmul_it = match_result.captured_nodes.find("matmul");
   auto bias_it = match_result.captured_nodes.find("bias");
-  
-  if (output_it == match_result.captured_nodes.end()) {
-    return Status(error::INVALID_ARGUMENT, "Missing output node in LinearRelu pattern");
+
+  if (output_it == match_result.captured_nodes.end() ||
+      matmul_it == match_result.captured_nodes.end() ||
+      bias_it == match_result.captured_nodes.end()) {
+    return Status(error::INVALID_ARGUMENT,
+                  "Missing required nodes in LinearRelu pattern");
   }
 
   const NodeDef* output_node = output_it->second;
   const NodeDef* matmul_node = matmul_it->second;
+  const NodeDef* bias_node = bias_it->second;
 
-  // create new LinearRelu node
-  std::string fused_node_name = output_node->name() + "_linear_relu_fused";
+  const std::string original_name = output_node->name();
+  const std::string original_output_name = original_name + "_original";
 
   // Check if this output node has already been fused (avoid duplicates)
-  // Extract the base name (remove trailing "_original" suffix if present)
-  std::string base_name = output_node->name();
-  if (base_name.size() > 9 && base_name.substr(base_name.size() - 9) == "_original") {
-    base_name = base_name.substr(0, base_name.size() - 9);
-  }
-  
-  // Check if there's already a linearRelu node with the base name
   for (const auto& node : graph->node()) {
-    if (node.name() == base_name && node.op() == "MusaLinearRelu") {
-      VLOG(1) << "MusaLinearRelu: Output node " << base_name 
+    if (node.name() == original_name && node.op() == "MusaLinearRelu") {
+      VLOG(1) << "MusaLinearRelu: Output node " << original_name
               << " is already a fused node, skipping";
       return Status::OK();
     }
   }
-  
-  VLOG(1) << "LinearReluFusion: Creating fused node: " << fused_node_name;
+
+  int output_node_idx = -1;
+  for (int i = 0; i < graph->node_size(); ++i) {
+    if (graph->node(i).name() == original_name) {
+      output_node_idx = i;
+      break;
+    }
+  }
+
+  if (output_node_idx < 0) {
+    return Status(error::INVALID_ARGUMENT,
+                  "Failed to find output node in graph: " + original_name);
+  }
+
+  VLOG(1) << "LinearReluFusion: Replacing " << original_name
+          << " with MusaLinearRelu";
+
+  NodeDef* original_output_node = graph->mutable_node(output_node_idx);
+  const std::string output_device = original_output_node->device();
+
+  // Pick T from MatMul or BiasAdd or output
+  AttrValue output_dtype;
+  auto dtype_it = matmul_node->attr().find("T");
+  if (dtype_it != matmul_node->attr().end()) {
+    output_dtype = dtype_it->second;
+  } else {
+    dtype_it = original_output_node->attr().find("T");
+    if (dtype_it != original_output_node->attr().end()) {
+      output_dtype = dtype_it->second;
+    } else {
+      output_dtype.set_type(DT_FLOAT);
+    }
+  }
+
+  original_output_node->set_name(original_output_name);
 
   NodeDef* fused_node = graph->add_node();
-  fused_node->set_name(fused_node_name);
+  fused_node->set_name(original_name);
   fused_node->set_op("MusaLinearRelu");
-  fused_node->set_device(output_node->device());
+  fused_node->set_device(output_device);
 
-  // Set inputs for MusaLinearRelu: MatMul inputs then Bias input
-  // 1. Add MatMul inputs
-  for (int i = 0; i < matmul_node->input_size(); ++i) {
-    fused_node->add_input(matmul_node->input(i));
-  }
-  // 2. Add Bias input
-  if (bias_it != match_result.captured_nodes.end() && bias_it->second) {
-    const NodeDef* biasAdd_node = match_result.captured_nodes.at("bias_add");
-    // Assume MatMul is input 0 and Bias is input 1 for BiasAdd
-    // Find which input is the bias
-    for (int i = 0; i < biasAdd_node->input_size(); ++i) {
-      if (biasAdd_node->input(i) != matmul_node->name()) {
-         fused_node->add_input(biasAdd_node->input(i));
-         break;
-      }
-    }
-  }
+  // MusaLinearRelu inputs: a, b, bias
+  fused_node->add_input(matmul_node->input(0));
+  fused_node->add_input(matmul_node->input(1));
+  // bias input might need port handling if it's more than just a name
+  fused_node->add_input(match_result.captured_nodes.at("bias_add")->input(
+      match_result.captured_nodes.at("bias_add")->input(0) == matmul_node->name()
+          ? 1
+          : 0));
 
-  // Copy essential attributes
+  auto* attr = fused_node->mutable_attr();
+  (*attr)["T"] = output_dtype;
+
   if (matmul_node->attr().count("transpose_a")) {
-    (*fused_node->mutable_attr())["transpose_a"] = matmul_node->attr().at("transpose_a");
+    (*attr)["transpose_a"] = matmul_node->attr().at("transpose_a");
+  } else {
+    (*attr)["transpose_a"].set_b(false);
   }
   if (matmul_node->attr().count("transpose_b")) {
-    (*fused_node->mutable_attr())["transpose_b"] = matmul_node->attr().at("transpose_b");
+    (*attr)["transpose_b"] = matmul_node->attr().at("transpose_b");
+  } else {
+    (*attr)["transpose_b"].set_b(false);
   }
 
-  // Redirect all inputs from the output node to the fused node
-  for (int i = 0; i < graph->node_size(); ++i) {
-    NodeDef* node = graph->mutable_node(i);
-    if (node->name() == fused_node_name) continue;
-    
-    for (int j = 0; j < node->input_size(); ++j) {
-      if (node->input(j) == output_node->name()) {
-        node->set_input(j, fused_node_name);
-      } else if (node->input(j).find(output_node->name() + ":") == 0) {
-        std::string suffix = node->input(j).substr(output_node->name().length());
-        node->set_input(j, fused_node_name + suffix);
-      }
-    }
-  }
+  // Remove nodes if unused
+  std::vector<std::string> removable_names = {
+      original_output_name, match_result.captured_nodes.at("bias_add")->name(),
+      matmul_node->name()};
 
-  // Rename the original output node and give the fused node the original name
-  std::string original_name = output_node->name();
-  const_cast<NodeDef*>(output_node)->set_name(original_name + "_original");
-  fused_node->set_name(original_name);
-  
-  // Also update any references to the renamed original node
-  for (int i = 0; i < graph->node_size(); ++i) {
-    NodeDef* node = graph->mutable_node(i);
-    if (node->name() == original_name) continue;
-    
-    for (int j = 0; j < node->input_size(); ++j) {
-      if (node->input(j) == original_name + "_original") {
-        node->set_input(j, original_name);
-      }
-    }
-  }
-  
-  VLOG(1) << "LinearReluFusion: Renamed fused node to " << original_name;
-  
+  FusionGraphUtils::RemoveNodesIfUnused(
+      graph, removable_names,
+      {matmul_node->input(0), matmul_node->input(1), bias_node->name(),
+       original_name});
+
+  VLOG(1) << "LinearReluFusion: Successfully replaced '" << original_name
+          << "' with MusaLinearRelu";
+
   return Status::OK();
 }
 
