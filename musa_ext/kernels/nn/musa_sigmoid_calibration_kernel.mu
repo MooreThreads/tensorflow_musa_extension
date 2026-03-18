@@ -66,6 +66,7 @@ __global__ void SigmoidCalibrationKernel<double>(const double* input,
 template <typename T>
 void LaunchSigmoidCalibrationKernel(const void* input, const void* scale,
                                     void* output, int n, musaStream_t stream) {
+  // Fuse BiasAdd + Relu
   const int block_size = 256;
   const int grid_size = (n + block_size - 1) / block_size;
   SigmoidCalibrationKernel<<<grid_size, block_size, 0, stream>>>(
