@@ -17,6 +17,8 @@ limitations under the License.
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <string>
 #include <unordered_set>
 
 #include "tensorflow/core/framework/attr_value.pb.h"
@@ -36,6 +38,18 @@ constexpr float kOne = 1.0f;
 constexpr float kPow3 = 3.0f;
 constexpr float kApproxCoeff = 0.044715f;
 constexpr float kApproxScale = 0.7978845608f;  // sqrt(2 / pi)
+
+bool IsTruthyEnvVar(const char* env_name) {
+  const char* env_val = std::getenv(env_name);
+  if (env_val == nullptr) {
+    return false;
+  }
+
+  const std::string value(env_val);
+  return value == "1" || value == "true" || value == "TRUE" ||
+         value == "yes" || value == "YES" || value == "on" ||
+         value == "ON";
+}
 
 bool IsOp(const NodeDef& node, const std::string& op_type) {
   return node.op() == op_type;
@@ -515,9 +529,13 @@ MusaGeluFusion::MusaGeluFusion() = default;
 
 bool MusaGeluFusion::IsKernelAvailable() const {
   if (!kernel_checked_) {
-    kernel_available_ = true;
+    kernel_available_ = !IsTruthyEnvVar("MUSA_DISABLE_GELU_FUSION");
     kernel_checked_ = true;
-    VLOG(1) << "MusaGelu kernel is available";
+    if (kernel_available_) {
+      VLOG(1) << "MusaGelu kernel is available";
+    } else {
+      VLOG(1) << "MusaGelu fusion disabled by MUSA_DISABLE_GELU_FUSION";
+    }
   }
   return kernel_available_;
 }

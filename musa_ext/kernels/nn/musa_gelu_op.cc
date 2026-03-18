@@ -3,15 +3,12 @@
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/shape_inference.h"
+
 #include "../utils_op.h"
 #include "utils/logging.h"
 
 namespace tensorflow {
 namespace musa {
-
-template <typename T>
-void LaunchGelu(const T* src, T* dst, int n, bool approximate,
-                musaStream_t stream);
 
 template <typename T>
 class MusaGeluOp : public MusaOpKernel {
@@ -37,19 +34,26 @@ class MusaGeluOp : public MusaOpKernel {
       return;
     }
 
-    const T* input_ptr = input.flat<T>().data();
-    T* output_ptr = output->flat<T>().data();
     const int64 num_elements = input.NumElements();
-
     auto& handle = GetHandleByCtx(ctx);
-    musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
+    mTensor mt_input = CreateMTensor(input, format_);
+    mTensor mt_output = CreateMTensor(*output, format_);
+    mUnary op;
+    const UNARY_MODE mode =
+        approximate_ ? UNARY_MODE::GELU_TANH : UNARY_MODE::GELU;
 
-    VLOG(1) << "MusaGeluOp::Compute launching kernel, elements="
-            << num_elements << ", approximate=" << approximate_;
+    VLOG(1) << "MusaGeluOp::Compute launching muDNN GELU, elements="
+            << num_elements << ", approximate=" << approximate_
+            << ", mode="
+            << (approximate_ ? "GELU_TANH" : "GELU");
+
+    MUSA_KERNEL_TRACE_START("Set Mode");
+    MTOP_CHECK_OK(op.SetMode(mode), "Set GELU Mode", ctx);
+    MUSA_KERNEL_TRACE_END("Set Mode");
 
     MUSA_KERNEL_TRACE_START("Kernel");
-    LaunchGelu<T>(input_ptr, output_ptr, static_cast<int>(num_elements),
-                  approximate_, stream);
+    MTOP_CHECK_OK_RUN(op.Run(handle, mt_output, mt_input), "GELU Forward Run",
+                      ctx);
     MUSA_KERNEL_TRACE_END("Kernel");
 
     VLOG(1) << "MusaGeluOp::Compute finished, elements=" << num_elements
