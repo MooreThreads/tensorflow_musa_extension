@@ -185,6 +185,12 @@ class AddNOpTest(MUSATestCase):
       shapes = [[5]] * 32  # Small size to avoid memory issues
       self._test_addn(shapes, dtype)
 
+  def testAddNSixtyFourInputs(self):
+    """Test AddN with 64 inputs to catch potential issues with large arrays."""
+    for dtype in [tf.float32, tf.int32]:
+      shapes = [[5]] * 64
+      self._test_addn(shapes, dtype)
+
   def testAddNShapeValidation(self):
     """Test that AddN properly validates input shapes."""
     # This test ensures our implementation correctly validates shapes

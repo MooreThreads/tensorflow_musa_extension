@@ -207,13 +207,13 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
 
     const void** d_inputs = nullptr;
     InlinePointers inline_inputs;
+    Tensor d_inputs_tensor;
 
     if (num_inputs <= MAX_INLINE_ADDN_INPUTS) {
       for (int i = 0; i < num_inputs; ++i) {
         inline_inputs.ptrs[i] = input_ptrs[i];
       }
     } else {
-      Tensor d_inputs_tensor;
       OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_UINT64, TensorShape({num_inputs}),
                                              &d_inputs_tensor));
       d_inputs =
