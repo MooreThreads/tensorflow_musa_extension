@@ -15,11 +15,11 @@ limitations under the License.
 
 #include "mu/graph_fusion/sigmoid_calibration_fusion.h"
 
+#include <algorithm>
 #include <cmath>
 #include <set>
-#include <vector>
 #include <string>
-#include <algorithm>
+#include <vector>
 
 #include "tensorflow/core/framework/attr_value.pb.h"
 #include "tensorflow/core/platform/logging.h"
@@ -210,7 +210,8 @@ Status MusaSigmoidCalibrationFusion::Apply(
   // 2. Rename original output node (the RealDiv)
   const_cast<NodeDef*>(real_div_node)->set_name(original_name + "_original");
 
-  // 3. Rename fused node to the original name to preserve downstream connections
+  // 3. Rename fused node to the original name to preserve downstream
+  // connections
   fused_node->set_name(original_name);
   VLOG(1) << "MusaSigmoidCalibration: Fused node created as " << original_name;
 
@@ -226,7 +227,7 @@ Status MusaSigmoidCalibrationFusion::Apply(
   if (sub_node->input_size() > 0) {
     std::string one_const_name = sub_node->input(0);
     // Note: In Match we verified input(0) is the "1.0" constant.
-    // We should be careful about deleting shared constants, but typically 
+    // We should be careful about deleting shared constants, but typically
     // these are small constants created specifically for this pattern.
     // For now, let's keep it simple and only remove the main op nodes.
   }
@@ -241,8 +242,8 @@ Status MusaSigmoidCalibrationFusion::Apply(
   std::sort(indices_to_remove.rbegin(), indices_to_remove.rend());
 
   for (int idx : indices_to_remove) {
-    // Note: Using a helper or manual deletion if FusionGraphUtils isn't available
-    // but here we are consistent with the existing code structure.
+    // Note: Using a helper or manual deletion if FusionGraphUtils isn't
+    // available but here we are consistent with the existing code structure.
     graph->mutable_node()->DeleteSubrange(idx, 1);
   }
 
