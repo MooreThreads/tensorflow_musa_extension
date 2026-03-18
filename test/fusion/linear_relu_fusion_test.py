@@ -51,7 +51,7 @@ class LinearReluFusionTest(MUSATestCase):
 
         # Define shapes
         m, k, n = 4, 8, 16
-        
+
         # Input data
         x_np = np.random.randn(m, k).astype(np.float32)
         w_np = np.random.randn(k, n).astype(np.float32)
@@ -62,7 +62,7 @@ class LinearReluFusionTest(MUSATestCase):
             x_tf = tf.constant(x_np)
             w_tf = tf.constant(w_np)
             b_tf = tf.constant(b_np)
-            
+
             mm = tf.matmul(x_tf, w_tf)
             bias = tf.nn.bias_add(mm, b_tf)
             expected_out = tf.nn.relu(bias)
@@ -76,7 +76,7 @@ class LinearReluFusionTest(MUSATestCase):
                 x = tf.compat.v1.placeholder(tf.float32, shape=[None, k], name="x")
                 w = tf.constant(w_np, dtype=tf.float32, name="w")
                 b = tf.constant(b_np, dtype=tf.float32, name="b")
-                
+
                 # This pattern should be matched by LinearReluFusion
                 mm_musa = tf.matmul(x, w)
                 bias_musa = tf.nn.bias_add(mm_musa, b)
@@ -105,7 +105,7 @@ class LinearReluFusionTest(MUSATestCase):
                 x = tf.compat.v1.placeholder(tf.float32, shape=[None, k], name="x")
                 w = tf.constant(w_np, dtype=tf.float32, name="w")
                 b = tf.constant(b_np, dtype=tf.float32, name="b")
-                
+
                 mm_musa = tf.matmul(x, w)
                 bias_musa = tf.nn.bias_add(mm_musa, b)
                 relu_out = tf.nn.relu(bias_musa)
