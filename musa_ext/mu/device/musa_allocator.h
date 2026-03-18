@@ -21,138 +21,77 @@
 namespace tensorflow {
 namespace musa {
 
-// Uses a multi-tier approach for different allocation sizes:
-// - Small (<=64KB): Power-of-2 size classes with pre-populated pools
-// - Medium (64KB-256MB): 64KB granularity size classes
-// - Large (>256MB): Direct allocation without pooling
-class MusaBFCAllocator : public Allocator {
+// MusaSubAllocator wraps musaMalloc/musaFree for use with TensorFlow's
+// BFCAllocator. This replaces direct musaMalloc calls with a proper memory
+// pooling strategy.
+class MusaSubAllocator : public SubAllocator {
  public:
-  explicit MusaBFCAllocator(int device_id, size_t total_memory = 0);
-  ~MusaBFCAllocator() override;
+  MusaSubAllocator(int device_id, const std::vector<Visitor>& alloc_visitors,
+                   const std::vector<Visitor>& free_visitors)
+      : SubAllocator(alloc_visitors, free_visitors), device_id_(device_id) {}
 
-  std::string Name() override { return "musa_bfc_allocator"; }
-
-  void* AllocateRaw(size_t alignment, size_t num_bytes) override;
-  void DeallocateRaw(void* ptr) override;
-
-  // Memory statistics
-  size_t AllocatedSize() const { return allocated_bytes_; }
-  size_t AvailableSize() const { return pool_bytes_ - allocated_bytes_; }
-  std::string GetStats() const;
-
- private:
-  // Size class configuration
-  static constexpr size_t kMinAllocationSize = 256;
-  static constexpr size_t kMaxPoolSize = 1ULL << 30;  // 1GB max per pool
-  static constexpr size_t kAllocationAlignment = 256;
-  static constexpr size_t kSmallSizeThreshold = 65536;              // 64KB
-  static constexpr size_t kLargeSizeThreshold = 256 * 1024 * 1024;  // 256MB
-
-  // Round up to alignment
-  size_t RoundedBytes(size_t bytes) const;
-
-  // Get size class for allocation
-  size_t GetSizeClass(size_t bytes) const;
-
-  // Pre-populate small pools on initialization
-  void PrepopulateSmallPools();
-
-  // Fast path allocation without full locking
-  bool TryAllocateFromPool(size_t size_class, void** ptr);
-
-  // Slow path allocation with full locking
-  void* AllocateRawLocked(size_t alignment, size_t num_bytes,
-                          size_t size_class);
-
-  // Direct allocation for large sizes
-  void* AllocateDirect(size_t alignment, size_t num_bytes);
-
-  // Try to free pooled memory when allocation fails
-  bool TryFreePoolMemory(size_t min_size);
-
-  int device_id_;
-  size_t pool_bytes_;
-  size_t allocated_bytes_;
-
-  // Protects all mutable state
-  mutable mutex mu_;
-
-  // Pool for each size class
-  // Key: size class (rounded allocation size)
-  // Value: queue of available pointers
-  std::unordered_map<size_t, std::queue<void*>> pools_;
-
-  // Track which size class each allocated pointer belongs to
-  std::unordered_map<void*, size_t> allocated_sizes_;
-
-  // Track original MUSA allocations for cleanup (large allocations)
-  std::vector<void*> musa_allocations_;
-
-  // Statistics
-  size_t num_allocs_ = 0;
-  size_t num_deallocs_ = 0;
-  size_t num_pool_hits_ = 0;
-  size_t num_pool_misses_ = 0;
-  size_t num_prealloc_ = 0;
-  size_t num_small_allocs_ = 0;
-
-  // Temporary storage for fast path
-  void* ptr_ = nullptr;
-};
-
-// Legacy raw allocator for comparison/testing
-class MusaRawAllocator : public Allocator {
- public:
-  explicit MusaRawAllocator(int device_id) : device_id_(device_id) {}
-
-  ~MusaRawAllocator() override = default;
-
-  std::string Name() override { return "musa_raw_allocator"; }
-
-  void* AllocateRaw(size_t alignment, size_t num_bytes) override {
-    if (num_bytes == 0) return nullptr;
-
-    musaSetDevice(device_id_);
-
-    size_t target_alignment = std::max((size_t)256, alignment);
-
-    // Check for overflow before calculation
-    if (num_bytes > std::numeric_limits<size_t>::max() - target_alignment) {
-      LOG(ERROR) << "MUSA allocator: allocation size overflow: " << num_bytes;
+  void* Alloc(size_t alignment, size_t num_bytes,
+              size_t* bytes_received) override {
+    if (num_bytes == 0) {
+      *bytes_received = 0;
       return nullptr;
     }
 
-    size_t alloc_bytes = (num_bytes + target_alignment - 1) / target_alignment *
-                         target_alignment;
+    // Ensure minimum alignment of 256 bytes (musaMalloc guarantee)
+    // and respect the requested alignment from BFCAllocator
+    size_t min_alignment = 256;
+    if (alignment < min_alignment) {
+      alignment = min_alignment;
+    }
 
-    // Check for overflow after adding padding
-    if (alloc_bytes > std::numeric_limits<size_t>::max() - 256) {
-      LOG(ERROR) << "MUSA allocator: allocation size overflow after padding: "
-                 << alloc_bytes;
+    // Round up allocation size to alignment boundary
+    size_t alloc_size = (num_bytes + alignment - 1) & ~(alignment - 1);
+    if (alloc_size < num_bytes) {
+      // Overflow check
       return nullptr;
     }
-    alloc_bytes += 256;
 
     void* ptr = nullptr;
-    musaError_t err = musaMalloc(&ptr, alloc_bytes);
+    musaSetDevice(device_id_);
+    musaError_t err = musaMalloc(&ptr, alloc_size);
     if (err != musaSuccess) {
-      LOG(ERROR) << "MUSA allocator: musaMalloc failed: "
-                 << musaGetErrorString(err) << " size: " << alloc_bytes;
+      LOG(WARNING) << "MusaSubAllocator: musaMalloc failed for " << alloc_size
+                   << " bytes (alignment=" << alignment
+                   << "): " << musaGetErrorString(err);
       return nullptr;
     }
+
+    // Check alignment
+    if ((reinterpret_cast<uintptr_t>(ptr) & (alignment - 1)) != 0) {
+      LOG(WARNING) << "MusaSubAllocator: musaMalloc returned unaligned pointer "
+                   << ptr << " (requested alignment=" << alignment << ")";
+      musaFree(ptr);
+      return nullptr;
+    }
+
+    *bytes_received = alloc_size;
+
+    // Call visitor to track allocation
+    VisitAlloc(ptr, device_id_, alloc_size);
+
     return ptr;
   }
 
-  void DeallocateRaw(void* ptr) override {
-    if (ptr) {
+  void Free(void* ptr, size_t num_bytes) override {
+    if (ptr != nullptr) {
+      // Call visitor to track deallocation
+      VisitFree(ptr, device_id_, num_bytes);
+
       musaSetDevice(device_id_);
       musaError_t err = musaFree(ptr);
       if (err != musaSuccess) {
-        LOG(ERROR) << "MUSA allocator: musaFree failed: "
+        LOG(ERROR) << "MusaSubAllocator: musaFree failed: "
                    << musaGetErrorString(err);
       }
     }
   }
+
+  bool SupportsCoalescing() const override { return true; }
 
  private:
   int device_id_;

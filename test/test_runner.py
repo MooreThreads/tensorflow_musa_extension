@@ -79,10 +79,13 @@ class ProgressBar:
         self.width = width
         self.start_time = time.time()
         self.status_counts = {'PASS': 0, 'FAIL': 0, 'ERROR': 0, 'SKIP': 0}
+        self.test_details = []  # Store test details for final display
 
     def update(self, test_name, status):
         self.current += 1
         self.status_counts[status] = self.status_counts.get(status, 0) + 1
+        # Store test detail
+        self.test_details.append((test_name, status))
 
         percent = self.current / self.total
         filled = int(self.width * percent)
@@ -103,7 +106,7 @@ class ProgressBar:
         rate = self.current / elapsed if elapsed > 0 else 0
 
         # Truncate test name if too long
-        max_name_len = 30
+        max_name_len = 40
         display_name = test_name[:max_name_len-3] + '...' if len(test_name) > max_name_len else test_name
 
         # Build progress line with stats
@@ -152,33 +155,51 @@ class CustomTestResult(unittest.TextTestResult):
     def startTest(self, test):
         super().startTest(test)
         # Don't print individual test info in quiet mode
+        test_name = self._get_test_full_name(test)
         if not self.quiet and self.detail_mode:
-            pass  # The detailed output is handled by unittest framework
+            # Print test start info in detail mode
+            print(f"\n{'='*60}")
+            print(f"RUNNING: {test_name}")
+            print(f"{'='*60}")
+
+    def _get_test_full_name(self, test):
+        """Get the full name of a test in format 'module.class.method'."""
+        test_class = test.__class__
+        module_name = test_class.__module__
+        # Extract just the filename without path and extension
+        module_file = module_name.split('.')[-1] if module_name else 'unknown'
+        class_name = test_class.__name__
+        method_name = test._testMethodName if hasattr(test, '_testMethodName') else 'unknown'
+        return f"{module_file}.{class_name}.{method_name}"
 
     def addSuccess(self, test):
         super().addSuccess(test)
+        test_name = self._get_test_full_name(test)
         # Count successes without storing to save memory
-        self.progress_bar.update(test._testMethodName, 'PASS') if self.show_progress and self.progress_bar else None
+        self.progress_bar.update(test_name, 'PASS') if self.show_progress and self.progress_bar else None
 
     def addError(self, test, err):
         super().addError(test, err)
         error_msg = str(err[1])
-        self.test_results.append(('ERROR', str(test), error_msg))
+        test_name = self._get_test_full_name(test)
+        self.test_results.append(('ERROR', test_name, error_msg))
         if self.show_progress and self.progress_bar:
-            self.progress_bar.update(test._testMethodName, 'ERROR')
+            self.progress_bar.update(test_name, 'ERROR')
 
     def addFailure(self, test, err):
         super().addFailure(test, err)
         error_msg = str(err[1])
-        self.test_results.append(('FAIL', str(test), error_msg))
+        test_name = self._get_test_full_name(test)
+        self.test_results.append(('FAIL', test_name, error_msg))
         if self.show_progress and self.progress_bar:
-            self.progress_bar.update(test._testMethodName, 'FAIL')
+            self.progress_bar.update(test_name, 'FAIL')
 
     def addSkip(self, test, reason):
         super().addSkip(test, reason)
-        self.test_results.append(('SKIP', str(test), reason))
+        test_name = self._get_test_full_name(test)
+        self.test_results.append(('SKIP', test_name, reason))
         if self.show_progress and self.progress_bar:
-            self.progress_bar.update(test._testMethodName, 'SKIP')
+            self.progress_bar.update(test_name, 'SKIP')
 
     def stopTestRun(self):
         super().stopTestRun()
@@ -209,8 +230,15 @@ class DualOutput:
 # ============================================================================
 from prettytable import PrettyTable
 
-def create_pretty_summary(result, elapsed_time):
-    """Create a beautiful summary using prettytable."""
+def create_pretty_summary(result, elapsed_time, quiet=True, detail_mode=False):
+    """Create a beautiful summary using prettytable.
+
+    Args:
+      result: Test result object
+      elapsed_time: Execution time in seconds
+      quiet: If True, only show summary stats and failed tests (no all test details)
+      detail_mode: If True, show all test details regardless
+    """
     total = result.testsRun
     # Get pass count from progress bar if available, otherwise from test_results
     if hasattr(result, 'progress_bar') and result.progress_bar:
@@ -273,18 +301,19 @@ def create_pretty_summary(result, elapsed_time):
     output_lines.append(summary_table.get_string())
     output_lines.append("")
 
-    # Add failed tests section if needed
+    # Add failed/error tests section if needed
+    # This is shown when there are failures/errors, regardless of mode
     if failed > 0 or errors > 0:
         fail_table = PrettyTable()
-        fail_table.field_names = ["Status", "Test Method"]
+        fail_table.field_names = ["Status", "Test Name"]
         fail_table.align["Status"] = "c"
-        fail_table.align["Test Method"] = "l"
+        fail_table.align["Test Name"] = "l"
 
         for test_status, full_test_str, msg in result.test_results:
             if test_status in ['FAIL', 'ERROR']:
-                test_method = full_test_str.split(' ')[0].split('.')[-1]
+                # full_test_str is now in format 'module.class.method'
                 status_icon = red('✗') if test_status == 'FAIL' else red('⚠')
-                fail_table.add_row([status_icon, test_method])
+                fail_table.add_row([status_icon, full_test_str])
 
         fail_table.border = True
         fail_table.header = True
@@ -293,6 +322,28 @@ def create_pretty_summary(result, elapsed_time):
         output_lines.append(bold(red("FAILED/ERROR TESTS".center(72))))
         output_lines.append("")
         output_lines.append(fail_table.get_string())
+        output_lines.append("")
+
+    # Add all test results detail section ONLY in detail mode
+    # In quiet mode, skip the full test list to keep output concise
+    if detail_mode and hasattr(result, 'progress_bar') and result.progress_bar and result.progress_bar.test_details:
+        detail_table = PrettyTable()
+        detail_table.field_names = ["Status", "Test Name"]
+        detail_table.align["Status"] = "c"
+        detail_table.align["Test Name"] = "l"
+
+        for test_name, status in result.progress_bar.test_details:
+            status_icons = {'PASS': green('✓'), 'FAIL': red('✗'), 'ERROR': red('⚠'), 'SKIP': yellow('○')}
+            status_icon = status_icons.get(status, '?')
+            detail_table.add_row([status_icon, test_name])
+
+        detail_table.border = True
+        detail_table.header = True
+        detail_table.padding_width = 1
+
+        output_lines.append(bold(cyan("ALL TEST RESULTS".center(72))))
+        output_lines.append("")
+        output_lines.append(detail_table.get_string())
         output_lines.append("")
 
     return "\n".join(output_lines)
@@ -334,7 +385,11 @@ class CustomTestRunner(unittest.TextTestRunner):
 
     def _printSummary(self, result, elapsed_time):
         """Print beautiful summary using prettytable."""
-        summary_output = create_pretty_summary(result, elapsed_time)
+        summary_output = create_pretty_summary(
+            result, elapsed_time,
+            quiet=self.quiet,
+            detail_mode=self.detail_mode
+        )
         print(summary_output)
 
     def run(self, test):
@@ -486,7 +541,7 @@ Examples:
             # Regular ops test
             test_dir = Path(__file__).resolve().parent / "ops"
             module_name = Path(single_path).stem
-        
+
         sys.path.insert(0, str(test_dir))
         try:
             module = importlib.import_module(module_name)
