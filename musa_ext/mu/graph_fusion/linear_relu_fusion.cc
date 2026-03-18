@@ -48,11 +48,10 @@ bool HasOriginalSuffix(const std::string& node_name) {
 }  // namespace
 
 bool LinearReluFusion::IsKernelAvailable() const {
-  if (kernel_checked_) return kernel_available_;
-
-  kernel_available_ =
-      FusionKernelRegistry::GetInstance().IsKernelAvailable(GetName());
-  kernel_checked_ = true;
+  if (!kernel_checked_) {
+    kernel_available_ = true;
+    kernel_checked_ = true;
+  }
   return kernel_available_;
 }
 
