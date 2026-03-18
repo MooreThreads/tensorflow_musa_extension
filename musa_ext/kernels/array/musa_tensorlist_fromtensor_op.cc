@@ -144,13 +144,6 @@ class MusaTensorListFromTensorOp : public MusaOpKernel {
             errors::Internal(
                 "musaMemcpyAsync failed in TensorListFromTensor, error code: ",
                 static_cast<int>(err)));
-
-        // 调试阶段先强制同步，确认不是时序问题
-        err = musaStreamSynchronize(stream);
-        OP_REQUIRES(ctx, err == musaSuccess,
-                    errors::Internal("musaStreamSynchronize failed in "
-                                     "TensorListFromTensor, error code: ",
-                                     static_cast<int>(err)));
       }
 
       output_list.tensors().push_back(aligned);

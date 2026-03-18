@@ -1,10 +1,18 @@
-name: PR Validation (MUSA GPU)
+name: CI Validation (MUSA GPU)
 
 on:
   pull_request:
     branches: [ main, develop ]
     types: [ opened, synchronize, reopened ]
   workflow_dispatch:
+    inputs:
+      target_branch:
+        description: 'Target branch to check rebase against (for manual run)'
+        required: false
+        default: 'main'
+        type: string
+  schedule:
+    - cron: '0 0 * * *'
 
 permissions:
   contents: read
@@ -14,80 +22,179 @@ jobs:
     runs-on: [self-hosted, musa-gpu]
 
     env:
-      PR_PATH: /home/runner/pr_test_${{ github.run_id }}_${{ github.run_attempt }}
-      CONTAINER: Runner
+      COMMIT_ID: ${{ github.event.pull_request.head.sha || github.sha }}
+      LOG_BASE: /home/runner/ci_logs
+      WORKSPACE: /home/runner/action-runner/_work/${{ github.event.repository.name }}/${{ github.event.repository.name }}
 
     steps:
+      - name: 🕵️ Check who am I
+        run: |
+          echo "我是用户: $(whoami)"
+          echo "我当前所在的家目录是: $HOME"
+
+      # ==============================
+      # Checkout
+      # ==============================
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
+          ref: ${{ env.COMMIT_ID }}
 
-      - name: Copy code into running container
+      # ==============================
+      # 创建日志目录
+      # ==============================
+      - name: Prepare log directory
         run: |
-          docker exec $CONTAINER mkdir -p $PR_PATH
-          docker cp . $CONTAINER:$PR_PATH
-          echo "✅ Code copied to container path: $PR_PATH"
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            TYPE="pr"
+            ID="${{ github.event.pull_request.head.sha }}"
+          elif [ "${{ github.event_name }}" == "schedule" ]; then
+            TYPE="daily"
+            ID=$(date +%F)
+          else
+            TYPE="manual"
+            ID="${{ github.run_id }}"
+          fi
+
+          LOG_DIR="$LOG_BASE/$TYPE/$ID"
+
+          mkdir -p "$LOG_DIR"
+
+          echo "LOG_DIR=$LOG_DIR" >> $GITHUB_ENV
+          echo "TYPE=$TYPE" >> $GITHUB_ENV
+
+          echo "✅ Log dir: $LOG_DIR"
 
       # ==============================
-      # clang-format 代码格式检查
+      # Rebase 检查（仅 PR）
       # ==============================
-      - name: Check code formatting (clang-format)
+      - name: Check Rebase Status
+        if: github.event_name == 'pull_request'
+        run: |
+          TARGET_BRANCH="${{ github.base_ref }}"
+          git fetch origin $TARGET_BRANCH
+
+          if ! git merge-base --is-ancestor origin/$TARGET_BRANCH HEAD; then
+            echo "❌ NOT rebased"
+            exit 1
+          fi
+
+      # ==============================
+      # Format
+      # ==============================
+      - name: Check code formatting
         id: run-format
         run: |
-          if docker exec $CONTAINER bash -c "cd $PR_PATH && find . -regex '.*\.\(cpp\|hpp\|c\|h\|cu\)' -print0 | xargs -0 clang-format --Werror --dry-run"; then
+          set +e 
+
+          exit_code=0
+          # 使用 bash -l -c 模拟登录，自动激活 Conda 环境
+          bash -l -c "
+            set -o pipefail
+            cd $WORKSPACE &&
+            LOG_FILE='$LOG_DIR/format.log' &&
+            FILE_LIST=\$(mktemp) &&
+            if [ '${{ github.event_name }}' = 'pull_request' ]; then
+              TARGET_BRANCH='${{ github.base_ref }}' &&
+              git fetch origin \$TARGET_BRANCH &&
+              git diff -z --diff-filter=ACMRTUXB --name-only origin/\$TARGET_BRANCH...HEAD -- \
+                '*.c' '*.cc' '*.cpp' '*.cu' '*.h' '*.hpp' > \$FILE_LIST
+            else
+              find . \( -path ./build -o -path ./.git \) -prune -o \
+                -regex '.*\.\(cc\|cpp\|hpp\|c\|h\|cu\)' -print0 > \$FILE_LIST
+            fi &&
+            if [ ! -s \$FILE_LIST ]; then
+              echo 'No C/C++ files to format-check.' > \$LOG_FILE
+            else
+              xargs -0 clang-format --Werror --dry-run < \$FILE_LIST > \$LOG_FILE 2>&1
+            fi
+          " || exit_code=$?
+
+          if [ $exit_code -eq 0 ]; then
             echo "status=success" >> $GITHUB_OUTPUT
           else
             echo "status=failure" >> $GITHUB_OUTPUT
+            exit 1
           fi
         continue-on-error: true
 
       # ==============================
       # Build
       # ==============================
-      - name: Run build script
+      - name: Build
         id: run-build
-        if: steps.run-format.outputs.status == 'success'
         run: |
-          if docker exec $CONTAINER bash -c "cd $PR_PATH && ./build.sh"; then
+          set +e 
+
+          exit_code=0
+          bash -l -c "
+            cd $WORKSPACE &&
+            LOG_FILE='$LOG_DIR/build.log' &&
+            rm -rf ./build &&
+            ./build.sh > \$LOG_FILE 2>&1
+          " || exit_code=$?
+
+          if [ $exit_code -eq 0 ]; then
             echo "status=success" >> $GITHUB_OUTPUT
           else
             echo "status=failure" >> $GITHUB_OUTPUT
+            exit 1
           fi
         continue-on-error: true
 
       # ==============================
-      # Integration Test
+      # Test
       # ==============================
-      - name: Run integration tests
+      - name: Integration Test
         id: run-integration
-        if: steps.run-build.outputs.status == 'success'
         run: |
-          if docker exec $CONTAINER bash -c "cd $PR_PATH && python test_runner.py"; then
+          set +e
+
+          exit_code=0
+          bash -l -c "
+            cd $WORKSPACE/test &&
+            LOG_FILE='$LOG_DIR/test.log' &&
+            timeout 30m python test_runner.py > \$LOG_FILE 2>&1
+          " || exit_code=$?
+
+          if [ $exit_code -eq 0 ]; then
             echo "status=success" >> $GITHUB_OUTPUT
           else
             echo "status=failure" >> $GITHUB_OUTPUT
+            exit 1
           fi
         continue-on-error: true
 
       # ==============================
-      # 清理 workspace
+      # Summary（写入日志目录）
       # ==============================
-      - name: Clean up container workspace
+      - name: Save Summary
         if: always()
         run: |
-          docker exec $CONTAINER rm -rf $PR_PATH
+          SUMMARY="$LOG_DIR/summary.md"
+          echo '# CI Report - $COMMIT_ID' > "$SUMMARY"
+          echo "- Format: ${{ steps.run-format.outputs.status || 'skipped' }}" >> "$SUMMARY"
+          echo "- Build: ${{ steps.run-build.outputs.status || 'skipped' }}" >> "$SUMMARY"
+          echo "- Test: ${{ steps.run-integration.outputs.status || 'skipped' }}" >> "$SUMMARY"
 
       # ==============================
-      # CI 总结输出
+      # CI Summary（GitHub UI）
       # ==============================
       - name: CI Summary
         if: always()
         run: |
           echo "## CI Result" >> $GITHUB_STEP_SUMMARY
+          echo "Commit: $COMMIT_ID" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Step | Result |" >> $GITHUB_STEP_SUMMARY
           echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Format | ${{ steps.run-format.outputs.status }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Build | ${{ steps.run-build.outputs.status }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Integration Test | ${{ steps.run-integration.outputs.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Format | ${{ steps.run-format.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ steps.run-build.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Test | ${{ steps.run-integration.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ steps.run-format.outputs.status }}" == "failure" ] || \
+             [ "${{ steps.run-build.outputs.status }}" == "failure" ] || \
+             [ "${{ steps.run-integration.outputs.status }}" == "failure" ]; then
+            exit 1
+          fi

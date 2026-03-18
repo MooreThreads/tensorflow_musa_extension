@@ -39,10 +39,12 @@ class MusaMergeOp : public MusaOpKernel {
   }
 };  // class MusaMergeOp
 
-#define REGISTER_MUSA_MERGE(type)                                   \
-  REGISTER_KERNEL_BUILDER(                                          \
-      Name("Merge").Device(DEVICE_MTGPU).TypeConstraint<type>("T"), \
-      MusaMergeOp<type>);
+#define REGISTER_MUSA_MERGE(type)                         \
+  REGISTER_KERNEL_BUILDER(Name("Merge")                   \
+                              .Device(DEVICE_MTGPU)       \
+                              .TypeConstraint<type>("T")  \
+                              .HostMemory("value_index"), \
+                          MusaMergeOp<type>);
 
 REGISTER_MUSA_MERGE(float);
 REGISTER_MUSA_MERGE(int32);
