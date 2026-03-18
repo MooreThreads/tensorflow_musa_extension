@@ -186,6 +186,7 @@ class MusaLinearReluOp : public MusaOpKernel {
 REGISTER_MUSA_LINEAR_RELU(float);
 REGISTER_MUSA_LINEAR_RELU(Eigen::half);
 REGISTER_MUSA_LINEAR_RELU(bfloat16);
+REGISTER_MUSA_LINEAR_RELU(double);
 
 #undef REGISTER_MUSA_LINEAR_RELU
 }  // namespace musa

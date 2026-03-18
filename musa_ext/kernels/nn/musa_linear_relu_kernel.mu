@@ -51,6 +51,16 @@ __global__ void BiasAddReluKernel(const T* x, const T* bias, T* output,
   }
 }
 
+template <>
+__global__ void BiasAddReluKernel<double>(const double* x, const double* bias,
+                                          double* output, int n_elements,
+                                          int n_cols) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < n_elements) {
+    output[idx] = x[idx] + bias[idx % n_cols];
+  }
+}
+
 template <typename T>
 void LaunchBiasAddReluKernel(const T* x, const T* bias, T* output,
                              int n_elements, int n_cols, musaStream_t stream) {
@@ -69,6 +79,8 @@ template void LaunchBiasAddReluKernel<Eigen::half>(const Eigen::half*,
 template void LaunchBiasAddReluKernel<bfloat16>(const bfloat16*,
                                                 const bfloat16*, bfloat16*, int,
                                                 int, musaStream_t);
+template void LaunchBiasAddReluKernel<double>(const double*, const double*,
+                                              double*, int, int, musaStream_t);
 
 }  // namespace musa
 }  // namespace tensorflow
