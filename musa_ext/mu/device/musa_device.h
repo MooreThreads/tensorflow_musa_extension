@@ -14,7 +14,10 @@
 
 #include "mudnn_base.h"
 #include "musa_allocator.h"
+#include "musa_event_mgr.h"
+#include "musa_host_allocator.h"
 #include "musa_stream.h"
+#include "pinned_memory_pool.h"
 #include "tensorflow/core/framework/device.h"
 #include "tensorflow/core/framework/device_base.h"
 #include "tensorflow/stream_executor/stream.h"
@@ -30,7 +33,9 @@ struct AsyncCopyPayload {
 class MusaDeviceContext : public DeviceContext {
  public:
   explicit MusaDeviceContext(musaStream_t stream, musaStream_t h2d_stream,
-                             ::stream_executor::StreamExecutor* executor);
+                             musaStream_t d2h_stream,
+                             ::stream_executor::StreamExecutor* executor,
+                             MusaEventMgr* event_mgr);
   ~MusaDeviceContext() override;
 
   ::stream_executor::Stream* stream() const override {
@@ -45,11 +50,17 @@ class MusaDeviceContext : public DeviceContext {
                              StringPiece tensor_name, Device* device,
                              Tensor* cpu_tensor, StatusCallback done) override;
 
+  void ThenExecute(musaStream_t stream, std::function<void()> func);
+
+  MusaEventMgr* event_mgr() const { return event_mgr_; }
+
  private:
   musaStream_t stream_handle_;
   musaStream_t h2d_stream_;
+  musaStream_t d2h_stream_;
   ::stream_executor::internal::StreamInterface* implementation_;
   ::stream_executor::Stream* official_stream_;
+  MusaEventMgr* event_mgr_;
 
   mutable std::mutex cleanup_mu_;
   mutable std::queue<AsyncCopyPayload*> cleanup_queue_;
@@ -73,22 +84,32 @@ class MusaDevice : public Device {
 
   musaStream_t GetStream() const { return stream_; }
   int get_device_id() const { return device_id_; }
+  Allocator* musa_host_allocator() const { return musa_host_allocator_; }
 
   ::musa::dnn::Handle& mudnn_handle() { return *mudnn_handle_; }
   mublasHandle_t mublas_handle() { return mublas_handle_; }
+  MusaEventMgr* event_mgr() const { return event_mgr_; }
 
   ::musa::dnn::MemoryMaintainer GetMemMaintainer(
       std::function<::musa::dnn::MemoryHandler(size_t)> func) {
     return func;
   }
 
+  GPUPinnedMemoryPool* pinned_memory_pool() const {
+    return pinned_memory_pool_;
+  }
+
  private:
   int device_id_;
   musaStream_t stream_;
   musaStream_t h2d_stream_;
+  musaStream_t d2h_stream_;
   MusaDeviceContext* device_context_;
   Allocator* musa_allocator_;
+  Allocator* musa_host_allocator_;
+  GPUPinnedMemoryPool* pinned_memory_pool_;
   GpuDeviceInfo gpu_device_info_;
+  MusaEventMgr* event_mgr_;
 
   std::unique_ptr<::musa::dnn::Handle> mudnn_handle_;
   mublasHandle_t mublas_handle_;

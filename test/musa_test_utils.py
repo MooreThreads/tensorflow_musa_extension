@@ -17,8 +17,20 @@
 
 import logging
 import os
+import sys
 import unittest
 import tensorflow as tf
+
+
+def _get_test_full_name(test_method):
+  """Get the full name of a test method in format 'module.class.method'."""
+  test_class = test_method.__self__.__class__
+  module_name = test_class.__module__
+  # Extract just the filename without path and extension
+  module_file = module_name.split('.')[-1] if module_name else 'unknown'
+  class_name = test_class.__name__
+  method_name = test_method.__name__
+  return f"{module_file}.{class_name}.{method_name}"
 
 
 def load_musa_plugin():

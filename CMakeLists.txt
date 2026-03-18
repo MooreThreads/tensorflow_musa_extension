@@ -62,6 +62,11 @@ endif()
 # Include paths
 include_directories("${TF_INC}" "${MUSA_PATH}/include")
 
+# Include TensorFlow C++ core headers for common_runtime
+# These are required for accessing BFCAllocator and device-specific headers
+include_directories("${TF_INC}/tensorflow/core/common_runtime")
+include_directories("${TF_INC}/tensorflow/core/common_runtime/device")
+
 # TensorFlow pip headers may place farmhash in different external include layouts.
 # fingerprint.h includes <farmhash.h>, so add whichever location exists.
 set(TF_FARMHASH_INC_SRC "${TF_INC}/external/farmhash_archive/src")
