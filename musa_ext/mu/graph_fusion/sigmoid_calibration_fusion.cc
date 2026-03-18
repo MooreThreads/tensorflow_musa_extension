@@ -262,7 +262,7 @@ std::string MusaSigmoidCalibrationFusion::sigmoid_node_input_name(
 REGISTER_FUSION_PATTERN(MusaSigmoidCalibrationFusion);
 
 // 注册 kernel 可用性
-REGISTER_FUSION_KERNEL(MusaSigmoidCalibrationFusion, []() { return true; });
+REGISTER_FUSION_KERNEL(MusaSigmoidCalibrationFusion, []() { return false; });
 
 }  // namespace musa_fusion
 }  // namespace grappler
