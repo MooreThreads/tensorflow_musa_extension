@@ -7,6 +7,8 @@ namespace tensorflow {
 namespace grappler {
 namespace musa_fusion {
 
+// Computes: MatMul + BiasAdd + Relu
+
 class LinearReluFusion : public FusionPattern {
  public:
   LinearReluFusion() = default;

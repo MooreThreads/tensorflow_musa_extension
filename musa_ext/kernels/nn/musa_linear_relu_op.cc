@@ -9,6 +9,8 @@
 namespace tensorflow {
 namespace musa {
 
+// The fused op for MusaLinearRelu, which computes MatMul + BiasAdd + Relu
+
 template <typename T>
 void LaunchBiasAddReluKernel(const T*, const T*, T*, int, int, musaStream_t);
 
