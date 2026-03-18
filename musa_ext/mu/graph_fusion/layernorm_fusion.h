@@ -26,7 +26,10 @@ namespace grappler {
 namespace musa_fusion {
 
 // LayerNorm fusion pattern
-// Matches a subgraph that implements LayerNorm and replaces it with MusaLayerNorm op
+// Matches either:
+//   1. A full affine LayerNorm subgraph ending in Add/AddV2
+//   2. A normalize-core subgraph ending in Mul where gamma = 1 + scale
+// and replaces it with a MusaLayerNorm op.
 //
 // Pattern structure (typical TF implementation):
 //   input -> Mean -> Sub -> SquaredDifference -> Mean -> Add(epsilon) -> Rsqrt -> Mul
@@ -70,9 +73,8 @@ class MusaLayerNormFusion : public FusionPattern {
   // This is the most reliable matching strategy
   FusionMatchResult MatchFromAddNode(const GraphDef& graph, int add_node_idx) const;
   
-  // Match LayerNorm pattern starting from RealDiv node
-  // Alternative matching strategy for different graph structures
-  FusionMatchResult MatchFromDivNode(const GraphDef& graph, int div_node_idx) const;
+  // Match LayerNorm-core pattern starting from the final Mul node
+  FusionMatchResult MatchFromMulNode(const GraphDef& graph, int mul_node_idx) const;
   
   // Kernel availability flag
   mutable bool kernel_available_ = true;

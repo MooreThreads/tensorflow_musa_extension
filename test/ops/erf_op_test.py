@@ -49,6 +49,14 @@ class ErfOpTest(MUSATestCase):
         """Test Erf with Float16."""
         self._test_erf(shape=[1000], dtype=tf.float16, rtol=1e-3, atol=1e-3)
 
+    def testErfFloat16Odd(self):
+        """Test Erf with Float16 on an odd number of elements."""
+        self._test_erf(shape=[1001], dtype=tf.float16, rtol=1e-3, atol=1e-3)
+
+    def testErfBFloat16Odd(self):
+        """Test Erf with BFloat16 on an odd number of elements."""
+        self._test_erf(shape=[1001], dtype=tf.bfloat16, rtol=1e-2, atol=1e-2)
+
     def testErfFloat64(self):
         """Test Erf with Float64."""
         self._test_erf(shape=[1000], dtype=tf.float64, rtol=1e-14, atol=1e-14)
