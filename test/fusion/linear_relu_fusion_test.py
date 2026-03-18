@@ -15,6 +15,7 @@
 
 """Tests for Linear+Relu fusion."""
 
+import os
 import numpy as np
 import tensorflow as tf
 from musa_test_utils import MUSATestCase
@@ -256,6 +257,78 @@ class LinearReluFusionTest(MUSATestCase):
                 rtol, atol = 2e-2, 2e-2
 
             self.assertAllClose(actual, expected_f32, rtol=rtol, atol=atol)
+
+    def test_linear_relu_fusion_large_features(self):
+        """Optional large-feature test. Enable by setting MUSA_RUN_LARGE_TESTS=1."""
+        if not os.environ.get("MUSA_RUN_LARGE_TESTS"):
+            self.skipTest("Large tests disabled; set MUSA_RUN_LARGE_TESTS=1 to run")
+
+        np.random.seed(321)
+        tf.random.set_seed(321)
+
+        # Larger feature dims but smaller batch to balance memory
+        m, k, n = 128, 2048, 1024
+        x_np = np.random.randn(m, k).astype(np.float32)
+        w_np = np.random.randn(k, n).astype(np.float32)
+        b_np = np.random.randn(n).astype(np.float32)
+
+        # Reference on CPU
+        with tf.device('/CPU:0'):
+            expected = tf.nn.relu(tf.nn.bias_add(tf.matmul(tf.constant(x_np), tf.constant(w_np)), tf.constant(b_np))) * 0.9
+
+        # MUSA graph
+        graph = tf.Graph()
+        with graph.as_default():
+            with tf.device('/device:MUSA:0'):
+                x = tf.compat.v1.placeholder(tf.float32, shape=[None, k], name="x_large_feat")
+                w = tf.constant(w_np, dtype=tf.float32, name="w_large_feat")
+                b = tf.constant(b_np, dtype=tf.float32, name="b_large_feat")
+
+                mm = tf.matmul(x, w)
+                bias = tf.nn.bias_add(mm, b)
+                out = tf.nn.relu(bias) * 0.9
+
+        config = create_config_with_musa_optimizer()
+        with tf.compat.v1.Session(graph=graph, config=config) as sess:
+            actual = sess.run(out, feed_dict={x: x_np})
+
+        self.assertAllClose(actual, expected.numpy(), rtol=1e-4, atol=1e-4)
+
+    def test_linear_relu_fusion_large_batch(self):
+        """Optional large-batch test. Enable by setting MUSA_RUN_LARGE_TESTS=1."""
+        if not os.environ.get("MUSA_RUN_LARGE_TESTS"):
+            self.skipTest("Large tests disabled; set MUSA_RUN_LARGE_TESTS=1 to run")
+
+        np.random.seed(123)
+        tf.random.set_seed(123)
+
+        # Larger but reasonable sizes to exercise throughput without OOM on typical test machines
+        m, k, n = 2048, 512, 512
+        x_np = np.random.randn(m, k).astype(np.float32)
+        w_np = np.random.randn(k, n).astype(np.float32)
+        b_np = np.random.randn(n).astype(np.float32)
+
+        # Reference on CPU
+        with tf.device('/CPU:0'):
+            expected = tf.nn.relu(tf.nn.bias_add(tf.matmul(tf.constant(x_np), tf.constant(w_np)), tf.constant(b_np))) * 1.0
+
+        # MUSA graph
+        graph = tf.Graph()
+        with graph.as_default():
+            with tf.device('/device:MUSA:0'):
+                x = tf.compat.v1.placeholder(tf.float32, shape=[None, k], name="x_large_batch")
+                w = tf.constant(w_np, dtype=tf.float32, name="w_large_batch")
+                b = tf.constant(b_np, dtype=tf.float32, name="b_large_batch")
+
+                mm = tf.matmul(x, w)
+                bias = tf.nn.bias_add(mm, b)
+                out = tf.nn.relu(bias)
+
+        config = create_config_with_musa_optimizer()
+        with tf.compat.v1.Session(graph=graph, config=config) as sess:
+            actual = sess.run(out, feed_dict={x: x_np})
+
+        self.assertAllClose(actual, expected.numpy(), rtol=1e-4, atol=1e-4)
 
 
 if __name__ == "__main__":

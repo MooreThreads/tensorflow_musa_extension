@@ -10,6 +10,11 @@ namespace tensorflow {
 namespace musa {
 
 // The fused op for MusaLinearRelu, which computes MatMul + BiasAdd + Relu
+// Provides two types of implementations:
+// 1) A pure MUSA implementation using mudnn for MatMul and a custom kernel for
+// BiasAdd+Relu
+// 2) A fallback implementation that uses mudnn for MatMul and then a separate
+// kernel for BiasAdd+Relu (for better performance on smaller sizes)
 
 template <typename T>
 void LaunchBiasAddReluKernel(const T*, const T*, T*, int, int, musaStream_t);
@@ -106,12 +111,12 @@ class MusaLinearReluOp : public MusaOpKernel {
                     "MUSA MatMul/BatchMatMul execution failed in LinearRelu."));
 
     // 2. BiasAdd + Relu
-    // MUSA_KERNEL_TRACE_START("UseMudnn");
-    // UseMudnn(ctx, bias_input, mm_out_shape, mt_mm_out);
-    // MUSA_KERNEL_TRACE_END("UseMudnn");
-    MUSA_KERNEL_TRACE_START("UseKernel");
-    UseKernel(ctx, bias_input, mm_out_shape, mm_out_tensor);
-    MUSA_KERNEL_TRACE_END("UseKernel");
+    MUSA_KERNEL_TRACE_START("UseMudnn");
+    UseMudnn(ctx, bias_input, mm_out_shape, mt_mm_out);
+    MUSA_KERNEL_TRACE_END("UseMudnn");
+    // MUSA_KERNEL_TRACE_START("UseKernel");
+    // UseKernel(ctx, bias_input, mm_out_shape, mm_out_tensor);
+    // MUSA_KERNEL_TRACE_END("UseKernel");
   }
 
   bool IsExpensive() override { return true; }
