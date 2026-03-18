@@ -94,9 +94,21 @@ jobs:
             set -o pipefail
             cd $WORKSPACE &&
             LOG_FILE='$LOG_DIR/format.log' &&
-            find . \( -path ./build -o -path ./.git \) -prune -o \
-            -regex '.*\.\(cpp\|hpp\|c\|h\|cu\)' -print0 |
-            xargs -0 clang-format --Werror --dry-run > \$LOG_FILE 2>&1
+            FILE_LIST=\$(mktemp) &&
+            if [ '${{ github.event_name }}' = 'pull_request' ]; then
+              TARGET_BRANCH='${{ github.base_ref }}' &&
+              git fetch origin \$TARGET_BRANCH &&
+              git diff -z --diff-filter=ACMRTUXB --name-only origin/\$TARGET_BRANCH...HEAD -- \
+                '*.c' '*.cc' '*.cpp' '*.cu' '*.h' '*.hpp' > \$FILE_LIST
+            else
+              find . \( -path ./build -o -path ./.git \) -prune -o \
+                -regex '.*\.\(cc\|cpp\|hpp\|c\|h\|cu\)' -print0 > \$FILE_LIST
+            fi &&
+            if [ ! -s \$FILE_LIST ]; then
+              echo 'No C/C++ files to format-check.' > \$LOG_FILE
+            else
+              xargs -0 clang-format --Werror --dry-run < \$FILE_LIST > \$LOG_FILE 2>&1
+            fi
           " || exit_code=$?
 
           if [ $exit_code -eq 0 ]; then
