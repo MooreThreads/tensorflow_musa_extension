@@ -56,7 +56,7 @@ bool LinearReluFusion::IsKernelAvailable() const {
 }
 
 FusionMatchResult LinearReluFusion::Match(const GraphDef& graph,
-                                         int start_node_idx) const {
+                                          int start_node_idx) const {
   FusionMatchResult result;
   if (start_node_idx < 0 || start_node_idx >= graph.node_size()) {
     return result;
@@ -73,7 +73,9 @@ FusionMatchResult LinearReluFusion::Match(const GraphDef& graph,
 
   if (relu_node.input_size() > 0) {
     const NodeDef* input_node = FindProducer(graph, relu_node.input(0));
-    if (input_node && (IsOp(*input_node, "BiasAdd") || IsOp(*input_node, "Add") || IsOp(*input_node, "AddV2"))) {
+    if (input_node &&
+        (IsOp(*input_node, "BiasAdd") || IsOp(*input_node, "Add") ||
+         IsOp(*input_node, "AddV2"))) {
       bias_add_node = input_node;
     }
   }
@@ -197,10 +199,12 @@ Status LinearReluFusion::Apply(GraphDef* graph,
   fused_node->add_input(matmul_node->input(0));
   fused_node->add_input(matmul_node->input(1));
   // bias input might need port handling if it's more than just a name
-  fused_node->add_input(match_result.captured_nodes.at("bias_add")->input(
-      match_result.captured_nodes.at("bias_add")->input(0) == matmul_node->name()
-          ? 1
-          : 0));
+  fused_node->add_input(
+      match_result.captured_nodes.at("bias_add")
+          ->input(match_result.captured_nodes.at("bias_add")->input(0) ==
+                          matmul_node->name()
+                      ? 1
+                      : 0));
 
   auto* attr = fused_node->mutable_attr();
   (*attr)["T"] = output_dtype;
