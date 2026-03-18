@@ -66,6 +66,7 @@ class MusaSigmoidCalibrationOp : public MusaOpKernel {
 REGISTER_MUSA_SIGMOID_CALIBRATION(float);
 REGISTER_MUSA_SIGMOID_CALIBRATION(Eigen::half);
 REGISTER_MUSA_SIGMOID_CALIBRATION(bfloat16);
+REGISTER_MUSA_SIGMOID_CALIBRATION(double);
 
 }  // namespace musa
 }  // namespace tensorflow

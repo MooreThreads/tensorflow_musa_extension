@@ -1,11 +1,11 @@
-#include <musa_runtime.h>
-#include <musa_fp16.h>
 #include <math.h>
+#include <musa_fp16.h>
+#include <musa_runtime.h>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wignored-pragmas"
-#include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/framework/bfloat16.h"
+#include "tensorflow/core/framework/types.h"
 #pragma GCC diagnostic pop
 
 using bfloat16 = tensorflow::bfloat16;
@@ -28,19 +28,17 @@ __device__ __forceinline__ float LoadFloat(const bfloat16* p) {
   return res;
 }
 
-__device__ __forceinline__ void StoreFloat(float* p, float v) {
-    *p = v;
-}
+__device__ __forceinline__ void StoreFloat(float* p, float v) { *p = v; }
 
 __device__ __forceinline__ void StoreFloat(Eigen::half* p, float v) {
-    __half h = __float2half(v);
-    *reinterpret_cast<__half*>(p) = h;
+  __half h = __float2half(v);
+  *reinterpret_cast<__half*>(p) = h;
 }
 
 __device__ __forceinline__ void StoreFloat(bfloat16* p, float v) {
-    uint32_t* f_ptr = reinterpret_cast<uint32_t*>(&v);
-    uint16_t b_val = *f_ptr >> 16;
-    *reinterpret_cast<uint16_t*>(p) = b_val;
+  uint32_t* f_ptr = reinterpret_cast<uint32_t*>(&v);
+  uint16_t b_val = *f_ptr >> 16;
+  *reinterpret_cast<uint16_t*>(p) = b_val;
 }
 
 template <typename T>
@@ -55,6 +53,16 @@ __global__ void SigmoidCalibrationKernel(const T* input, const T* scale,
   }
 }
 
+template <>
+__global__ void SigmoidCalibrationKernel<double>(const double* input,
+                                                 const double* scale,
+                                                 double* output, int n) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < n) {
+    output[idx] = input[idx] / (input[idx] + scale[idx] * (1.0 - input[idx]));
+  }
+}
+
 template <typename T>
 void LaunchSigmoidCalibrationKernel(const void* input, const void* scale,
                                     void* output, int n, musaStream_t stream) {
@@ -66,12 +74,15 @@ void LaunchSigmoidCalibrationKernel(const void* input, const void* scale,
 }
 
 template void LaunchSigmoidCalibrationKernel<float>(const void*, const void*,
-                                                   void*, int, musaStream_t);
+                                                    void*, int, musaStream_t);
 template void LaunchSigmoidCalibrationKernel<Eigen::half>(const void*,
-                                                         const void*, void*,
-                                                         int, musaStream_t);
+                                                          const void*, void*,
+                                                          int, musaStream_t);
 template void LaunchSigmoidCalibrationKernel<bfloat16>(const void*, const void*,
-                                                      void*, int, musaStream_t);
+                                                       void*, int,
+                                                       musaStream_t);
+template void LaunchSigmoidCalibrationKernel<double>(const void*, const void*,
+                                                     void*, int, musaStream_t);
 
 }  // namespace musa
 }  // namespace tensorflow
