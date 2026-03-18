@@ -128,6 +128,135 @@ class LinearReluFusionTest(MUSATestCase):
 
         self.assertTrue(has_fused_node, "MusaLinearRelu fusion was NOT applied to the graph")
 
+    def test_linear_relu_fusion_various_batch_sizes(self):
+        """Test fusion correctness across several batch sizes."""
+        np.random.seed(7)
+        tf.random.set_seed(7)
+
+        k, n = 6, 10
+        w_np = np.random.randn(k, n).astype(np.float32)
+        b_np = np.random.randn(n).astype(np.float32)
+
+        for m in (1, 3, 8):
+            x_np = np.random.randn(m, k).astype(np.float32)
+
+            # Reference on CPU
+            with tf.device('/CPU:0'):
+                x_tf = tf.constant(x_np)
+                w_tf = tf.constant(w_np)
+                b_tf = tf.constant(b_np)
+                expected = tf.nn.relu(tf.nn.bias_add(tf.matmul(x_tf, w_tf), b_tf)) * 1.5
+
+            # MUSA graph
+            graph = tf.Graph()
+            with graph.as_default():
+                with tf.device('/device:MUSA:0'):
+                    x = tf.compat.v1.placeholder(tf.float32, shape=[None, k], name="x_bs")
+                    w = tf.constant(w_np, dtype=tf.float32, name="w_bs")
+                    b = tf.constant(b_np, dtype=tf.float32, name="b_bs")
+
+                    mm = tf.matmul(x, w)
+                    bias = tf.nn.bias_add(mm, b)
+                    out = tf.nn.relu(bias)
+                    # extra consumer
+                    out = out * 1.5
+
+            config = create_config_with_musa_optimizer()
+            with tf.compat.v1.Session(graph=graph, config=config) as sess:
+                actual = sess.run(out, feed_dict={x: x_np})
+
+            self.assertAllClose(actual, expected.numpy(), rtol=1e-5, atol=1e-5)
+
+    def test_linear_relu_fusion_not_applied_with_intervening_op(self):
+        """If an extra op exists between MatMul and BiasAdd, fusion should not occur."""
+        m, k, n = 2, 5, 7
+        x_np = np.random.randn(m, k).astype(np.float32)
+        w_np = np.random.randn(k, n).astype(np.float32)
+        b_np = np.random.randn(n).astype(np.float32)
+
+        graph = tf.Graph()
+        with graph.as_default():
+            with tf.device('/device:MUSA:0'):
+                x = tf.compat.v1.placeholder(tf.float32, shape=[None, k], name="x_int")
+                w = tf.constant(w_np, dtype=tf.float32, name="w_int")
+                b = tf.constant(b_np, dtype=tf.float32, name="b_int")
+
+                mm = tf.matmul(x, w)
+                # Insert an identity (or any intervening op) to block fusion
+                mid = tf.identity(mm, name="intervening_identity")
+                bias = tf.nn.bias_add(mid, b)
+                relu_out = tf.nn.relu(bias)
+                output = relu_out * 2.0
+
+        config = create_config_with_musa_optimizer()
+        run_options = tf.compat.v1.RunOptions(output_partition_graphs=True)
+        run_metadata = tf.compat.v1.RunMetadata()
+
+        with tf.compat.v1.Session(graph=graph, config=config) as sess:
+            sess.run(output, feed_dict={x: x_np}, options=run_options, run_metadata=run_metadata)
+
+        # Ensure fused node is NOT present when intervening op exists
+        has_fused_node = False
+        for partition_graph in run_metadata.partition_graphs:
+            for node in partition_graph.node:
+                if node.op == "MusaLinearRelu":
+                    has_fused_node = True
+                    break
+
+        self.assertFalse(has_fused_node, "MusaLinearRelu fusion should NOT be applied when an intervening op exists")
+
+    def test_linear_relu_fusion_dtypes(self):
+        """Test fusion correctness across multiple dtypes: float32, float16, bfloat16."""
+        np.random.seed(21)
+        tf.random.set_seed(21)
+
+        m, k, n = 3, 6, 8
+        w_np = np.random.randn(k, n).astype(np.float32)
+        b_np = np.random.randn(n).astype(np.float32)
+
+        dtypes = [tf.float32, tf.float16, tf.bfloat16]
+
+        for dtype in dtypes:
+            x_np = np.random.randn(m, k).astype(np.float32)
+
+            # Reference computed in float32
+            with tf.device('/CPU:0'):
+                x_tf = tf.constant(x_np, dtype=tf.float32)
+                w_tf = tf.constant(w_np, dtype=tf.float32)
+                b_tf = tf.constant(b_np, dtype=tf.float32)
+                expected = tf.nn.relu(tf.nn.bias_add(tf.matmul(x_tf, w_tf), b_tf)) * 0.75
+                expected_f32 = expected.numpy()
+
+            # Build MUSA graph: accept float32 feeds then cast to target dtype inside graph
+            graph = tf.Graph()
+            with graph.as_default():
+                with tf.device('/device:MUSA:0'):
+                    x_ph = tf.compat.v1.placeholder(tf.float32, shape=[None, k], name="x_dt")
+                    x = tf.cast(x_ph, dtype)
+                    w = tf.constant(w_np, dtype=dtype, name="w_dt")
+                    b = tf.constant(b_np, dtype=dtype, name="b_dt")
+
+                    mm = tf.matmul(x, w)
+                    bias = tf.nn.bias_add(mm, b)
+                    out = tf.nn.relu(bias)
+                    out = out * tf.constant(0.75, dtype=dtype)
+                    # cast back to float32 for stable comparison
+                    out_f32 = tf.cast(out, tf.float32)
+
+            config = create_config_with_musa_optimizer()
+            with tf.compat.v1.Session(graph=graph, config=config) as sess:
+                actual = sess.run(out_f32, feed_dict={x_ph: x_np})
+
+            # Tolerances adjusted for reduced-precision dtypes
+            if dtype == tf.float32:
+                rtol, atol = 1e-5, 1e-5
+            elif dtype == tf.float16:
+                rtol, atol = 1e-2, 1e-2
+            else:  # bfloat16
+                rtol, atol = 2e-2, 2e-2
+
+            self.assertAllClose(actual, expected_f32, rtol=rtol, atol=atol)
+
 
 if __name__ == "__main__":
     tf.test.main()
