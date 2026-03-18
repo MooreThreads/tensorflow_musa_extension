@@ -46,9 +46,8 @@ bool IsTruthyEnvVar(const char* env_name) {
   }
 
   const std::string value(env_val);
-  return value == "1" || value == "true" || value == "TRUE" ||
-         value == "yes" || value == "YES" || value == "on" ||
-         value == "ON";
+  return value == "1" || value == "true" || value == "TRUE" || value == "yes" ||
+         value == "YES" || value == "on" || value == "ON";
 }
 
 bool IsOp(const NodeDef& node, const std::string& op_type) {
@@ -188,7 +187,8 @@ bool IsSqrt2Node(const NodeDef* node, const GraphDef& graph) {
 const NodeDef* MatchScaledInput(const NodeDef* node, const GraphDef& graph) {
   if (!node) return nullptr;
 
-  if ((IsOp(*node, "RealDiv") || IsOp(*node, "Div")) && node->input_size() == 2) {
+  if ((IsOp(*node, "RealDiv") || IsOp(*node, "Div")) &&
+      node->input_size() == 2) {
     const NodeDef* numerator = FindProducer(graph, node->input(0));
     const NodeDef* denominator = FindProducer(graph, node->input(1));
     if (numerator && denominator && !IsOp(*numerator, "Const") &&
@@ -312,7 +312,8 @@ bool MatchApproximateFactor(const NodeDef* factor, const GraphDef& graph,
   }
 
   const NodeDef* tanh_scale_mul = FindProducer(graph, tanh_node->input(0));
-  if (!tanh_scale_mul || !IsMulOp(*tanh_scale_mul) || tanh_scale_mul->input_size() != 2) {
+  if (!tanh_scale_mul || !IsMulOp(*tanh_scale_mul) ||
+      tanh_scale_mul->input_size() != 2) {
     return false;
   }
 
@@ -320,7 +321,8 @@ bool MatchApproximateFactor(const NodeDef* factor, const GraphDef& graph,
   bool found_scale = false;
   for (int i = 0; i < 2; ++i) {
     const NodeDef* maybe_const = FindProducer(graph, tanh_scale_mul->input(i));
-    const NodeDef* maybe_add = FindProducer(graph, tanh_scale_mul->input(1 - i));
+    const NodeDef* maybe_add =
+        FindProducer(graph, tanh_scale_mul->input(1 - i));
     if (!maybe_const || !maybe_add) continue;
     if (HasFloatValue(*maybe_const, kApproxScale) && IsAddOp(*maybe_add)) {
       found_scale = true;
@@ -337,7 +339,8 @@ bool MatchApproximateFactor(const NodeDef* factor, const GraphDef& graph,
   bool found_x = false;
   for (int i = 0; i < 2; ++i) {
     const NodeDef* maybe_input = FindProducer(graph, inner_add->input(i));
-    const NodeDef* maybe_cubic_mul = FindProducer(graph, inner_add->input(1 - i));
+    const NodeDef* maybe_cubic_mul =
+        FindProducer(graph, inner_add->input(1 - i));
     if (!maybe_input || !maybe_cubic_mul) continue;
     if (maybe_input == expected_input && IsMulOp(*maybe_cubic_mul)) {
       found_x = true;
@@ -443,8 +446,10 @@ FusionMatchResult MatchFromNestedHalfConst(const GraphDef& graph,
     }
 
     for (int j = 0; j < 2; ++j) {
-      const NodeDef* original_input = FindProducer(graph, x_factor_mul->input(j));
-      const NodeDef* factor_node = FindProducer(graph, x_factor_mul->input(1 - j));
+      const NodeDef* original_input =
+          FindProducer(graph, x_factor_mul->input(j));
+      const NodeDef* factor_node =
+          FindProducer(graph, x_factor_mul->input(1 - j));
       if (!original_input || !factor_node || IsOp(*original_input, "Const")) {
         continue;
       }
@@ -473,7 +478,8 @@ FusionMatchResult MatchFromInputAndHalfFactor(const GraphDef& graph,
 
   for (int i = 0; i < final_mul.input_size() && i < 2; ++i) {
     const NodeDef* original_input = FindProducer(graph, final_mul.input(i));
-    const NodeDef* half_factor_mul = FindProducer(graph, final_mul.input(1 - i));
+    const NodeDef* half_factor_mul =
+        FindProducer(graph, final_mul.input(1 - i));
     if (!original_input || !half_factor_mul || IsOp(*original_input, "Const")) {
       continue;
     }
@@ -497,7 +503,8 @@ FusionMatchResult MatchFromInputAndHalfFactor(const GraphDef& graph,
 }
 
 FusionMatchResult MatchByFactor(const GraphDef& graph, int start_node_idx,
-                                bool approximate, FactorMatcher factor_matcher) {
+                                bool approximate,
+                                FactorMatcher factor_matcher) {
   if (start_node_idx < 0 || start_node_idx >= graph.node_size()) {
     return FusionMatchResult{};
   }
@@ -660,8 +667,7 @@ Status MusaGeluFusion::Apply(GraphDef* graph,
   const std::string output_device = original_output_node->device();
   AttrValue output_dtype;
   const auto dtype_it = original_output_node->attr().find("T");
-  const bool has_output_dtype =
-      dtype_it != original_output_node->attr().end();
+  const bool has_output_dtype = dtype_it != original_output_node->attr().end();
   if (has_output_dtype) {
     output_dtype = dtype_it->second;
   }

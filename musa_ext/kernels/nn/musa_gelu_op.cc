@@ -1,10 +1,9 @@
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/shape_inference.h"
-
-#include "../utils_op.h"
 #include "utils/logging.h"
 
 namespace tensorflow {
@@ -44,8 +43,7 @@ class MusaGeluOp : public MusaOpKernel {
 
     VLOG(1) << "MusaGeluOp::Compute launching muDNN GELU, elements="
             << num_elements << ", approximate=" << approximate_
-            << ", mode="
-            << (approximate_ ? "GELU_TANH" : "GELU");
+            << ", mode=" << (approximate_ ? "GELU_TANH" : "GELU");
 
     MUSA_KERNEL_TRACE_START("Set Mode");
     MTOP_CHECK_OK(op.SetMode(mode), "Set GELU Mode", ctx);
@@ -64,9 +62,9 @@ class MusaGeluOp : public MusaOpKernel {
   bool approximate_;
 };
 
-#define REGISTER_MUSA_GELU(TYPE)                                        \
-  REGISTER_KERNEL_BUILDER(                                              \
-      Name("MusaGelu").Device("MUSA").TypeConstraint<TYPE>("T"),        \
+#define REGISTER_MUSA_GELU(TYPE)                                 \
+  REGISTER_KERNEL_BUILDER(                                       \
+      Name("MusaGelu").Device("MUSA").TypeConstraint<TYPE>("T"), \
       MusaGeluOp<TYPE>);
 
 REGISTER_MUSA_GELU(float);

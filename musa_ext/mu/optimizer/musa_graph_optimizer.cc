@@ -20,6 +20,10 @@ limitations under the License.
 #include <unordered_set>
 #include <vector>
 
+#include "mu/graph_fusion/fusion_pattern_manager.h"
+#include "mu/graph_fusion/gelu_fusion.h"
+#include "mu/graph_fusion/layernorm_fusion.h"
+#include "mu/optimizer/graph_utils.h"
 #include "tensorflow/core/framework/attr_value.pb.h"
 #include "tensorflow/core/framework/graph.pb.h"
 #include "tensorflow/core/framework/node_def.pb.h"
@@ -33,11 +37,6 @@ limitations under the License.
 #include "tensorflow/core/grappler/utils.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/platform/logging.h"
-
-#include "mu/graph_fusion/fusion_pattern_manager.h"
-#include "mu/graph_fusion/layernorm_fusion.h"
-#include "mu/graph_fusion/gelu_fusion.h"
-#include "mu/optimizer/graph_utils.h"
 
 namespace tensorflow {
 namespace grappler {
@@ -282,8 +281,8 @@ int RemoveIsolatedFusionConstNodes(GraphDef* graph) {
     std::sort(isolated_const_indices.begin(), isolated_const_indices.end(),
               std::greater<int>());
     for (int node_idx : isolated_const_indices) {
-      ::tensorflow::grappler::musa_fusion::FusionGraphUtils::RemoveNode(graph,
-                                                                        node_idx);
+      ::tensorflow::grappler::musa_fusion::FusionGraphUtils::RemoveNode(
+          graph, node_idx);
       removed_count++;
     }
   }
@@ -341,7 +340,8 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
 
     // Skip optimization if graph doesn't contain MUSA nodes
     if (!GraphHasMusaNodes(*optimized_graph)) {
-      VLOG(2) << "MusaGraphOptimizer: No MUSA nodes found, skipping optimization";
+      VLOG(2)
+          << "MusaGraphOptimizer: No MUSA nodes found, skipping optimization";
       dumper.DumpFinal(*optimized_graph);
       return Status::OK();
     }
@@ -370,8 +370,7 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
       const int removed_isolated_consts =
           RemoveIsolatedFusionConstNodes(optimized_graph);
       if (removed_isolated_consts > 0) {
-        VLOG(1) << "MusaGraphOptimizer: Removed "
-                << removed_isolated_consts
+        VLOG(1) << "MusaGraphOptimizer: Removed " << removed_isolated_consts
                 << " isolated fusion Const node(s) after fusion";
       }
       dumper.DumpAfterPass(*optimized_graph, "fusion");
@@ -452,14 +451,14 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
               Status status = pattern->Apply(graph, match_result);
               if (!status.ok()) {
                 LOG(WARNING) << "MusaGraphOptimizer: Fallback for pattern '"
-                            << pattern->GetName() << "' failed: " << status;
+                             << pattern->GetName() << "' failed: " << status;
               }
               fusion_fallback_count++;
               continue;
             }
 
-            VLOG(1) << "MusaGraphOptimizer: Applying pattern '" << pattern->GetName()
-                    << "' at node " << node_idx;
+            VLOG(1) << "MusaGraphOptimizer: Applying pattern '"
+                    << pattern->GetName() << "' at node " << node_idx;
 
             Status status = pattern->Apply(graph, match_result);
             if (status.ok()) {
@@ -469,8 +468,9 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
                       << "' applied successfully";
               break;  // Restart scanning since graph was modified
             } else {
-              LOG(WARNING) << "MusaGraphOptimizer: Pattern '" << pattern->GetName()
-                          << "' apply failed: " << status;
+              LOG(WARNING) << "MusaGraphOptimizer: Pattern '"
+                           << pattern->GetName()
+                           << "' apply failed: " << status;
             }
           }
         }
