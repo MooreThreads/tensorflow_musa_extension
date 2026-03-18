@@ -422,11 +422,7 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
 
     bool graph_modified = true;
     int iteration = 0;
-    // Large production graphs may contain dozens of fusible subgraphs. The
-    // previous fixed cap of 15 could stop the pass before later GELU patterns
-    // were visited. Use the graph size as a conservative upper bound while
-    // still protecting against non-converging rewrite loops.
-    const int kMaxIterations = std::max(15, graph->node_size());
+    const int kMaxIterations = 50;  // Prevent infinite loops
 
     while (graph_modified && iteration < kMaxIterations) {
       graph_modified = false;
