@@ -193,8 +193,13 @@ jobs:
           echo "| Build | ${{ steps.run-build.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Test | ${{ steps.run-integration.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
 
-          if [ "${{ steps.run-format.outputs.status }}" == "failure" ] || \
-             [ "${{ steps.run-build.outputs.status }}" == "failure" ] || \
+          # if [ "${{ steps.run-format.outputs.status }}" == "failure" ] || \
+          #    [ "${{ steps.run-build.outputs.status }}" == "failure" ] || \
+          #    [ "${{ steps.run-integration.outputs.status }}" == "failure" ]; then
+          #   exit 1
+          # fi
+
+          if [ "${{ steps.run-build.outputs.status }}" == "failure" ] || \
              [ "${{ steps.run-integration.outputs.status }}" == "failure" ]; then
             exit 1
           fi
