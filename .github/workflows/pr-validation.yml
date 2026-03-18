@@ -27,7 +27,7 @@ jobs:
       WORKSPACE: /home/runner/action-runner/_work/${{ github.event.repository.name }}/${{ github.event.repository.name }}
 
     steps:
-      - name: 🕵️ Check who am I
+      - name: Check who am I
         run: |
           echo "我是用户: $(whoami)"
           echo "我当前所在的家目录是: $HOME"
