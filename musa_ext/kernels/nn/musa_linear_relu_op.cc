@@ -1,14 +1,16 @@
 #include <mudnn.h>
 #include <mudnn_xmma.h>
+#include <musa_runtime.h>
 
 #include "../utils_op.h"
 #include "tensorflow/core/util/matmul_bcast.h"
+#include "utils/logging.h"
 
 namespace tensorflow {
 namespace musa {
 
 template <typename T>
-void LaunchBiasAddReluKernel(const T*, const T*, T*, int, musaStream_t);
+void LaunchBiasAddReluKernel(const T*, const T*, T*, int, int, musaStream_t);
 
 template <typename T>
 class MusaLinearReluOp : public MusaOpKernel {
@@ -19,6 +21,7 @@ class MusaLinearReluOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_KERNEL_TIMING_GUARD(ctx);
     const Tensor& in0 = ctx->input(0);
     const Tensor& in1 = ctx->input(1);
     const Tensor& bias_input = ctx->input(2);
@@ -101,6 +104,25 @@ class MusaLinearReluOp : public MusaOpKernel {
                     "MUSA MatMul/BatchMatMul execution failed in LinearRelu."));
 
     // 2. BiasAdd + Relu
+    // MUSA_KERNEL_TRACE_START("UseMudnn");
+    // UseMudnn(ctx, bias_input, mm_out_shape, mt_mm_out);
+    // MUSA_KERNEL_TRACE_END("UseMudnn");
+    MUSA_KERNEL_TRACE_START("UseKernel");
+    UseKernel(ctx, bias_input, mm_out_shape, mm_out_tensor);
+    MUSA_KERNEL_TRACE_END("UseKernel");
+  }
+
+  bool IsExpensive() override { return true; }
+
+ private:
+  bool trans_a_ = false;
+  bool trans_b_ = false;
+  bool tf32_enabled_ = false;  // TF32 acceleration enabled by default
+
+  void UseMudnn(OpKernelContext* ctx, const Tensor& bias_input,
+                const TensorShape& mm_out_shape, const mTensor& mt_mm_out) {
+    auto& handle = GetHandleByCtx(ctx);
+
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, mm_out_shape, &output));
 
@@ -122,7 +144,7 @@ class MusaLinearReluOp : public MusaOpKernel {
 
     mBinary bias_op;
     bias_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    status = bias_op.Run(handle, mt_out, mt_mm_out, mt_bias);
+    mStatus status = bias_op.Run(handle, mt_out, mt_mm_out, mt_bias);
 
     OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
                 errors::Internal("MUSA BiasAdd failed in LinearRelu."));
@@ -136,12 +158,17 @@ class MusaLinearReluOp : public MusaOpKernel {
                 errors::Internal("MUSA Relu failed in LinearRelu."));
   }
 
-  bool IsExpensive() override { return true; }
-
- private:
-  bool trans_a_ = false;
-  bool trans_b_ = false;
-  bool tf32_enabled_ = false;  // TF32 acceleration enabled by default
+  void UseKernel(OpKernelContext* ctx, const Tensor& bias_input,
+                 const TensorShape& mm_out_shape, const Tensor& mm_out_tensor) {
+    Tensor* output = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, mm_out_shape, &output));
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
+    const T* mm_ptr = mm_out_tensor.flat<T>().data();
+    LaunchBiasAddReluKernel(
+        mm_ptr, bias_input.flat<T>().data(), output->flat<T>().data(),
+        mm_out_shape.num_elements(),
+        mm_out_shape.dim_size(mm_out_shape.dims() - 1), stream);
+  }
 };
 
 #define REGISTER_MUSA_LINEAR_RELU(TYPE)                                \
