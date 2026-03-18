@@ -24,7 +24,7 @@ jobs:
     env:
       COMMIT_ID: ${{ github.event.pull_request.head.sha || github.sha }}
       LOG_BASE: /home/runner/ci_logs
-      WORKSPACE: /homre/runner/action-runner/_work/${{ github.event.repository.name }}/${{ github.event.repository.name }}
+      WORKSPACE: /home/runner/action-runner/_work/${{ github.event.repository.name }}/${{ github.event.repository.name }}
 
     steps:
       - name: 🕵️ Check who am I
@@ -59,7 +59,6 @@ jobs:
 
           LOG_DIR="$LOG_BASE/$TYPE/$ID"
 
-          # 因为已经是 runner 用户，直接原生执行 mkdir 即可！
           mkdir -p "$LOG_DIR"
 
           echo "LOG_DIR=$LOG_DIR" >> $GITHUB_ENV
