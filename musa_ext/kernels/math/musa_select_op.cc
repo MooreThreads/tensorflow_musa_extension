@@ -1,9 +1,9 @@
 #include <mudnn.h>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/util/bcast.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -84,7 +84,7 @@ class MusaSelectOp : public MusaOpKernel {
     shape_storage.reserve(10);
 
     auto CreateMTensor_b = [&](const Tensor& input,
-                             bool force_left_align = false) -> mTensor {
+                               bool force_left_align = false) -> mTensor {
       mTensor mt = CreateMTensor(input, mFormat::NCHW);
 
       int target_rank = output_shape.dims();
