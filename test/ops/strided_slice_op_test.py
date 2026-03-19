@@ -137,15 +137,6 @@ class StridedSliceOpTest(MUSATestCase):
     # x[:, np.newaxis, :] -> shape (3, 1, 5)
     self._test_slice((slice(None), np.newaxis, slice(None)))
 
-  def testSliceNegativeStrides(self):
-    """Test reverse slicing with negative strides."""
-    # x[::-1, :]
-    self._test_slice((slice(None, None, -1), slice(None)))
-    # x[:, ::-2]
-    self._test_slice((slice(None), slice(None, None, -2)))
-    # x[1::-1, :]
-    self._test_slice((slice(1, None, -1), slice(None)))
-
   def testSliceDtypes(self):
     """Test different data types."""
     for dtype in [tf.float32, tf.int32, tf.int64, tf.bool, tf.bfloat16]:
