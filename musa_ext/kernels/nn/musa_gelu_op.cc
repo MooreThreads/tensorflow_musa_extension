@@ -33,7 +33,7 @@ class MusaGeluOp : public MusaOpKernel {
     MUSA_KERNEL_TRACE_END("Mem Alloc");
 
     if (input.NumElements() == 0) {
-      VLOG(1) << "MusaGeluOp::Compute skipped empty tensor";
+      // VLOG(1) << "MusaGeluOp::Compute skipped empty tensor";
       return;
     }
 
@@ -44,16 +44,16 @@ class MusaGeluOp : public MusaOpKernel {
     auto& handle = GetHandleByCtx(ctx);
     musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 
-    VLOG(1) << "MusaGeluOp::Compute launching kernel, elements="
-            << num_elements << ", approximate=" << approximate_;
+    // VLOG(1) << "MusaGeluOp::Compute launching kernel, elements="
+    //         << num_elements << ", approximate=" << approximate_;
 
     MUSA_KERNEL_TRACE_START("Kernel");
     LaunchGelu<T>(input_ptr, output_ptr, static_cast<int>(num_elements),
                   approximate_, stream);
     MUSA_KERNEL_TRACE_END("Kernel");
 
-    VLOG(1) << "MusaGeluOp::Compute finished, elements=" << num_elements
-            << ", approximate=" << approximate_;
+    // VLOG(1) << "MusaGeluOp::Compute finished, elements=" << num_elements
+    //         << ", approximate=" << approximate_;
   }
 
  private:

@@ -70,18 +70,20 @@ mTensor CreateMTensor(const Tensor& t, mFormat format) {
   rst.SetType(GetType(t.dtype()));
 
   auto dims_raw = t.shape().dim_sizes();
-  std::vector<int64_t> dims;
-  for (auto d : dims_raw) {
-    dims.push_back(d);
-  }
+  const int rank = static_cast<int>(dims_raw.size());
+  // Reuse TensorFlow's shape storage directly instead of copying dims into a
+  // temporary vector. For small elementwise ops this shaves a bit of host-side
+  // wrapper overhead.
+  const int64_t* dims =
+      reinterpret_cast<const int64_t*>(dims_raw.data());
 
-  if (dims.size() >= 4) {
+  if (rank >= 4) {
     rst.SetFormat(format);
   } else {
     rst.SetFormat(mFormat::NCHW);
   }
 
-  rst.SetNdInfo(static_cast<int>(dims.size()), dims.data());
+  rst.SetNdInfo(rank, dims);
   return rst;
 }
 

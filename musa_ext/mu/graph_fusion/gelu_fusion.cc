@@ -517,7 +517,7 @@ bool MusaGeluFusion::IsKernelAvailable() const {
   if (!kernel_checked_) {
     kernel_available_ = true;
     kernel_checked_ = true;
-    VLOG(1) << "MusaGelu kernel is available";
+    // VLOG(1) << "MusaGelu kernel is available";
   }
   return kernel_available_;
 }
@@ -537,8 +537,8 @@ FusionMatchResult MusaGeluFusion::Match(const GraphDef& graph,
   // current MLP-style graphs we are targeting.
   FusionMatchResult result = MatchStandardPattern(graph, start_node_idx);
   if (result.IsValid()) {
-    VLOG(1) << "MusaGeluFusion: matched exact GELU at node "
-            << graph.node(start_node_idx).name();
+    // VLOG(1) << "MusaGeluFusion: matched exact GELU at node "
+    //         << graph.node(start_node_idx).name();
     return result;
   }
 
@@ -546,8 +546,8 @@ FusionMatchResult MusaGeluFusion::Match(const GraphDef& graph,
   // than interleaving it with the exact logic.
   result = MatchApproximatePattern(graph, start_node_idx);
   if (result.IsValid()) {
-    VLOG(1) << "MusaGeluFusion: matched approximate GELU at node "
-            << graph.node(start_node_idx).name();
+    // VLOG(1) << "MusaGeluFusion: matched approximate GELU at node "
+    //         << graph.node(start_node_idx).name();
     return result;
   }
 
@@ -620,8 +620,8 @@ Status MusaGeluFusion::Apply(GraphDef* graph,
 
   for (const auto& node : graph->node()) {
     if (node.name() == original_name && node.op() == "MusaGelu") {
-      VLOG(1) << "MusaGeluFusion: fused node already exists for "
-              << original_name;
+      // VLOG(1) << "MusaGeluFusion: fused node already exists for "
+      //         << original_name;
       return Status::OK();
     }
   }
@@ -666,10 +666,10 @@ Status MusaGeluFusion::Apply(GraphDef* graph,
   const int removed_count = FusionGraphUtils::RemoveNodesIfUnused(
       graph, removable_node_names, {input_name, original_name});
 
-  VLOG(1) << "MusaGeluFusion: replaced '" << original_name
-          << "' with MusaGelu (approximate=" << approximate
-          << ", matched_nodes=" << match_result.matched_nodes.size()
-          << ", removed_nodes=" << removed_count << ")";
+  // VLOG(1) << "MusaGeluFusion: replaced '" << original_name
+  //         << "' with MusaGelu (approximate=" << approximate
+  //         << ", matched_nodes=" << match_result.matched_nodes.size()
+  //         << ", removed_nodes=" << removed_count << ")";
 
   return Status::OK();
 }
