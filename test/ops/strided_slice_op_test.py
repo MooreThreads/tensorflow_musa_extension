@@ -38,7 +38,7 @@ class CastOpTest(MUSATestCase):
             x_np = np.random.randn(*shape).astype(np_dtype) * 10.0
     else:
         x_np = np.array(data)
-        
+
     x = tf.constant(x_np, dtype=src_dtype)
 
     # Define Operator Wrapper
@@ -81,7 +81,7 @@ class StridedSliceOpTest(MUSATestCase):
     else:
         if shape is None: shape = [3, 5]
         x_np = np.arange(np.prod(shape)).reshape(shape).astype(dtype.as_numpy_dtype)
-        
+
     x = tf.constant(x_np, dtype=dtype)
 
     # Define Operator Wrapper
