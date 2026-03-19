@@ -62,6 +62,14 @@ class MeanOpTest(MUSATestCase):
       for shape, axis in test_cases:
         self._test_mean(shape, axis, dtype)
 
+  def testMeanReduceElementsOne(self):
+    # Cases where all reduced dimensions have size 1 -> reduce_elements == 1
+    for dtype in [tf.float32]:
+      # single reduced dim of size 1
+      self._test_mean([2, 1, 3], 1, dtype)
+      # multiple reduced dims, product equals 1
+      self._test_mean([2, 1, 1, 3], [1, 2], dtype)
+
   def testMeanLargeTensor(self):
     for dtype in [tf.float32]:
       atol = 2e-7
