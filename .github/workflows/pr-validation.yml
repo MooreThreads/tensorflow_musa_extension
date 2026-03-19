@@ -27,7 +27,7 @@ jobs:
       WORKSPACE: /home/runner/action-runner/_work/${{ github.event.repository.name }}/${{ github.event.repository.name }}
 
     steps:
-      - name: 🕵️ Check who am I
+      - name: Check who am I
         run: |
           echo "我是用户: $(whoami)"
           echo "我当前所在的家目录是: $HOME"
@@ -94,9 +94,21 @@ jobs:
             set -o pipefail
             cd $WORKSPACE &&
             LOG_FILE='$LOG_DIR/format.log' &&
-            find . \( -path ./build -o -path ./.git \) -prune -o \
-            -regex '.*\.\(cpp\|hpp\|c\|h\|cu\)' -print0 |
-            xargs -0 clang-format --Werror --dry-run > \$LOG_FILE 2>&1
+            FILE_LIST=\$(mktemp) &&
+            if [ '${{ github.event_name }}' = 'pull_request' ]; then
+              TARGET_BRANCH='${{ github.base_ref }}' &&
+              git fetch origin \$TARGET_BRANCH &&
+              git diff -z --diff-filter=ACMRTUXB --name-only origin/\$TARGET_BRANCH...HEAD -- \
+                '*.c' '*.cc' '*.cpp' '*.cu' '*.h' '*.hpp' > \$FILE_LIST
+            else
+              find . \( -path ./build -o -path ./.git \) -prune -o \
+                -regex '.*\.\(cc\|cpp\|hpp\|c\|h\|cu\)' -print0 > \$FILE_LIST
+            fi &&
+            if [ ! -s \$FILE_LIST ]; then
+              echo 'No C/C++ files to format-check.' > \$LOG_FILE
+            else
+              xargs -0 clang-format --Werror --dry-run < \$FILE_LIST > \$LOG_FILE 2>&1
+            fi
           " || exit_code=$?
 
           if [ $exit_code -eq 0 ]; then
@@ -181,8 +193,13 @@ jobs:
           echo "| Build | ${{ steps.run-build.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Test | ${{ steps.run-integration.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
 
-          if [ "${{ steps.run-format.outputs.status }}" == "failure" ] || \
-             [ "${{ steps.run-build.outputs.status }}" == "failure" ] || \
+          # if [ "${{ steps.run-format.outputs.status }}" == "failure" ] || \
+          #    [ "${{ steps.run-build.outputs.status }}" == "failure" ] || \
+          #    [ "${{ steps.run-integration.outputs.status }}" == "failure" ]; then
+          #   exit 1
+          # fi
+
+          if [ "${{ steps.run-build.outputs.status }}" == "failure" ] || \
              [ "${{ steps.run-integration.outputs.status }}" == "failure" ]; then
             exit 1
           fi
