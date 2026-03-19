@@ -81,10 +81,7 @@ class MusaMeanOp : public MusaOpKernel {
       }
     }
 
-    Tensor* out = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &out));
-
-    if (out->NumElements() == 0 || reduce_elements == 0) return;
+    if (reduce_elements == 0) return;
 
     auto& handle = GetHandleByCtx(ctx);
 
@@ -98,6 +95,11 @@ class MusaMeanOp : public MusaOpKernel {
       ctx->set_output(0, output);
       return;
     }
+
+    Tensor* out = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &out));
+
+    if (out->NumElements() == 0) return;
 
     Tensor out_reshaped(out->dtype());
     OP_REQUIRES(ctx, out_reshaped.CopyFrom(*out, musa_output_shape),
