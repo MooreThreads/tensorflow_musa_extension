@@ -407,32 +407,67 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
 
 MusaDevice::~MusaDevice() {
   musaSetDevice(device_id_);
+
+  // CRITICAL: Destroy order matters to avoid use-after-free:
+  // 1. device_context_ first - it waits for all stream operations to complete
+  //    and destroys streams. This ensures all callbacks registered with
+  //    event_mgr_ are either completed or can no longer be triggered.
+  // 2. event_mgr_ next - its destructor waits for the polling thread and
+  //    processes any remaining events synchronously.
+  // 3. pinned_memory_pool_ after event_mgr_ - because event callbacks may
+  //    reference pinned_memory_pool_ (e.g., in CopyDeviceTensorToCPU).
+  // 4. Other allocators and handles.
+
+  // Step 1: Release device_context_ (will wait for streams to complete)
   if (device_context_) {
     device_context_->Unref();
+    device_context_ = nullptr;
   }
-  if (mublas_handle_) {
-    mublasDestroy(mublas_handle_);
-  }
-  if (pinned_memory_pool_) {
-    delete pinned_memory_pool_;
-  }
-  if (musa_host_allocator_) {
-    delete musa_host_allocator_;
-  }
-  if (musa_allocator_) {
-    delete musa_allocator_;
-  }
+
+  // Step 2: Destroy event_mgr_ (will process remaining callbacks synchronously)
   if (event_mgr_) {
     delete event_mgr_;
+    event_mgr_ = nullptr;
   }
+
+  // Step 3: Destroy mublas_handle_
+  if (mublas_handle_) {
+    mublasDestroy(mublas_handle_);
+    mublas_handle_ = nullptr;
+  }
+
+  // Step 4: Destroy pinned_memory_pool_ (after event_mgr_ to ensure no
+  // callbacks reference it)
+  if (pinned_memory_pool_) {
+    delete pinned_memory_pool_;
+    pinned_memory_pool_ = nullptr;
+  }
+
+  // Step 5: Destroy host allocator
+  if (musa_host_allocator_) {
+    delete musa_host_allocator_;
+    musa_host_allocator_ = nullptr;
+  }
+
+  // Step 6: Destroy device allocator
+  if (musa_allocator_) {
+    delete musa_allocator_;
+    musa_allocator_ = nullptr;
+  }
+
+  // Step 7: Destroy streams (should already be idle after device_context_
+  // Unref)
   if (d2h_stream_) {
     musaStreamDestroy(d2h_stream_);
+    d2h_stream_ = nullptr;
   }
   if (h2d_stream_) {
     musaStreamDestroy(h2d_stream_);
+    h2d_stream_ = nullptr;
   }
   if (stream_) {
     musaStreamDestroy(stream_);
+    stream_ = nullptr;
   }
 }
 

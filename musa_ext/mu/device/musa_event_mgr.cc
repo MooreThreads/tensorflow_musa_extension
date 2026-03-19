@@ -31,17 +31,53 @@ MusaEventMgr::MusaEventMgr(int device_id, int32 polling_active_delay_usecs,
 }
 
 MusaEventMgr::~MusaEventMgr() {
+  // Set shutdown flag first to prevent new callbacks from being scheduled
+  shutting_down_.store(true, std::memory_order_release);
+
   StopPollingLoop();
-  for (auto& iu : used_events_) {
+
+  // At this point, PollLoop has exited. All events that were in used_events_
+  // have either been:
+  // 1. Processed by PollLoop's final FreeMemory (during shutdown path)
+  // 2. Left in used_events_ if PollLoop didn't process them
+  //
+  // We need to clean up any remaining events without querying them,
+  // as the underlying streams/resources may have been destroyed.
+
+  ToFreeVector to_free;
+  {
+    mutex_lock l(mu_);
+    // Move all remaining events to to_free without querying
+    for (auto& iu : used_events_) {
+      to_free.push_back(std::move(iu));
+    }
+    used_events_.clear();
+  }
+
+  // Execute callbacks and destroy events synchronously
+  for (const auto& iu : to_free) {
     if (iu.event != nullptr) {
       DestroyEvent(iu.event);
     }
+    if (iu.func != nullptr) {
+      musaSetDevice(device_id_);
+      iu.func();
+    } else if (iu.has_status_func) {
+      musaSetDevice(device_id_);
+      iu.status_func(Status::OK());
+    }
   }
-  used_events_.clear();
-  for (musaEvent_t event : free_events_) {
+
+  // Clear free_events_ - these are events that were recycled and
+  // are safe to destroy
+  std::vector<musaEvent_t> events_to_destroy;
+  {
+    mutex_lock l(mu_);
+    events_to_destroy.swap(free_events_);
+  }
+  for (musaEvent_t event : events_to_destroy) {
     DestroyEvent(event);
   }
-  free_events_.clear();
 }
 
 musaEvent_t MusaEventMgr::CreateEvent() {
@@ -57,7 +93,9 @@ musaEvent_t MusaEventMgr::CreateEvent() {
 void MusaEventMgr::DestroyEvent(musaEvent_t event) {
   if (event != nullptr) {
     musaError_t err = musaEventDestroy(event);
-    if (err != musaSuccess) {
+    // Only log as WARNING for errors other than invalid resource handle
+    // which can happen during shutdown when events are cleaned up
+    if (err != musaSuccess && err != musaErrorInvalidResourceHandle) {
       LOG(WARNING) << "Failed to destroy MUSA event: "
                    << musaGetErrorString(err);
     }
@@ -143,28 +181,51 @@ void MusaEventMgr::PollEvents(bool is_dedicated_poller, ToFreeVector* to_free) {
 }
 
 void MusaEventMgr::FreeMemory(const ToFreeVector& to_free) {
-  for (const auto& iu : to_free) {
-    if (iu.event != nullptr) {
-      free_events_.push_back(iu.event);
+  // First, collect all events to be recycled under lock
+  // This prevents race conditions with other threads accessing free_events_
+  {
+    mutex_lock l(mu_);
+    for (const auto& iu : to_free) {
+      if (iu.event != nullptr) {
+        free_events_.push_back(iu.event);
+      }
     }
+  }
 
+  // Execute callbacks outside the lock to avoid blocking
+  for (const auto& iu : to_free) {
     if (iu.func != nullptr) {
       // Inject device context before executing callback in threadpool thread
       // Background threads lose device context, causing silent failures
       auto user_func = iu.func;
       int device_id = device_id_;
-      threadpool_.Schedule([user_func, device_id]() {
+
+      // During shutdown, execute callbacks synchronously to ensure
+      // all callbacks complete before destruction
+      if (shutting_down_.load(std::memory_order_acquire)) {
         musaSetDevice(device_id);
         user_func();
-      });
+      } else {
+        threadpool_.Schedule([user_func, device_id]() {
+          musaSetDevice(device_id);
+          user_func();
+        });
+      }
     } else if (iu.has_status_func) {
       Status status = Status::OK();
       auto status_func = iu.status_func;
       int device_id = device_id_;
-      threadpool_.Schedule([status, status_func, device_id]() {
+
+      // During shutdown, execute callbacks synchronously
+      if (shutting_down_.load(std::memory_order_acquire)) {
         musaSetDevice(device_id);
         status_func(status);
-      });
+      } else {
+        threadpool_.Schedule([status, status_func, device_id]() {
+          musaSetDevice(device_id);
+          status_func(status);
+        });
+      }
     }
   }
 }
@@ -179,7 +240,17 @@ void MusaEventMgr::PollLoop() {
       }
 
       if (stop_polling_) {
-        PollEvents(true, &to_free);
+        // During shutdown, don't query events - just move them all to to_free
+        // This avoids "invalid resource handle" errors when the underlying
+        // resources may have already been destroyed
+        if (shutting_down_.load(std::memory_order_acquire)) {
+          for (auto& iu : used_events_) {
+            to_free.push_back(std::move(iu));
+          }
+          used_events_.clear();
+        } else {
+          PollEvents(true, &to_free);
+        }
         break;
       }
 
@@ -194,7 +265,25 @@ void MusaEventMgr::PollLoop() {
     }
   }
 
-  FreeMemory(to_free);
+  // Final FreeMemory call - during shutdown, destroy events directly
+  // instead of adding to free_events_ to avoid double-free
+  if (shutting_down_.load(std::memory_order_acquire)) {
+    for (const auto& iu : to_free) {
+      if (iu.event != nullptr) {
+        DestroyEvent(iu.event);
+      }
+      // Execute callbacks synchronously during shutdown
+      if (iu.func != nullptr) {
+        musaSetDevice(device_id_);
+        iu.func();
+      } else if (iu.has_status_func) {
+        musaSetDevice(device_id_);
+        iu.status_func(Status::OK());
+      }
+    }
+  } else {
+    FreeMemory(to_free);
+  }
 
   if (polling_stopped_) {
     polling_stopped_->Notify();
