@@ -60,7 +60,7 @@ else()
 endif()
 
 # Include paths
-include_directories("${TF_INC}" "${MUSA_PATH}/include" "${MUSA_PATH}/include/mudnncxx")
+include_directories("${TF_INC}" "${MUSA_PATH}/include")
 
 # Include TensorFlow C++ core headers for common_runtime
 # These are required for accessing BFCAllocator and device-specific headers
@@ -150,7 +150,7 @@ set_target_properties(musa_plugin PROPERTIES
 )
 
 # Link
-target_link_libraries(musa_plugin PRIVATE ${TF_LINK_FLAGS} musa mublas mudnncxx rt)
+target_link_libraries(musa_plugin PRIVATE ${TF_LINK_FLAGS} musa mublas mudnn rt)
 
 # Output configuration
 set_target_properties(musa_plugin PROPERTIES
