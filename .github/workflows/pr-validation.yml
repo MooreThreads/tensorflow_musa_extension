@@ -155,7 +155,7 @@ jobs:
           bash -l -c "
             cd $WORKSPACE/test &&
             LOG_FILE='$LOG_DIR/test.log' &&
-            timeout 30m python test_runner.py > \$LOG_FILE 2>&1
+            timeout 30m python test_runner.py --fusion > \$LOG_FILE 2>&1
           " || exit_code=$?
 
           if [ $exit_code -eq 0 ]; then
