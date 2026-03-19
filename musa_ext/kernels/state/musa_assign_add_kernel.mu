@@ -1,5 +1,5 @@
 // musa_assign_add_kernel.mu
-// MUSA kernel for AssignAdd operation
+// MUSA kernel for AssignAdd operation_new
 // Performs in-place addition: ref = ref + value
 
 #include <musa_runtime.h>

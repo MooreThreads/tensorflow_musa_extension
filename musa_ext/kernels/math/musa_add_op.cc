@@ -1,10 +1,144 @@
+#include <cstdlib>
+#include <string>
+#include <vector>
+
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
+#include "tensorflow/core/util/bcast.h"
 #include "../utils_op.h"
+#include "utils/logging.h"
 
 namespace tensorflow {
 namespace musa {
+
+namespace {
+
+bool UseAddBroadcastViewOpt() {
+  const char* env = std::getenv("MUSA_ADDV2_ENABLE_BCAST_VIEW_OPT");
+  if (env == nullptr || std::string(env).empty()) {
+    return true;
+  }
+  const std::string value(env);
+  return !(value == "0" || value == "false" || value == "FALSE" ||
+           value == "off" || value == "OFF" || value == "no" ||
+           value == "NO");
+}
+
+bool SameShape(const TensorShape& lhs, const TensorShape& rhs) {
+  if (lhs.dims() != rhs.dims()) return false;
+  for (int i = 0; i < lhs.dims(); ++i) {
+    if (lhs.dim_size(i) != rhs.dim_size(i)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::vector<int64_t> MakeDenseStrides(const Tensor& tensor) {
+  std::vector<int64_t> strides(tensor.dims(), 1);
+  for (int i = tensor.dims() - 2; i >= 0; --i) {
+    strides[i] = strides[i + 1] * tensor.dim_size(i + 1);
+  }
+  return strides;
+}
+
+bool SameShape(const Tensor& tensor, const TensorShape& output_shape) {
+  if (tensor.dims() != output_shape.dims()) return false;
+  for (int i = 0; i < tensor.dims(); ++i) {
+    if (tensor.dim_size(i) != output_shape.dim_size(i)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool IsSmallRepeatedBroadcast(const Tensor& tensor,
+                              const TensorShape& output_shape) {
+  // The broadcast-view path only helps when a relatively small input is reused
+  // many times in the output. Without this guard, descriptor setup overhead can
+  // dominate and turn into a regression on common same-shape AddV2 cases.
+  if (output_shape.dims() == 0 || tensor.NumElements() <= 0 ||
+      output_shape.num_elements() <= 0) {
+    return false;
+  }
+  if (SameShape(tensor, output_shape)) {
+    return false;
+  }
+
+  const int64_t input_elements = tensor.NumElements();
+  const int64_t output_elements = output_shape.num_elements();
+  if (input_elements <= 0 || output_elements <= input_elements) {
+    return false;
+  }
+
+  const int64_t reuse_factor = output_elements / input_elements;
+  if (reuse_factor < 4) {
+    return false;
+  }
+
+  if (input_elements == 1) {
+    return true;
+  }
+
+  if (input_elements > 4096) {
+    return false;
+  }
+
+  if (tensor.dims() < output_shape.dims()) {
+    return true;
+  }
+
+  return tensor.dims() > 0 && tensor.dim_size(0) == 1;
+}
+
+Status ConfigureBroadcastView(const Tensor& tensor,
+                              const TensorShape& output_shape, mTensor* mt,
+                              std::vector<int64_t>* dims,
+                              std::vector<int64_t>* strides) {
+  // Express TensorFlow-style broadcast as a muDNN tensor view by keeping the
+  // output dims and setting broadcasted axes to stride 0.
+  if (SameShape(tensor, output_shape) || output_shape.dims() == 0) {
+    return Status::OK();
+  }
+
+  const int input_rank = tensor.dims();
+  const int target_rank = output_shape.dims();
+  const auto dense_strides = MakeDenseStrides(tensor);
+
+  dims->assign(target_rank, 1);
+  strides->assign(target_rank, 0);
+
+  for (int i = 0; i < target_rank; ++i) {
+    (*dims)[i] = output_shape.dim_size(i);
+  }
+
+  for (int i = 1; i <= target_rank; ++i) {
+    const int target_idx = target_rank - i;
+    const int input_idx = input_rank - i;
+    if (input_idx < 0) continue;
+
+    const int64_t in_dim = tensor.dim_size(input_idx);
+    const int64_t out_dim = output_shape.dim_size(target_idx);
+    if (in_dim == out_dim) {
+      (*strides)[target_idx] = dense_strides[input_idx];
+    } else if (in_dim != 1) {
+      return errors::InvalidArgument(
+          "Invalid Add broadcast view: input shape=",
+          tensor.shape().DebugString(),
+          ", output shape=", output_shape.DebugString());
+    }
+  }
+
+  auto status = mt->SetNdInfo(target_rank, dims->data(), strides->data());
+  if (status != ::musa::dnn::Status::SUCCESS) {
+    return errors::Internal("MUSA Add SetNdInfo failed. Status: ",
+                            static_cast<int>(status));
+  }
+  return Status::OK();
+}
+
+}  // namespace
 
 template <typename T>
 class MusaAddOp : public MusaOpKernel {
@@ -17,51 +151,66 @@ class MusaAddOp : public MusaOpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_KERNEL_TIMING_GUARD(ctx);
     const Tensor& in0 = ctx->input(0);
     const Tensor& in1 = ctx->input(1);
 
-    const int dims0 = in0.dims();
-    const int dims1 = in1.dims();
-    const int out_dims = std::max(dims0, dims1);
     TensorShape output_shape;
-
-    for (int i = 0; i < out_dims; ++i) {
-      int d0 =
-          (i < out_dims - dims0) ? 1 : in0.dim_size(i - (out_dims - dims0));
-      int d1 =
-          (i < out_dims - dims1) ? 1 : in1.dim_size(i - (out_dims - dims1));
-
-      if (d0 == d1) {
-        output_shape.AddDim(d0);
-      } else if (d0 == 1) {
-        output_shape.AddDim(d1);
-      } else if (d1 == 1) {
-        output_shape.AddDim(d0);
-      } else {
-        ctx->CtxFailure(errors::InvalidArgument(
-            "Incompatible shapes: ", in0.shape().DebugString(), " and ",
-            in1.shape().DebugString()));
-        return;
-      }
+    const bool same_shape = SameShape(in0.shape(), in1.shape());
+    if (same_shape) {
+      output_shape = in0.shape();
+    } else {
+      MUSA_KERNEL_TRACE_START("BCast");
+      BCast bcast(BCast::Vec(in0.shape().dim_sizes()),
+                  BCast::Vec(in1.shape().dim_sizes()));
+      OP_REQUIRES(ctx, bcast.IsValid(),
+                  errors::InvalidArgument(
+                      "Incompatible shapes for Add: ",
+                      in0.shape().DebugString(), " and ",
+                      in1.shape().DebugString()));
+      output_shape = BCast::ToShape(bcast.output_shape());
+      MUSA_KERNEL_TRACE_END("BCast");
     }
 
+    // Reuse the left input buffer when TensorFlow determines it is safe.
+    // This particularly helps the common [N, C] + [C] broadcast pattern where
+    // the output shape matches input 0.
+    MUSA_KERNEL_TRACE_START("Alloc");
     Tensor* out = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &out));
+    OP_REQUIRES_OK(ctx, ctx->forward_input_or_allocate_output(
+                            {0}, 0, output_shape, &out));
+    MUSA_KERNEL_TRACE_END("Alloc");
 
     if (in0.NumElements() == 0 || in1.NumElements() == 0 ||
         output_shape.num_elements() == 0) {
       return;
     }
 
+    MUSA_KERNEL_TRACE_START("Tensor Wrap");
     auto& handle = GetHandleByCtx(ctx);
     mTensor t0 = CreateMTensor(in0, format_);
     mTensor t1 = CreateMTensor(in1, format_);
     mTensor t_out = CreateMTensor(*out, format_);
+    std::vector<int64_t> t0_dims, t0_strides;
+    std::vector<int64_t> t1_dims, t1_strides;
+    if (UseAddBroadcastViewOpt()) {
+      if (IsSmallRepeatedBroadcast(in0, output_shape)) {
+        OP_REQUIRES_OK(ctx, ConfigureBroadcastView(in0, output_shape, &t0,
+                                                   &t0_dims, &t0_strides));
+      }
+      if (IsSmallRepeatedBroadcast(in1, output_shape)) {
+        OP_REQUIRES_OK(ctx, ConfigureBroadcastView(in1, output_shape, &t1,
+                                                   &t1_dims, &t1_strides));
+      }
+    }
+    MUSA_KERNEL_TRACE_END("Tensor Wrap");
 
     ::musa::dnn::Binary op;
     op.SetMode(::musa::dnn::Binary::Mode::ADD);
 
+    MUSA_KERNEL_TRACE_START("Kernel");
     auto status = op.Run(handle, t_out, t0, t1);
+    MUSA_KERNEL_TRACE_END("Kernel");
     OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
                 errors::Internal("MUSA Add execution failed."));
   }

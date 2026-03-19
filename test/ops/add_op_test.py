@@ -77,6 +77,21 @@ class AddOpTest(MUSATestCase):
       for shape_x, shape_y in test_cases:
         self._test_add(shape_x, shape_y, dtype)
 
+  def testAddPrunedGraphHotShapes(self):
+    """Test add with broadcast patterns observed in prunedGraph."""
+    test_cases = [
+        ([7, 48], [48]),
+        ([5, 64], [64]),
+        ([3, 768], [1, 768]),
+        ([2, 8, 160], [160]),
+        ([], [64]),
+    ]
+    for dtype in [tf.float32, tf.float16]:
+      rtol = 1e-2 if dtype == tf.float16 else 1e-5
+      atol = 1e-2 if dtype == tf.float16 else 1e-8
+      for shape_x, shape_y in test_cases:
+        self._test_add(shape_x, shape_y, dtype, rtol=rtol, atol=atol)
+
 
 if __name__ == "__main__":
   tf.test.main()

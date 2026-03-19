@@ -26,11 +26,17 @@ namespace grappler {
 namespace musa_fusion {
 
 // LayerNorm fusion pattern
-// Matches a subgraph that implements LayerNorm and replaces it with MusaLayerNorm op
+// Matches either:
+//   1. A full affine LayerNorm subgraph ending in Add/AddV2
+//   2. A normalize-core subgraph ending in Mul where gamma = 1 + scale
+// and replaces it with a MusaLayerNorm op.
 //
 // Pattern structure (typical TF implementation):
-//   input -> Mean -> Sub -> SquaredDifference -> Mean -> Add(epsilon) -> Rsqrt -> Mul
-//                                                                    -> Mul -> Add (with gamma/beta)
+//   input -> Mean -> Sub -> SquaredDifference -> Mean -> Add(epsilon) -> Rsqrt
+//   -> Mul
+//                                                                    -> Mul ->
+//                                                                    Add (with
+//                                                                    gamma/beta)
 //
 // Or the variable-based version:
 //   input -> Moments -> [mean, variance] -> Sub/Sqrt/Div/Mul/Add pattern
@@ -43,21 +49,23 @@ class MusaLayerNormFusion : public FusionPattern {
  public:
   MusaLayerNormFusion();
   ~MusaLayerNormFusion() override = default;
-  
+
   // Match the LayerNorm pattern starting from a node
-  FusionMatchResult Match(const GraphDef& graph, int start_node_idx) const override;
-  
+  FusionMatchResult Match(const GraphDef& graph,
+                          int start_node_idx) const override;
+
   // Apply the fusion: replace matched subgraph with MusaLayerNorm
-  Status Apply(GraphDef* graph, const FusionMatchResult& match_result) const override;
-  
+  Status Apply(GraphDef* graph,
+               const FusionMatchResult& match_result) const override;
+
   // Priority: higher than basic patterns
   int GetPriority() const override { return 100; }
-  
+
   // Kernel is available (implemented in musa_layernorm_op.cc)
   bool IsKernelAvailable() const override;
-  
+
   std::string GetName() const override { return "MusaLayerNormFusion"; }
-  
+
   std::string GetFallbackReason() const override {
     if (!kernel_available_) {
       return "MusaLayerNorm kernel not available on this device";
@@ -68,12 +76,13 @@ class MusaLayerNormFusion : public FusionPattern {
  private:
   // Match LayerNorm pattern starting from Add node (beta addition)
   // This is the most reliable matching strategy
-  FusionMatchResult MatchFromAddNode(const GraphDef& graph, int add_node_idx) const;
-  
-  // Match LayerNorm pattern starting from RealDiv node
-  // Alternative matching strategy for different graph structures
-  FusionMatchResult MatchFromDivNode(const GraphDef& graph, int div_node_idx) const;
-  
+  FusionMatchResult MatchFromAddNode(const GraphDef& graph,
+                                     int add_node_idx) const;
+
+  // Match LayerNorm-core pattern starting from the final Mul node
+  FusionMatchResult MatchFromMulNode(const GraphDef& graph,
+                                     int mul_node_idx) const;
+
   // Kernel availability flag
   mutable bool kernel_available_ = true;
   mutable bool kernel_checked_ = false;

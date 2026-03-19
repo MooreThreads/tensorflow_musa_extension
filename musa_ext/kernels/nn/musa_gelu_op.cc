@@ -29,7 +29,7 @@ class MusaGeluOp : public MusaOpKernel {
     MUSA_KERNEL_TRACE_END("Mem Alloc");
 
     if (input.NumElements() == 0) {
-      VLOG(1) << "MusaGeluOp::Compute skipped empty tensor";
+      // VLOG(1) << "MusaGeluOp::Compute skipped empty tensor";
       return;
     }
 
@@ -40,7 +40,7 @@ class MusaGeluOp : public MusaOpKernel {
     mUnary op;
     const UNARY_MODE mode =
         approximate_ ? UNARY_MODE::GELU_TANH : UNARY_MODE::GELU;
-
+        
     VLOG(1) << "MusaGeluOp::Compute launching muDNN GELU, elements="
             << num_elements << ", approximate=" << approximate_
             << ", mode=" << (approximate_ ? "GELU_TANH" : "GELU");
@@ -54,8 +54,8 @@ class MusaGeluOp : public MusaOpKernel {
                       ctx);
     MUSA_KERNEL_TRACE_END("Kernel");
 
-    VLOG(1) << "MusaGeluOp::Compute finished, elements=" << num_elements
-            << ", approximate=" << approximate_;
+    // VLOG(1) << "MusaGeluOp::Compute finished, elements=" << num_elements
+    //         << ", approximate=" << approximate_;
   }
 
  private:
