@@ -241,6 +241,12 @@ python test_runner.py --quiet
 - **归一化**：LayerNorm, FusedBatchNorm
 - **特殊算子**：TensorInteraction, BiasAdd, Assign
 
+## 使用示例
+
+详细使用示例见：
+
+[![MUSA Playground](https://img.shields.io/badge/Gitee-TensorFlow_MUSA_Playground-C71D23?style=for-the-badge&logo=gitee&logoColor=white)](https://gitee.com/mthreadsacademy/tensorflow_musa_playground)
+
 ## 贡献指南
 
 欢迎贡献新的算子实现或优化！贡献流程：
