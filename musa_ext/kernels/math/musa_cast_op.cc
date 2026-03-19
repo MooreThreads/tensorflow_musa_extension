@@ -11,6 +11,8 @@ class MusaCastOp : public MusaOpKernel {
   explicit MusaCastOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("SrcT", &external_src_dtype_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("DstT", &external_dst_dtype_));
+    // Cache identity check for zero-copy fast path (matches TensorFlow's CastOpBase)
+    is_identity_cast_ = (external_src_dtype_ == external_dst_dtype_);
   }
 
   // Cast is element-wise - lightweight
@@ -18,14 +20,30 @@ class MusaCastOp : public MusaOpKernel {
 
   void Compute(OpKernelContext* ctx) override {
     const Tensor& inp = ctx->input(0);
+
+    // Zero-copy fast path for identity cast (SrcT == DstT)
+    // This matches TensorFlow's official CastOpBase behavior:
+    // - Uses reference counting to manage shared buffer
+    // - TensorFlow's runtime ensures safety via copy-on-write semantics
+    if (is_identity_cast_) {
+      ctx->set_output(0, inp);
+      return;
+    }
+
+    // Early exit for empty tensors - still need to allocate output with correct shape
+    if (inp.NumElements() == 0) {
+      Tensor* output = nullptr;
+      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, inp.shape(), &output));
+      return;
+    }
+
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, inp.shape(), &output));
-
-    if (inp.NumElements() == 0) return;
 
     auto in_mt = CreateMTensor(inp);
     auto out_mt = CreateMTensor(*output);
 
+    // BOOL format workaround for muDNN
     if (inp.dtype() == DT_BOOL) {
       in_mt.SetFormat(mFormat::NCHW);
     }
@@ -33,13 +51,7 @@ class MusaCastOp : public MusaOpKernel {
     mHandle& h = GetHandleByCtx(ctx);
     ::musa::dnn::Unary op;
 
-    mStatus m_status;
-    if (external_src_dtype_ == external_dst_dtype_) {
-      m_status = op.SetMode(::musa::dnn::Unary::Mode::IDENTITY);
-    } else {
-      m_status = op.SetMode(::musa::dnn::Unary::Mode::CAST);
-    }
-
+    auto m_status = op.SetMode(::musa::dnn::Unary::Mode::CAST);
     OP_REQUIRES(ctx, m_status == mStatus::SUCCESS,
                 errors::Internal("muDNN Unary SetMode failed in Cast"));
 
@@ -49,10 +61,10 @@ class MusaCastOp : public MusaOpKernel {
       LOG(ERROR) << "MUSA Cast Run failed! Src: "
                  << DataTypeString(external_src_dtype_)
                  << " -> Dst: " << DataTypeString(external_dst_dtype_)
-                 << " | Status: " << (int)m_status;
+                 << " | Status: " << static_cast<int>(m_status);
 
       ctx->SetStatus(errors::Internal("MUSA Cast Run failed. Status code: ",
-                                      (int)m_status));
+                                      static_cast<int>(m_status)));
       return;
     }
   }
@@ -60,6 +72,7 @@ class MusaCastOp : public MusaOpKernel {
  private:
   DataType external_src_dtype_;
   DataType external_dst_dtype_;
+  bool is_identity_cast_;  // Cached flag for zero-copy optimization
 };
 
 #define REGISTER_CAST_MUSA(SrcT, DstT)                       \
