@@ -827,6 +827,29 @@ Status MusaTensorDotFusion::Apply(GraphDef* graph,
           << " fused sub-graph nodes";
 
   // =========================================================================
+  // 收集所有融合节点的输入节点（用于后续孤立节点检测）
+  // =========================================================================
+  std::unordered_set<std::string> potential_orphan_producers;
+  for (const auto& node_name : fuse_node_names) {
+    int idx = FusionGraphUtils::FindNodeIndex(*graph, node_name);
+    if (idx >= 0 && idx < graph->node_size()) {
+      const NodeDef& node = graph->node(idx);
+      for (int j = 0; j < node.input_size(); ++j) {
+        std::string producer =
+            FusionGraphUtils::GetProducerNodeName(node.input(j));
+        // 只记录不在融合子图内的输入节点
+        if (producer != output_name && !fuse_node_names.count(producer) &&
+            producer != input_a_name && producer != input_b_name) {
+          potential_orphan_producers.insert(producer);
+        }
+      }
+    }
+  }
+
+  VLOG(2) << "[TensorDot::Apply] found " << potential_orphan_producers.size()
+          << " potential orphan producer nodes";
+
+  // =========================================================================
   // 删除被融合的子图节点（融合节点继承 output_name，无需重定向）
   // =========================================================================
   int removed_count = 0;
@@ -842,6 +865,52 @@ Status MusaTensorDotFusion::Apply(GraphDef* graph,
   }
 
   VLOG(2) << "[TensorDot::Apply] removed " << removed_count << " nodes";
+
+  // =========================================================================
+  // 检查并删除孤立节点
+  // =========================================================================
+  int orphan_removed_count = 0;
+  for (auto it = potential_orphan_producers.begin();
+       it != potential_orphan_producers.end();) {
+    const std::string& producer_name = *it;
+
+    // 检查该节点是否还存在（可能已经被之前的删除操作删除）
+    int idx = FusionGraphUtils::FindNodeIndex(*graph, producer_name);
+    if (idx < 0 || idx >= graph->node_size()) {
+      ++it;
+      continue;
+    }
+
+    // 检查该节点是否还有其他消费者
+    bool has_consumers = false;
+    for (int i = 0; i < graph->node_size(); ++i) {
+      const NodeDef& node = graph->node(i);
+      for (int j = 0; j < node.input_size(); ++j) {
+        std::string input_producer =
+            FusionGraphUtils::GetProducerNodeName(node.input(j));
+        if (input_producer == producer_name) {
+          has_consumers = true;
+          break;
+        }
+      }
+      if (has_consumers) break;
+    }
+
+    if (!has_consumers) {
+      // 孤立节点，删除它
+      VLOG(2) << "[TensorDot::Apply] removing orphan node: " << producer_name;
+      FusionGraphUtils::RemoveNode(graph, idx);
+      orphan_removed_count++;
+      it = potential_orphan_producers.erase(it);
+    } else {
+      ++it;
+    }
+  }
+
+  if (orphan_removed_count > 0) {
+    VLOG(2) << "[TensorDot::Apply] removed " << orphan_removed_count
+            << " orphan nodes";
+  }
 
   // =========================================================================
   // 创建融合节点
