@@ -32,8 +32,7 @@ class MusaCastOp : public MusaOpKernel {
 
     // Early exit for empty tensors - still need to allocate output with correct shape
     if (inp.NumElements() == 0) {
-      Tensor* output = nullptr;
-      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, inp.shape(), &output));
+      ctx->set_output(0, inp);
       return;
     }
 
