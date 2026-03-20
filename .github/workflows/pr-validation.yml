@@ -179,7 +179,7 @@ jobs:
           bash -l -c "
             cd /home/runner/tf_test_model/prunedGraph &&
             LOG_FILE='$LOG_DIR/performance-part1.log' &&
-            timeout 20m python run_graph_tf_musa.py --inference-only > \$LOG_FILE 2>&1
+            timeout 20m python run_graph_tf_musa.py --inference-only --inference-rounds 1000 > \$LOG_FILE 2>&1
           " || exit_code=$?
 
           if [ $exit_code -ne 0 ]; then
@@ -195,7 +195,7 @@ jobs:
             exit 1
           fi
 
-          BASELINE=0.011360
+          BASELINE=0.038332
           THRESHOLD=$(awk -v base="$BASELINE" 'BEGIN {printf "%.6f", base * 1.05}')
 
           echo "Baseline : $BASELINE"
