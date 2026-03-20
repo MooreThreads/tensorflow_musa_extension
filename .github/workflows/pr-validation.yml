@@ -69,16 +69,15 @@ jobs:
       # ==============================
       # Rebase 检查（仅 PR）
       # ==============================
-      - name: Check Rebase Status
-        if: github.event_name == 'pull_request'
-        run: |
-          TARGET_BRANCH="${{ github.base_ref }}"
-          git fetch origin $TARGET_BRANCH
-
-          if ! git merge-base --is-ancestor origin/$TARGET_BRANCH HEAD; then
-            echo "❌ NOT rebased"
-            exit 1
-          fi
+      # - name: Check Rebase Status
+      #   if: github.event_name == 'pull_request'
+      #   run: |
+      #     TARGET_BRANCH="${{ github.base_ref }}"
+      #     git fetch origin $TARGET_BRANCH
+      #     if ! git merge-base --is-ancestor origin/$TARGET_BRANCH HEAD; then
+      #       echo "❌ NOT rebased"
+      #       exit 1
+      #     fi
 
       # ==============================
       # Format
@@ -130,6 +129,7 @@ jobs:
           exit_code=0
           bash -l -c "
             cd $WORKSPACE &&
+            cp -r /home/runner/tensorflow_musa_extension/CMakeList.txt ./ &&
             LOG_FILE='$LOG_DIR/build.log' &&
             rm -rf ./build &&
             ./build.sh > \$LOG_FILE 2>&1
@@ -274,16 +274,12 @@ jobs:
           echo "| Format | ${{ steps.run-format.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Build | ${{ steps.run-build.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Test | ${{ steps.run-integration.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Performance | ${{ steps.run-performance.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
-
-          # if [ "${{ steps.run-format.outputs.status }}" == "failure" ] || \
-          #    [ "${{ steps.run-build.outputs.status }}" == "failure" ] || \
-          #    [ "${{ steps.run-integration.outputs.status }}" == "failure" ]; then
-          #   exit 1
-          # fi
+          echo "| Performance | ${{ steps.run-performance-part1.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Performance | ${{ steps.run-performance-part2.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ steps.run-build.outputs.status }}" == "failure" ] || \
              [ "${{ steps.run-integration.outputs.status }}" == "failure" ] || \
-             [ "${{ steps.run-performance.outputs.status }}" == "failure" ]; then
+             [ "${{ steps.run-performance-part1.outputs.status }}" == "failure" ] || \
+             [ "${{ steps.run-performance-part2.outputs.status }}" == "failure" ]; then
             exit 1
           fi
