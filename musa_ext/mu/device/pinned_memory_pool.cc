@@ -43,15 +43,23 @@ GPUPinnedMemoryPool::~GPUPinnedMemoryPool() {
 
   musaSetDevice(device_id_);
 
+  // Process all pending frees under lock to ensure thread safety
+  // and proper cleanup of events and memory
   mutex_lock l(mu_);
-  for (const auto& block : pending_frees_) {
+
+  // First, destroy all events in pending_frees_ and release memory directly
+  // Do NOT move to free_list_ to avoid potential double-free issues
+  for (auto& block : pending_frees_) {
     if (block.event != nullptr) {
       musaEventDestroy(block.event);
+      block.event = nullptr;
     }
+    // Release memory directly instead of moving to free_list_
     ReleaseBlock(block);
   }
   pending_frees_.clear();
 
+  // Release all blocks in free_list_
   for (const auto& block : free_list_) {
     ReleaseBlock(block);
   }
@@ -132,6 +140,24 @@ void GPUPinnedMemoryPool::FreeAsync(void* ptr, size_t bytes,
 
   musaSetDevice(device_id_);
 
+  // If stream is nullptr, synchronize and free immediately
+  // This avoids creating unnecessary events and ensures memory is safe to free
+  if (stream == nullptr) {
+    musaError_t err = musaDeviceSynchronize();
+    if (err != musaSuccess) {
+      LOG(WARNING) << "PinnedMemoryPool: musaDeviceSynchronize failed: "
+                   << musaGetErrorString(err);
+    }
+    musaError_t free_err = musaFreeHost(ptr);
+    if (free_err != musaSuccess) {
+      LOG(ERROR) << "PinnedMemoryPool: musaFreeHost failed: "
+                 << musaGetErrorString(free_err);
+    }
+    VLOG(2) << "PinnedMemoryPool: Freed block " << ptr << " size=" << alloc_size
+            << " (sync, no stream)";
+    return;
+  }
+
   musaEvent_t event;
   musaError_t err = musaEventCreateWithFlags(&event, musaEventDisableTiming);
   if (err != musaSuccess) {
@@ -190,10 +216,24 @@ void GPUPinnedMemoryPool::PollPendingFrees() {
   while (it != pending_frees_.end()) {
     Block& block = *it;
 
+    // Skip blocks with null events (should not happen, but be defensive)
+    if (block.event == nullptr) {
+      LOG(WARNING) << "PinnedMemoryPool: Block " << block.ptr
+                   << " has null event, moving to free_list";
+      free_list_.push_back(block);
+      it = pending_frees_.erase(it);
+      continue;
+    }
+
     musaError_t err = musaEventQuery(block.event);
 
     if (err == musaSuccess) {
-      musaEventDestroy(block.event);
+      // Event completed successfully, destroy it and move block to free_list
+      musaError_t destroy_err = musaEventDestroy(block.event);
+      if (destroy_err != musaSuccess) {
+        LOG(WARNING) << "PinnedMemoryPool: Failed to destroy event for block "
+                     << block.ptr << ": " << musaGetErrorString(destroy_err);
+      }
       block.event = nullptr;
 
       VLOG(2) << "PinnedMemoryPool: Block " << block.ptr
@@ -202,11 +242,18 @@ void GPUPinnedMemoryPool::PollPendingFrees() {
       free_list_.push_back(block);
       it = pending_frees_.erase(it);
     } else if (err == musaErrorNotReady) {
+      // Event not ready yet, skip to next block
       ++it;
     } else {
+      // Event query failed, destroy the event and move block to free_list
+      // This is a defensive measure to prevent memory leaks
       LOG(WARNING) << "PinnedMemoryPool: Event query failed for block "
                    << block.ptr << ": " << musaGetErrorString(err);
-      musaEventDestroy(block.event);
+      musaError_t destroy_err = musaEventDestroy(block.event);
+      if (destroy_err != musaSuccess) {
+        LOG(WARNING) << "PinnedMemoryPool: Failed to destroy event for block "
+                     << block.ptr << ": " << musaGetErrorString(destroy_err);
+      }
       block.event = nullptr;
       free_list_.push_back(block);
       it = pending_frees_.erase(it);

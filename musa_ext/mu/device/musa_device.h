@@ -61,12 +61,6 @@ class MusaDeviceContext : public DeviceContext {
   ::stream_executor::internal::StreamInterface* implementation_;
   ::stream_executor::Stream* official_stream_;
   MusaEventMgr* event_mgr_;
-
-  mutable std::mutex cleanup_mu_;
-  mutable std::queue<AsyncCopyPayload*> cleanup_queue_;
-  mutable std::atomic<bool> stop_polling_{false};
-  mutable std::thread polling_thread_;
-  void PollingLoop() const;
 };
 
 class MusaDevice : public Device {
