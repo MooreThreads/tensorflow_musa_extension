@@ -3,6 +3,7 @@
 #include <list>
 #include <vector>
 
+#include <musa_runtime.h>
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -10,7 +11,6 @@
 #include "tensorflow/core/framework/resource_var.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.h"
-#include "tensorflow/core/lib/core/notification.h"
 #include "../array/musa_fill_functor.h"
 #include "../utils_op.h"
 
@@ -30,22 +30,16 @@ Status CopyTensorForUpdate(OpKernelContext* ctx, const Tensor& src, Tensor* dst)
     return Status::OK();
   }
 
-  auto* device_context = ctx->op_device_context();
-  if (device_context == nullptr) {
-    return errors::Internal("ResourceApplyAdam: null op device context.");
+  // Use musaMemcpyAsync for same-device memory copy
+  musaStream_t stream = GetMusaStreamByCtx(ctx);
+  musaError_t err = musaMemcpyAsync(dst->data(), src.data(), src.TotalBytes(),
+                                    musaMemcpyDeviceToDevice, stream);
+  if (err != musaSuccess) {
+    return errors::Internal("CopyTensorForUpdate: musaMemcpyAsync failed: ",
+                            musaGetErrorString(err));
   }
 
-  Device* device = static_cast<Device*>(ctx->device());
-  Notification n;
-  Status status;
-  device_context->CopyTensorInSameDevice(
-      &src, device, dst, [&n, &status](const Status& s) {
-        status = s;
-        n.Notify();
-      });
-  n.WaitForNotification();
-
-  return status;
+  return Status::OK();
 }
 
 Status PrepareTensorForMusaUpdate(OpKernelContext* ctx, Var* var) {
