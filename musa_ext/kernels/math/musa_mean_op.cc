@@ -87,8 +87,6 @@ class MusaMeanOp : public MusaOpKernel {
 
     if (reduce_elements == 1) {
       Tensor output;
-      // zero-copy: assign new output_shape, underlying GPU memory still points
-      // to input
       bool success = output.CopyFrom(input, output_shape);
       OP_REQUIRES(ctx, success,
                   errors::Internal("MUSA Mean: Tensor::CopyFrom failed."));
