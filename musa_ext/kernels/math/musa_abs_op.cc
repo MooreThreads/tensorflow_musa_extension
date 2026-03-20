@@ -11,7 +11,6 @@ class MusaAbsOp : public MusaOpKernel {
  public:
   explicit MusaAbsOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
-  // Abs is element-wise - lightweight
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {

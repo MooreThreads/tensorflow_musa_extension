@@ -102,6 +102,23 @@ class MusaStridedSliceOp : public OpKernel {
       }
     }
 
+    // Shape-slicing chains hit this path heavily and the generic muDNN Permute
+    // route can request a large temporary workspace even for tiny 1D slices.
+    // Keep these slices on MUSA by short-circuiting to a direct device copy.
+    if (input_dims == 1 && is_simple_slice && m_strides[0] == 1) {
+      auto& h = GetHandleByCtx(context);
+      const int64_t start = m_starts[0];
+      OP_REQUIRES(context, start >= 0,
+                  errors::InvalidArgument("StridedSlice start must be >= 0"));
+      OP_REQUIRES(
+          context, start + result->NumElements() <= input.NumElements(),
+          errors::InvalidArgument("StridedSlice memcpy path is out of bounds"));
+      musaMemcpyAsync(result->flat<T>().data(), input.flat<T>().data() + start,
+                      result->TotalBytes(), musaMemcpyDeviceToDevice,
+                      reinterpret_cast<musaStream_t>(h.GetStream()));
+      return;
+    }
+
     mHandle& h = GetHandleByCtx(context);
     ::musa::dnn::Permute op;
 
