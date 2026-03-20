@@ -155,6 +155,41 @@ class WhereOpTest(MUSATestCase):
     x_tensor = tf.constant([[1, 2], [3, 4]], dtype=tf.float32)
     y_tensor = tf.constant([[5, 6], [7, 8]], dtype=tf.float32)
     self._compare_cpu_musa(condition_scalar, x_tensor, y_tensor, dtype=tf.float32)
+    
+  def testWhereLargeInput(self):
+    """Test Where with large input to see if it triggers illegal address."""
+    shape = (16,)
+    condition_np = np.zeros(shape, dtype=bool)
+    condition_np[0] = True
+    condition_np[15] = True
+    
+    condition = tf.constant(condition_np)
+    
+    with tf.device("/device:MUSA:0"):
+      res = tf.where(condition)
+    
+    expected = np.array([[0], [15]], dtype=np.int64)
+    self.assertAllClose(res.numpy(), expected)
+
+  def testWhereEmpty(self):
+    """Test Where with empty input."""
+    condition = tf.constant([], dtype=tf.bool)
+    with tf.device("/device:MUSA:0"):
+      res = tf.where(condition)
+    self.assertEqual(res.shape, (0, 1))
+
+  def testWhereStress(self):
+    """Stress test with different sizes."""
+    for size in [1, 10, 100, 1000, 10000]:
+      condition_np = np.random.choice([True, False], size=(size,))
+      condition = tf.constant(condition_np)
+      with tf.device("/device:MUSA:0"):
+        res = tf.where(condition)
+      
+      with tf.device("/cpu:0"):
+        expected = tf.where(condition)
+      
+      self.assertAllClose(res.numpy(), expected.numpy())
 
 
 if __name__ == "__main__":
