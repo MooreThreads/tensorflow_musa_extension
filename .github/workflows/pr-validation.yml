@@ -129,7 +129,7 @@ jobs:
           exit_code=0
           bash -l -c "
             cd $WORKSPACE &&
-            cp -r /home/runner/tensorflow_musa_extension/CMakeList.txt ./ &&
+            cp -r /home/runner/tensorflow_musa_extension/CMakeLists.txt ./ &&
             LOG_FILE='$LOG_DIR/build.log' &&
             rm -rf ./build &&
             ./build.sh > \$LOG_FILE 2>&1
