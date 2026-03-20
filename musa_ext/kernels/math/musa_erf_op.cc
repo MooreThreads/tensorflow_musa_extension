@@ -1,17 +1,63 @@
-#include <cmath>
-
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
-#include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/framework/types.h"
-#include "../utils_op.h"
+#include "utils/logging.h"
 
 namespace tensorflow {
 namespace musa {
 
 template <typename T>
 void LaunchErf(const T* src, T* dst, int n, musaStream_t stream);
+
+template <typename T>
+void LaunchErfSpecialCaseFixup(const T* src, T* dst, int n,
+                               musaStream_t stream);
+
+template <typename T>
+struct ErfRunner {
+  static void Run(OpKernelContext* ctx, const Tensor& input, Tensor* output,
+                  mFormat format) {
+    auto& handle = GetHandleByCtx(ctx);
+    mTensor t_input = CreateMTensor(input, format);
+    mTensor t_output = CreateMTensor(*output, format);
+
+    mUnary op;
+    op.SetMode(::musa::dnn::Unary::Mode::ERF);
+    auto status = op.Run(handle, t_output, t_input);
+    OP_REQUIRES(
+        ctx, status == ::musa::dnn::Status::SUCCESS,
+        errors::Internal("MUSA muDNN Unary Erf execution failed. Status: ",
+                         static_cast<int>(status)));
+
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
+    LaunchErfSpecialCaseFixup<T>(input.flat<T>().data(),
+                                 output->flat<T>().data(),
+                                 static_cast<int>(input.NumElements()), stream);
+
+    auto kernel_status = musaGetLastError();
+    OP_REQUIRES(ctx, kernel_status == musaSuccess,
+                errors::Internal("MUSA Erf special-case fixup failed: ",
+                                 musaGetErrorString(kernel_status)));
+  }
+};
+
+template <>
+struct ErfRunner<double> {
+  static void Run(OpKernelContext* ctx, const Tensor& input, Tensor* output,
+                  mFormat /*format*/) {
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
+    LaunchErf<double>(input.flat<double>().data(),
+                      output->flat<double>().data(),
+                      static_cast<int>(input.NumElements()), stream);
+
+    auto kernel_status = musaGetLastError();
+    OP_REQUIRES(ctx, kernel_status == musaSuccess,
+                errors::Internal("MUSA Erf kernel failed: ",
+                                 musaGetErrorString(kernel_status)));
+  }
+};
 
 template <typename T>
 class MusaErfOp : public MusaOpKernel {
@@ -22,21 +68,20 @@ class MusaErfOp : public MusaOpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_KERNEL_TIMING_GUARD(ctx);
+
     const Tensor& input = ctx->input(0);
 
     Tensor* output = nullptr;
+    MUSA_KERNEL_TRACE_START("Mem Alloc");
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &output));
+    MUSA_KERNEL_TRACE_END("Mem Alloc");
 
     if (input.NumElements() == 0) return;
 
-    const T* input_ptr = input.flat<T>().data();
-    T* output_ptr = output->flat<T>().data();
-    const int64 num_elements = input.NumElements();
-
-    auto& handle = GetHandleByCtx(ctx);
-    musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
-
-    LaunchErf<T>(input_ptr, output_ptr, static_cast<int>(num_elements), stream);
+    MUSA_KERNEL_TRACE_START("Kernel");
+    ErfRunner<T>::Run(ctx, input, output, format_);
+    MUSA_KERNEL_TRACE_END("Kernel");
   }
 };
 

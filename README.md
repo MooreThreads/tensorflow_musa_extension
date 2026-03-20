@@ -4,7 +4,7 @@ TensorFlow MUSA Extension 是一个高性能的 TensorFlow 插件，专为摩尔
 
 ## 特性
 
-- **完整的算子支持**：涵盖深度学习训练和推理所需的核心算子
+- **完整的算子支持**：涵盖深度学习训练和推理所需的核心算子 
 - **高性能优化**：针对 MUSA 架构进行深度优化，包括内存访问模式和计算效率
 - **自动图优化**：支持 Layout 自动转换、算子融合和自动混合精度（AMP）
 - **无缝集成**：与 TensorFlow 生态系统完全兼容，无需修改现有代码
@@ -240,6 +240,12 @@ python test_runner.py --quiet
 - **数据操作**：Reshape, Concat, Gather, StridedSlice, ExpandDims
 - **归一化**：LayerNorm, FusedBatchNorm
 - **特殊算子**：TensorInteraction, BiasAdd, Assign
+
+## 使用示例
+
+详细使用示例见：
+
+[![MUSA Playground](https://img.shields.io/badge/Gitee-TensorFlow_MUSA_Playground-C71D23?style=for-the-badge&logo=gitee&logoColor=white)](https://gitee.com/mthreadsacademy/tensorflow_musa_playground)
 
 ## 贡献指南
 

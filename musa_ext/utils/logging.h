@@ -576,8 +576,8 @@ class KernelTimingScope {
 
   void PrintTotalOnlyLocked(double host_total_ms, double device_total_ms) {
     std::fprintf(stderr,
-                 "\n[MUSA_KERNEL_TIMING] %s %s, host_total_ms=%.3f, "
-                 "device_total_ms=%.3f\n\n",
+                 "[MUSA_KERNEL_TIMING] %s %s, host_total_ms=%.3f, "
+                 "device_total_ms=%.3f\n",
                  kernel_name_.c_str(), input_shape_.c_str(), host_total_ms,
                  device_total_ms);
   }
@@ -587,7 +587,7 @@ class KernelTimingScope {
     constexpr double kPrintEpsMs = 0.0005;
 
     std::fprintf(stderr,
-                 "\n[MUSA_KERNEL_TIMING] %s %s, host_total_ms=%.3f, "
+                 "[MUSA_KERNEL_TIMING] %s %s, host_total_ms=%.3f, "
                  "device_total_ms=%.3f",
                  kernel_name_.c_str(), input_shape_.c_str(), host_total_ms,
                  device_total_ms);
@@ -621,7 +621,7 @@ class KernelTimingScope {
       PrintOneStage("Other", other_ms);
     }
 
-    std::fprintf(stderr, "\n\n");
+    std::fprintf(stderr, "\n");
   }
 
   bool active_ = false;
