@@ -110,6 +110,10 @@ class MusaEventMgr {
   std::thread polling_thread_;
 
   thread::ThreadPool threadpool_;
+
+  // Shutdown flag to prevent new callbacks from being scheduled during
+  // destruction
+  std::atomic<bool> shutting_down_{false};
 };
 
 }  // namespace musa
