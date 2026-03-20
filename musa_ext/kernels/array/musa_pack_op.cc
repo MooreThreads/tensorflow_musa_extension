@@ -94,13 +94,14 @@ class MusaPackOp : public MusaOpKernel {
     for (int i = axis + 1; i < output_shape.dims(); ++i)
       after_size *= output_shape.dim_size(i);
 
-    Tensor d_inputs_tensor;
     const int64_t ptr_array_bytes = num_inputs * sizeof(const void*);
-    OP_REQUIRES_OK(ctx,
-                   ctx->allocate_temp(DT_INT8, TensorShape({ptr_array_bytes}),
-                                      &d_inputs_tensor));
-    const void** d_inputs =
-        reinterpret_cast<const void**>(d_inputs_tensor.flat<int8>().data());
+    void* d_inputs_raw = nullptr;
+    auto alloc_status =
+        tensorflow::musa::MusaAllocate(ptr_array_bytes, &d_inputs_raw);
+    OP_REQUIRES(ctx, alloc_status == mStatus::SUCCESS,
+                errors::ResourceExhausted(
+                    "Failed to allocate Pack pointer table on MUSA"));
+    const void** d_inputs = reinterpret_cast<const void**>(d_inputs_raw);
 
     const void* input_ptrs[16];
     const void** ptr_array =
@@ -117,6 +118,16 @@ class MusaPackOp : public MusaOpKernel {
     void* output_ptr = const_cast<char*>(output->tensor_data().data());
     LaunchKernel(reinterpret_cast<const void**>(d_inputs), output_ptr,
                  num_inputs, before_size, after_size, total_elements, stream);
+
+    auto* device = GetDeviceByCtx(ctx);
+    OP_REQUIRES(ctx, device != nullptr,
+                errors::Internal("Failed to get MUSA device for Pack"));
+    auto* event_mgr = device->event_mgr();
+    OP_REQUIRES(ctx, event_mgr != nullptr,
+                errors::Internal("Failed to get MUSA event manager for Pack"));
+    event_mgr->ThenExecute(stream, [d_inputs_raw]() {
+      (void)tensorflow::musa::MusaFree(d_inputs_raw);
+    });
 
     if (num_inputs > 16) {
       delete[] ptr_array;
@@ -236,13 +247,14 @@ class MusaUnpackOp : public MusaOpKernel {
     for (int i = axis + 1; i < input.dims(); ++i)
       after_size *= input.dim_size(i);
 
-    Tensor d_outputs_tensor;
     const int64_t ptr_array_bytes = num_outputs * sizeof(void*);
-    OP_REQUIRES_OK(ctx,
-                   ctx->allocate_temp(DT_INT8, TensorShape({ptr_array_bytes}),
-                                      &d_outputs_tensor));
-    void** d_outputs =
-        reinterpret_cast<void**>(d_outputs_tensor.flat<int8>().data());
+    void* d_outputs_raw = nullptr;
+    auto alloc_status =
+        tensorflow::musa::MusaAllocate(ptr_array_bytes, &d_outputs_raw);
+    OP_REQUIRES(ctx, alloc_status == mStatus::SUCCESS,
+                errors::ResourceExhausted(
+                    "Failed to allocate Unpack pointer table on MUSA"));
+    void** d_outputs = reinterpret_cast<void**>(d_outputs_raw);
 
     tensorflow::musa::MusaMemcpyAsyncH2D(d_outputs, ptr_array,
                                          num_outputs * sizeof(void*), stream);
@@ -250,6 +262,16 @@ class MusaUnpackOp : public MusaOpKernel {
     const void* input_ptr = input.tensor_data().data();
     LaunchKernel(input_ptr, d_outputs, num_outputs, before_size, after_size,
                  total_elements, stream);
+
+    auto* device = GetDeviceByCtx(ctx);
+    OP_REQUIRES(ctx, device != nullptr,
+                errors::Internal("Failed to get MUSA device for Unpack"));
+    auto* event_mgr = device->event_mgr();
+    OP_REQUIRES(ctx, event_mgr != nullptr,
+                errors::Internal("Failed to get MUSA event manager for Unpack"));
+    event_mgr->ThenExecute(stream, [d_outputs_raw]() {
+      (void)tensorflow::musa::MusaFree(d_outputs_raw);
+    });
 
     if (num_outputs > 16) delete[] ptr_array;
   }

@@ -1,5 +1,5 @@
-#include <musa_runtime_api.h>
-
+#include "../utils_op.h"
+#include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -22,10 +22,21 @@ class MusaShapeOp : public OpKernel {
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, TensorShape({rank}), &output));
 
-    auto flat_output = output->flat<OutType>();
+    if (rank == 0) return;
+
+    std::vector<OutType> host_shape(rank);
     for (int i = 0; i < rank; ++i) {
-      flat_output(i) = static_cast<OutType>(shape.dim_size(i));
+      host_shape[i] = static_cast<OutType>(shape.dim_size(i));
     }
+
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
+    OP_REQUIRES(ctx, stream != nullptr,
+                errors::Internal("Failed to get MUSA stream for Shape"));
+    auto status = MusaMemcpyAsyncH2D(output->flat<OutType>().data(),
+                                     host_shape.data(),
+                                     rank * sizeof(OutType), stream);
+    OP_REQUIRES(ctx, status == mStatus::SUCCESS,
+                errors::Internal("MUSA Shape H2D memcpy failed"));
   }
 };
 
@@ -44,10 +55,21 @@ class MusaShapeNOp : public OpKernel {
       OP_REQUIRES_OK(ctx,
                      ctx->allocate_output(i, TensorShape({rank}), &output));
 
-      auto flat_output = output->flat<OutType>();
+      if (rank == 0) continue;
+
+      std::vector<OutType> host_shape(rank);
       for (int j = 0; j < rank; ++j) {
-        flat_output(j) = static_cast<OutType>(shape.dim_size(j));
+        host_shape[j] = static_cast<OutType>(shape.dim_size(j));
       }
+
+      musaStream_t stream = GetMusaStreamByCtx(ctx);
+      OP_REQUIRES(ctx, stream != nullptr,
+                  errors::Internal("Failed to get MUSA stream for ShapeN"));
+      auto status = MusaMemcpyAsyncH2D(output->flat<OutType>().data(),
+                                       host_shape.data(),
+                                       rank * sizeof(OutType), stream);
+      OP_REQUIRES(ctx, status == mStatus::SUCCESS,
+                  errors::Internal("MUSA ShapeN H2D memcpy failed"));
     }
   }
 };
@@ -62,14 +84,12 @@ class MusaShapeNOp : public OpKernel {
                                                                             \
   REGISTER_KERNEL_BUILDER(Name("Shape")                                     \
                               .Device("MUSA")                               \
-                              .HostMemory("output")                         \
                               .TypeConstraint<out_type>("out_type")         \
                               .TypeConstraint("T", MUSA_SHAPE_INPUT_TYPES), \
                           MusaShapeOp<out_type>);                           \
                                                                             \
   REGISTER_KERNEL_BUILDER(Name("ShapeN")                                    \
                               .Device("MUSA")                               \
-                              .HostMemory("output")                         \
                               .TypeConstraint<out_type>("out_type")         \
                               .TypeConstraint("T", MUSA_SHAPE_INPUT_TYPES), \
                           MusaShapeNOp<out_type>)

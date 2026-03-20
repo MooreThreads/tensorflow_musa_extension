@@ -1,5 +1,6 @@
 #include "../utils_op.h"
 #include "musa_fill_functor.h"
+#include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
@@ -78,11 +79,16 @@ class MusaFillOp : public MusaOpKernel {
         errors::InvalidArgument("value must represent a scalar, got shape ",
                                 Tvalue.shape().DebugString()));
 
-    auto dims_vec = Tdims.flat<Index>();
+    std::vector<Index> dims_host(Tdims.NumElements());
+    if (!dims_host.empty()) {
+      auto status = MusaMemcpyD2H(dims_host.data(), Tdims.tensor_data().data(),
+                                  dims_host.size() * sizeof(Index));
+      OP_REQUIRES(context, status == mStatus::SUCCESS,
+                  errors::Internal("MUSA Fill dims D2H memcpy failed"));
+    }
     TensorShape shape;
     OP_REQUIRES_OK(context, TensorShapeUtils::MakeShape(
-                                reinterpret_cast<const Index*>(dims_vec.data()),
-                                dims_vec.size(), &shape));
+                                dims_host.data(), dims_host.size(), &shape));
 
     Tensor* out = nullptr;
     OP_REQUIRES_OK(context, context->allocate_output(0, shape, &out));
@@ -101,14 +107,12 @@ class MusaFillOp : public MusaOpKernel {
                               .Device("MUSA")                        \
                               .TypeConstraint<type>("T")             \
                               .TypeConstraint<int32>("index_type")   \
-                              .HostMemory("dims")                    \
                               .HostMemory("value"),                  \
                           MusaFillOp<type, int32>);                  \
   REGISTER_KERNEL_BUILDER(Name("Fill")                               \
                               .Device("MUSA")                        \
                               .TypeConstraint<type>("T")             \
                               .TypeConstraint<int64_t>("index_type") \
-                              .HostMemory("dims")                    \
                               .HostMemory("value"),                  \
                           MusaFillOp<type, int64>);
 

@@ -69,11 +69,7 @@ mTensor CreateMTensor(const Tensor& t, mFormat format) {
       const_cast<void*>(static_cast<const void*>(t.tensor_data().data())));
   rst.SetType(GetType(t.dtype()));
 
-  auto dims_raw = t.shape().dim_sizes();
-  std::vector<int64_t> dims;
-  for (auto d : dims_raw) {
-    dims.push_back(d);
-  }
+  auto dims = t.shape().dim_sizes();
 
   if (dims.size() >= 4) {
     rst.SetFormat(format);

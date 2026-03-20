@@ -28,9 +28,15 @@ class MusaReshapeOp : public MusaOpKernel {
     int64 product = 1;
 
     if (sizes.dtype() == DT_INT32) {
-      auto vec = sizes.flat<int32>();
-      for (int i = 0; i < vec.size(); ++i) {
-        int64 size = static_cast<int64>(vec(i));
+      std::vector<int32> host_sizes(sizes.NumElements());
+      if (!host_sizes.empty()) {
+        auto status = MusaMemcpyD2H(host_sizes.data(), sizes.tensor_data().data(),
+                                    host_sizes.size() * sizeof(int32));
+        OP_REQUIRES(ctx, status == mStatus::SUCCESS,
+                    errors::Internal("MUSA Reshape shape D2H memcpy failed"));
+      }
+      for (int i = 0; i < host_sizes.size(); ++i) {
+        int64 size = static_cast<int64>(host_sizes[i]);
         if (size == -1) {
           OP_REQUIRES(ctx, unknown_index == -1,
                       errors::InvalidArgument(
@@ -47,9 +53,15 @@ class MusaReshapeOp : public MusaOpKernel {
         }
       }
     } else if (sizes.dtype() == DT_INT64) {
-      auto vec = sizes.flat<int64>();
-      for (int i = 0; i < vec.size(); ++i) {
-        int64 size = vec(i);
+      std::vector<int64> host_sizes(sizes.NumElements());
+      if (!host_sizes.empty()) {
+        auto status = MusaMemcpyD2H(host_sizes.data(), sizes.tensor_data().data(),
+                                    host_sizes.size() * sizeof(int64));
+        OP_REQUIRES(ctx, status == mStatus::SUCCESS,
+                    errors::Internal("MUSA Reshape shape D2H memcpy failed"));
+      }
+      for (int i = 0; i < host_sizes.size(); ++i) {
+        int64 size = host_sizes[i];
         if (size == -1) {
           OP_REQUIRES(ctx, unknown_index == -1,
                       errors::InvalidArgument(
@@ -103,8 +115,7 @@ class MusaReshapeOp : public MusaOpKernel {
 
 #define REGISTER_MUSA_RESHAPE(TYPE)                                        \
   REGISTER_KERNEL_BUILDER(                                                 \
-      Name("Reshape").Device("MUSA").TypeConstraint<TYPE>("T").HostMemory( \
-          "shape"),                                                        \
+      Name("Reshape").Device("MUSA").TypeConstraint<TYPE>("T"),            \
       MusaReshapeOp<TYPE>)
 
 REGISTER_MUSA_RESHAPE(float);
