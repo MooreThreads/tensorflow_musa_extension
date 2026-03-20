@@ -1,9 +1,12 @@
+#include <musa_runtime.h>
+
 #include <algorithm>
 #include <cmath>
 #include <list>
 #include <vector>
 
-#include <musa_runtime.h>
+#include "../array/musa_fill_functor.h"
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -11,8 +14,6 @@
 #include "tensorflow/core/framework/resource_var.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.h"
-#include "../array/musa_fill_functor.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -20,7 +21,8 @@ namespace musa {
 // Keep Adam-related kernels in one translation unit so similarly shaped helper
 // classes do not end up with duplicate names across different .cc files.
 
-Status CopyTensorForUpdate(OpKernelContext* ctx, const Tensor& src, Tensor* dst) {
+Status CopyTensorForUpdate(OpKernelContext* ctx, const Tensor& src,
+                           Tensor* dst) {
   AllocatorAttributes attr;
   attr.set_gpu_compatible(true);
   attr.set_nic_compatible(true);
@@ -104,7 +106,8 @@ class MusaResourceApplyAdamOp : public MusaOpKernel {
     }
 
     OP_REQUIRES(ctx,
-                var->tensor()->IsInitialized() && m->tensor()->IsInitialized() &&
+                var->tensor()->IsInitialized() &&
+                    m->tensor()->IsInitialized() &&
                     v->tensor()->IsInitialized(),
                 errors::FailedPrecondition(
                     "Adam variables (var/m/v) not initialized."));
@@ -126,8 +129,7 @@ class MusaResourceApplyAdamOp : public MusaOpKernel {
                                const char* op_name) -> Status {
       if (status != ::musa::dnn::Status::SUCCESS) {
         return errors::Internal("ResourceApplyAdam ", op_name,
-                                " failed. Status: ",
-                                static_cast<int>(status));
+                                " failed. Status: ", static_cast<int>(status));
       }
       return Status::OK();
     };
@@ -135,9 +137,8 @@ class MusaResourceApplyAdamOp : public MusaOpKernel {
     auto fill_scalar = [&](T val, const TensorShape& shape,
                            mTensor* out) -> Status {
       temp_storage.emplace_back();
-      Status alloc_status =
-          ctx->allocate_temp(DataTypeToEnum<T>::value, shape,
-                             &temp_storage.back());
+      Status alloc_status = ctx->allocate_temp(DataTypeToEnum<T>::value, shape,
+                                               &temp_storage.back());
       if (!alloc_status.ok()) {
         return alloc_status;
       }
@@ -153,10 +154,9 @@ class MusaResourceApplyAdamOp : public MusaOpKernel {
     const T epsilon = ctx->input(8).scalar<T>()();
     const Tensor& grad = ctx->input(9);
 
-    const double alpha_val =
-        static_cast<double>(lr) *
-        std::sqrt(1.0 - static_cast<double>(beta2_power)) /
-        (1.0 - static_cast<double>(beta1_power));
+    const double alpha_val = static_cast<double>(lr) *
+                             std::sqrt(1.0 - static_cast<double>(beta2_power)) /
+                             (1.0 - static_cast<double>(beta1_power));
 
     mTensor t_var = CreateMTensor(var_t, format_);
     mTensor t_m = CreateMTensor(m_t, format_);
@@ -169,20 +169,18 @@ class MusaResourceApplyAdamOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, fill_scalar(static_cast<T>(1.0) - beta1, grad.shape(),
                                     &t_inv_beta1));
     b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    OP_REQUIRES_OK(ctx,
-                   require_success(b_op.Run(handle, t_m, t_m, t_beta1),
-                                   "MUL beta1"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_m, t_m, t_beta1), "MUL beta1"));
     temp_storage.emplace_back();
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
                                            grad.shape(), &temp_storage.back()));
     mTensor t_g_scaled = CreateMTensor(temp_storage.back(), format_);
-    OP_REQUIRES_OK(ctx,
-                   require_success(b_op.Run(handle, t_g_scaled, t_grad,
-                                            t_inv_beta1),
-                                   "MUL inv_beta1"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_g_scaled, t_grad, t_inv_beta1),
+                             "MUL inv_beta1"));
     b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_m, t_m, t_g_scaled),
-                                        "ADD m"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_m, t_m, t_g_scaled), "ADD m"));
 
     mTensor t_beta2;
     mTensor t_inv_beta2;
@@ -190,9 +188,8 @@ class MusaResourceApplyAdamOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, fill_scalar(static_cast<T>(1.0) - beta2, grad.shape(),
                                     &t_inv_beta2));
     b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    OP_REQUIRES_OK(ctx,
-                   require_success(b_op.Run(handle, t_v, t_v, t_beta2),
-                                   "MUL beta2"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_v, t_v, t_beta2), "MUL beta2"));
     temp_storage.emplace_back();
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
                                            grad.shape(), &temp_storage.back()));
@@ -203,13 +200,12 @@ class MusaResourceApplyAdamOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
                                            grad.shape(), &temp_storage.back()));
     mTensor t_g2_scaled = CreateMTensor(temp_storage.back(), format_);
-    OP_REQUIRES_OK(ctx,
-                   require_success(b_op.Run(handle, t_g2_scaled, t_g2,
-                                            t_inv_beta2),
-                                   "MUL inv_beta2"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_g2_scaled, t_g2, t_inv_beta2),
+                             "MUL inv_beta2"));
     b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_v, t_v, t_g2_scaled),
-                                        "ADD v"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_v, t_v, t_g2_scaled), "ADD v"));
 
     temp_storage.emplace_back();
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
@@ -227,14 +223,14 @@ class MusaResourceApplyAdamOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_den, t_m, t_den),
                                         "DIV update"));
     mTensor t_alpha;
-    OP_REQUIRES_OK(ctx, fill_scalar(static_cast<T>(alpha_val), var_t.shape(),
-                                    &t_alpha));
+    OP_REQUIRES_OK(
+        ctx, fill_scalar(static_cast<T>(alpha_val), var_t.shape(), &t_alpha));
     b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
     OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_den, t_den, t_alpha),
                                         "MUL alpha"));
     b_op.SetMode(::musa::dnn::Binary::Mode::SUB);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_var, t_var, t_den),
-                                        "SUB var"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_var, t_var, t_den), "SUB var"));
 
     musaStream_t stream = GetMusaStreamByCtx(ctx);
     musaError_t sync_err = musaStreamSynchronize(stream);
@@ -378,7 +374,7 @@ class MusaApplyAdamKernelOp : public MusaOpKernel {
   bool use_nesterov_;
 };
 
-#define REGISTER_RESOURCE_ADAM(T)                         \
+#define REGISTER_RESOURCE_ADAM(T)                        \
   REGISTER_KERNEL_BUILDER(Name("ResourceApplyAdam")      \
                               .Device(DEVICE_MTGPU)      \
                               .HostMemory("var")         \
@@ -393,7 +389,7 @@ class MusaApplyAdamKernelOp : public MusaOpKernel {
                               .HostMemory("epsilon"),    \
                           MusaResourceApplyAdamOp<T>);
 
-#define REGISTER_APPLY_ADAM(T)                            \
+#define REGISTER_APPLY_ADAM(T)                           \
   REGISTER_KERNEL_BUILDER(Name("ApplyAdam")              \
                               .Device(DEVICE_MTGPU)      \
                               .TypeConstraint<T>("T")    \
