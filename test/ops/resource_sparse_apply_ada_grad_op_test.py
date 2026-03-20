@@ -7,11 +7,11 @@ class ResourceSparseApplyAdaGradV2Test(MUSATestCase):
     # Expected manual calculation (always in float32 for reference)
     expected_accum = accum_np.astype(np.float32).copy()
     for i, idx in enumerate(indices_np):
-      # Handle negative indices if needed (TF's behavior for invalid indices can vary, 
+      # Handle negative indices if needed (TF's behavior for invalid indices can vary,
       # but standard sparse ops often ignore or clamp. Our kernel ignores negative.)
       if idx < 0: continue
       expected_accum[idx] += grad_np[i].astype(np.float32)**2
-    
+
     expected_var = var_np.astype(np.float32).copy()
     for i, idx in enumerate(indices_np):
       if idx < 0: continue
@@ -26,7 +26,7 @@ class ResourceSparseApplyAdaGradV2Test(MUSATestCase):
         epsilon = tf.constant(epsilon_np, dtype=dtype)
         grad = tf.constant(grad_np, dtype=dtype)
         indices = tf.constant(indices_np)
-        
+
         update = tf.raw_ops.ResourceSparseApplyAdagradV2(
             var=var.handle,
             accum=accum.handle,
@@ -35,17 +35,17 @@ class ResourceSparseApplyAdaGradV2Test(MUSATestCase):
             grad=grad,
             indices=indices,
             use_locking=False)
-        
+
         with tf.control_dependencies([update]):
           res_var = var.read_value()
           res_accum = accum.read_value()
-        
+
         init_op = tf.compat.v1.global_variables_initializer()
 
     with tf.compat.v1.Session(graph=graph) as sess:
       sess.run(init_op)
       out_var, out_accum = sess.run([res_var, res_accum])
-        
+
       # Using higher tolerance for half precision
       if dtype in [tf.float16, tf.bfloat16]:
         self.assertAllClose(expected_var, out_var, atol=1e-2, rtol=1e-2)
@@ -76,11 +76,11 @@ class ResourceSparseApplyAdaGradV2Test(MUSATestCase):
       accum_np = np.random.random([rows, cols]).astype(np_type)
       lr_np = np.array(0.01, dtype=np_type)
       epsilon_np = np.array(1e-4, dtype=np_type)
-      
+
       num_updates = 10
       indices_np = np.random.choice(rows, num_updates, replace=False).astype(np.int32)
       grad_np = np.random.random([num_updates, cols]).astype(np_type)
-      
+
       self._test_logic(var_np, accum_np, lr_np, epsilon_np, grad_np, indices_np, dtype)
 
   def testEmptyIndices(self):
@@ -92,7 +92,7 @@ class ResourceSparseApplyAdaGradV2Test(MUSATestCase):
     epsilon_np = np.array(1e-7, dtype=np.float32)
     indices_np = np.array([], dtype=np.int32)
     grad_np = np.zeros([0, 2], dtype=np.float32)
-    
+
     self._test_logic(var_np, accum_np, lr_np, epsilon_np, grad_np, indices_np, dtype)
 
   def testLargeStrideRows(self):
@@ -106,7 +106,7 @@ class ResourceSparseApplyAdaGradV2Test(MUSATestCase):
     epsilon_np = np.array(1e-8, dtype=np.float32)
     indices_np = np.array([0, 199], dtype=np.int64)
     grad_np = np.random.random([2, cols]).astype(np.float32)
-    
+
     self._test_logic(var_np, accum_np, lr_np, epsilon_np, grad_np, indices_np, dtype)
 
   def testZeroLR(self):
@@ -118,7 +118,7 @@ class ResourceSparseApplyAdaGradV2Test(MUSATestCase):
     epsilon_np = np.array(1e-7, dtype=np.float32)
     indices_np = np.array([0], dtype=np.int32)
     grad_np = np.array([[0.5, 0.5]], dtype=np.float32)
-    
+
     self._test_logic(var_np, accum_np, lr_np, epsilon_np, grad_np, indices_np, dtype)
 
 if __name__ == "__main__":

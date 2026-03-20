@@ -1,15 +1,24 @@
+#include <unordered_set>
+
+#include "../utils_op.h"
+#include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/resource_mgr.h"
 #include "tensorflow/core/framework/resource_var.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_shape.h"
-#include "tensorflow/core/framework/bfloat16.h"
-#include "../utils_op.h"
-#include <unordered_set>
 
 extern "C" {
-#define DECLARE_V2_LAUNCHER(T) void LaunchResourceSparseApplyAdaGradV2##T##Int32(     void* var, void* accum, const void* lr, const void* epsilon,     const void* grad, const int32_t* indices, int64_t inner_size,     int64_t indices_size, musaStream_t stream); void LaunchResourceSparseApplyAdaGradV2##T##Int64(     void* var, void* accum, const void* lr, const void* epsilon,     const void* grad, const int64_t* indices, int64_t inner_size,     int64_t indices_size, musaStream_t stream);
+#define DECLARE_V2_LAUNCHER(T)                                      \
+  void LaunchResourceSparseApplyAdaGradV2##T##Int32(                \
+      void* var, void* accum, const void* lr, const void* epsilon,  \
+      const void* grad, const int32_t* indices, int64_t inner_size, \
+      int64_t indices_size, musaStream_t stream);                   \
+  void LaunchResourceSparseApplyAdaGradV2##T##Int64(                \
+      void* var, void* accum, const void* lr, const void* epsilon,  \
+      const void* grad, const int64_t* indices, int64_t inner_size, \
+      int64_t indices_size, musaStream_t stream);
 
 DECLARE_V2_LAUNCHER(Float)
 DECLARE_V2_LAUNCHER(Half)
@@ -68,18 +77,19 @@ class MusaResourceSparseApplyAdaGradV2Op : public MusaOpKernel {
                     "var and accum must have the same shape. var shape: ",
                     var_tensor->shape().DebugString(),
                     ", accum shape: ", accum_tensor->shape().DebugString()));
-    OP_REQUIRES(
-        ctx, TensorShapeUtils::IsVectorOrHigher(var_tensor->shape()),
-        errors::InvalidArgument("var must be at least 1D: ",
-                                var_tensor->shape().DebugString()));
+    OP_REQUIRES(ctx, TensorShapeUtils::IsVectorOrHigher(var_tensor->shape()),
+                errors::InvalidArgument("var must be at least 1D: ",
+                                        var_tensor->shape().DebugString()));
 
-    const int64_t inner_size = var_tensor->shape().num_elements() / var_tensor->dim_size(0);
+    const int64_t inner_size =
+        var_tensor->shape().num_elements() / var_tensor->dim_size(0);
     const int64_t indices_size = indices.dim_size(0);
 
     musaStream_t stream = GetMusaStreamByCtx(ctx);
 
-    // Detect if there are duplicate indices. 
-    // If so, launch the kernel multiple times to match TF CPU sequential behavior.
+    // Detect if there are duplicate indices.
+    // If so, launch the kernel multiple times to match TF CPU sequential
+    // behavior.
     auto indices_flat = indices.flat<Index>();
     bool has_duplicates = false;
     std::unordered_set<Index> seen;
@@ -92,30 +102,52 @@ class MusaResourceSparseApplyAdaGradV2Op : public MusaOpKernel {
     }
 
     auto launch_v2 = [&](int start_idx, int count) {
-      void* var_ptr = const_cast<void*>(static_cast<const void*>(var_tensor->flat<T>().data()));
-      void* accum_ptr = const_cast<void*>(static_cast<const void*>(accum_tensor->flat<T>().data()));
+      void* var_ptr = const_cast<void*>(
+          static_cast<const void*>(var_tensor->flat<T>().data()));
+      void* accum_ptr = const_cast<void*>(
+          static_cast<const void*>(accum_tensor->flat<T>().data()));
       const void* lr_ptr = static_cast<const void*>(lr.flat<T>().data());
-      const void* epsilon_ptr = static_cast<const void*>(epsilon.flat<T>().data());
-      const void* grad_ptr = static_cast<const void*>(&grad.flat<T>().data()[start_idx * inner_size]);
+      const void* epsilon_ptr =
+          static_cast<const void*>(epsilon.flat<T>().data());
+      const void* grad_ptr = static_cast<const void*>(
+          &grad.flat<T>().data()[start_idx * inner_size]);
       const Index* indices_ptr = &indices_flat(start_idx);
 
       if (std::is_same<T, float>::value) {
         if (std::is_same<Index, int32>::value) {
-          LaunchResourceSparseApplyAdaGradV2FloatInt32(var_ptr, accum_ptr, lr_ptr, epsilon_ptr, grad_ptr, reinterpret_cast<const int32_t*>(indices_ptr), inner_size, count, stream);
+          LaunchResourceSparseApplyAdaGradV2FloatInt32(
+              var_ptr, accum_ptr, lr_ptr, epsilon_ptr, grad_ptr,
+              reinterpret_cast<const int32_t*>(indices_ptr), inner_size, count,
+              stream);
         } else {
-          LaunchResourceSparseApplyAdaGradV2FloatInt64(var_ptr, accum_ptr, lr_ptr, epsilon_ptr, grad_ptr, reinterpret_cast<const int64_t*>(indices_ptr), inner_size, count, stream);
+          LaunchResourceSparseApplyAdaGradV2FloatInt64(
+              var_ptr, accum_ptr, lr_ptr, epsilon_ptr, grad_ptr,
+              reinterpret_cast<const int64_t*>(indices_ptr), inner_size, count,
+              stream);
         }
       } else if (std::is_same<T, Eigen::half>::value) {
         if (std::is_same<Index, int32>::value) {
-          LaunchResourceSparseApplyAdaGradV2HalfInt32(var_ptr, accum_ptr, lr_ptr, epsilon_ptr, grad_ptr, reinterpret_cast<const int32_t*>(indices_ptr), inner_size, count, stream);
+          LaunchResourceSparseApplyAdaGradV2HalfInt32(
+              var_ptr, accum_ptr, lr_ptr, epsilon_ptr, grad_ptr,
+              reinterpret_cast<const int32_t*>(indices_ptr), inner_size, count,
+              stream);
         } else {
-          LaunchResourceSparseApplyAdaGradV2HalfInt64(var_ptr, accum_ptr, lr_ptr, epsilon_ptr, grad_ptr, reinterpret_cast<const int64_t*>(indices_ptr), inner_size, count, stream);
+          LaunchResourceSparseApplyAdaGradV2HalfInt64(
+              var_ptr, accum_ptr, lr_ptr, epsilon_ptr, grad_ptr,
+              reinterpret_cast<const int64_t*>(indices_ptr), inner_size, count,
+              stream);
         }
       } else if (std::is_same<T, bfloat16>::value) {
         if (std::is_same<Index, int32>::value) {
-          LaunchResourceSparseApplyAdaGradV2BFloat16Int32(var_ptr, accum_ptr, lr_ptr, epsilon_ptr, grad_ptr, reinterpret_cast<const int32_t*>(indices_ptr), inner_size, count, stream);
+          LaunchResourceSparseApplyAdaGradV2BFloat16Int32(
+              var_ptr, accum_ptr, lr_ptr, epsilon_ptr, grad_ptr,
+              reinterpret_cast<const int32_t*>(indices_ptr), inner_size, count,
+              stream);
         } else {
-          LaunchResourceSparseApplyAdaGradV2BFloat16Int64(var_ptr, accum_ptr, lr_ptr, epsilon_ptr, grad_ptr, reinterpret_cast<const int64_t*>(indices_ptr), inner_size, count, stream);
+          LaunchResourceSparseApplyAdaGradV2BFloat16Int64(
+              var_ptr, accum_ptr, lr_ptr, epsilon_ptr, grad_ptr,
+              reinterpret_cast<const int64_t*>(indices_ptr), inner_size, count,
+              stream);
         }
       }
     };
@@ -123,7 +155,8 @@ class MusaResourceSparseApplyAdaGradV2Op : public MusaOpKernel {
     if (!has_duplicates) {
       launch_v2(0, indices_size);
     } else {
-      // Launch one index at a time if there are duplicates to ensure sequential correctness
+      // Launch one index at a time if there are duplicates to ensure sequential
+      // correctness
       for (int i = 0; i < indices_size; ++i) {
         launch_v2(i, 1);
       }
@@ -134,7 +167,17 @@ class MusaResourceSparseApplyAdaGradV2Op : public MusaOpKernel {
   bool use_exclusive_lock_;
 };
 
-#define REGISTER_KERNELS(T)   REGISTER_KERNEL_BUILDER(Name("ResourceSparseApplyAdagradV2")                               .Device("MUSA")                               .TypeConstraint<T>("T")                               .TypeConstraint<int32>("Tindices"),                           MusaResourceSparseApplyAdaGradV2Op<T, int32>);   REGISTER_KERNEL_BUILDER(Name("ResourceSparseApplyAdagradV2")                               .Device("MUSA")                               .TypeConstraint<T>("T")                               .TypeConstraint<int64>("Tindices"),                           MusaResourceSparseApplyAdaGradV2Op<T, int64>);
+#define REGISTER_KERNELS(T)                                              \
+  REGISTER_KERNEL_BUILDER(Name("ResourceSparseApplyAdagradV2")           \
+                              .Device("MUSA")                            \
+                              .TypeConstraint<T>("T")                    \
+                              .TypeConstraint<int32>("Tindices"),        \
+                          MusaResourceSparseApplyAdaGradV2Op<T, int32>); \
+  REGISTER_KERNEL_BUILDER(Name("ResourceSparseApplyAdagradV2")           \
+                              .Device("MUSA")                            \
+                              .TypeConstraint<T>("T")                    \
+                              .TypeConstraint<int64>("Tindices"),        \
+                          MusaResourceSparseApplyAdaGradV2Op<T, int64>);
 
 REGISTER_KERNELS(float);
 REGISTER_KERNELS(Eigen::half);
