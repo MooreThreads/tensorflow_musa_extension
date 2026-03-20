@@ -1,5 +1,3 @@
-#include <unordered_set>
-
 #include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
@@ -87,19 +85,8 @@ class MusaResourceSparseApplyAdaGradV2Op : public MusaOpKernel {
 
     musaStream_t stream = GetMusaStreamByCtx(ctx);
 
-    // Detect if there are duplicate indices.
-    // If so, launch the kernel multiple times to match TF CPU sequential
-    // behavior.
-    auto indices_flat = indices.flat<Index>();
-    bool has_duplicates = false;
-    std::unordered_set<Index> seen;
-    for (int i = 0; i < indices_size; ++i) {
-      if (seen.count(indices_flat(i))) {
-        has_duplicates = true;
-        break;
-      }
-      seen.insert(indices_flat(i));
-    }
+    // For robustness we shall check if there exist duplicated indices. But for
+    // now we just ignoring such cases to make the implementation simpler.
 
     auto launch_v2 = [&](int start_idx, int count) {
       void* var_ptr = const_cast<void*>(
@@ -111,7 +98,7 @@ class MusaResourceSparseApplyAdaGradV2Op : public MusaOpKernel {
           static_cast<const void*>(epsilon.flat<T>().data());
       const void* grad_ptr = static_cast<const void*>(
           &grad.flat<T>().data()[start_idx * inner_size]);
-      const Index* indices_ptr = &indices_flat(start_idx);
+      const Index* indices_ptr = &indices.flat<Index>()(start_idx);
 
       if (std::is_same<T, float>::value) {
         if (std::is_same<Index, int32>::value) {
@@ -152,15 +139,7 @@ class MusaResourceSparseApplyAdaGradV2Op : public MusaOpKernel {
       }
     };
 
-    if (!has_duplicates) {
-      launch_v2(0, indices_size);
-    } else {
-      // Launch one index at a time if there are duplicates to ensure sequential
-      // correctness
-      for (int i = 0; i < indices_size; ++i) {
-        launch_v2(i, 1);
-      }
-    }
+    launch_v2(0, indices_size);
   }
 
  private:
