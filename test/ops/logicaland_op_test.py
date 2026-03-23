@@ -13,7 +13,7 @@
 # limitations under the License.
 # ==============================================================================
 
-"""Tests for MUSA LogicalOr operator."""
+"""Tests for MUSA LogicalAnd operator."""
 
 import numpy as np
 import tensorflow as tf
@@ -21,39 +21,40 @@ import tensorflow as tf
 from musa_test_utils import MUSATestCase
 
 
-class LogicalOrOpTest(MUSATestCase):
+class LogicalAndOpTest(MUSATestCase):
 
-  def _test_logical_or(self, shape_x, shape_y):
+  def _test_logical_and(self, shape_x, shape_y):
     x_np = np.random.choice([True, False], size=shape_x).astype(np.bool_)
     y_np = np.random.choice([True, False], size=shape_y).astype(np.bool_)
 
     x = tf.constant(x_np, dtype=tf.bool)
     y = tf.constant(y_np, dtype=tf.bool)
-    self._compare_cpu_musa_results(tf.logical_or, [x, y], tf.bool)
+    self._compare_cpu_musa_results(tf.logical_and, [x, y], tf.bool)
 
-  def testLogicalOrBasic(self):
-    self._test_logical_or([1024], [1024])
+  def testLogicalAndBasic(self):
+    self._test_logical_and([1024], [1024])
 
-  def testLogicalOrMatrix(self):
-    self._test_logical_or([64, 128], [64, 128])
+  def testLogicalAndMatrix(self):
+    self._test_logical_and([64, 128], [64, 128])
 
-  def testLogicalOrBroadcastRow(self):
-    self._test_logical_or([64, 1], [64, 128])
+  def testLogicalAndBroadcastRow(self):
+    self._test_logical_and([64, 1], [64, 128])
 
-  def testLogicalOrBroadcastScalar(self):
-    self._test_logical_or([], [64, 128])
+  def testLogicalAndBroadcastScalar(self):
+    self._test_logical_and([], [64, 128])
 
-  def testLogicalOrAllTrue(self):
+  def testLogicalAndAllTrue(self):
     x = tf.constant(np.ones([256], dtype=np.bool_), dtype=tf.bool)
     y = tf.constant(np.random.choice([True, False], size=[256]).astype(np.bool_),
                     dtype=tf.bool)
-    self._compare_cpu_musa_results(tf.logical_or, [x, y], tf.bool)
+    self._compare_cpu_musa_results(tf.logical_and, [x, y], tf.bool)
 
-  def testLogicalOrAllFalse(self):
+  def testLogicalAndAllFalse(self):
     x = tf.constant(np.zeros([256], dtype=np.bool_), dtype=tf.bool)
     y = tf.constant(np.random.choice([True, False], size=[256]).astype(np.bool_),
                     dtype=tf.bool)
-    self._compare_cpu_musa_results(tf.logical_or, [x, y], tf.bool)
+    self._compare_cpu_musa_results(tf.logical_and, [x, y], tf.bool)
+
 
 if __name__ == "__main__":
   tf.test.main()
