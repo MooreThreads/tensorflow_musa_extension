@@ -1,3 +1,5 @@
+#include <type_traits>
+
 #include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
@@ -25,6 +27,57 @@ DECLARE_V2_LAUNCHER(BFloat16)
 
 namespace tensorflow {
 namespace musa {
+
+template <typename T>
+struct always_false : std::false_type {};
+
+template <typename T, typename Index>
+struct AdaGradV2Launcher {
+  static void Run(void* var, void* accum, const void* lr, const void* epsilon,
+                  const void* grad, const Index* indices, int64_t inner_size,
+                  int64_t indices_size, musaStream_t stream) {
+    if constexpr (std::is_same<T, float>::value) {
+      if constexpr (std::is_same<Index, int32>::value) {
+        LaunchResourceSparseApplyAdaGradV2FloatInt32(
+            var, accum, lr, epsilon, grad,
+            reinterpret_cast<const int32_t*>(indices), inner_size, indices_size,
+            stream);
+      } else {
+        LaunchResourceSparseApplyAdaGradV2FloatInt64(
+            var, accum, lr, epsilon, grad,
+            reinterpret_cast<const int64_t*>(indices), inner_size, indices_size,
+            stream);
+      }
+    } else if constexpr (std::is_same<T, Eigen::half>::value) {
+      if constexpr (std::is_same<Index, int32>::value) {
+        LaunchResourceSparseApplyAdaGradV2HalfInt32(
+            var, accum, lr, epsilon, grad,
+            reinterpret_cast<const int32_t*>(indices), inner_size, indices_size,
+            stream);
+      } else {
+        LaunchResourceSparseApplyAdaGradV2HalfInt64(
+            var, accum, lr, epsilon, grad,
+            reinterpret_cast<const int64_t*>(indices), inner_size, indices_size,
+            stream);
+      }
+    } else if constexpr (std::is_same<T, bfloat16>::value) {
+      if constexpr (std::is_same<Index, int32>::value) {
+        LaunchResourceSparseApplyAdaGradV2BFloat16Int32(
+            var, accum, lr, epsilon, grad,
+            reinterpret_cast<const int32_t*>(indices), inner_size, indices_size,
+            stream);
+      } else {
+        LaunchResourceSparseApplyAdaGradV2BFloat16Int64(
+            var, accum, lr, epsilon, grad,
+            reinterpret_cast<const int64_t*>(indices), inner_size, indices_size,
+            stream);
+      }
+    } else {
+      static_assert(always_false<T>::value,
+                    "Unsupported T for AdaGradV2 launcher");
+    }
+  }
+};
 
 template <typename T, typename Index>
 class MusaResourceSparseApplyAdaGradV2Op : public MusaOpKernel {
@@ -100,43 +153,9 @@ class MusaResourceSparseApplyAdaGradV2Op : public MusaOpKernel {
           &grad.flat<T>().data()[start_idx * inner_size]);
       const Index* indices_ptr = &indices.flat<Index>()(start_idx);
 
-      if (std::is_same<T, float>::value) {
-        if (std::is_same<Index, int32>::value) {
-          LaunchResourceSparseApplyAdaGradV2FloatInt32(
-              var_ptr, accum_ptr, lr_ptr, epsilon_ptr, grad_ptr,
-              reinterpret_cast<const int32_t*>(indices_ptr), inner_size, count,
-              stream);
-        } else {
-          LaunchResourceSparseApplyAdaGradV2FloatInt64(
-              var_ptr, accum_ptr, lr_ptr, epsilon_ptr, grad_ptr,
-              reinterpret_cast<const int64_t*>(indices_ptr), inner_size, count,
-              stream);
-        }
-      } else if (std::is_same<T, Eigen::half>::value) {
-        if (std::is_same<Index, int32>::value) {
-          LaunchResourceSparseApplyAdaGradV2HalfInt32(
-              var_ptr, accum_ptr, lr_ptr, epsilon_ptr, grad_ptr,
-              reinterpret_cast<const int32_t*>(indices_ptr), inner_size, count,
-              stream);
-        } else {
-          LaunchResourceSparseApplyAdaGradV2HalfInt64(
-              var_ptr, accum_ptr, lr_ptr, epsilon_ptr, grad_ptr,
-              reinterpret_cast<const int64_t*>(indices_ptr), inner_size, count,
-              stream);
-        }
-      } else if (std::is_same<T, bfloat16>::value) {
-        if (std::is_same<Index, int32>::value) {
-          LaunchResourceSparseApplyAdaGradV2BFloat16Int32(
-              var_ptr, accum_ptr, lr_ptr, epsilon_ptr, grad_ptr,
-              reinterpret_cast<const int32_t*>(indices_ptr), inner_size, count,
-              stream);
-        } else {
-          LaunchResourceSparseApplyAdaGradV2BFloat16Int64(
-              var_ptr, accum_ptr, lr_ptr, epsilon_ptr, grad_ptr,
-              reinterpret_cast<const int64_t*>(indices_ptr), inner_size, count,
-              stream);
-        }
-      }
+      AdaGradV2Launcher<T, Index>::Run(var_ptr, accum_ptr, lr_ptr, epsilon_ptr,
+                                       grad_ptr, indices_ptr, inner_size, count,
+                                       stream);
     };
 
     launch_v2(0, indices_size);
