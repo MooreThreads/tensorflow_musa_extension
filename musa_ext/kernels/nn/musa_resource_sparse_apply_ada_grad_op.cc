@@ -31,53 +31,13 @@ namespace musa {
 template <typename T>
 struct always_false : std::false_type {};
 
-template <typename T, typename Index>
-struct AdaGradV2Launcher {
-  static void Run(void* var, void* accum, const void* lr, const void* epsilon,
-                  const void* grad, const Index* indices, int64_t inner_size,
-                  int64_t indices_size, musaStream_t stream) {
-    if constexpr (std::is_same<T, float>::value) {
-      if constexpr (std::is_same<Index, int32>::value) {
-        LaunchResourceSparseApplyAdaGradV2FloatInt32(
-            var, accum, lr, epsilon, grad,
-            reinterpret_cast<const int32_t*>(indices), inner_size, indices_size,
-            stream);
-      } else {
-        LaunchResourceSparseApplyAdaGradV2FloatInt64(
-            var, accum, lr, epsilon, grad,
-            reinterpret_cast<const int64_t*>(indices), inner_size, indices_size,
-            stream);
-      }
-    } else if constexpr (std::is_same<T, Eigen::half>::value) {
-      if constexpr (std::is_same<Index, int32>::value) {
-        LaunchResourceSparseApplyAdaGradV2HalfInt32(
-            var, accum, lr, epsilon, grad,
-            reinterpret_cast<const int32_t*>(indices), inner_size, indices_size,
-            stream);
-      } else {
-        LaunchResourceSparseApplyAdaGradV2HalfInt64(
-            var, accum, lr, epsilon, grad,
-            reinterpret_cast<const int64_t*>(indices), inner_size, indices_size,
-            stream);
-      }
-    } else if constexpr (std::is_same<T, bfloat16>::value) {
-      if constexpr (std::is_same<Index, int32>::value) {
-        LaunchResourceSparseApplyAdaGradV2BFloat16Int32(
-            var, accum, lr, epsilon, grad,
-            reinterpret_cast<const int32_t*>(indices), inner_size, indices_size,
-            stream);
-      } else {
-        LaunchResourceSparseApplyAdaGradV2BFloat16Int64(
-            var, accum, lr, epsilon, grad,
-            reinterpret_cast<const int64_t*>(indices), inner_size, indices_size,
-            stream);
-      }
-    } else {
-      static_assert(always_false<T>::value,
-                    "Unsupported T for AdaGradV2 launcher");
-    }
-  }
-};
+template <typename T, typename IndexT>
+void LaunchResourceSparseApplyAdaGradV2Impl(T* var, T* accum, const T* lr,
+                                            const T* epsilon, const T* grad,
+                                            const IndexT* indices,
+                                            int64_t inner_size,
+                                            int64_t indices_size,
+                                            musaStream_t stream);
 
 template <typename T, typename Index>
 class MusaResourceSparseApplyAdaGradV2Op : public MusaOpKernel {
@@ -141,24 +101,11 @@ class MusaResourceSparseApplyAdaGradV2Op : public MusaOpKernel {
     // For robustness we shall check if there exist duplicated indices. But for
     // now we just ignoring such cases to make the implementation simpler.
 
-    auto launch_v2 = [&](int start_idx, int count) {
-      void* var_ptr = const_cast<void*>(
-          static_cast<const void*>(var_tensor->flat<T>().data()));
-      void* accum_ptr = const_cast<void*>(
-          static_cast<const void*>(accum_tensor->flat<T>().data()));
-      const void* lr_ptr = static_cast<const void*>(lr.flat<T>().data());
-      const void* epsilon_ptr =
-          static_cast<const void*>(epsilon.flat<T>().data());
-      const void* grad_ptr = static_cast<const void*>(
-          &grad.flat<T>().data()[start_idx * inner_size]);
-      const Index* indices_ptr = &indices.flat<Index>()(start_idx);
-
-      AdaGradV2Launcher<T, Index>::Run(var_ptr, accum_ptr, lr_ptr, epsilon_ptr,
-                                       grad_ptr, indices_ptr, inner_size, count,
-                                       stream);
-    };
-
-    launch_v2(0, indices_size);
+    LaunchResourceSparseApplyAdaGradV2Impl<T, Index>(
+        var_tensor->flat<T>().data(), accum_tensor->flat<T>().data(),
+        lr.flat<T>().data(), epsilon.flat<T>().data(),
+        &grad.flat<T>().data()[0], &indices.flat<Index>()(0), inner_size,
+        indices_size, stream);
   }
 
  private:

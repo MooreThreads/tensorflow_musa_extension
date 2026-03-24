@@ -86,55 +86,26 @@ void LaunchResourceSparseApplyAdaGradV2Impl(T* var, T* accum, const T* lr,
           var, accum, lr, epsilon, grad, indices, inner_size, indices_size);
 }
 
-extern "C" {
-void LaunchResourceSparseApplyAdaGradV2FloatInt32(
-    float* var, float* accum, const float* lr, const float* epsilon,
-    const float* grad, const int32_t* indices, int64_t inner_size,
-    int64_t indices_size, musaStream_t stream) {
-  LaunchResourceSparseApplyAdaGradV2Impl<float, int32_t>(
-      var, accum, lr, epsilon, grad, indices, inner_size, indices_size, stream);
-}
+#define REGISTER_MUSA_RESOURCE_SPARSE_APPLY_ADA_GRAD_V2_LAUNCHER(T, IndexT) \
+  template <>                                                               \
+  void LaunchResourceSparseApplyAdaGradV2Impl<T, IndexT>(                   \
+      T * var, T * accum, const T* lr, const T* epsilon, const T* grad,     \
+      const IndexT* indices, int64_t inner_size, int64_t indices_size,      \
+      musaStream_t stream);
 
-void LaunchResourceSparseApplyAdaGradV2FloatInt64(
-    float* var, float* accum, const float* lr, const float* epsilon,
-    const float* grad, const int64_t* indices, int64_t inner_size,
-    int64_t indices_size, musaStream_t stream) {
-  LaunchResourceSparseApplyAdaGradV2Impl<float, int64_t>(
-      var, accum, lr, epsilon, grad, indices, inner_size, indices_size, stream);
-}
+#define REGISTER_INT64_LAUNCHER(T) \
+  REGISTER_MUSA_RESOURCE_SPARSE_APPLY_ADA_GRAD_V2_LAUNCHER(T, int64_t);
 
-void LaunchResourceSparseApplyAdaGradV2HalfInt32(
-    Eigen::half* var, Eigen::half* accum, const Eigen::half* lr,
-    const Eigen::half* epsilon, const Eigen::half* grad, const int32_t* indices,
-    int64_t inner_size, int64_t indices_size, musaStream_t stream) {
-  LaunchResourceSparseApplyAdaGradV2Impl<Eigen::half, int32_t>(
-      var, accum, lr, epsilon, grad, indices, inner_size, indices_size, stream);
-}
+#define REGISTER_INT32_LAUNCHER(T) \
+  REGISTER_MUSA_RESOURCE_SPARSE_APPLY_ADA_GRAD_V2_LAUNCHER(T, int32);
 
-void LaunchResourceSparseApplyAdaGradV2HalfInt64(
-    Eigen::half* var, Eigen::half* accum, const Eigen::half* lr,
-    const Eigen::half* epsilon, const Eigen::half* grad, const int64_t* indices,
-    int64_t inner_size, int64_t indices_size, musaStream_t stream) {
-  LaunchResourceSparseApplyAdaGradV2Impl<Eigen::half, int64_t>(
-      var, accum, lr, epsilon, grad, indices, inner_size, indices_size, stream);
-}
+REGISTER_INT32_LAUNCHER(float);
+REGISTER_INT32_LAUNCHER(Eigen::half);
+REGISTER_INT32_LAUNCHER(bfloat16);
 
-void LaunchResourceSparseApplyAdaGradV2BFloat16Int32(
-    bfloat16* var, bfloat16* accum, const bfloat16* lr, const bfloat16* epsilon,
-    const bfloat16* grad, const int32_t* indices, int64_t inner_size,
-    int64_t indices_size, musaStream_t stream) {
-  LaunchResourceSparseApplyAdaGradV2Impl<bfloat16, int32_t>(
-      var, accum, lr, epsilon, grad, indices, inner_size, indices_size, stream);
-}
-
-void LaunchResourceSparseApplyAdaGradV2BFloat16Int64(
-    bfloat16* var, bfloat16* accum, const bfloat16* lr, const bfloat16* epsilon,
-    const bfloat16* grad, const int64_t* indices, int64_t inner_size,
-    int64_t indices_size, musaStream_t stream) {
-  LaunchResourceSparseApplyAdaGradV2Impl<bfloat16, int64_t>(
-      var, accum, lr, epsilon, grad, indices, inner_size, indices_size, stream);
-}
-}  // extern "C"
+REGISTER_INT64_LAUNCHER(float);
+REGISTER_INT64_LAUNCHER(Eigen::half);
+REGISTER_INT64_LAUNCHER(bfloat16);
 
 }  // namespace musa
 }  // namespace tensorflow
