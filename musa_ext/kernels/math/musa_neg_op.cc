@@ -22,7 +22,7 @@ class MusaNegOp : public MusaOpKernel {
     const Tensor& input = ctx->input(0);
 
     Tensor* output = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &output));
+    OP_REQUIRES_OK(ctx, ctx->forward_input_or_allocate_output({0}, 0, input.shape(), &output));
 
     if (input.NumElements() == 0) return;
 
