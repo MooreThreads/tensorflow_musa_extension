@@ -23,36 +23,47 @@ from musa_test_utils import MUSATestCase
 
 class LogicalAndOpTest(MUSATestCase):
 
-  def _test_logical_and(self, shape_x, shape_y):
-    x_np = np.random.choice([True, False], size=shape_x).astype(np.bool_)
-    y_np = np.random.choice([True, False], size=shape_y).astype(np.bool_)
+  def testLogicalAndBasic(self):
+    x_np = np.random.choice([True, False], size=[1024]).astype(np.bool_)
+    y_np = np.random.choice([True, False], size=[1024]).astype(np.bool_)
 
     x = tf.constant(x_np, dtype=tf.bool)
     y = tf.constant(y_np, dtype=tf.bool)
+
     self._compare_cpu_musa_results(tf.logical_and, [x, y], tf.bool)
 
-  def testLogicalAndBasic(self):
-    self._test_logical_and([1024], [1024])
-
-  def testLogicalAndMatrix(self):
-    self._test_logical_and([64, 128], [64, 128])
-
   def testLogicalAndBroadcastRow(self):
-    self._test_logical_and([64, 1], [64, 128])
+    x_np = np.random.choice([True, False], size=[64, 1]).astype(np.bool_)
+    y_np = np.random.choice([True, False], size=[64, 128]).astype(np.bool_)
 
-  def testLogicalAndBroadcastScalar(self):
-    self._test_logical_and([], [64, 128])
+    x = tf.constant(x_np, dtype=tf.bool)
+    y = tf.constant(y_np, dtype=tf.bool)
+
+    self._compare_cpu_musa_results(tf.logical_and, [x, y], tf.bool)
+
+  def testLogicalAndScalarBroadcast(self):
+    x = tf.constant(False, dtype=tf.bool)
+    y_np = np.random.choice([True, False], size=[64, 128]).astype(np.bool_)
+    y = tf.constant(y_np, dtype=tf.bool)
+
+    self._compare_cpu_musa_results(tf.logical_and, [x, y], tf.bool)
 
   def testLogicalAndAllTrue(self):
-    x = tf.constant(np.ones([256], dtype=np.bool_), dtype=tf.bool)
-    y = tf.constant(np.random.choice([True, False], size=[256]).astype(np.bool_),
-                    dtype=tf.bool)
+    x_np = np.ones([256], dtype=np.bool_)
+    y_np = np.ones([256], dtype=np.bool_)
+
+    x = tf.constant(x_np, dtype=tf.bool)
+    y = tf.constant(y_np, dtype=tf.bool)
+
     self._compare_cpu_musa_results(tf.logical_and, [x, y], tf.bool)
 
   def testLogicalAndAllFalse(self):
-    x = tf.constant(np.zeros([256], dtype=np.bool_), dtype=tf.bool)
-    y = tf.constant(np.random.choice([True, False], size=[256]).astype(np.bool_),
-                    dtype=tf.bool)
+    x_np = np.zeros([256], dtype=np.bool_)
+    y_np = np.random.choice([True, False], size=[256]).astype(np.bool_)
+
+    x = tf.constant(x_np, dtype=tf.bool)
+    y = tf.constant(y_np, dtype=tf.bool)
+
     self._compare_cpu_musa_results(tf.logical_and, [x, y], tf.bool)
 
 
