@@ -38,7 +38,19 @@ class MusaSubOp : public MusaOpKernel {
     }
 
     Tensor* out = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &out));
+    if (in0.shape() == output_shape) {
+      const std::vector<int> forwardable_input_indices = {0};
+      OP_REQUIRES_OK(
+          ctx, ctx->forward_input_or_allocate_output(
+                   forwardable_input_indices, 0, output_shape, &out));
+    } else if (in1.shape() == output_shape) {
+      const std::vector<int> forwardable_input_indices = {1};
+      OP_REQUIRES_OK(
+          ctx, ctx->forward_input_or_allocate_output(
+                   forwardable_input_indices, 0, output_shape, &out));
+    } else {
+      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &out));
+    }
     if (out->NumElements() == 0) return;
 
     auto& handle = GetHandleByCtx(ctx);
