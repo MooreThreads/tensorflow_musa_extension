@@ -40,6 +40,13 @@ class LogicOpsTest(MUSATestCase):
 
     self._compare_cpu_musa_results(tf.logical_or, [x, y], tf.bool)
 
+  def testLogicalOrScalarBroadcast(self):
+    x = tf.constant(True, dtype=tf.bool)
+    y_np = np.random.choice([True, False], size=[64, 128]).astype(np.bool_)
+    y = tf.constant(y_np, dtype=tf.bool)
+
+    self._compare_cpu_musa_results(tf.logical_or, [x, y], tf.bool)
+
   def testEqualFloat16(self):
     shape = [32, 32]
     x_np = np.random.randn(*shape).astype(np.float16)
