@@ -35,9 +35,8 @@ namespace musa_fusion {
  *   │   │   └─ StridedSlice
  *   │   │      └─  ReadVariableOp
  *   │   └─ Select
- *   └─ AddV2
- *       └─ StridedSlice
- *          └─  ReadVariableOp
+ *   └─ StridedSlice
+ *       └─ ReadVariableOp
  */
 
 class MusaShiftedAffineMapFusion : public FusionPattern {

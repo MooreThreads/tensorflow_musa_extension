@@ -17,8 +17,7 @@ limitations under the License.
 // MusaShiftedAffineMap custom Op / Kernel
 //
 // Computes:
-//   output = mask * (data_left + sliced_var_left)
-//                  + (data_right + sliced_var_right)
+//   output = mask * (data_left + sliced_var_left) + sliced_var_right
 //
 // All operations are element-wise with broadcasting support.
 //
@@ -44,29 +43,19 @@ namespace musa {
 // =============================================================================
 
 REGISTER_OP("MusaShiftedAffineMap")
-    .Input(
-        "data_left: T")  // data tensor (left branch, other input to left AddV2)
-    .Input("sliced_var_left: T")  // StridedSlice(ReadVariableOp) output (left
-                                  // bias)
-    .Input("mask: T")             // Select output (gate / mask)
-    .Input("data_right: T")  // data tensor (right branch, other input to right
-                             // AddV2)
-    .Input("sliced_var_right: T")  // StridedSlice(ReadVariableOp) output (right
-                                   // bias)
+    .Input("data_left: T")        // other input of inner AddV2 (left branch)
+    .Input("sliced_var_left: T")  // StridedSlice(ReadVariableOp) — left bias
+    .Input("mask: T")             // Select output (gate)
+    .Input("sliced_var_right: T") // StridedSlice(ReadVariableOp) — right addend
     .Output("output: T")
     .Attr("T: {float, double, half, bfloat16}")
     .SetShapeFn([](shape_inference::InferenceContext* c) {
-      // The output shape is determined by broadcasting the data inputs
-      // and mask. In practice they usually share the same shape.
-      shape_inference::ShapeHandle output_shape = c->input(0);
-
-      // Broadcast with mask (input 2)
-      shape_inference::ShapeHandle mask_shape = c->input(2);
-      if (c->RankKnown(output_shape) && c->RankKnown(mask_shape)) {
-        TF_RETURN_IF_ERROR(c->Merge(output_shape, mask_shape, &output_shape));
-      }
-
-      c->set_output(0, output_shape);
+      // Output shape = broadcast(data_left, mask)
+      shape_inference::ShapeHandle out = c->input(0);
+      shape_inference::ShapeHandle mask_sh = c->input(2);
+      if (c->RankKnown(out) && c->RankKnown(mask_sh))
+        TF_RETURN_IF_ERROR(c->Merge(out, mask_sh, &out));
+      c->set_output(0, out);
       return Status::OK();
     });
 
@@ -78,40 +67,34 @@ template <typename T>
 class MusaShiftedAffineMapOp : public MusaOpKernel {
  public:
   using MusaOpKernel::MusaOpKernel;
-
-  // Fuses 4 element-wise operations
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
-    const Tensor& data_left = ctx->input(0);
+    const Tensor& data_left      = ctx->input(0);
     const Tensor& sliced_var_left = ctx->input(1);
-    const Tensor& mask = ctx->input(2);
-    const Tensor& data_right = ctx->input(3);
-    const Tensor& sliced_var_right = ctx->input(4);
+    const Tensor& mask            = ctx->input(2);
+    const Tensor& sliced_var_right = ctx->input(3);
 
-    VLOG(2) << "MusaShiftedAffineMap: data_left="
-            << data_left.shape().DebugString()
-            << ", sliced_var_left=" << sliced_var_left.shape().DebugString()
-            << ", mask=" << mask.shape().DebugString()
-            << ", data_right=" << data_right.shape().DebugString()
-            << ", sliced_var_right=" << sliced_var_right.shape().DebugString();
+    VLOG(2) << "MusaShiftedAffineMap:"
+            << " data_left=" << data_left.shape().DebugString()
+            << " sliced_var_left=" << sliced_var_left.shape().DebugString()
+            << " mask=" << mask.shape().DebugString()
+            << " sliced_var_right=" << sliced_var_right.shape().DebugString();
 
     // -----------------------------------------------------------------
-    // Determine output shape via BCast(data_left, mask)
+    // Output shape = BCast(data_left, mask)
     // -----------------------------------------------------------------
     BCast bcast_main(BCast::Vec(data_left.shape().dim_sizes()),
                      BCast::Vec(mask.shape().dim_sizes()));
-    OP_REQUIRES(
-        ctx, bcast_main.IsValid(),
-        errors::InvalidArgument(
-            "Incompatible shapes: data_left=", data_left.shape().DebugString(),
-            " vs mask=", mask.shape().DebugString()));
+    OP_REQUIRES(ctx, bcast_main.IsValid(),
+                errors::InvalidArgument(
+                    "Incompatible shapes: data_left=",
+                    data_left.shape().DebugString(),
+                    " vs mask=", mask.shape().DebugString()));
 
     TensorShape output_shape = BCast::ToShape(bcast_main.output_shape());
-
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
-
     if (output->NumElements() == 0) return;
 
     auto& handle = GetHandleByCtx(ctx);
@@ -121,94 +104,60 @@ class MusaShiftedAffineMapOp : public MusaOpKernel {
     // -----------------------------------------------------------------
     BCast bcast_left(BCast::Vec(data_left.shape().dim_sizes()),
                      BCast::Vec(sliced_var_left.shape().dim_sizes()));
-    OP_REQUIRES(
-        ctx, bcast_left.IsValid(),
-        errors::InvalidArgument(
-            "Incompatible shapes: data_left=", data_left.shape().DebugString(),
-            " vs sliced_var_left=", sliced_var_left.shape().DebugString()));
+    OP_REQUIRES(ctx, bcast_left.IsValid(),
+                errors::InvalidArgument(
+                    "Incompatible shapes: data_left=",
+                    data_left.shape().DebugString(),
+                    " vs sliced_var_left=",
+                    sliced_var_left.shape().DebugString()));
 
-    TensorShape temp_left_shape = BCast::ToShape(bcast_left.output_shape());
     Tensor temp_left;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(data_left.dtype(), temp_left_shape,
-                                           &temp_left));
-
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(
+        data_left.dtype(), BCast::ToShape(bcast_left.output_shape()),
+        &temp_left));
     {
-      mBinary add_op;
-      add_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-      mTensor mt_data = CreateMTensor(data_left, format_);
-      mTensor mt_var = CreateMTensor(sliced_var_left, format_);
-      mTensor mt_out = CreateMTensor(temp_left, format_);
-      auto status = add_op.Run(handle, mt_out, mt_data, mt_var);
-      OP_REQUIRES(ctx, status == mStatus::SUCCESS,
-                  errors::Internal("ShiftedAffineMap step1 (add left) failed: ",
-                                   static_cast<int>(status)));
+      mBinary op; op.SetMode(::musa::dnn::Binary::Mode::ADD);
+      auto s = op.Run(handle,
+                      CreateMTensor(temp_left, format_),
+                      CreateMTensor(data_left, format_),
+                      CreateMTensor(sliced_var_left, format_));
+      OP_REQUIRES(ctx, s == mStatus::SUCCESS,
+                  errors::Internal("ShiftedAffineMap ADD left failed: ",
+                                   static_cast<int>(s)));
     }
 
     // -----------------------------------------------------------------
     // Step 2: temp_gated = temp_left * mask
     // -----------------------------------------------------------------
     Tensor temp_gated;
-    OP_REQUIRES_OK(
-        ctx, ctx->allocate_temp(data_left.dtype(), output_shape, &temp_gated));
-
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(
+        data_left.dtype(), output_shape, &temp_gated));
     {
-      mBinary mul_op;
-      mul_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-      mTensor mt_left = CreateMTensor(temp_left, format_);
-      mTensor mt_mask = CreateMTensor(mask, format_);
-      mTensor mt_out = CreateMTensor(temp_gated, format_);
-      auto status = mul_op.Run(handle, mt_out, mt_left, mt_mask);
-      OP_REQUIRES(ctx, status == mStatus::SUCCESS,
-                  errors::Internal("ShiftedAffineMap step2 (mul mask) failed: ",
-                                   static_cast<int>(status)));
+      mBinary op; op.SetMode(::musa::dnn::Binary::Mode::MUL);
+      auto s = op.Run(handle,
+                      CreateMTensor(temp_gated, format_),
+                      CreateMTensor(temp_left, format_),
+                      CreateMTensor(mask, format_));
+      OP_REQUIRES(ctx, s == mStatus::SUCCESS,
+                  errors::Internal("ShiftedAffineMap MUL mask failed: ",
+                                   static_cast<int>(s)));
     }
 
     // -----------------------------------------------------------------
-    // Step 3: temp_right = data_right + sliced_var_right
-    // -----------------------------------------------------------------
-    BCast bcast_right(BCast::Vec(data_right.shape().dim_sizes()),
-                      BCast::Vec(sliced_var_right.shape().dim_sizes()));
-    OP_REQUIRES(ctx, bcast_right.IsValid(),
-                errors::InvalidArgument(
-                    "Incompatible shapes: data_right=",
-                    data_right.shape().DebugString(), " vs sliced_var_right=",
-                    sliced_var_right.shape().DebugString()));
-
-    TensorShape temp_right_shape = BCast::ToShape(bcast_right.output_shape());
-    Tensor temp_right;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(data_right.dtype(), temp_right_shape,
-                                           &temp_right));
-
-    {
-      mBinary add_op;
-      add_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-      mTensor mt_data = CreateMTensor(data_right, format_);
-      mTensor mt_var = CreateMTensor(sliced_var_right, format_);
-      mTensor mt_out = CreateMTensor(temp_right, format_);
-      auto status = add_op.Run(handle, mt_out, mt_data, mt_var);
-      OP_REQUIRES(
-          ctx, status == mStatus::SUCCESS,
-          errors::Internal("ShiftedAffineMap step3 (add right) failed: ",
-                           static_cast<int>(status)));
-    }
-
-    // -----------------------------------------------------------------
-    // Step 4: output = temp_gated + temp_right
+    // Step 3: output = temp_gated + sliced_var_right
     // -----------------------------------------------------------------
     {
-      mBinary add_op;
-      add_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-      mTensor mt_gated = CreateMTensor(temp_gated, format_);
-      mTensor mt_right = CreateMTensor(temp_right, format_);
-      mTensor mt_out = CreateMTensor(*output, format_);
-      auto status = add_op.Run(handle, mt_out, mt_gated, mt_right);
-      OP_REQUIRES(
-          ctx, status == mStatus::SUCCESS,
-          errors::Internal("ShiftedAffineMap step4 (final add) failed: ",
-                           static_cast<int>(status)));
+      mBinary op; op.SetMode(::musa::dnn::Binary::Mode::ADD);
+      auto s = op.Run(handle,
+                      CreateMTensor(*output, format_),
+                      CreateMTensor(temp_gated, format_),
+                      CreateMTensor(sliced_var_right, format_));
+      OP_REQUIRES(ctx, s == mStatus::SUCCESS,
+                  errors::Internal("ShiftedAffineMap ADD right failed: ",
+                                   static_cast<int>(s)));
     }
 
-    VLOG(2) << "MusaShiftedAffineMap: output=" << output->shape().DebugString();
+    VLOG(2) << "MusaShiftedAffineMap output=" << output->shape().DebugString();
   }
 };
 
