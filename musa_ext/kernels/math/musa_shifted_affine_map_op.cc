@@ -26,9 +26,8 @@ limitations under the License.
 #include <limits>
 #include <vector>
 
-#include "kernels/math/musa_shifted_affine_map_kernel.h"
-#include "utils/logging.h"
 #include "../utils_op.h"
+#include "kernels/math/musa_shifted_affine_map_kernel.h"
 #include "tensorflow/core/framework/common_shape_fns.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
@@ -36,6 +35,7 @@ limitations under the License.
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/util/bcast.h"
+#include "utils/logging.h"
 
 namespace tensorflow {
 namespace musa {
@@ -46,9 +46,8 @@ Status BroadcastShapes(const TensorShape& lhs, const TensorShape& rhs,
                        TensorShape* output) {
   BCast bcast(BCast::Vec(lhs.dim_sizes()), BCast::Vec(rhs.dim_sizes()));
   if (!bcast.IsValid()) {
-    return errors::InvalidArgument("Incompatible shapes: ",
-                                   lhs.DebugString(), " vs ",
-                                   rhs.DebugString());
+    return errors::InvalidArgument("Incompatible shapes: ", lhs.DebugString(),
+                                   " vs ", rhs.DebugString());
   }
   *output = BCast::ToShape(bcast.output_shape());
   return Status::OK();
@@ -92,7 +91,8 @@ ShiftedAffineMapStrides BuildBroadcastStrides(const TensorShape& input_shape,
         output_shape.dim_size(out_axis) > 1) {
       kernel_strides.values[out_axis] = 0;
     } else {
-      kernel_strides.values[out_axis] = static_cast<int>(dense_strides[in_axis]);
+      kernel_strides.values[out_axis] =
+          static_cast<int>(dense_strides[in_axis]);
     }
   }
 
@@ -106,10 +106,10 @@ ShiftedAffineMapStrides BuildBroadcastStrides(const TensorShape& input_shape,
 // =============================================================================
 
 REGISTER_OP("MusaShiftedAffineMap")
-    .Input("data_left: T")        // other input of inner AddV2 (left branch)
-    .Input("sliced_var_left: T")  // StridedSlice(ReadVariableOp) — left bias
-    .Input("mask: T")             // Select output (gate)
-    .Input("sliced_var_right: T") // StridedSlice(ReadVariableOp) — right addend
+    .Input("data_left: T")  // other input of inner AddV2/Mul
+    .Input("mask: T")       // Select output (gate)
+    .Input(
+        "sliced_var_right: T")  // StridedSlice(ReadVariableOp) — right addend
     .Output("output: T")
     .Attr("T: {float, double, half, bfloat16}")
     .SetShapeFn([](shape_inference::InferenceContext* c) {
@@ -153,14 +153,13 @@ REGISTER_OP("MusaShiftedAffineMap")
 
       ShapeHandle out = c->input(0);
       if (!c->RankKnown(out) || !c->RankKnown(c->input(1)) ||
-          !c->RankKnown(c->input(2)) || !c->RankKnown(c->input(3))) {
+          !c->RankKnown(c->input(2))) {
         c->set_output(0, c->UnknownShape());
         return Status::OK();
       }
 
       TF_RETURN_IF_ERROR(BroadcastTwoShapes(out, c->input(1), &out));
       TF_RETURN_IF_ERROR(BroadcastTwoShapes(out, c->input(2), &out));
-      TF_RETURN_IF_ERROR(BroadcastTwoShapes(out, c->input(3), &out));
       c->set_output(0, out);
       return Status::OK();
     });
@@ -179,35 +178,59 @@ class MusaShiftedAffineMapOp : public MusaOpKernel {
     MUSA_KERNEL_TIMING_GUARD(ctx);
 
     const Tensor& data_left = ctx->input(0);
-    const Tensor& sliced_var_left = ctx->input(1);
-    const Tensor& mask = ctx->input(2);
-    const Tensor& sliced_var_right = ctx->input(3);
+    const Tensor& mask = ctx->input(1);
+    const Tensor& sliced_var_right = ctx->input(2);
+
+    // =========================================================================
+    // FAST PATH: Check if all inputs have exactly the same shape.
+    // If so, we can bypass complex stride calculations and use a fast 1D
+    // kernel.
+    // =========================================================================
+    bool is_same_shape = (data_left.shape() == mask.shape()) &&
+                         (data_left.shape() == sliced_var_right.shape());
+
+    if (is_same_shape) {
+      Tensor* output = nullptr;
+      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, data_left.shape(), &output));
+      if (output->NumElements() == 0) return;
+
+      musaStream_t stream = GetMusaStreamByCtx(ctx);
+      MUSA_KERNEL_TRACE_START("Kernel_FastPath");
+      LaunchShiftedAffineMapContiguous<T>(
+          data_left.flat<T>().data(), mask.flat<T>().data(),
+          sliced_var_right.flat<T>().data(), output->flat<T>().data(),
+          static_cast<int64_t>(output->NumElements()), stream);
+      MUSA_KERNEL_TRACE_END("Kernel_FastPath");
+
+      auto launch_status = musaGetLastError();
+      OP_REQUIRES(
+          ctx, launch_status == musaSuccess,
+          errors::Internal("MUSA ShiftedAffineMap fast path launch failed: ",
+                           musaGetErrorString(launch_status)));
+
+      VLOG(2) << "MusaShiftedAffineMap (FastPath) output="
+              << output->shape().DebugString();
+      return;
+    }
 
     VLOG(2) << "MusaShiftedAffineMap:"
             << " data_left=" << data_left.shape().DebugString()
-            << " sliced_var_left=" << sliced_var_left.shape().DebugString()
             << " mask=" << mask.shape().DebugString()
             << " sliced_var_right=" << sliced_var_right.shape().DebugString();
 
     TensorShape temp_left_shape;
-    OP_REQUIRES_OK(ctx, BroadcastShapes(data_left.shape(),
-                                        sliced_var_left.shape(),
+    OP_REQUIRES_OK(ctx, BroadcastShapes(data_left.shape(), mask.shape(),
                                         &temp_left_shape));
 
-    TensorShape temp_gated_shape;
-    OP_REQUIRES_OK(ctx, BroadcastShapes(temp_left_shape, mask.shape(),
-                                        &temp_gated_shape));
-
     TensorShape output_shape;
-    OP_REQUIRES_OK(ctx, BroadcastShapes(temp_gated_shape,
-                                        sliced_var_right.shape(),
-                                        &output_shape));
+    OP_REQUIRES_OK(ctx,
+                   BroadcastShapes(temp_left_shape, sliced_var_right.shape(),
+                                   &output_shape));
 
-    OP_REQUIRES(
-        ctx, output_shape.dims() <= kShiftedAffineMapMaxDims,
-        errors::InvalidArgument("ShiftedAffineMap rank ", output_shape.dims(),
-                                " exceeds kernel limit ",
-                                kShiftedAffineMapMaxDims));
+    OP_REQUIRES(ctx, output_shape.dims() <= kShiftedAffineMapMaxDims,
+                errors::InvalidArgument(
+                    "ShiftedAffineMap rank ", output_shape.dims(),
+                    " exceeds kernel limit ", kShiftedAffineMapMaxDims));
 
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
@@ -222,8 +245,6 @@ class MusaShiftedAffineMapOp : public MusaOpKernel {
     ShiftedAffineMapShape kernel_shape = BuildKernelShape(output_shape);
     ShiftedAffineMapStrides data_left_st =
         BuildBroadcastStrides(data_left.shape(), output_shape);
-    ShiftedAffineMapStrides sliced_var_left_st =
-        BuildBroadcastStrides(sliced_var_left.shape(), output_shape);
     ShiftedAffineMapStrides mask_st =
         BuildBroadcastStrides(mask.shape(), output_shape);
     ShiftedAffineMapStrides sliced_var_right_st =
@@ -232,13 +253,17 @@ class MusaShiftedAffineMapOp : public MusaOpKernel {
     musaStream_t stream = GetMusaStreamByCtx(ctx);
     MUSA_KERNEL_TRACE_START("Kernel");
     LaunchShiftedAffineMapKernel<T>(
-        data_left.flat<T>().data(), data_left_st,
-        sliced_var_left.flat<T>().data(), sliced_var_left_st,
-        mask.flat<T>().data(), mask_st,
-        sliced_var_right.flat<T>().data(), sliced_var_right_st,
+        data_left.flat<T>().data(), data_left_st, mask.flat<T>().data(),
+        mask_st, sliced_var_right.flat<T>().data(), sliced_var_right_st,
         output->flat<T>().data(), kernel_shape,
         static_cast<int>(output->NumElements()), stream);
     MUSA_KERNEL_TRACE_END("Kernel");
+
+    auto launch_status = musaGetLastError();
+    OP_REQUIRES(
+        ctx, launch_status == musaSuccess,
+        errors::Internal("MUSA ShiftedAffineMap broadcast path launch failed: ",
+                         musaGetErrorString(launch_status)));
 
     VLOG(2) << "MusaShiftedAffineMap output=" << output->shape().DebugString();
   }
