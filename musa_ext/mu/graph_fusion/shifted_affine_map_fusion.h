@@ -37,6 +37,7 @@ namespace musa_fusion {
  *   │   └─ Select
  *   └─ StridedSlice
  *       └─ ReadVariableOp
+ * output = mask * (1.0 + slice(var_left)) + slice(var_right)
  */
 
 class MusaShiftedAffineMapFusion : public FusionPattern {
