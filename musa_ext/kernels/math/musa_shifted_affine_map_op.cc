@@ -117,10 +117,13 @@ class MusaShiftedAffineMapOp : public MusaOpKernel {
         &temp_left));
     {
       mBinary op; op.SetMode(::musa::dnn::Binary::Mode::ADD);
+      mTensor temp_left_mt = CreateMTensor(temp_left, format_);
+      mTensor data_left_mt = CreateMTensor(data_left, format_);
+      mTensor sliced_var_left_mt = CreateMTensor(sliced_var_left, format_);
       auto s = op.Run(handle,
-                      CreateMTensor(temp_left, format_),
-                      CreateMTensor(data_left, format_),
-                      CreateMTensor(sliced_var_left, format_));
+                      temp_left_mt,
+                      data_left_mt,
+                      sliced_var_left_mt);
       OP_REQUIRES(ctx, s == mStatus::SUCCESS,
                   errors::Internal("ShiftedAffineMap ADD left failed: ",
                                    static_cast<int>(s)));
@@ -134,10 +137,13 @@ class MusaShiftedAffineMapOp : public MusaOpKernel {
         data_left.dtype(), output_shape, &temp_gated));
     {
       mBinary op; op.SetMode(::musa::dnn::Binary::Mode::MUL);
+      mTensor temp_gated_mt = CreateMTensor(temp_gated, format_);
+      mTensor temp_left_mt = CreateMTensor(temp_left, format_);
+      mTensor mask_mt = CreateMTensor(mask, format_);
       auto s = op.Run(handle,
-                      CreateMTensor(temp_gated, format_),
-                      CreateMTensor(temp_left, format_),
-                      CreateMTensor(mask, format_));
+                      temp_gated_mt,
+                      temp_left_mt,
+                      mask_mt);
       OP_REQUIRES(ctx, s == mStatus::SUCCESS,
                   errors::Internal("ShiftedAffineMap MUL mask failed: ",
                                    static_cast<int>(s)));
@@ -148,10 +154,13 @@ class MusaShiftedAffineMapOp : public MusaOpKernel {
     // -----------------------------------------------------------------
     {
       mBinary op; op.SetMode(::musa::dnn::Binary::Mode::ADD);
+      mTensor output_mt = CreateMTensor(*output, format_);
+      mTensor temp_gated_mt = CreateMTensor(temp_gated, format_);
+      mTensor sliced_var_right_mt = CreateMTensor(sliced_var_right, format_);
       auto s = op.Run(handle,
-                      CreateMTensor(*output, format_),
-                      CreateMTensor(temp_gated, format_),
-                      CreateMTensor(sliced_var_right, format_));
+                      output_mt,
+                      temp_gated_mt,
+                      sliced_var_right_mt);
       OP_REQUIRES(ctx, s == mStatus::SUCCESS,
                   errors::Internal("ShiftedAffineMap ADD right failed: ",
                                    static_cast<int>(s)));

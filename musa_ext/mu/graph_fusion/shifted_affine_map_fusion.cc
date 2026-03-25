@@ -58,14 +58,28 @@ const NodeDef* FindProducer(const GraphDef& graph, const std::string& input) {
   return FusionGraphUtils::GetNodeByName(graph, name);
 }
 
+const NodeDef* ResolveIdentityLike(const GraphDef& graph, const NodeDef* node) {
+  const NodeDef* current = node;
+  while (current && IsOp(*current, "Identity") && current->input_size() > 0) {
+    current = FindProducer(graph, current->input(0));
+  }
+  return current;
+}
+
+const NodeDef* FindResolvedProducer(const GraphDef& graph,
+                                    const std::string& input) {
+  return ResolveIdentityLike(graph, FindProducer(graph, input));
+}
+
 // Check whether `slice_node` is a StridedSlice whose data source is a
 // ReadVariableOp (or equivalent).  StridedSlice inputs: [input, begin, end,
 // strides].  We only examine input[0] (the data source).
 bool IsStridedSliceFromVariable(const GraphDef& graph,
                                 const NodeDef& slice_node) {
-  if (!IsOp(slice_node, "StridedSlice")) return false;
-  if (slice_node.input_size() < 1) return false;
-  const NodeDef* data_src = FindProducer(graph, slice_node.input(0));
+  const NodeDef* slice = ResolveIdentityLike(graph, &slice_node);
+  if (!slice || !IsOp(*slice, "StridedSlice")) return false;
+  if (slice->input_size() < 1) return false;
+  const NodeDef* data_src = FindResolvedProducer(graph, slice->input(0));
   if (!data_src) return false;
   return IsVarReadOp(*data_src);
 }
@@ -81,17 +95,21 @@ bool DecomposeAddV2AsDataAndSlicedVar(const GraphDef& graph,
   if (add_node.input_size() < 2) return false;
   const NodeDef* in0 = FindProducer(graph, add_node.input(0));
   const NodeDef* in1 = FindProducer(graph, add_node.input(1));
+  const NodeDef* in0_resolved = ResolveIdentityLike(graph, in0);
+  const NodeDef* in1_resolved = ResolveIdentityLike(graph, in1);
   if (!in0 || !in1) return false;
 
-  if (IsStridedSliceFromVariable(graph, *in0)) {
+  if (in0_resolved && IsStridedSliceFromVariable(graph, *in0_resolved)) {
     *out_sliced_var = in0;
-    *out_var_read = FindProducer(graph, in0->input(0));
+    *out_var_read =
+        FindResolvedProducer(graph, in0_resolved->input(0));
     *out_data = in1;
     return true;
   }
-  if (IsStridedSliceFromVariable(graph, *in1)) {
+  if (in1_resolved && IsStridedSliceFromVariable(graph, *in1_resolved)) {
     *out_sliced_var = in1;
-    *out_var_read = FindProducer(graph, in1->input(0));
+    *out_var_read =
+        FindResolvedProducer(graph, in1_resolved->input(0));
     *out_data = in0;
     return true;
   }
@@ -104,14 +122,18 @@ bool DecomposeMulAsAddMask(const GraphDef& graph, const NodeDef& mul_node,
   if (mul_node.input_size() < 2) return false;
   const NodeDef* in0 = FindProducer(graph, mul_node.input(0));
   const NodeDef* in1 = FindProducer(graph, mul_node.input(1));
+  const NodeDef* in0_resolved = ResolveIdentityLike(graph, in0);
+  const NodeDef* in1_resolved = ResolveIdentityLike(graph, in1);
   if (!in0 || !in1) return false;
 
-  if (IsOp(*in0, "AddV2") && IsMaskOp(*in1)) {
+  if (in0_resolved && in1_resolved && IsOp(*in0_resolved, "AddV2") &&
+      IsMaskOp(*in1_resolved)) {
     *out_add = in0;
     *out_mask = in1;
     return true;
   }
-  if (IsOp(*in1, "AddV2") && IsMaskOp(*in0)) {
+  if (in0_resolved && in1_resolved && IsOp(*in1_resolved, "AddV2") &&
+      IsMaskOp(*in0_resolved)) {
     *out_add = in1;
     *out_mask = in0;
     return true;
@@ -172,6 +194,8 @@ FusionMatchResult MusaShiftedAffineMapFusion::MatchFromOutputAddNode(
 
   const NodeDef* in0 = FindProducer(graph, output_add.input(0));
   const NodeDef* in1 = FindProducer(graph, output_add.input(1));
+  const NodeDef* in0_resolved = ResolveIdentityLike(graph, in0);
+  const NodeDef* in1_resolved = ResolveIdentityLike(graph, in1);
   if (!in0 || !in1) {
     VLOG(2)
         << "[ShiftedAffineMap::Match] FAIL: cannot resolve output_add inputs";
@@ -186,20 +210,24 @@ FusionMatchResult MusaShiftedAffineMapFusion::MatchFromOutputAddNode(
   const NodeDef* sliced_var_right = nullptr;
   const NodeDef* var_read_right = nullptr;
 
-  auto try_sides = [&](const NodeDef* a, const NodeDef* b) -> bool {
-    if (IsOp(*a, "Mul") && IsStridedSliceFromVariable(graph, *b)) {
+  auto try_sides = [&](const NodeDef* a, const NodeDef* a_resolved,
+                       const NodeDef* b, const NodeDef* b_resolved) -> bool {
+    if (a_resolved && b_resolved && IsOp(*a_resolved, "Mul") &&
+        IsStridedSliceFromVariable(graph, *b_resolved)) {
       mul_node = a;
       sliced_var_right = b;
-      var_read_right = FindProducer(graph, b->input(0));
+      var_read_right = FindResolvedProducer(graph, b_resolved->input(0));
       return true;
     }
     return false;
   };
 
-  if (!try_sides(in0, in1) && !try_sides(in1, in0)) {
+  if (!try_sides(in0, in0_resolved, in1, in1_resolved) &&
+      !try_sides(in1, in1_resolved, in0, in0_resolved)) {
     VLOG(2) << "[ShiftedAffineMap::Match] FAIL: output AddV2 inputs are not "
-            << "(Mul, StridedSlice); got (" << in0->op() << ", " << in1->op()
-            << ")";
+            << "(Mul, StridedSlice); got ("
+            << (in0_resolved ? in0_resolved->op() : "NULL") << ", "
+            << (in1_resolved ? in1_resolved->op() : "NULL") << ")";
     return result;
   }
 
@@ -262,21 +290,36 @@ FusionMatchResult MusaShiftedAffineMapFusion::MatchFromOutputAddNode(
   // — left_add inputs
   for (int i = 0; i < left_add_node->input_size() && i < 2; ++i) {
     const NodeDef* p = FindProducer(graph, left_add_node->input(i));
+    const NodeDef* p_resolved = ResolveIdentityLike(graph, p);
     if (p == sliced_var_left)
       result.captured_attrs["sliced_var_left_input"] = left_add_node->input(i);
     else if (p == data_left)
+      result.captured_attrs["data_left_input"] = left_add_node->input(i);
+    else if (p_resolved && sliced_var_left &&
+             p_resolved == ResolveIdentityLike(graph, sliced_var_left))
+      result.captured_attrs["sliced_var_left_input"] = left_add_node->input(i);
+    else if (p_resolved && data_left &&
+             p_resolved == ResolveIdentityLike(graph, data_left))
       result.captured_attrs["data_left_input"] = left_add_node->input(i);
   }
   // — mask from mul
   for (int i = 0; i < mul_node->input_size() && i < 2; ++i) {
     const NodeDef* p = FindProducer(graph, mul_node->input(i));
+    const NodeDef* p_resolved = ResolveIdentityLike(graph, p);
     if (p == mask_node)
+      result.captured_attrs["mask_input"] = mul_node->input(i);
+    else if (p_resolved && mask_node &&
+             p_resolved == ResolveIdentityLike(graph, mask_node))
       result.captured_attrs["mask_input"] = mul_node->input(i);
   }
   // — sliced_var_right from output_add
   for (int i = 0; i < output_add.input_size() && i < 2; ++i) {
     const NodeDef* p = FindProducer(graph, output_add.input(i));
+    const NodeDef* p_resolved = ResolveIdentityLike(graph, p);
     if (p == sliced_var_right)
+      result.captured_attrs["sliced_var_right_input"] = output_add.input(i);
+    else if (p_resolved && sliced_var_right &&
+             p_resolved == ResolveIdentityLike(graph, sliced_var_right))
       result.captured_attrs["sliced_var_right_input"] = output_add.input(i);
   }
 

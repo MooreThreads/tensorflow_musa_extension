@@ -127,6 +127,48 @@ def _build_shifted_affine_map_graph(data_shape, var_left_shape, var_right_shape)
     return graph, output, var_left, var_right
 
 
+def _build_shifted_affine_map_graph_with_identity_wrappers(
+        data_shape, var_left_shape, var_right_shape):
+    """Construct a fusible graph with Identity wrappers on boundary inputs."""
+    graph = tf.Graph()
+    with graph.as_default():
+        with tf.device("/device:MUSA:0"):
+            data_left = tf.compat.v1.placeholder(
+                tf.float32, shape=data_shape, name="data_left")
+            data_left_id = tf.identity(data_left, name="data_left_identity")
+
+            var_left = tf.Variable(
+                tf.zeros(var_left_shape, dtype=tf.float32), name="var_left")
+            sliced_var_left = tf.strided_slice(
+                var_left, [0] * len(var_left_shape), list(var_left_shape),
+                [1] * len(var_left_shape), name="strided_slice_left")
+            sliced_var_left_id = tf.identity(
+                sliced_var_left, name="strided_slice_left_identity")
+
+            var_right = tf.Variable(
+                tf.zeros(var_right_shape, dtype=tf.float32), name="var_right")
+            sliced_var_right = tf.strided_slice(
+                var_right, [0] * len(var_right_shape), list(var_right_shape),
+                [1] * len(var_right_shape), name="strided_slice_right")
+            sliced_var_right_id = tf.identity(
+                sliced_var_right, name="strided_slice_right_identity")
+
+            mask_cond = tf.compat.v1.placeholder(
+                tf.bool, shape=data_shape, name="mask_cond")
+            ones = tf.ones(data_shape, dtype=tf.float32)
+            zeros = tf.zeros(data_shape, dtype=tf.float32)
+            mask = tf.where(mask_cond, ones, zeros, name="mask_select")
+            mask_id = tf.identity(mask, name="mask_identity")
+
+            add_left = tf.math.add(
+                data_left_id, sliced_var_left_id, name="add_left")
+            mul_gated = tf.math.multiply(add_left, mask_id, name="mul_gated")
+            output = tf.math.add(
+                mul_gated, sliced_var_right_id, name="output")
+
+    return graph, output, var_left, var_right
+
+
 # =========================================================================
 # Test class
 # =========================================================================
@@ -253,7 +295,50 @@ class ShiftedAffineMapFusionTest(MUSATestCase):
         print("  PASSED")
 
     # -----------------------------------------------------------------
-    # 4. Negative test: incomplete pattern should NOT fuse
+    # 4. Identity wrappers should still fuse
+    # -----------------------------------------------------------------
+    def test_fusion_with_identity_wrappers(self):
+        """Fusion should tolerate Identity wrappers on boundary inputs."""
+        print("\n" + "=" * 70)
+        print("Test: ShiftedAffineMap — identity wrappers")
+        print("=" * 70)
+
+        data_shape = [2, 4, 8]
+        var_shape = [8]
+
+        rng = np.random.RandomState(7)
+        data_np = rng.standard_normal(data_shape).astype(np.float32)
+        mask_np = rng.random(data_shape) > 0.4
+        var_l = rng.standard_normal(var_shape).astype(np.float32) * 0.01
+        var_r = rng.standard_normal(var_shape).astype(np.float32) * 0.01
+
+        expected = _numpy_shifted_affine_map(
+            data_np, var_l, mask_np.astype(np.float32), var_r)
+
+        graph, output, var_left, var_right = (
+            _build_shifted_affine_map_graph_with_identity_wrappers(
+                data_shape, var_shape, var_shape))
+        config = _create_config_with_musa_optimizer()
+        run_opts = tf.compat.v1.RunOptions(output_partition_graphs=True)
+        run_meta = tf.compat.v1.RunMetadata()
+
+        with tf.compat.v1.Session(graph=graph, config=config) as sess:
+            sess.run(tf.compat.v1.global_variables_initializer())
+            sess.run(var_left.assign(var_l))
+            sess.run(var_right.assign(var_r))
+            result = sess.run(
+                output,
+                feed_dict={"data_left:0": data_np, "mask_cond:0": mask_np},
+                options=run_opts, run_metadata=run_meta)
+
+        fused = _has_fused_op(run_meta.partition_graphs)
+        print(f"  fused={fused}, max_diff={np.max(np.abs(result - expected)):.2e}")
+        self.assertTrue(fused, "Fusion should handle Identity wrappers")
+        self.assertAllClose(result, expected, rtol=_RTOL, atol=_ATOL)
+        print("  PASSED")
+
+    # -----------------------------------------------------------------
+    # 5. Negative test: incomplete pattern should NOT fuse
     # -----------------------------------------------------------------
     def test_fusion_not_applied_when_pattern_incomplete(self):
         """Fusion should NOT fire when the right branch is not StridedSlice."""
@@ -287,7 +372,7 @@ class ShiftedAffineMapFusionTest(MUSATestCase):
         print("  PASSED")
 
     # -----------------------------------------------------------------
-    # 5. Subgraph cleanup
+    # 6. Subgraph cleanup
     # -----------------------------------------------------------------
     def test_subgraph_nodes_removed(self):
         """After fusion, intermediate nodes should be gone."""
