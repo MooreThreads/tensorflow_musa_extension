@@ -44,7 +44,7 @@ from tensorflow.core.protobuf import rewriter_config_pb2
 # ---------------------------------------------------------------------------
 _TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 _PARENT_DIR = os.path.dirname(_TEST_DIR)
-_SUBGRAPH_PB = os.path.join(_PARENT_DIR, "tensordot_bias_subgraph.pb")
+_SUBGRAPH_PB = os.path.join(_PARENT_DIR, "fusion/tensordot_bias_subgraph.pb")
 
 # Node names inside the subgraph pb (from the provided computation graph)
 # Note: Using longseq_mixer_ad_hard prefix to match the actual pb file
