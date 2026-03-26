@@ -154,6 +154,9 @@ Status RunMusaConv2DBackpropInput(OpKernelContext* ctx,
         ", filter_shape=", filter.shape().DebugString(),
         ", in_backprop_shape=", in_backprop->shape().DebugString());
   }
+  if (out_backprop.dtype() == DT_FLOAT || out_backprop.dtype() == DT_DOUBLE) {
+    algo = mConvolution::AlgorithmBwdData::IMPLICIT_GEMM;
+  }
 
   size_t workspace_size = 0;
   status = conv.GetBackwardDataWorkspaceSize(handle, workspace_size, dx, dy, w,
