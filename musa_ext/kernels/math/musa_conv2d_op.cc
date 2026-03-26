@@ -164,6 +164,9 @@ Status RunMusaConv2D(OpKernelContext* ctx, const Tensor& input,
         ", filter_shape=", filter.shape().DebugString(),
         ", output_shape=", output->shape().DebugString());
   }
+  if (input.dtype() == DT_FLOAT || input.dtype() == DT_DOUBLE) {
+    algo = mConvolution::Algorithm::IMPLICIT_GEMM;
+  }
 
   size_t workspace_size = 0;
   status = conv.GetForwardWorkspaceSize(handle, workspace_size, y, x, w, algo);
