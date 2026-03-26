@@ -125,10 +125,15 @@ class MusaGatherNdOp : public MusaOpKernel {
     // Get stream
     musaStream_t stream = GetMusaStreamByCtx(ctx);
 
+    // Allocate temporary tensor for strides on device using TF allocator
+    Tensor strides_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_INT64,
+                                            TensorShape({index_depth}),
+                                            &strides_tensor));
+    int64_t* d_params_strides = strides_tensor.flat<int64_t>().data();
+
     // Copy strides to device
-    int64_t* d_params_strides = nullptr;
     const size_t strides_bytes = index_depth * sizeof(int64_t);
-    musaMalloc(reinterpret_cast<void**>(&d_params_strides), strides_bytes);
     musaMemcpyAsync(d_params_strides, params_strides.data(), strides_bytes,
                     musaMemcpyHostToDevice, stream);
 
@@ -143,8 +148,7 @@ class MusaGatherNdOp : public MusaOpKernel {
         d_params_strides,
         stream);
 
-    // Free device memory
-    musaFree(d_params_strides);
+    // Temporary tensor will be automatically deallocated by TF allocator
   }
 
  private:

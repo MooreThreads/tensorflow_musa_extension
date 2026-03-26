@@ -1,53 +1,40 @@
+// MUSA Pack/Unpack Operators
+// Pack: implemented via muDNN Concat with expanded dimension metadata
+// Unpack: implemented via custom kernel for direct memory copy
+//
+// Copyright 2026 The TensorFlow MUSA Authors. All Rights Reserved.
+// Licensed under the Apache License, Version 2.
+
+#include <mudnn.h>
+
+#include <vector>
+
+#include "../utils_op.h"
 #include "mu/device/musa_memcpy.h"
-#include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
+#include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
-#include "tensorflow/stream_executor/device_memory.h"
-#include "tensorflow/stream_executor/stream.h"
-#include "utils_op.h"
-
-extern "C" {
-void LaunchPackKernelFloat(const float** inputs, float* output, int num,
-                           int before, int after, int total,
-                           musaStream_t stream);
-void LaunchPackKernelDouble(const double** inputs, double* output, int num,
-                            int before, int after, int total,
-                            musaStream_t stream);
-void LaunchPackKernelHalf(const void** inputs, void* output, int num,
-                          int before, int after, int total,
-                          musaStream_t stream);
-void LaunchPackKernelBFloat16(const void** inputs, void* output, int num,
-                              int before, int after, int total,
-                              musaStream_t stream);
-void LaunchPackKernelInt32(const int** inputs, int* output, int num, int before,
-                           int after, int total, musaStream_t stream);
-void LaunchPackKernelInt64(const int64_t** inputs, int64_t* output, int num,
-                           int before, int after, int total,
-                           musaStream_t stream);
-
-void LaunchUnpackKernelFloat(const float* input, float** outputs, int num,
-                             int before, int after, int total,
-                             musaStream_t stream);
-void LaunchUnpackKernelDouble(const double* input, double** outputs, int num,
-                              int before, int after, int total,
-                              musaStream_t stream);
-void LaunchUnpackKernelHalf(const void* input, void** outputs, int num,
-                            int before, int after, int total,
-                            musaStream_t stream);
-void LaunchUnpackKernelBFloat16(const void* input, void** outputs, int num,
-                                int before, int after, int total,
-                                musaStream_t stream);
-void LaunchUnpackKernelInt32(const int* input, int** outputs, int num,
-                             int before, int after, int total,
-                             musaStream_t stream);
-void LaunchUnpackKernelInt64(const int64_t* input, int64_t** outputs, int num,
-                             int before, int after, int total,
-                             musaStream_t stream);
-}
+#include "tensorflow/core/framework/tensor_shape.h"
 
 namespace tensorflow {
 namespace musa {
 
+// Create mTensor view with an extra dimension of size 1 at specified axis.
+mTensor CreateMTensorWithExpandedDim(const Tensor& t, int axis, mFormat format) {
+  mTensor rst = CreateMTensor(t, format);
+
+  auto orig_dims = t.shape().dim_sizes();
+  const int orig_rank = static_cast<int>(orig_dims.size());
+  std::vector<int64_t> new_dims(orig_rank + 1);
+  for (int i = 0; i < axis; ++i) new_dims[i] = orig_dims[i];
+  new_dims[axis] = 1;
+  for (int i = axis; i < orig_rank; ++i) new_dims[i + 1] = orig_dims[i];
+
+  rst.SetNdInfo(orig_rank + 1, new_dims.data());
+  return rst;
+}
+
+// Pack concatenates tensors along a new dimension via muDNN Concat.
 template <typename T>
 class MusaPackOp : public MusaOpKernel {
  public:
@@ -58,282 +45,313 @@ class MusaPackOp : public MusaOpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
-    const int num_inputs = ctx->num_inputs();
-    const Tensor& first_input = ctx->input(0);
+    const int N = ctx->num_inputs();
 
-    int expanded_num_dims = first_input.dims() + 1;
-    int axis = axis_ < 0 ? axis_ + expanded_num_dims : axis_;
+    OP_REQUIRES(ctx, N > 0,
+                errors::InvalidArgument("Pack requires at least one input"));
 
-    TensorShape output_shape(first_input.shape());
-    output_shape.InsertDim(axis, num_inputs);
+    // Get shapes from all inputs
+    std::vector<TensorShape> shapes(N);
+    for (int i = 0; i < N; ++i) {
+      shapes[i] = ctx->input(i).shape();
+    }
+
+    // Verify all shapes match
+    for (int i = 1; i < N; ++i) {
+      OP_REQUIRES(ctx, shapes[i].IsSameSize(shapes[0]),
+                  errors::InvalidArgument(
+                      "Shapes of all inputs must match: input 0 has shape ",
+                      shapes[0].DebugString(), " but input ", i,
+                      " has shape ", shapes[i].DebugString()));
+    }
+
+    // Compute output shape
+    const int dims = shapes[0].dims();
+    int axis = axis_ < 0 ? axis_ + dims + 1 : axis_;
+    OP_REQUIRES(ctx, axis >= 0 && axis <= dims,
+                errors::InvalidArgument("axis must be in range [", -dims - 1,
+                                        ", ", dims, "], but got ", axis_));
+
+    TensorShape output_shape;
+    for (int i = 0; i < axis; ++i) {
+      output_shape.AddDim(shapes[0].dim_size(i));
+    }
+    output_shape.AddDim(N);
+    for (int i = axis; i < dims; ++i) {
+      output_shape.AddDim(shapes[0].dim_size(i));
+    }
 
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
 
-    const int total_elements = output->NumElements();
-    if (total_elements == 0) return;
+    // Handle empty tensors
+    if (output->NumElements() == 0) return;
 
-    auto& handle = GetHandleByCtx(ctx);
-    musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
-
-    if (axis == 0) {
-      const int64_t input_bytes = first_input.NumElements() * sizeof(T);
-      char* dst = const_cast<char*>(output->tensor_data().data());
-      for (int i = 0; i < num_inputs; ++i) {
-        const char* src = ctx->input(i).tensor_data().data();
-        musaMemcpyAsync(dst + i * input_bytes, src, input_bytes,
-                        musaMemcpyDeviceToDevice, stream);
-      }
+    // Handle single input - just copy with expanded dim
+    if (N == 1) {
+      musaStream_t stream = GetMusaStreamByCtx(ctx);
+      musaError_t err = musaMemcpyAsync(
+          const_cast<char*>(output->tensor_data().data()),
+          ctx->input(0).tensor_data().data(),
+          ctx->input(0).TotalBytes(),
+          musaMemcpyDeviceToDevice, stream);
+      OP_REQUIRES(ctx, err == musaSuccess,
+                  errors::Internal("musaMemcpyAsync failed: ",
+                                   musaGetErrorString(err)));
       return;
     }
 
-    int64_t before_size = 1;
-    for (int i = 0; i < axis; ++i) before_size *= output_shape.dim_size(i);
+    // Use muDNN Concat with expanded dimension metadata
+    auto& handle = GetHandleByCtx(ctx);
 
-    int64_t after_size = 1;
-    for (int i = axis + 1; i < output_shape.dims(); ++i)
-      after_size *= output_shape.dim_size(i);
-
-    Tensor d_inputs_tensor;
-    const int64_t ptr_array_bytes = num_inputs * sizeof(const void*);
-    OP_REQUIRES_OK(ctx,
-                   ctx->allocate_temp(DT_INT8, TensorShape({ptr_array_bytes}),
-                                      &d_inputs_tensor));
-    const void** d_inputs =
-        reinterpret_cast<const void**>(d_inputs_tensor.flat<int8>().data());
-
-    const void* input_ptrs[16];
-    const void** ptr_array =
-        (num_inputs <= 16) ? input_ptrs : new const void*[num_inputs];
-
-    for (int i = 0; i < num_inputs; ++i) {
-      ptr_array[i] = ctx->input(i).tensor_data().data();
+    // Create mTensor views with expanded dimension at axis
+    std::vector<::musa::dnn::Tensor> mudnn_ins;
+    mudnn_ins.reserve(N);
+    for (int i = 0; i < N; ++i) {
+      mudnn_ins.push_back(CreateMTensorWithExpandedDim(ctx->input(i), axis, format_));
     }
 
-    tensorflow::musa::MusaMemcpyAsyncH2D(
-        const_cast<void**>(d_inputs), ptr_array,
-        num_inputs * sizeof(const void*), stream);
+    ::musa::dnn::Tensor mudnn_out = CreateMTensor(*output, format_);
+    ::musa::dnn::Concat concat_op;
+    concat_op.SetAxis(axis);
 
-    void* output_ptr = const_cast<char*>(output->tensor_data().data());
-    LaunchKernel(reinterpret_cast<const void**>(d_inputs), output_ptr,
-                 num_inputs, before_size, after_size, total_elements, stream);
+    auto status = concat_op.Run(handle, mudnn_out, N, mudnn_ins.data());
 
-    if (num_inputs > 16) {
-      delete[] ptr_array;
-    }
+    OP_REQUIRES(
+        ctx, status == ::musa::dnn::Status::SUCCESS,
+        errors::Internal("MUSA Concat Run failed for Pack. Status: ", static_cast<int>(status)));
   }
 
  private:
   int axis_;
-
-  void LaunchKernel(const void** inputs, void* output, int num, int before,
-                    int after, int total, musaStream_t stream);
 };
 
-template <>
-void MusaPackOp<float>::LaunchKernel(const void** inputs, void* output, int num,
-                                     int before, int after, int total,
-                                     musaStream_t stream) {
-  LaunchPackKernelFloat(reinterpret_cast<const float**>(inputs),
-                        reinterpret_cast<float*>(output), num, before, after,
-                        total, stream);
-}
-template <>
-void MusaPackOp<double>::LaunchKernel(const void** inputs, void* output,
-                                      int num, int before, int after, int total,
-                                      musaStream_t stream) {
-  LaunchPackKernelDouble(reinterpret_cast<const double**>(inputs),
-                         reinterpret_cast<double*>(output), num, before, after,
-                         total, stream);
-}
-template <>
-void MusaPackOp<Eigen::half>::LaunchKernel(const void** inputs, void* output,
-                                           int num, int before, int after,
-                                           int total, musaStream_t stream) {
-  LaunchPackKernelHalf(inputs, output, num, before, after, total, stream);
-}
-template <>
-void MusaPackOp<bfloat16>::LaunchKernel(const void** inputs, void* output,
-                                        int num, int before, int after,
-                                        int total, musaStream_t stream) {
-  LaunchPackKernelBFloat16(inputs, output, num, before, after, total, stream);
-}
-template <>
-void MusaPackOp<int32>::LaunchKernel(const void** inputs, void* output, int num,
-                                     int before, int after, int total,
-                                     musaStream_t stream) {
-  LaunchPackKernelInt32(reinterpret_cast<const int**>(inputs),
-                        reinterpret_cast<int*>(output), num, before, after,
-                        total, stream);
-}
-template <>
-void MusaPackOp<int64>::LaunchKernel(const void** inputs, void* output, int num,
-                                     int before, int after, int total,
-                                     musaStream_t stream) {
-  LaunchPackKernelInt64(reinterpret_cast<const int64_t**>(inputs),
-                        reinterpret_cast<int64_t*>(output), num, before, after,
-                        total, stream);
-}
+// Unpack kernel launchers (implemented in musa_pack_unpack_kernel.mu)
+extern "C" {
+void LaunchUnpackSingleFloat(const float* input, float* output,
+                             int64_t outer_size, int64_t N, int64_t inner_size,
+                             int64_t unpack_idx, musaStream_t stream);
+void LaunchUnpackSingleDouble(const double* input, double* output,
+                              int64_t outer_size, int64_t N, int64_t inner_size,
+                              int64_t unpack_idx, musaStream_t stream);
+void LaunchUnpackSingleInt32(const int32_t* input, int32_t* output,
+                             int64_t outer_size, int64_t N, int64_t inner_size,
+                             int64_t unpack_idx, musaStream_t stream);
+void LaunchUnpackSingleInt64(const int64_t* input, int64_t* output,
+                             int64_t outer_size, int64_t N, int64_t inner_size,
+                             int64_t unpack_idx, musaStream_t stream);
+void LaunchUnpackSingleUInt8(const uint8_t* input, uint8_t* output,
+                             int64_t outer_size, int64_t N, int64_t inner_size,
+                             int64_t unpack_idx, musaStream_t stream);
+void LaunchUnpackSingleBool(const bool* input, bool* output,
+                            int64_t outer_size, int64_t N, int64_t inner_size,
+                            int64_t unpack_idx, musaStream_t stream);
+void LaunchUnpackSingleHalf(const void* input, void* output,
+                            int64_t outer_size, int64_t N, int64_t inner_size,
+                            int64_t unpack_idx, musaStream_t stream);
+void LaunchUnpackSingleBFloat16(const void* input, void* output,
+                                int64_t outer_size, int64_t N, int64_t inner_size,
+                                int64_t unpack_idx, musaStream_t stream);
 
+}  // extern "C"
+
+// Unpack splits a tensor along a dimension into multiple tensors.
 template <typename T>
 class MusaUnpackOp : public MusaOpKernel {
  public:
   explicit MusaUnpackOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("axis", &axis_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("num", &num_outputs_attr_));
   }
 
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
     const Tensor& input = ctx->input(0);
-    int axis = axis_ < 0 ? axis_ + input.dims() : axis_;
-    const int num_outputs = input.dim_size(axis);
+    const int N = num_outputs_attr_;
 
-    TensorShape output_shape = input.shape();
-    output_shape.RemoveDim(axis);
+    const int dims = input.dims();
+    int axis = axis_ < 0 ? axis_ + dims : axis_;
 
-    const int total_elements = input.NumElements();
+    OP_REQUIRES(ctx, axis >= 0 && axis < dims,
+                errors::InvalidArgument("axis must be in range [", -dims,
+                                        ", ", dims, "), but got ", axis_));
 
-    void* output_ptrs[16];
-    void** ptr_array =
-        (num_outputs <= 16) ? output_ptrs : new void*[num_outputs];
+    OP_REQUIRES(ctx, N == input.dim_size(axis),
+                errors::InvalidArgument("num outputs (", N,
+                                        ") must equal the dimension on axis (",
+                                        input.dim_size(axis), ")"));
 
-    for (int i = 0; i < num_outputs; ++i) {
-      Tensor* out = nullptr;
-      OP_REQUIRES_OK(ctx, ctx->allocate_output(i, output_shape, &out));
-      if (out->NumElements() > 0) {
-        ptr_array[i] = const_cast<char*>(out->tensor_data().data());
-      } else {
-        ptr_array[i] = nullptr;
+    // Compute output shape (input shape without the axis dimension)
+    TensorShape output_shape;
+    for (int i = 0; i < dims; ++i) {
+      if (i != axis) {
+        output_shape.AddDim(input.dim_size(i));
       }
     }
 
-    if (total_elements == 0) {
-      if (num_outputs > 16) delete[] ptr_array;
+    // Allocate outputs
+    std::vector<Tensor*> outputs(N);
+    for (int i = 0; i < N; ++i) {
+      OP_REQUIRES_OK(ctx, ctx->allocate_output(i, output_shape, &outputs[i]));
+    }
+
+    // Handle empty tensors
+    if (input.NumElements() == 0) return;
+
+    // Handle single output - just copy
+    if (N == 1) {
+      musaStream_t stream = GetMusaStreamByCtx(ctx);
+      musaError_t err = musaMemcpyAsync(
+          const_cast<char*>(outputs[0]->tensor_data().data()),
+          input.tensor_data().data(),
+          input.TotalBytes(),
+          musaMemcpyDeviceToDevice, stream);
+      OP_REQUIRES(ctx, err == musaSuccess,
+                  errors::Internal("musaMemcpyAsync failed: ",
+                                   musaGetErrorString(err)));
       return;
     }
 
-    auto& handle = GetHandleByCtx(ctx);
-    musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
+    // Compute sizes for kernel
+    // outer_size: product of dimensions before axis
+    // inner_size: product of dimensions after axis
+    int64_t outer_size = 1;
+    for (int i = 0; i < axis; ++i) {
+      outer_size *= input.dim_size(i);
+    }
+    int64_t inner_size = 1;
+    for (int i = axis + 1; i < dims; ++i) {
+      inner_size *= input.dim_size(i);
+    }
 
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
+
+    // Fast path for axis=0: use async memcpy for contiguous copies
+    // Input layout [N, d0, d1, ...] means each output is a contiguous slice
     if (axis == 0) {
-      const int64_t output_bytes =
-          (num_outputs > 0 ? total_elements / num_outputs : 0) * sizeof(T);
-      const char* src = input.tensor_data().data();
-      for (int i = 0; i < num_outputs; ++i) {
-        if (ptr_array[i] != nullptr) {
-          musaMemcpyAsync(ptr_array[i], src + i * output_bytes, output_bytes,
-                          musaMemcpyDeviceToDevice, stream);
-        }
+      const int64_t output_bytes = outputs[0]->TotalBytes();
+      for (int i = 0; i < N; ++i) {
+        musaError_t err = musaMemcpyAsync(
+            outputs[i]->flat<T>().data(),
+            reinterpret_cast<const char*>(input.flat<T>().data()) + i * output_bytes,
+            output_bytes,
+            musaMemcpyDeviceToDevice, stream);
+        OP_REQUIRES(ctx, err == musaSuccess,
+                    errors::Internal("musaMemcpyAsync failed for output ", i,
+                                     ": ", musaGetErrorString(err)));
       }
-      if (num_outputs > 16) delete[] ptr_array;
       return;
     }
 
-    int64_t before_size = 1;
-    for (int i = 0; i < axis; ++i) before_size *= input.dim_size(i);
-    int64_t after_size = 1;
-    for (int i = axis + 1; i < input.dims(); ++i)
-      after_size *= input.dim_size(i);
+    const T* input_ptr = input.flat<T>().data();
 
-    Tensor d_outputs_tensor;
-    const int64_t ptr_array_bytes = num_outputs * sizeof(void*);
-    OP_REQUIRES_OK(ctx,
-                   ctx->allocate_temp(DT_INT8, TensorShape({ptr_array_bytes}),
-                                      &d_outputs_tensor));
-    void** d_outputs =
-        reinterpret_cast<void**>(d_outputs_tensor.flat<int8>().data());
-
-    tensorflow::musa::MusaMemcpyAsyncH2D(d_outputs, ptr_array,
-                                         num_outputs * sizeof(void*), stream);
-
-    const void* input_ptr = input.tensor_data().data();
-    LaunchKernel(input_ptr, d_outputs, num_outputs, before_size, after_size,
-                 total_elements, stream);
-
-    if (num_outputs > 16) delete[] ptr_array;
+    // Launch unpack kernel for each output
+    for (int i = 0; i < N; ++i) {
+      T* output_ptr = outputs[i]->flat<T>().data();
+      LaunchUnpackSingleForType(input_ptr, output_ptr, outer_size, N, inner_size, i, stream);
+    }
   }
 
  private:
-  int axis_;
+  void LaunchUnpackSingleForType(const T* input, T* output,
+                                  int64_t outer_size, int64_t N, int64_t inner_size,
+                                  int64_t unpack_idx, musaStream_t stream);
 
-  void LaunchKernel(const void* input, void** outputs, int num, int before,
-                    int after, int total, musaStream_t stream);
+  int axis_;
+  int num_outputs_attr_;
 };
 
-template <>
-void MusaUnpackOp<float>::LaunchKernel(const void* input, void** outputs,
-                                       int num, int before, int after,
-                                       int total, musaStream_t stream) {
-  LaunchUnpackKernelFloat(reinterpret_cast<const float*>(input),
-                          reinterpret_cast<float**>(outputs), num, before,
-                          after, total, stream);
-}
-template <>
-void MusaUnpackOp<double>::LaunchKernel(const void* input, void** outputs,
-                                        int num, int before, int after,
-                                        int total, musaStream_t stream) {
-  LaunchUnpackKernelDouble(reinterpret_cast<const double*>(input),
-                           reinterpret_cast<double**>(outputs), num, before,
-                           after, total, stream);
-}
-template <>
-void MusaUnpackOp<Eigen::half>::LaunchKernel(const void* input, void** outputs,
-                                             int num, int before, int after,
-                                             int total, musaStream_t stream) {
-  LaunchUnpackKernelHalf(input, outputs, num, before, after, total, stream);
-}
-template <>
-void MusaUnpackOp<bfloat16>::LaunchKernel(const void* input, void** outputs,
-                                          int num, int before, int after,
-                                          int total, musaStream_t stream) {
-  LaunchUnpackKernelBFloat16(input, outputs, num, before, after, total, stream);
-}
-template <>
-void MusaUnpackOp<int32>::LaunchKernel(const void* input, void** outputs,
-                                       int num, int before, int after,
-                                       int total, musaStream_t stream) {
-  LaunchUnpackKernelInt32(reinterpret_cast<const int*>(input),
-                          reinterpret_cast<int**>(outputs), num, before, after,
-                          total, stream);
-}
-template <>
-void MusaUnpackOp<int64>::LaunchKernel(const void* input, void** outputs,
-                                       int num, int before, int after,
-                                       int total, musaStream_t stream) {
-  LaunchUnpackKernelInt64(reinterpret_cast<const int64_t*>(input),
-                          reinterpret_cast<int64_t**>(outputs), num, before,
-                          after, total, stream);
+// Type-specific unpack launcher implementations
+template <> void MusaUnpackOp<float>::LaunchUnpackSingleForType(
+    const float* input, float* output,
+    int64_t outer_size, int64_t N, int64_t inner_size,
+    int64_t unpack_idx, musaStream_t stream) {
+  LaunchUnpackSingleFloat(input, output, outer_size, N, inner_size, unpack_idx, stream);
 }
 
-#define REGISTER_MUSA_STACK_KERNELS(type)                            \
-  REGISTER_KERNEL_BUILDER(                                           \
-      Name("Pack").Device(DEVICE_MTGPU).TypeConstraint<type>("T"),   \
-      MusaPackOp<type>);                                             \
-  REGISTER_KERNEL_BUILDER(                                           \
-      Name("Unpack").Device(DEVICE_MTGPU).TypeConstraint<type>("T"), \
-      MusaUnpackOp<type>);
+template <> void MusaUnpackOp<double>::LaunchUnpackSingleForType(
+    const double* input, double* output,
+    int64_t outer_size, int64_t N, int64_t inner_size,
+    int64_t unpack_idx, musaStream_t stream) {
+  LaunchUnpackSingleDouble(input, output, outer_size, N, inner_size, unpack_idx, stream);
+}
 
-#define REGISTER_MUSA_STACK_KERNELS_HOST(type)           \
-  REGISTER_KERNEL_BUILDER(Name("Pack")                   \
-                              .Device(DEVICE_MTGPU)      \
-                              .TypeConstraint<type>("T") \
-                              .HostMemory("values")      \
-                              .HostMemory("output"),     \
-                          MusaPackOp<type>);             \
-  REGISTER_KERNEL_BUILDER(Name("Unpack")                 \
-                              .Device(DEVICE_MTGPU)      \
-                              .TypeConstraint<type>("T") \
-                              .HostMemory("value")       \
-                              .HostMemory("output"),     \
-                          MusaUnpackOp<type>);
+template <> void MusaUnpackOp<int32>::LaunchUnpackSingleForType(
+    const int32* input, int32* output,
+    int64_t outer_size, int64_t N, int64_t inner_size,
+    int64_t unpack_idx, musaStream_t stream) {
+  LaunchUnpackSingleInt32(input, output, outer_size, N, inner_size, unpack_idx, stream);
+}
 
-REGISTER_MUSA_STACK_KERNELS(float);
-REGISTER_MUSA_STACK_KERNELS(double);
-REGISTER_MUSA_STACK_KERNELS(int32);
-REGISTER_MUSA_STACK_KERNELS(int64);
-REGISTER_MUSA_STACK_KERNELS(Eigen::half);
-REGISTER_MUSA_STACK_KERNELS(bfloat16);
+template <> void MusaUnpackOp<int64>::LaunchUnpackSingleForType(
+    const int64* input, int64* output,
+    int64_t outer_size, int64_t N, int64_t inner_size,
+    int64_t unpack_idx, musaStream_t stream) {
+  LaunchUnpackSingleInt64(input, output, outer_size, N, inner_size, unpack_idx, stream);
+}
+
+template <> void MusaUnpackOp<uint8>::LaunchUnpackSingleForType(
+    const uint8* input, uint8* output,
+    int64_t outer_size, int64_t N, int64_t inner_size,
+    int64_t unpack_idx, musaStream_t stream) {
+  LaunchUnpackSingleUInt8(input, output, outer_size, N, inner_size, unpack_idx, stream);
+}
+
+template <> void MusaUnpackOp<bool>::LaunchUnpackSingleForType(
+    const bool* input, bool* output,
+    int64_t outer_size, int64_t N, int64_t inner_size,
+    int64_t unpack_idx, musaStream_t stream) {
+  LaunchUnpackSingleBool(input, output, outer_size, N, inner_size, unpack_idx, stream);
+}
+
+template <> void MusaUnpackOp<Eigen::half>::LaunchUnpackSingleForType(
+    const Eigen::half* input, Eigen::half* output,
+    int64_t outer_size, int64_t N, int64_t inner_size,
+    int64_t unpack_idx, musaStream_t stream) {
+  LaunchUnpackSingleHalf(reinterpret_cast<const void*>(input),
+                         reinterpret_cast<void*>(output),
+                         outer_size, N, inner_size, unpack_idx, stream);
+}
+
+template <> void MusaUnpackOp<bfloat16>::LaunchUnpackSingleForType(
+    const bfloat16* input, bfloat16* output,
+    int64_t outer_size, int64_t N, int64_t inner_size,
+    int64_t unpack_idx, musaStream_t stream) {
+  LaunchUnpackSingleBFloat16(reinterpret_cast<const void*>(input),
+                             reinterpret_cast<void*>(output),
+                             outer_size, N, inner_size, unpack_idx, stream);
+}
+
+// Kernel Registration
+#define REGISTER_MUSA_PACK_KERNELS(type) \
+  REGISTER_KERNEL_BUILDER(Name("Pack").Device("MUSA").TypeConstraint<type>("T"), MusaPackOp<type>);
+
+#define REGISTER_MUSA_UNPACK_KERNELS(type) \
+  REGISTER_KERNEL_BUILDER(Name("Unpack").Device("MUSA").TypeConstraint<type>("T"), MusaUnpackOp<type>);
+
+// Register Pack operators
+REGISTER_MUSA_PACK_KERNELS(float)
+REGISTER_MUSA_PACK_KERNELS(double)
+REGISTER_MUSA_PACK_KERNELS(int32)
+REGISTER_MUSA_PACK_KERNELS(int64)
+REGISTER_MUSA_PACK_KERNELS(Eigen::half)
+REGISTER_MUSA_PACK_KERNELS(bfloat16)
+REGISTER_MUSA_PACK_KERNELS(bool)
+REGISTER_MUSA_PACK_KERNELS(uint8)
+
+// Register Unpack operators
+REGISTER_MUSA_UNPACK_KERNELS(float)
+REGISTER_MUSA_UNPACK_KERNELS(double)
+REGISTER_MUSA_UNPACK_KERNELS(int32)
+REGISTER_MUSA_UNPACK_KERNELS(int64)
+REGISTER_MUSA_UNPACK_KERNELS(Eigen::half)
+REGISTER_MUSA_UNPACK_KERNELS(bfloat16)
+REGISTER_MUSA_UNPACK_KERNELS(bool)
+REGISTER_MUSA_UNPACK_KERNELS(uint8)
+
+#undef REGISTER_MUSA_PACK_KERNELS
+#undef REGISTER_MUSA_UNPACK_KERNELS
 
 }  // namespace musa
 }  // namespace tensorflow
