@@ -27,7 +27,7 @@ class AddNOpTest(MUSATestCase):
   def _test_addn(self, shapes, dtype, rtol=1e-5, atol=1e-8):
     """Test addn operation with given shapes and dtype."""
     np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
-    
+
     # Generate input tensors
     inputs_np = []
     for shape in shapes:
@@ -38,14 +38,14 @@ class AddNOpTest(MUSATestCase):
         # For floating point types, use uniform distribution
         input_np = np.random.uniform(-1, 1, size=shape).astype(np_dtype)
       inputs_np.append(input_np)
-    
+
     # Create TensorFlow constants
     inputs_tf = [tf.constant(inp, dtype=dtype) for inp in inputs_np]
-    
+
     # Special handling for tf.add_n - pass as list, not unpacked arguments
     def addn_wrapper(*args):
       return tf.add_n(args)
-    
+
     self._compare_cpu_musa_results(addn_wrapper, inputs_tf, dtype, rtol=rtol, atol=atol)
 
   def testAddNSingleInput(self):
@@ -107,7 +107,7 @@ class AddNOpTest(MUSATestCase):
     for dtype in [tf.float32, tf.int32]:
       with self.assertRaises(tf.errors.InvalidArgumentError):
         self._test_addn([[10], [5]], dtype)
-      
+
       with self.assertRaises(tf.errors.InvalidArgumentError):
         self._test_addn([[2, 3], [3, 2]], dtype)
 
@@ -116,16 +116,16 @@ class AddNOpTest(MUSATestCase):
     for dtype in [tf.float32, tf.float16, tf.bfloat16, tf.int32, tf.int64]:
       rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
       atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
-      
+
       # All zeros
       shapes = [[100]]
-      inputs_np = [np.zeros(shape, dtype=np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype) 
+      inputs_np = [np.zeros(shape, dtype=np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype)
                   for shape in shapes]
       inputs_tf = [tf.constant(inp, dtype=dtype) for inp in inputs_np]
-      
+
       def addn_wrapper(*args):
         return tf.add_n(args)
-      
+
       self._compare_cpu_musa_results(addn_wrapper, inputs_tf, dtype, rtol=rtol, atol=atol)
 
   def testAddNMixedPositiveNegative(self):
@@ -133,7 +133,7 @@ class AddNOpTest(MUSATestCase):
     for dtype in [tf.float32, tf.float16, tf.bfloat16, tf.int32, tf.int64]:
       rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
       atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
-      
+
       # Create inputs with mixed positive and negative values
       shapes = [[50], [50]]
       inputs_np = []
@@ -143,12 +143,12 @@ class AddNOpTest(MUSATestCase):
         else:
           inp = np.random.uniform(-10, 10, size=shape).astype(np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype)
         inputs_np.append(inp)
-      
+
       inputs_tf = [tf.constant(inp, dtype=dtype) for inp in inputs_np]
-      
+
       def addn_wrapper(*args):
         return tf.add_n(args)
-      
+
       self._compare_cpu_musa_results(addn_wrapper, inputs_tf, dtype, rtol=rtol, atol=atol)
 
   def testAddNEdgeCases(self):
@@ -157,7 +157,7 @@ class AddNOpTest(MUSATestCase):
     for dtype in [tf.float32, tf.float16, tf.bfloat16]:
       rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
       atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
-      
+
       # Test with very small values (close to machine epsilon)
       shapes = [[20]]
       if dtype == tf.float16:
@@ -170,12 +170,12 @@ class AddNOpTest(MUSATestCase):
       else:  # float32
         small_val = np.finfo(np.float32).eps
         inputs_np = [np.full(shape, small_val, dtype=np.float32) for shape in shapes * 2]
-      
+
       inputs_tf = [tf.constant(inp, dtype=dtype) for inp in inputs_np]
-      
+
       def addn_wrapper(*args):
         return tf.add_n(args)
-      
+
       self._compare_cpu_musa_results(addn_wrapper, inputs_tf, dtype, rtol=rtol, atol=atol)
 
   def testAddNMaxInputs(self):
@@ -185,13 +185,19 @@ class AddNOpTest(MUSATestCase):
       shapes = [[5]] * 32  # Small size to avoid memory issues
       self._test_addn(shapes, dtype)
 
+  def testAddNSixtyFourInputs(self):
+    """Test AddN with 64 inputs to catch potential issues with large arrays."""
+    for dtype in [tf.float32, tf.int32]:
+      shapes = [[5]] * 64
+      self._test_addn(shapes, dtype)
+
   def testAddNShapeValidation(self):
     """Test that AddN properly validates input shapes."""
     # This test ensures our implementation correctly validates shapes
     # before attempting computation
     with self.assertRaises(tf.errors.InvalidArgumentError):
       # Different ranks
-      inputs = [tf.constant([1, 2, 3], dtype=tf.float32), 
+      inputs = [tf.constant([1, 2, 3], dtype=tf.float32),
                 tf.constant([[1, 2], [3, 4]], dtype=tf.float32)]
       def addn_wrapper(*args):
         return tf.add_n(args)
@@ -199,7 +205,7 @@ class AddNOpTest(MUSATestCase):
 
     with self.assertRaises(tf.errors.InvalidArgumentError):
       # Same rank but incompatible dimensions
-      inputs = [tf.constant([1, 2, 3], dtype=tf.float32), 
+      inputs = [tf.constant([1, 2, 3], dtype=tf.float32),
                 tf.constant([1, 2], dtype=tf.float32)]
       def addn_wrapper(*args):
         return tf.add_n(args)

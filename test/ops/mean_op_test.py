@@ -8,14 +8,14 @@ class MeanOpTest(MUSATestCase):
 
   def _test_mean(self, shape, axis, dtype, keepdims=False, rtol=1e-5, atol=1e-8):
     np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
-    
+
     data_np = np.random.randn(*shape).astype(np_dtype)
-    
+
     data_tensor = tf.constant(data_np, dtype=dtype)
-    
+
     def mean_func(x):
       return tf.reduce_mean(x, axis=axis, keepdims=keepdims)
-    
+
     self._compare_cpu_musa_results(mean_func, [data_tensor], dtype, rtol=rtol, atol=atol)
 
   def testMeanAxisLast(self):
@@ -61,6 +61,14 @@ class MeanOpTest(MUSATestCase):
     for dtype in [tf.float32]:
       for shape, axis in test_cases:
         self._test_mean(shape, axis, dtype)
+
+  def testMeanReduceElementsOne(self):
+    # Cases where all reduced dimensions have size 1 -> reduce_elements == 1
+    for dtype in [tf.float32]:
+      # single reduced dim of size 1
+      self._test_mean([2, 1, 3], 1, dtype)
+      # multiple reduced dims, product equals 1
+      self._test_mean([2, 1, 1, 3], [1, 2], dtype)
 
   def testMeanLargeTensor(self):
     for dtype in [tf.float32]:

@@ -71,11 +71,11 @@ __global__ void MusaScatterIndicesKernel(const TIndex* __restrict__ d_marks,
                                          int num_items) {
   const int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < num_items && d_marks[idx] == 1) {
-    // d_scanned is inclusive sum from muDNN CumSum, so (sum - 1) is the
-    // zero-based index
+    // d_scanned[idx] is the inclusive sum of marks,
+    // i.e., count of 1s in [0, idx].
     TIndex pos = d_scanned[idx] - 1;
-    if (d_selected_indices) {
-      d_selected_indices[static_cast<TIndex>(pos)] = static_cast<TIndex>(idx);
+    if (d_selected_indices && pos >= 0) {
+      d_selected_indices[pos] = static_cast<TIndex>(idx);
     }
   }
 }
