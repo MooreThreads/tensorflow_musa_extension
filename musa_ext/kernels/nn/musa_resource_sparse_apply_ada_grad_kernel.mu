@@ -87,8 +87,7 @@ void LaunchResourceSparseApplyAdaGradV2Impl(T* var, T* accum, const T* lr,
 }
 
 #define REGISTER_MUSA_RESOURCE_SPARSE_APPLY_ADA_GRAD_V2_LAUNCHER(T, IndexT) \
-  template <>                                                               \
-  void LaunchResourceSparseApplyAdaGradV2Impl<T, IndexT>(                   \
+  template void LaunchResourceSparseApplyAdaGradV2Impl<T, IndexT>(          \
       T * var, T * accum, const T* lr, const T* epsilon, const T* grad,     \
       const IndexT* indices, int64_t inner_size, int64_t indices_size,      \
       musaStream_t stream);
@@ -107,5 +106,8 @@ REGISTER_INT64_LAUNCHER(float);
 REGISTER_INT64_LAUNCHER(Eigen::half);
 REGISTER_INT64_LAUNCHER(bfloat16);
 
+#undef REGISTER_MUSA_RESOURCE_SPARSE_APPLY_ADA_GRAD_V2_LAUNCHER
+#undef REGISTER_INT32_LAUNCHER
+#undef REGISTER_INT64_LAUNCHER
 }  // namespace musa
 }  // namespace tensorflow
