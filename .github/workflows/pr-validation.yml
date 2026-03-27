@@ -85,7 +85,7 @@ jobs:
       - name: Check code formatting
         id: run-format
         run: |
-          set +e 
+          set +e
 
           exit_code=0
           # 使用 bash -l -c 模拟登录，自动激活 Conda 环境
@@ -124,7 +124,7 @@ jobs:
       - name: Build
         id: run-build
         run: |
-          set +e 
+          set +e
 
           exit_code=0
           bash -l -c "
