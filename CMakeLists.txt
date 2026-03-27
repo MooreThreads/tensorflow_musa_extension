@@ -15,10 +15,58 @@ option(MUSA_KERNEL_DEBUG "Enable MUSA kernel compute timing instrumentation" OFF
 # Set MUSA path
 set(MUSA_PATH "/usr/local/musa" CACHE STRING "Path to MUSA installation")
 set(MCC_EXECUTABLE "${MUSA_PATH}/bin/mcc")
+set(MUSA_DNN_VARIANT "AUTO" CACHE STRING "MuDNN variant to use: AUTO, mudnn, or mudnncxx")
+set_property(CACHE MUSA_DNN_VARIANT PROPERTY STRINGS AUTO mudnn mudnncxx)
 
 # Validate MUSA path exists
 if(NOT EXISTS "${MUSA_PATH}")
     message(FATAL_ERROR "MUSA_PATH '${MUSA_PATH}' does not exist. Please set correct MUSA installation path.")
+endif()
+
+set(MUSA_LIB_SEARCH_DIRS "${MUSA_PATH}/lib" "${MUSA_PATH}/lib64")
+find_library(MUDNN_LIBRARY NAMES mudnn PATHS ${MUSA_LIB_SEARCH_DIRS} NO_DEFAULT_PATH)
+find_library(MUDNNCXX_LIBRARY NAMES mudnncxx PATHS ${MUSA_LIB_SEARCH_DIRS} NO_DEFAULT_PATH)
+
+set(MUSA_DNN_INCLUDE_DIRS "")
+set(MUSA_DNN_LIBRARIES "")
+set(MUSA_DNN_VARIANT_RESOLVED "")
+
+if(MUSA_DNN_VARIANT STREQUAL "AUTO")
+    if(EXISTS "${MUSA_PATH}/include/mudnncxx" AND MUDNNCXX_LIBRARY)
+        set(MUSA_DNN_VARIANT_RESOLVED "mudnncxx")
+    elseif(EXISTS "${MUSA_PATH}/include/mudnn.h" AND MUDNN_LIBRARY)
+        set(MUSA_DNN_VARIANT_RESOLVED "mudnn")
+    else()
+        message(FATAL_ERROR
+            "Failed to detect a usable MuDNN installation under '${MUSA_PATH}'. "
+            "Tried mudnncxx (include/mudnncxx + libmudnncxx) and mudnn (mudnn.h + libmudnn).")
+    endif()
+elseif(MUSA_DNN_VARIANT STREQUAL "mudnncxx")
+    if(NOT EXISTS "${MUSA_PATH}/include/mudnncxx" OR NOT MUDNNCXX_LIBRARY)
+        message(FATAL_ERROR
+            "MUSA_DNN_VARIANT=mudnncxx was requested, but '${MUSA_PATH}/include/mudnncxx' "
+            "or libmudnncxx was not found.")
+    endif()
+    set(MUSA_DNN_VARIANT_RESOLVED "mudnncxx")
+elseif(MUSA_DNN_VARIANT STREQUAL "mudnn")
+    if(NOT EXISTS "${MUSA_PATH}/include/mudnn.h" OR NOT MUDNN_LIBRARY)
+        message(FATAL_ERROR
+            "MUSA_DNN_VARIANT=mudnn was requested, but '${MUSA_PATH}/include/mudnn.h' "
+            "or libmudnn was not found.")
+    endif()
+    set(MUSA_DNN_VARIANT_RESOLVED "mudnn")
+else()
+    message(FATAL_ERROR "Unsupported MUSA_DNN_VARIANT='${MUSA_DNN_VARIANT}'. Expected AUTO, mudnn, or mudnncxx.")
+endif()
+
+if(MUSA_DNN_VARIANT_RESOLVED STREQUAL "mudnncxx")
+    list(APPEND MUSA_DNN_INCLUDE_DIRS "${MUSA_PATH}/include/mudnncxx")
+    list(APPEND MUSA_DNN_LIBRARIES "${MUDNNCXX_LIBRARY}")
+    if(MUDNN_LIBRARY)
+        list(APPEND MUSA_DNN_LIBRARIES "${MUDNN_LIBRARY}")
+    endif()
+elseif(MUSA_DNN_VARIANT_RESOLVED STREQUAL "mudnn")
+    list(APPEND MUSA_DNN_LIBRARIES "${MUDNN_LIBRARY}")
 endif()
 
 # Get TensorFlow parameters
@@ -60,7 +108,7 @@ else()
 endif()
 
 # Include paths
-include_directories("${TF_INC}" "${MUSA_PATH}/include" "${MUSA_PATH}/include/mudnncxx")
+include_directories("${TF_INC}" "${MUSA_PATH}/include" ${MUSA_DNN_INCLUDE_DIRS})
 
 # Include TensorFlow C++ core headers for common_runtime
 # These are required for accessing BFCAllocator and device-specific headers
@@ -150,7 +198,7 @@ set_target_properties(musa_plugin PROPERTIES
 )
 
 # Link
-target_link_libraries(musa_plugin PRIVATE ${TF_LINK_FLAGS} musa mublas mudnncxx rt)
+target_link_libraries(musa_plugin PRIVATE ${TF_LINK_FLAGS} musa mublas ${MUSA_DNN_LIBRARIES} rt)
 
 # Output configuration
 set_target_properties(musa_plugin PROPERTIES
@@ -171,6 +219,7 @@ list(LENGTH MU_SOURCES MU_SOURCES_COUNT)
 
 message(STATUS "TensorFlow MUSA Plugin Configuration:")
 message(STATUS "  MUSA Path: ${MUSA_PATH}")
+message(STATUS "  MuDNN Variant: ${MUSA_DNN_VARIANT_RESOLVED}")
 message(STATUS "  TensorFlow Include: ${TF_INC}")
 message(STATUS "  MUSA Kernel Debug: ${MUSA_KERNEL_DEBUG}")
 message(STATUS "  Source Files: ${CPP_SOURCES_COUNT} C++ files, ${MU_SOURCES_COUNT} MUSA kernels")
