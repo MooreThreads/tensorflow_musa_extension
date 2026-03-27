@@ -422,8 +422,7 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
 
     bool graph_modified = true;
     int iteration = 0;
-    const int kMaxIterations =
-        std::max(50, graph->node_size());  // Prevent infinite loops
+    const int kMaxIterations = 200;  // Prevent infinite loops
 
     while (graph_modified && iteration < kMaxIterations) {
       graph_modified = false;
