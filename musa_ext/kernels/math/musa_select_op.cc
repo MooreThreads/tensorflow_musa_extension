@@ -78,8 +78,8 @@ class MusaSelectOp : public MusaOpKernel {
     if (then_t.shape() == output_shape) {
       const std::vector<int> forwardable_input_indices = {1};
       OP_REQUIRES_OK(
-          ctx, ctx->forward_input_or_allocate_output(
-                   forwardable_input_indices, 0, output_shape, &output));
+          ctx, ctx->forward_input_or_allocate_output(forwardable_input_indices,
+                                                     0, output_shape, &output));
     } else {
       OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
     }
