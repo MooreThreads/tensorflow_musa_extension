@@ -17,36 +17,27 @@ class ResourceSparseApplyAdaGradV2Test(MUSATestCase):
       if idx < 0: continue
       expected_var[idx] -= lr_np.astype(np.float32) * grad_np[i].astype(np.float32) / (np.sqrt(expected_accum[idx]) + epsilon_np.astype(np.float32))
 
-    graph = tf.Graph()
-    with graph.as_default():
-      with tf.device("/device:MUSA:0"):
-        var = tf.Variable(var_np, dtype=dtype)
-        accum = tf.Variable(accum_np, dtype=dtype)
-        lr = tf.constant(lr_np, dtype=dtype)
-        epsilon = tf.constant(epsilon_np, dtype=dtype)
-        grad = tf.constant(grad_np, dtype=dtype)
-        indices = tf.constant(indices_np)
+    with tf.device("/device:MUSA:0"):
+      var = tf.Variable(var_np, dtype=dtype)
+      accum = tf.Variable(accum_np, dtype=dtype)
+      lr = tf.constant(lr_np, dtype=dtype)
+      epsilon = tf.constant(epsilon_np, dtype=dtype)
+      grad = tf.constant(grad_np, dtype=dtype)
+      indices = tf.constant(indices_np)
 
-        update = tf.raw_ops.ResourceSparseApplyAdagradV2(
-            var=var.handle,
-            accum=accum.handle,
-            lr=lr,
-            epsilon=epsilon,
-            grad=grad,
-            indices=indices,
-            use_locking=False)
+      tf.raw_ops.ResourceSparseApplyAdagradV2(
+          var=var.handle,
+          accum=accum.handle,
+          lr=lr,
+          epsilon=epsilon,
+          grad=grad,
+          indices=indices,
+          use_locking=False)
 
-        with tf.control_dependencies([update]):
-          res_var = var.read_value()
-          res_accum = accum.read_value()
+      out_var = var.read_value().numpy()
+      out_accum = accum.read_value().numpy()
 
-        init_op = tf.compat.v1.global_variables_initializer()
-
-    with tf.compat.v1.Session(graph=graph) as sess:
-      sess.run(init_op)
-      out_var, out_accum = sess.run([res_var, res_accum])
-
-      # Using higher tolerance for half precision
+    # Using higher tolerance for half precision
       if dtype in [tf.float16, tf.bfloat16]:
         self.assertAllClose(expected_var, out_var, atol=1e-2, rtol=1e-2)
         self.assertAllClose(expected_accum, out_accum, atol=1e-2, rtol=1e-2)
