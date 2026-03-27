@@ -4,7 +4,6 @@ from musa_test_utils import MUSATestCase
 
 class ResourceSparseApplyAdaGradV2Test(MUSATestCase):
   def _test_logic(self, var_np, accum_np, lr_np, epsilon_np, grad_np, indices_np, dtype):
-    # Expected manual calculation (always in float32 for reference)
     expected_accum = accum_np.astype(np.float32).copy()
     for i, idx in enumerate(indices_np):
       # Handle negative indices if needed (TF's behavior for invalid indices can vary,
