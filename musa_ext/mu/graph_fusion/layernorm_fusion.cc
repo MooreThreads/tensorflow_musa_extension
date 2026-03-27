@@ -15,16 +15,14 @@ limitations under the License.
 
 #include "mu/graph_fusion/layernorm_fusion.h"
 
-#include <algorithm>
-#include <cmath>
-#include <cstdint>
+#include <cstring>
 #include <limits>
 #include <sstream>
 #include <unordered_set>
-#include <utility>
 
+#include "mu/optimizer/graph_utils.h"
 #include "tensorflow/core/framework/attr_value.pb.h"
-#include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/framework/tensor.pb.h"
 #include "tensorflow/core/platform/logging.h"
 
 namespace tensorflow {
@@ -33,46 +31,22 @@ namespace musa_fusion {
 
 namespace {
 
-constexpr float kDefaultEpsilon = 1e-6f;
-constexpr float kScaleOnlyUpperClip = 10000000.0f;
-constexpr float kScaleOnlyLowerClip = 9.99999996e-12f;
-// Reuse the existing epsilon-based LayerNorm kernel to approximate
-// clip(sqrt(var), lower, upper) for the normalize-core pattern.
-constexpr float kScaleOnlyEpsilon = kScaleOnlyLowerClip * kScaleOnlyLowerClip;
-constexpr int64_t kReduceAxis = 1;
-constexpr int64_t kKeepDimExpand = -1;
-constexpr int64_t kGammaExpandDim = 0;
-constexpr float kGammaBase = 1.0f;
-
+// Helper to check if node has specific op type
 bool IsOp(const NodeDef& node, const std::string& op_type) {
   return node.op() == op_type;
 }
 
-bool IsAddOp(const NodeDef& node) {
-  return IsOp(node, "Add") || IsOp(node, "AddV2");
-}
-
-bool IsDivOp(const NodeDef& node) {
-  return IsOp(node, "RealDiv") || IsOp(node, "Div");
-}
-
-bool IsMulOp(const NodeDef& node) { return IsOp(node, "Mul"); }
-
-bool HasOriginalSuffix(const std::string& node_name) {
-  static const std::string kOriginalSuffix = "_original";
-  return node_name.size() >= kOriginalSuffix.size() &&
-         node_name.compare(node_name.size() - kOriginalSuffix.size(),
-                           kOriginalSuffix.size(), kOriginalSuffix) == 0;
-}
-
+// Helper to find node's input producer
 const NodeDef* FindProducer(const GraphDef& graph, const std::string& input) {
   if (input.empty()) return nullptr;
 
   std::string node_name = input;
+  // Handle control dependencies
   if (node_name[0] == '^') {
     node_name = node_name.substr(1);
   }
-  const size_t colon_pos = node_name.find(':');
+  // Handle output port suffix
+  size_t colon_pos = node_name.find(':');
   if (colon_pos != std::string::npos) {
     node_name = node_name.substr(0, colon_pos);
   }
@@ -85,337 +59,98 @@ const NodeDef* FindProducer(const GraphDef& graph, const std::string& input) {
   return nullptr;
 }
 
-const NodeDef* ResolveIdentityLike(const GraphDef& graph, const NodeDef* node) {
-  const NodeDef* current = node;
-  while (current && IsOp(*current, "Identity") && current->input_size() > 0) {
-    current = FindProducer(graph, current->input(0));
+// Helper to get clean node name (remove port suffix and control dep prefix)
+std::string GetCleanName(const std::string& input) {
+  if (input.empty()) return "";
+
+  std::string name = input;
+  if (name[0] == '^') {
+    name = name.substr(1);
   }
-  return current;
+  size_t colon_pos = name.find(':');
+  if (colon_pos != std::string::npos) {
+    name = name.substr(0, colon_pos);
+  }
+  return name;
 }
 
-const NodeDef* FindResolvedProducer(const GraphDef& graph,
-                                    const std::string& input) {
-  return ResolveIdentityLike(graph, FindProducer(graph, input));
-}
+// Helper: check that an input is a Const (optionally through Identity or
+// ExpandDims chain).
+const NodeDef* GetConstLikeNode(const GraphDef& graph,
+                                const std::string& input_name) {
+  const NodeDef* node = FindProducer(graph, input_name);
+  if (!node) return nullptr;
 
-bool TryGetScalarFloatValue(const NodeDef* node, float* value) {
-  if (!node || !value || !IsOp(*node, "Const")) {
-    return false;
+  // Allow Identity chain: Const -> Identity -> Identity ...
+  while (node && IsOp(*node, "Identity")) {
+    if (node->input_size() == 0) return nullptr;
+    node = FindProducer(graph, node->input(0));
   }
 
-  auto value_it = node->attr().find("value");
-  if (value_it == node->attr().end() || !value_it->second.has_tensor()) {
-    return false;
-  }
-
-  const TensorProto& tensor = value_it->second.tensor();
-  if (tensor.float_val_size() > 0) {
-    *value = tensor.float_val(0);
-    return true;
-  }
-  if (tensor.double_val_size() > 0) {
-    *value = static_cast<float>(tensor.double_val(0));
-    return true;
-  }
-  if (tensor.int_val_size() > 0) {
-    *value = static_cast<float>(tensor.int_val(0));
-    return true;
-  }
-  if (tensor.int64_val_size() > 0) {
-    *value = static_cast<float>(tensor.int64_val(0));
-    return true;
-  }
-
-  Tensor parsed_tensor;
-  if (!parsed_tensor.FromProto(tensor) || parsed_tensor.NumElements() != 1) {
-    return false;
-  }
-
-  switch (parsed_tensor.dtype()) {
-    case DT_FLOAT:
-      *value = parsed_tensor.flat<float>()(0);
-      return true;
-    case DT_DOUBLE:
-      *value = static_cast<float>(parsed_tensor.flat<double>()(0));
-      return true;
-    case DT_INT32:
-      *value = static_cast<float>(parsed_tensor.flat<int32>()(0));
-      return true;
-    case DT_INT64:
-      *value = static_cast<float>(parsed_tensor.flat<int64>()(0));
-      return true;
-    default:
-      return false;
-  }
-}
-
-bool TryGetScalarIntValue(const NodeDef* node, int64_t* value) {
-  if (!node || !value || !IsOp(*node, "Const")) {
-    return false;
-  }
-
-  auto value_it = node->attr().find("value");
-  if (value_it == node->attr().end() || !value_it->second.has_tensor()) {
-    return false;
-  }
-
-  const TensorProto& tensor = value_it->second.tensor();
-  if (tensor.int_val_size() > 0) {
-    *value = tensor.int_val(0);
-    return true;
-  }
-  if (tensor.int64_val_size() > 0) {
-    *value = tensor.int64_val(0);
-    return true;
-  }
-
-  Tensor parsed_tensor;
-  if (!parsed_tensor.FromProto(tensor) || parsed_tensor.NumElements() != 1) {
-    return false;
-  }
-
-  switch (parsed_tensor.dtype()) {
-    case DT_INT32:
-      *value = parsed_tensor.flat<int32>()(0);
-      return true;
-    case DT_INT64:
-      *value = parsed_tensor.flat<int64>()(0);
-      return true;
-    default:
-      return false;
-  }
-}
-
-bool HasFloatValue(const NodeDef* node, float expected_value,
-                   float abs_tolerance, float rel_tolerance = 1e-6f) {
-  float actual_value = 0.0f;
-  if (!TryGetScalarFloatValue(node, &actual_value)) {
-    return false;
-  }
-
-  const float tolerance =
-      std::max(abs_tolerance, rel_tolerance * std::abs(expected_value));
-  return std::abs(actual_value - expected_value) <= tolerance;
-}
-
-bool HasIntValue(const NodeDef* node, int64_t expected_value) {
-  int64_t actual_value = 0;
-  return TryGetScalarIntValue(node, &actual_value) &&
-         actual_value == expected_value;
-}
-
-bool IsParameterLike(const GraphDef& graph, const NodeDef* node) {
-  const NodeDef* leaf = ResolveIdentityLike(graph, node);
-  if (!leaf) return false;
-
-  return IsOp(*leaf, "Const") || IsOp(*leaf, "VariableV2") ||
-         IsOp(*leaf, "VarHandleOp") || IsOp(*leaf, "ReadVariableOp");
-}
-
-void PushUnique(std::vector<const NodeDef*>* nodes, const NodeDef* node) {
-  if (!node) return;
-  auto it = std::find(nodes->begin(), nodes->end(), node);
-  if (it == nodes->end()) {
-    nodes->push_back(node);
-  }
-}
-
-std::string FloatToString(float value) {
-  std::ostringstream oss;
-  oss.precision(std::numeric_limits<float>::max_digits10);
-  oss << value;
-  return oss.str();
-}
-
-bool MatchExpandDimsWithDim(const GraphDef& graph, const NodeDef* expand_node,
-                            int64_t expected_dim, const NodeDef** data_input) {
-  if (!expand_node || !IsOp(*expand_node, "ExpandDims") ||
-      expand_node->input_size() != 2) {
-    return false;
-  }
-
-  const NodeDef* dim_node = FindResolvedProducer(graph, expand_node->input(1));
-  if (!HasIntValue(dim_node, expected_dim)) {
-    return false;
-  }
-
-  *data_input = FindProducer(graph, expand_node->input(0));
-  return *data_input != nullptr;
-}
-
-bool MatchMeanWithAxis(const GraphDef& graph, const NodeDef* mean_node,
-                       int64_t expected_axis, const NodeDef** data_input) {
-  if (!mean_node || !IsOp(*mean_node, "Mean") || mean_node->input_size() != 2) {
-    return false;
-  }
-
-  const NodeDef* axis_node = FindResolvedProducer(graph, mean_node->input(1));
-  if (!HasIntValue(axis_node, expected_axis)) {
-    return false;
-  }
-
-  *data_input = FindProducer(graph, mean_node->input(0));
-  return *data_input != nullptr;
-}
-
-bool MatchBinaryWithConst(const GraphDef& graph, const NodeDef* node,
-                          const std::string& op_type, float expected_const,
-                          float abs_tolerance, const NodeDef** other_input) {
-  if (!node || !IsOp(*node, op_type) || node->input_size() != 2) {
-    return false;
-  }
-
-  for (int i = 0; i < 2; ++i) {
-    const NodeDef* maybe_const = FindResolvedProducer(graph, node->input(i));
-    const NodeDef* maybe_other = FindProducer(graph, node->input(1 - i));
-    if (!maybe_const || !maybe_other) continue;
-
-    if (HasFloatValue(maybe_const, expected_const, abs_tolerance)) {
-      *other_input = maybe_other;
-      return true;
+  // Allow ExpandDims: Const -> ExpandDims (for gamma/beta expansion)
+  if (node && IsOp(*node, "ExpandDims")) {
+    if (node->input_size() < 1) return nullptr;
+    node = FindProducer(graph, node->input(0));
+    // Skip any Identity after ExpandDims
+    while (node && IsOp(*node, "Identity")) {
+      if (node->input_size() == 0) return nullptr;
+      node = FindProducer(graph, node->input(0));
     }
   }
 
+  if (!node || !IsOp(*node, "Const")) return nullptr;
+  return node;
+}
+
+// Helper: extract float scalar value from a Const node
+bool ExtractFloatScalar(const NodeDef* const_node, float* out_value) {
+  if (!const_node || !out_value) return false;
+
+  auto value_it = const_node->attr().find("value");
+  if (value_it == const_node->attr().end()) return false;
+
+  const TensorProto& tp = value_it->second.tensor();
+  if (tp.dtype() != DT_FLOAT) return false;
+
+  if (tp.float_val_size() > 0) {
+    *out_value = tp.float_val(0);
+    return true;
+  }
+  if (!tp.tensor_content().empty()) {
+    const float* data =
+        reinterpret_cast<const float*>(tp.tensor_content().data());
+    *out_value = data[0];
+    return true;
+  }
   return false;
 }
 
-bool IsClipOp(const NodeDef& node) {
-  return IsOp(node, "MusaClip") || IsOp(node, "ClipByValue") ||
-         IsOp(node, "MusaClipByValue") || IsOp(node, "Clip");
+// Find LayerNorm prefix from node name
+// Example: "fwffm_pbp_mlp/ad_emb_aug_ln_layer/add_1" ->
+// "fwffm_pbp_mlp/ad_emb_aug_ln_layer" Rule: Extract from the beginning to the
+// last '/' (excluding the last segment)
+std::string FindLayerNormPrefix(const std::string& node_name) {
+  if (node_name.empty()) return "";
+
+  // Find the last '/' in the node name
+  size_t last_slash_pos = node_name.rfind('/');
+  if (last_slash_pos == std::string::npos) {
+    // No '/' found, return empty (no prefix)
+    return "";
+  }
+
+  // Extract prefix: from beginning to the last '/'
+  return node_name.substr(0, last_slash_pos);
 }
 
-bool MatchClipNode(const GraphDef& graph, const NodeDef* clip_node,
-                   const NodeDef** unclipped_input) {
-  if (!clip_node || !IsClipOp(*clip_node) || clip_node->input_size() != 3) {
-    return false;
-  }
-
-  const NodeDef* lower_node = FindResolvedProducer(graph, clip_node->input(1));
-  const NodeDef* upper_node = FindResolvedProducer(graph, clip_node->input(2));
-  if (!HasFloatValue(lower_node, kScaleOnlyLowerClip, 1e-13f) ||
-      !HasFloatValue(upper_node, kScaleOnlyUpperClip, 1e-3f)) {
-    return false;
-  }
-
-  *unclipped_input = FindResolvedProducer(graph, clip_node->input(0));
-  return *unclipped_input != nullptr;
-}
-
-bool MatchClippedSqrt(const GraphDef& graph, const NodeDef* clipped_node,
-                      const NodeDef** sqrt_node,
-                      std::vector<const NodeDef*>* matched_clip_nodes) {
-  if (!clipped_node || !sqrt_node) {
-    return false;
-  }
-
-  const NodeDef* matched_sqrt = nullptr;
-  if (IsOp(*clipped_node, "Maximum")) {
-    const NodeDef* minimum_node = nullptr;
-    if (!MatchBinaryWithConst(graph, clipped_node, "Maximum",
-                              kScaleOnlyLowerClip, 1e-13f, &minimum_node)) {
-      return false;
-    }
-
-    if (!MatchBinaryWithConst(graph, minimum_node, "Minimum",
-                              kScaleOnlyUpperClip, 1e-3f, &matched_sqrt)) {
-      return false;
-    }
-
-    if (matched_clip_nodes) {
-      PushUnique(matched_clip_nodes, clipped_node);
-      PushUnique(matched_clip_nodes, minimum_node);
-    }
-  } else if (IsClipOp(*clipped_node)) {
-    if (!MatchClipNode(graph, clipped_node, &matched_sqrt)) {
-      return false;
-    }
-
-    if (matched_clip_nodes) {
-      PushUnique(matched_clip_nodes, clipped_node);
-    }
-  } else {
-    return false;
-  }
-
-  if (!matched_sqrt || !IsOp(*matched_sqrt, "Sqrt") ||
-      matched_sqrt->input_size() != 1) {
-    return false;
-  }
-
-  *sqrt_node = matched_sqrt;
-  return true;
-}
-
-bool MatchCenteredSubRoot(const GraphDef& graph, const NodeDef* sub_node,
-                          const NodeDef** input_node,
-                          const NodeDef** mean_expand_node) {
-  if (!sub_node || !IsOp(*sub_node, "Sub") || sub_node->input_size() != 2) {
-    return false;
-  }
-
-  const NodeDef* lhs = FindProducer(graph, sub_node->input(0));
-  const NodeDef* rhs = FindProducer(graph, sub_node->input(1));
-  if (!lhs || !rhs) {
-    return false;
-  }
-
-  if (!IsOp(*lhs, "ConcatV2") || !IsOp(*rhs, "ExpandDims")) {
-    return false;
-  }
-
-  *input_node = lhs;
-  *mean_expand_node = rhs;
-  return true;
-}
-
-bool MatchCenteredSub(const GraphDef& graph, const NodeDef* sub_node,
-                      const NodeDef* expected_input,
-                      const NodeDef* expected_mean_expand) {
-  if (!sub_node || !IsOp(*sub_node, "Sub") || sub_node->input_size() != 2) {
-    return false;
-  }
-
-  const NodeDef* lhs = FindProducer(graph, sub_node->input(0));
-  const NodeDef* rhs = FindProducer(graph, sub_node->input(1));
-  return lhs == expected_input && rhs == expected_mean_expand;
-}
-
-bool MatchScaleGammaBranch(const GraphDef& graph, const NodeDef* gamma_add_node,
-                           const NodeDef** gamma_expand_node,
-                           std::string* gamma_scale_input,
-                           std::string* gamma_const_input) {
-  if (!gamma_add_node || !IsAddOp(*gamma_add_node) ||
-      gamma_add_node->input_size() != 2) {
-    return false;
-  }
-
-  for (int i = 0; i < 2; ++i) {
-    const NodeDef* maybe_const =
-        FindResolvedProducer(graph, gamma_add_node->input(i));
-    const NodeDef* maybe_expand =
-        FindProducer(graph, gamma_add_node->input(1 - i));
-    const NodeDef* scale_input = nullptr;
-    if (!maybe_const || !maybe_expand) continue;
-
-    if (!HasFloatValue(maybe_const, kGammaBase, 1e-6f) ||
-        !MatchExpandDimsWithDim(graph, maybe_expand, kGammaExpandDim,
-                                &scale_input)) {
-      continue;
-    }
-
-    if (gamma_expand_node) {
-      *gamma_expand_node = maybe_expand;
-    }
-    if (gamma_scale_input) {
-      *gamma_scale_input = maybe_expand->input(0);
-    }
-    if (gamma_const_input) {
-      *gamma_const_input = gamma_add_node->input(i);
-    }
-    return true;
-  }
-
-  return false;
+// Check if node belongs to the same LayerNorm subgraph
+bool BelongsToLayerNorm(const std::string& node_name,
+                        const std::string& prefix) {
+  if (prefix.empty()) return false;
+  if (node_name == prefix) return true;
+  return node_name.length() > prefix.length() &&
+         node_name.compare(0, prefix.length(), prefix) == 0 &&
+         node_name[prefix.length()] == '/';
 }
 
 }  // namespace
@@ -423,6 +158,14 @@ bool MatchScaleGammaBranch(const GraphDef& graph, const NodeDef* gamma_add_node,
 // =============================================================================
 // MusaLayerNormFusion Implementation
 // =============================================================================
+//
+// Pattern to match:
+//   Layer 1 (start): MusaNormalize (output: normalized tensor)
+//   Layer 2:         Mul        - Scale by gamma
+//   Layer 3 (end):   AddV2      - Add beta bias
+//
+// After fusion: MusaLayerNorm(x, gamma, beta)
+//
 
 MusaLayerNormFusion::MusaLayerNormFusion() = default;
 
@@ -437,22 +180,15 @@ bool MusaLayerNormFusion::IsKernelAvailable() const {
 FusionMatchResult MusaLayerNormFusion::Match(const GraphDef& graph,
                                              int start_node_idx) const {
   if (start_node_idx < 0 || start_node_idx >= graph.node_size()) {
+    VLOG(2) << "[LayerNorm::Match] RETURN empty: node_idx out of range";
     return FusionMatchResult{};
   }
 
   const NodeDef& start_node = graph.node(start_node_idx);
-  if (HasOriginalSuffix(start_node.name())) {
-    return FusionMatchResult{};
-  }
 
-  if (IsMulOp(start_node)) {
-    FusionMatchResult mul_result = MatchFromMulNode(graph, start_node_idx);
-    if (mul_result.IsValid()) {
-      return mul_result;
-    }
-  }
-
-  if (IsAddOp(start_node)) {
+  if (IsOp(start_node, "AddV2")) {
+    VLOG(2) << "[LayerNorm::Match] ENTER AddV2 path, node="
+            << start_node.name();
     return MatchFromAddNode(graph, start_node_idx);
   }
 
@@ -464,433 +200,425 @@ FusionMatchResult MusaLayerNormFusion::MatchFromAddNode(
   FusionMatchResult result;
   const NodeDef& add_node = graph.node(add_node_idx);
 
-  if (!IsAddOp(add_node)) {
+  VLOG(2) << "[LayerNorm::Match] MatchFromAddNode ENTER, node="
+          << add_node.name();
+
+  if (!IsOp(add_node, "AddV2")) {
+    VLOG(2) << "[LayerNorm::Match] FAIL: not AddV2 op, node="
+            << add_node.name();
     return result;
   }
 
+  // Extract LayerNorm prefix
+  const std::string layernorm_prefix = FindLayerNormPrefix(add_node.name());
+  if (layernorm_prefix.empty()) {
+    VLOG(2) << "[LayerNorm::Match] FAIL: cannot extract LayerNorm prefix, node="
+            << add_node.name();
+    return result;
+  }
+  VLOG(2) << "[LayerNorm::Match] prefix=" << layernorm_prefix;
+
+  // =========================================================================
+  // Layer 3 (end): AddV2 inputs:
+  //   - input[0]: Mul (layer 2) OR beta (Const/ExpandDims)
+  //   - input[1]: beta (Const/ExpandDims) OR Mul (layer 2)
+  // =========================================================================
+  if (add_node.input_size() != 2) {
+    VLOG(2) << "[LayerNorm::Match] FAIL layer3: AddV2 input_size="
+            << add_node.input_size() << " (need 2), node=" << add_node.name();
+    return result;
+  }
+
+  const NodeDef* add_input0 = FindProducer(graph, add_node.input(0));
+  const NodeDef* add_input1 = FindProducer(graph, add_node.input(1));
+
+  if (!add_input0 || !add_input1) {
+    VLOG(2) << "[LayerNorm::Match] FAIL layer3: cannot find AddV2 inputs, node="
+            << add_node.name();
+    return result;
+  }
+
+  // Determine which input is Mul (layer 2) and which is beta
   const NodeDef* mul_node = nullptr;
-  const NodeDef* beta_node = nullptr;
+  const NodeDef* beta_input = nullptr;
+  std::string beta_input_name;
 
-  for (int i = 0; i < add_node.input_size() && i < 2; ++i) {
-    const NodeDef* input_node = FindProducer(graph, add_node.input(i));
-    if (!input_node) continue;
-
-    if (IsMulOp(*input_node)) {
-      mul_node = input_node;
-    } else if (IsParameterLike(graph, input_node)) {
-      beta_node = input_node;
-    }
-  }
-
-  if (!mul_node || !beta_node) {
+  if (IsOp(*add_input0, "Mul") &&
+      BelongsToLayerNorm(add_input0->name(), layernorm_prefix)) {
+    mul_node = add_input0;
+    beta_input = add_input1;
+    beta_input_name = GetCleanName(add_node.input(1));
+  } else if (IsOp(*add_input1, "Mul") &&
+             BelongsToLayerNorm(add_input1->name(), layernorm_prefix)) {
+    mul_node = add_input1;
+    beta_input = add_input0;
+    beta_input_name = GetCleanName(add_node.input(0));
+  } else {
+    VLOG(2)
+        << "[LayerNorm::Match] FAIL layer3: AddV2 inputs are not (Mul, beta), "
+        << "input0=" << add_input0->op() << ", input1=" << add_input1->op()
+        << ", node=" << add_node.name();
     return result;
   }
 
-  const NodeDef* div_node = nullptr;
-  const NodeDef* gamma_node = nullptr;
-
-  for (int i = 0; i < mul_node->input_size() && i < 2; ++i) {
-    const NodeDef* input_node = FindProducer(graph, mul_node->input(i));
-    if (!input_node) continue;
-
-    if (IsDivOp(*input_node) || IsMulOp(*input_node)) {
-      div_node = input_node;
-    } else if (IsParameterLike(graph, input_node)) {
-      gamma_node = input_node;
-    }
-  }
-
-  if (!div_node || !gamma_node) {
+  // Verify beta is a Const or ExpandDims of Const
+  const NodeDef* beta_const = GetConstLikeNode(graph, beta_input_name);
+  if (!beta_const) {
+    VLOG(2) << "[LayerNorm::Match] FAIL layer3: beta is not Const, node="
+            << add_node.name();
     return result;
   }
 
-  const NodeDef* sub_node = nullptr;
-  for (int i = 0; i < div_node->input_size() && i < 2; ++i) {
-    const NodeDef* input_node = FindProducer(graph, div_node->input(i));
-    if (input_node && IsOp(*input_node, "Sub")) {
-      sub_node = input_node;
-      break;
-    }
-  }
-  if (!sub_node) {
+  VLOG(2) << "[LayerNorm::Match] PASS layer3: Mul=" << mul_node->name()
+          << ", beta=" << beta_const->name();
+
+  // =========================================================================
+  // Layer 2: Mul inputs:
+  //   - input[0]: MusaNormalize (layer 1) OR gamma (Const/ExpandDims)
+  //   - input[1]: gamma (Const/ExpandDims) OR MusaNormalize (layer 1)
+  // =========================================================================
+  if (mul_node->input_size() != 2) {
+    VLOG(2) << "[LayerNorm::Match] FAIL layer2: Mul input_size="
+            << mul_node->input_size() << ", node=" << add_node.name();
     return result;
   }
 
-  const NodeDef* mean_node = nullptr;
-  for (int i = 0; i < sub_node->input_size() && i < 2; ++i) {
-    const NodeDef* input_node = FindProducer(graph, sub_node->input(i));
-    if (input_node && IsOp(*input_node, "Mean")) {
-      mean_node = input_node;
-      break;
-    }
-  }
-  if (!mean_node) {
+  const NodeDef* mul_input0 = FindProducer(graph, mul_node->input(0));
+  const NodeDef* mul_input1 = FindProducer(graph, mul_node->input(1));
+
+  if (!mul_input0 || !mul_input1) {
+    VLOG(2) << "[LayerNorm::Match] FAIL layer2: cannot find Mul inputs, node="
+            << add_node.name();
     return result;
   }
 
+  // Determine which input is MusaNormalize (layer 1) and which is gamma
+  const NodeDef* normalize_node = nullptr;
+  const NodeDef* gamma_input = nullptr;
+  std::string gamma_input_name;
+
+  if (IsOp(*mul_input0, "MusaNormalize") &&
+      BelongsToLayerNorm(mul_input0->name(), layernorm_prefix)) {
+    normalize_node = mul_input0;
+    gamma_input = mul_input1;
+    gamma_input_name = GetCleanName(mul_node->input(1));
+  } else if (IsOp(*mul_input1, "MusaNormalize") &&
+             BelongsToLayerNorm(mul_input1->name(), layernorm_prefix)) {
+    normalize_node = mul_input1;
+    gamma_input = mul_input0;
+    gamma_input_name = GetCleanName(mul_node->input(0));
+  } else {
+    VLOG(2) << "[LayerNorm::Match] FAIL layer2: Mul inputs are not "
+               "(MusaNormalize, gamma), "
+            << "input0=" << mul_input0->op() << ", input1=" << mul_input1->op()
+            << ", node=" << add_node.name();
+    return result;
+  }
+
+  // Verify gamma is a Const or ExpandDims of Const
+  const NodeDef* gamma_const = GetConstLikeNode(graph, gamma_input_name);
+  if (!gamma_const) {
+    VLOG(2) << "[LayerNorm::Match] FAIL layer2: gamma is not Const, node="
+            << add_node.name();
+    return result;
+  }
+
+  VLOG(2) << "[LayerNorm::Match] PASS layer2: MusaNormalize="
+          << normalize_node->name() << ", gamma=" << gamma_const->name();
+
+  // =========================================================================
+  // Layer 1 (start): MusaNormalize inputs:
+  //   - input[0]: x (original input)
+  //   - input[1]: gamma_default (Const, typically 1.0)
+  //   - input[2]: beta_default (Const, typically 0.0)
+  // =========================================================================
+  if (normalize_node->input_size() < 1) {
+    VLOG(2) << "[LayerNorm::Match] FAIL layer1: MusaNormalize input_size="
+            << normalize_node->input_size() << ", node=" << add_node.name();
+    return result;
+  }
+
+  const NodeDef* original_input = FindProducer(graph, normalize_node->input(0));
+  if (!original_input) {
+    VLOG(2)
+        << "[LayerNorm::Match] FAIL layer1: cannot find original input, node="
+        << add_node.name();
+    return result;
+  }
+
+  // Get epsilon from MusaNormalize attribute
+  float epsilon = 1e-5f;
+  auto epsilon_attr = normalize_node->attr().find("epsilon");
+  if (epsilon_attr != normalize_node->attr().end()) {
+    epsilon = epsilon_attr->second.f();
+  }
+
+  VLOG(2) << "[LayerNorm::Match] PASS layer1: original_input="
+          << original_input->name() << ", epsilon=" << epsilon;
+
+  // =========================================================================
+  // Check for external references (fork detection)
+  // If any matched node (except output) is referenced by external nodes,
+  // we cannot safely fuse this subgraph.
+  // =========================================================================
+  std::unordered_set<std::string> matched_node_names;
+  matched_node_names.insert(add_node.name());
+  matched_node_names.insert(mul_node->name());
+  matched_node_names.insert(normalize_node->name());
+
+  // The output node (add_node) can be referenced externally - that's the normal
+  // case We only check if intermediate nodes are referenced externally
+  for (int i = 0; i < graph.node_size(); ++i) {
+    const NodeDef& node = graph.node(i);
+    // Skip nodes that are part of the matched subgraph
+    if (matched_node_names.count(node.name())) continue;
+
+    // Check all inputs of this external node
+    for (int j = 0; j < node.input_size(); ++j) {
+      std::string input_name = GetCleanName(node.input(j));
+      // If this external node references an intermediate matched node (not the
+      // output)
+      if (input_name != add_node.name() &&
+          matched_node_names.count(input_name)) {
+        VLOG(1) << "[LayerNorm::Match] REJECT: fork detected, node "
+                << input_name << " is referenced by external node "
+                << node.name();
+        return result;  // Return empty result - cannot fuse
+      }
+    }
+  }
+
+  // =========================================================================
+  // Build match result
+  // =========================================================================
   result.matched = true;
-  PushUnique(&result.matched_nodes, &add_node);
-  PushUnique(&result.matched_nodes, mul_node);
-  PushUnique(&result.matched_nodes, div_node);
-  PushUnique(&result.matched_nodes, sub_node);
-  PushUnique(&result.matched_nodes, mean_node);
 
+  // Add all matched nodes (from end to start)
+  result.matched_nodes.push_back(&add_node);       // Layer 3
+  result.matched_nodes.push_back(mul_node);        // Layer 2
+  result.matched_nodes.push_back(normalize_node);  // Layer 1
+
+  // Store captured nodes
   result.captured_nodes["output"] = &add_node;
+  result.captured_nodes["add"] = &add_node;
   result.captured_nodes["mul"] = mul_node;
-  result.captured_nodes["div"] = div_node;
-  result.captured_nodes["sub"] = sub_node;
-  result.captured_nodes["mean"] = mean_node;
-  result.captured_nodes["gamma"] = gamma_node;
-  result.captured_nodes["beta"] = beta_node;
+  result.captured_nodes["normalize"] = normalize_node;
 
-  for (int i = 0; i < sub_node->input_size() && i < 2; ++i) {
-    const NodeDef* input_node = FindProducer(graph, sub_node->input(i));
-    if (input_node && input_node != mean_node) {
-      result.captured_nodes["input"] = input_node;
-      result.captured_attrs["input_tensor"] = sub_node->input(i);
-      break;
-    }
+  // Store captured attributes
+  result.captured_attrs["original_input"] = original_input->name();
+  result.captured_attrs["layernorm_prefix"] = layernorm_prefix;
+
+  // Store gamma and beta names (may be Const or ExpandDims)
+  result.captured_attrs["gamma_input"] = gamma_input_name;
+  result.captured_attrs["gamma_const"] = gamma_const->name();
+  result.captured_attrs["beta_input"] = beta_input_name;
+  result.captured_attrs["beta_const"] = beta_const->name();
+
+  // Store epsilon from MusaNormalize
+  std::ostringstream epsilon_ss;
+  epsilon_ss << epsilon;
+  result.captured_attrs["epsilon"] = epsilon_ss.str();
+
+  // Record all matched nodes for deletion
+  for (const NodeDef* matched_node : result.matched_nodes) {
+    result.captured_attrs["fuse_node_" +
+                          std::to_string(result.captured_attrs.size())] =
+        matched_node->name();
   }
 
-  result.captured_attrs["epsilon"] = FloatToString(kDefaultEpsilon);
-  return result;
-}
-
-FusionMatchResult MusaLayerNormFusion::MatchFromMulNode(
-    const GraphDef& graph, int mul_node_idx) const {
-  FusionMatchResult result;
-  const NodeDef& final_mul = graph.node(mul_node_idx);
-
-  if (!IsMulOp(final_mul) || final_mul.input_size() != 2) {
-    return result;
-  }
-
-  const NodeDef* realdiv_node = nullptr;
-  const NodeDef* gamma_add_node = nullptr;
-  const NodeDef* gamma_expand_node = nullptr;
-  std::string gamma_scale_input;
-  std::string gamma_const_input;
-
-  for (int i = 0; i < 2; ++i) {
-    const NodeDef* maybe_div = FindProducer(graph, final_mul.input(i));
-    const NodeDef* maybe_gamma = FindProducer(graph, final_mul.input(1 - i));
-    if (!maybe_div || !maybe_gamma || !IsDivOp(*maybe_div)) {
-      continue;
-    }
-
-    const NodeDef* matched_expand = nullptr;
-    std::string matched_scale_input;
-    std::string matched_const_input;
-    if (!MatchScaleGammaBranch(graph, maybe_gamma, &matched_expand,
-                               &matched_scale_input, &matched_const_input)) {
-      continue;
-    }
-
-    realdiv_node = maybe_div;
-    gamma_add_node = maybe_gamma;
-    gamma_expand_node = matched_expand;
-    gamma_scale_input = matched_scale_input;
-    gamma_const_input = matched_const_input;
-    break;
-  }
-
-  if (!realdiv_node || !gamma_add_node || !gamma_expand_node ||
-      gamma_scale_input.empty() || gamma_const_input.empty()) {
-    return result;
-  }
-
-  const NodeDef* sub_a = nullptr;
-  const NodeDef* sqrt_node = nullptr;
-  std::vector<const NodeDef*> matched_clip_nodes;
-  for (int i = 0; i < 2; ++i) {
-    const NodeDef* numerator = FindProducer(graph, realdiv_node->input(i));
-    const NodeDef* denominator =
-        FindProducer(graph, realdiv_node->input(1 - i));
-    if (!numerator || !denominator) continue;
-
-    const NodeDef* matched_sqrt = nullptr;
-    std::vector<const NodeDef*> clip_nodes;
-    if (IsOp(*numerator, "Sub") &&
-        MatchClippedSqrt(graph, denominator, &matched_sqrt, &clip_nodes)) {
-      sub_a = numerator;
-      sqrt_node = matched_sqrt;
-      matched_clip_nodes = std::move(clip_nodes);
-      break;
-    }
-  }
-
-  if (!sub_a || !sqrt_node || matched_clip_nodes.empty()) {
-    return result;
-  }
-
-  const NodeDef* concat_node = nullptr;
-  const NodeDef* mean_expand_node = nullptr;
-  if (!MatchCenteredSubRoot(graph, sub_a, &concat_node, &mean_expand_node)) {
-    return result;
-  }
-
-  const NodeDef* mean_node = nullptr;
-  if (!MatchExpandDimsWithDim(graph, mean_expand_node, kKeepDimExpand,
-                              &mean_node)) {
-    return result;
-  }
-
-  const NodeDef* mean_input = nullptr;
-  if (!MatchMeanWithAxis(graph, mean_node, kReduceAxis, &mean_input) ||
-      mean_input != concat_node || !IsOp(*concat_node, "ConcatV2")) {
-    return result;
-  }
-
-  const NodeDef* var_expand_node = FindProducer(graph, sqrt_node->input(0));
-  if (!var_expand_node) {
-    return result;
-  }
-
-  const NodeDef* var_mean_node = nullptr;
-  if (!MatchExpandDimsWithDim(graph, var_expand_node, kKeepDimExpand,
-                              &var_mean_node)) {
-    return result;
-  }
-
-  const NodeDef* var_mul_node = nullptr;
-  if (!MatchMeanWithAxis(graph, var_mean_node, kReduceAxis, &var_mul_node) ||
-      !var_mul_node || !IsMulOp(*var_mul_node) ||
-      var_mul_node->input_size() != 2) {
-    return result;
-  }
-
-  const NodeDef* sub_b = FindProducer(graph, var_mul_node->input(0));
-  const NodeDef* sub_c = FindProducer(graph, var_mul_node->input(1));
-  if (!MatchCenteredSub(graph, sub_b, concat_node, mean_expand_node) ||
-      !MatchCenteredSub(graph, sub_c, concat_node, mean_expand_node)) {
-    return result;
-  }
-
-  result.matched = true;
-  PushUnique(&result.matched_nodes, &final_mul);
-  PushUnique(&result.matched_nodes, realdiv_node);
-  for (const NodeDef* clip_node : matched_clip_nodes) {
-    PushUnique(&result.matched_nodes, clip_node);
-  }
-  PushUnique(&result.matched_nodes, sqrt_node);
-  PushUnique(&result.matched_nodes, var_expand_node);
-  PushUnique(&result.matched_nodes, var_mean_node);
-  PushUnique(&result.matched_nodes, var_mul_node);
-  PushUnique(&result.matched_nodes, sub_a);
-  PushUnique(&result.matched_nodes, sub_b);
-  PushUnique(&result.matched_nodes, sub_c);
-  PushUnique(&result.matched_nodes, mean_expand_node);
-  PushUnique(&result.matched_nodes, mean_node);
-  PushUnique(&result.matched_nodes, gamma_add_node);
-  PushUnique(&result.matched_nodes, gamma_expand_node);
-
-  result.captured_nodes["output"] = &final_mul;
-  result.captured_nodes["input"] = concat_node;
-  result.captured_nodes["div"] = realdiv_node;
-  result.captured_nodes["sub"] = sub_a;
-  result.captured_nodes["mean"] = mean_node;
-
-  result.captured_attrs["input_tensor"] = sub_a->input(0);
-  result.captured_attrs["gamma_scale_input"] = gamma_scale_input;
-  result.captured_attrs["gamma_const_input"] = gamma_const_input;
-  result.captured_attrs["epsilon"] = FloatToString(kScaleOnlyEpsilon);
+  VLOG(1) << "[LayerNorm::Match] SUCCESS matched=" << add_node.name()
+          << ", input=" << original_input->name()
+          << ", gamma=" << gamma_const->name()
+          << ", beta=" << beta_const->name() << ", epsilon=" << epsilon
+          << ", prefix=" << layernorm_prefix
+          << ", fuse_nodes=" << result.matched_nodes.size();
 
   return result;
 }
 
 Status MusaLayerNormFusion::Apply(GraphDef* graph,
                                   const FusionMatchResult& match_result) const {
+  VLOG(2) << "[LayerNorm::Apply] ENTER, matched=" << match_result.matched
+          << ", nodes_count=" << match_result.matched_nodes.size()
+          << ", kernel_available=" << IsKernelAvailable();
+
   if (!match_result.IsValid()) {
+    VLOG(2) << "[LayerNorm::Apply] RETURN: invalid match result";
     return Status(error::INVALID_ARGUMENT, "Invalid LayerNorm match result");
   }
 
   if (!IsKernelAvailable()) {
+    VLOG(2)
+        << "[LayerNorm::Apply] RETURN: kernel not available, skipping fusion";
     return Status::OK();
   }
 
+  // Get the output node (AddV2)
   auto output_it = match_result.captured_nodes.find("output");
-  auto input_it = match_result.captured_nodes.find("input");
   if (output_it == match_result.captured_nodes.end()) {
+    VLOG(2)
+        << "[LayerNorm::Apply] RETURN: missing output node in captured_nodes";
     return Status(error::INVALID_ARGUMENT,
                   "Missing output node in LayerNorm pattern");
   }
 
   const NodeDef* output_node = output_it->second;
-  const std::string original_name = output_node->name();
-  const std::string original_output_name = original_name + "_original";
+  std::string output_name = output_node->name();
+  std::string output_device = output_node->device();
+  VLOG(2) << "[LayerNorm::Apply] output_node=" << output_name;
 
+  // Check if already fused
   for (const auto& node : graph->node()) {
-    if (node.name() == original_name && node.op() == "MusaLayerNorm") {
-      VLOG(1) << "MusaLayerNorm: Output node " << original_name
-              << " is already fused, skipping";
-      return Status::OK();
+    if (node.name() == output_name && node.op() == "MusaLayerNorm") {
+      VLOG(2) << "[LayerNorm::Apply] RETURN: already fused, node="
+              << output_name;
+      return Status(error::ALREADY_EXISTS, "Already fused");
     }
   }
 
-  int output_node_idx = -1;
-  for (int i = 0; i < graph->node_size(); ++i) {
-    if (graph->node(i).name() == original_name) {
-      output_node_idx = i;
-      break;
-    }
-  }
-  if (output_node_idx < 0) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Failed to find output node in graph: " + original_name);
-  }
-
-  NodeDef* original_output_node = graph->mutable_node(output_node_idx);
-  const std::string output_device = original_output_node->device();
-  AttrValue output_dtype;
-  const auto dtype_it = original_output_node->attr().find("T");
-  const bool has_output_dtype = dtype_it != original_output_node->attr().end();
-  if (has_output_dtype) {
-    output_dtype = dtype_it->second;
+  // Get input name
+  std::string input_name;
+  auto original_input_it = match_result.captured_attrs.find("original_input");
+  if (original_input_it != match_result.captured_attrs.end() &&
+      !original_input_it->second.empty()) {
+    input_name = original_input_it->second;
+  } else {
+    VLOG(2) << "[LayerNorm::Apply] RETURN: cannot determine input";
+    return Status(error::INVALID_ARGUMENT, "Cannot determine LayerNorm input");
   }
 
-  float epsilon = kDefaultEpsilon;
+  // Get data type
+  DataType dtype = DT_FLOAT;
+  auto dtype_it = output_node->attr().find("T");
+  if (dtype_it != output_node->attr().end()) {
+    dtype = dtype_it->second.type();
+  }
+
+  // Extract epsilon
+  float epsilon = 1e-5f;
   auto epsilon_it = match_result.captured_attrs.find("epsilon");
   if (epsilon_it != match_result.captured_attrs.end()) {
     epsilon = std::stof(epsilon_it->second);
   }
 
-  std::string fused_input_name;
-  auto input_name_it = match_result.captured_attrs.find("input_tensor");
-  if (input_name_it != match_result.captured_attrs.end()) {
-    fused_input_name = input_name_it->second;
-  } else if (input_it != match_result.captured_nodes.end() &&
-             input_it->second) {
-    fused_input_name = input_it->second->name();
-  } else {
-    auto mean_it = match_result.captured_nodes.find("mean");
-    if (mean_it != match_result.captured_nodes.end() && mean_it->second &&
-        mean_it->second->input_size() > 0) {
-      fused_input_name = mean_it->second->input(0);
-    } else {
-      return Status(error::INVALID_ARGUMENT,
-                    "Cannot determine LayerNorm input");
+  // Get gamma and beta input names
+  std::string gamma_input_name;
+  std::string beta_input_name;
+  auto gamma_input_it = match_result.captured_attrs.find("gamma_input");
+  auto beta_input_it = match_result.captured_attrs.find("beta_input");
+  if (gamma_input_it != match_result.captured_attrs.end()) {
+    gamma_input_name = gamma_input_it->second;
+  }
+  if (beta_input_it != match_result.captured_attrs.end()) {
+    beta_input_name = beta_input_it->second;
+  }
+
+  VLOG(2) << "[LayerNorm::Apply] input=" << input_name
+          << ", gamma=" << gamma_input_name << ", beta=" << beta_input_name
+          << ", epsilon=" << epsilon;
+
+  // =========================================================================
+  // Collect nodes to delete (from captured_attrs fuse_node_*)
+  // =========================================================================
+  std::unordered_set<std::string> fuse_node_names;
+  for (const auto& kv : match_result.captured_attrs) {
+    if (kv.first.substr(0, 10) == "fuse_node_") {
+      fuse_node_names.insert(kv.second);
     }
   }
 
-  const NodeDef* gamma_node = nullptr;
-  const NodeDef* beta_node = nullptr;
+  // Don't delete the input nodes
+  fuse_node_names.erase(input_name);
+  fuse_node_names.erase(gamma_input_name);
+  fuse_node_names.erase(beta_input_name);
 
-  auto gamma_it = match_result.captured_nodes.find("gamma");
-  if (gamma_it != match_result.captured_nodes.end()) {
-    gamma_node = gamma_it->second;
-  }
-  auto beta_it = match_result.captured_nodes.find("beta");
-  if (beta_it != match_result.captured_nodes.end()) {
-    beta_node = beta_it->second;
-  }
+  // =========================================================================
+  // Check for shared nodes (referenced by external nodes)
+  // =========================================================================
+  std::unordered_set<std::string> shared_nodes;
 
-  std::string gamma_name;
-  auto gamma_scale_it = match_result.captured_attrs.find("gamma_scale_input");
-  auto gamma_const_it = match_result.captured_attrs.find("gamma_const_input");
-  if (gamma_scale_it != match_result.captured_attrs.end() &&
-      gamma_const_it != match_result.captured_attrs.end()) {
-    gamma_name = original_name + "/fused_gamma";
-    if (FusionGraphUtils::FindNodeIndex(*graph, gamma_name) < 0) {
-      NodeDef* gamma_add_node = graph->add_node();
-      gamma_add_node->set_name(gamma_name);
-      gamma_add_node->set_op("AddV2");
-      gamma_add_node->set_device(output_device);
-      gamma_add_node->add_input(gamma_const_it->second);
-      gamma_add_node->add_input(gamma_scale_it->second);
+  VLOG(1) << "[LayerNorm::Apply] Checking for shared nodes, graph has "
+          << graph->node_size() << " nodes, fuse_node_names has "
+          << fuse_node_names.size() << " nodes to delete";
 
-      auto* gamma_attr = gamma_add_node->mutable_attr();
-      if (has_output_dtype) {
-        (*gamma_attr)["T"] = output_dtype;
-      } else {
-        (*gamma_attr)["T"].set_type(DT_FLOAT);
-      }
-    }
-  } else if (gamma_node) {
-    gamma_name = gamma_node->name();
-  } else {
-    return Status(error::INVALID_ARGUMENT,
-                  "Missing gamma input in LayerNorm fusion");
-  }
+  for (int i = 0; i < graph->node_size(); ++i) {
+    const NodeDef& node = graph->node(i);
+    // Skip nodes in the deletion list
+    if (fuse_node_names.count(node.name())) continue;
 
-  std::string beta_name;
-  if (beta_node) {
-    beta_name = beta_node->name();
-  } else {
-    beta_name = original_name + "/fused_beta";
-    if (FusionGraphUtils::FindNodeIndex(*graph, beta_name) < 0) {
-      NodeDef* beta_zero_node = graph->add_node();
-      beta_zero_node->set_name(beta_name);
-      beta_zero_node->set_op("ZerosLike");
-      beta_zero_node->set_device(output_device);
-      beta_zero_node->add_input(gamma_name);
-
-      auto* beta_attr = beta_zero_node->mutable_attr();
-      if (has_output_dtype) {
-        (*beta_attr)["T"] = output_dtype;
-      } else {
-        (*beta_attr)["T"].set_type(DT_FLOAT);
+    // Check all inputs of this node
+    for (int j = 0; j < node.input_size(); ++j) {
+      std::string producer =
+          FusionGraphUtils::GetProducerNodeName(node.input(j));
+      // If input comes from a node in the deletion list (and not the output
+      // node)
+      if (fuse_node_names.count(producer) && producer != output_name) {
+        shared_nodes.insert(producer);
+        VLOG(1) << "[LayerNorm::Apply] SHARED NODE DETECTED: " << producer
+                << " (referenced by external node: " << node.name() << ")";
       }
     }
   }
 
-  std::vector<std::string> removable_node_names;
-  removable_node_names.reserve(match_result.matched_nodes.size());
-  const std::string input_name =
-      (input_it != match_result.captured_nodes.end() && input_it->second)
-          ? input_it->second->name()
-          : "";
-  for (const NodeDef* matched_node : match_result.matched_nodes) {
-    if (!matched_node) continue;
-    if (!input_name.empty() && matched_node->name() == input_name) {
-      continue;
-    }
-    if (matched_node->name() == original_name) {
-      removable_node_names.push_back(original_output_name);
+  // Remove shared nodes from deletion list
+  for (const auto& name : shared_nodes) {
+    VLOG(1) << "[LayerNorm::Apply] KEEPING SHARED NODE: " << name;
+    fuse_node_names.erase(name);
+  }
+
+  VLOG(2) << "[LayerNorm::Apply] will remove " << fuse_node_names.size()
+          << " fused sub-graph nodes, found " << shared_nodes.size()
+          << " shared nodes";
+
+  // =========================================================================
+  // Delete fused nodes
+  // =========================================================================
+  int removed_count = 0;
+  for (auto it = fuse_node_names.begin(); it != fuse_node_names.end();) {
+    int idx = FusionGraphUtils::FindNodeIndex(*graph, *it);
+    if (idx >= 0) {
+      FusionGraphUtils::RemoveNode(graph, idx);
+      removed_count++;
+      it = fuse_node_names.erase(it);
     } else {
-      removable_node_names.push_back(matched_node->name());
+      ++it;
     }
   }
 
-  original_output_node->set_name(original_output_name);
+  VLOG(2) << "[LayerNorm::Apply] removed " << removed_count << " nodes";
 
+  // =========================================================================
+  // Create fused node (MusaLayerNorm)
+  // Inputs: x (original input), gamma, beta
+  // =========================================================================
   NodeDef* fused_node = graph->add_node();
-  fused_node->set_name(original_name);
+  fused_node->set_name(output_name);
   fused_node->set_op("MusaLayerNorm");
   fused_node->set_device(output_device);
-  fused_node->add_input(fused_input_name);
-  fused_node->add_input(gamma_name);
-  fused_node->add_input(beta_name);
 
+  // Add inputs: input, gamma, beta
+  fused_node->add_input(input_name);
+  fused_node->add_input(gamma_input_name);
+  fused_node->add_input(beta_input_name);
+
+  // Set attributes
   auto* attr = fused_node->mutable_attr();
-  if (has_output_dtype) {
-    (*attr)["T"] = output_dtype;
-  } else {
-    (*attr)["T"].set_type(DT_FLOAT);
-  }
+  (*attr)["T"].set_type(dtype);
   (*attr)["epsilon"].set_f(epsilon);
 
-  std::unordered_set<std::string> protected_node_names = {original_name};
-  auto protect_input = [&protected_node_names](const std::string& input_name) {
-    const std::string producer =
-        FusionGraphUtils::GetProducerNodeName(input_name);
-    if (!producer.empty()) {
-      protected_node_names.insert(producer);
-    }
-  };
-  protect_input(fused_input_name);
-  protect_input(gamma_name);
-  protect_input(beta_name);
-
-  const int removed_count = FusionGraphUtils::RemoveNodesIfUnused(
-      graph, removable_node_names, protected_node_names);
-
-  VLOG(1) << "MusaLayerNorm: Replaced '" << original_name
-          << "' with MusaLayerNorm (removed_nodes=" << removed_count << ")";
+  VLOG(1) << "[LayerNorm::Apply] SUCCESS fused to " << output_name
+          << ", input=" << input_name << ", gamma=" << gamma_input_name
+          << ", beta=" << beta_input_name << ", epsilon=" << epsilon
+          << ", removed=" << removed_count
+          << ", graph_nodes=" << graph->node_size();
 
   return Status::OK();
 }
 
+// Register fusion pattern
 REGISTER_FUSION_PATTERN(MusaLayerNormFusion);
+
+// Register kernel availability
 REGISTER_FUSION_KERNEL(MusaLayerNormFusion, []() { return true; });
 
 }  // namespace musa_fusion
