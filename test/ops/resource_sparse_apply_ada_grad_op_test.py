@@ -17,7 +17,6 @@ class ResourceSparseApplyAdaGradV2Test(MUSATestCase):
       if idx < 0: continue
       expected_var[idx] -= lr_np.astype(np.float32) * grad_np[i].astype(np.float32) / (np.sqrt(expected_accum[idx]) + epsilon_np.astype(np.float32))
 
-    # Instead of using tf graphs, using eager (which is the default in TF2) for simplicity
     with tf.device("/device:MUSA:0"):
       var = tf.Variable(var_np, dtype=dtype)
       accum = tf.Variable(accum_np, dtype=dtype)
