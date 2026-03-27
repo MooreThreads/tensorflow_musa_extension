@@ -74,7 +74,15 @@ class MusaSelectOp : public MusaOpKernel {
     }
 
     Tensor* output = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
+    // ==: 合并output&&input
+    if (then_t.shape() == output_shape) {
+      const std::vector<int> forwardable_input_indices = {1};
+      OP_REQUIRES_OK(
+          ctx, ctx->forward_input_or_allocate_output(
+                   forwardable_input_indices, 0, output_shape, &output));
+    } else {
+      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
+    }
     if (output->NumElements() == 0) return;
 
     MusaDevice* device = reinterpret_cast<MusaDevice*>(ctx->device());
