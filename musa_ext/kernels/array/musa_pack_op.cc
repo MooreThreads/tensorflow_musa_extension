@@ -7,6 +7,7 @@
 
 #include <mudnn.h>
 
+#include <type_traits>
 #include <vector>
 
 #include "../utils_op.h"
@@ -18,6 +19,21 @@
 
 namespace tensorflow {
 namespace musa {
+
+template <typename T>
+inline bool NeedsHostVisiblePackSync() {
+  return std::is_same<T, int32>::value || std::is_same<T, int64>::value;
+}
+
+inline void SyncPackStreamIfNeeded(OpKernelContext* ctx, musaStream_t stream,
+                                   bool should_sync) {
+  if (!should_sync) return;
+
+  musaError_t err = musaStreamSynchronize(stream);
+  OP_REQUIRES(ctx, err == musaSuccess,
+              errors::Internal("MUSA Pack stream sync failed: ",
+                               musaGetErrorString(err)));
+}
 
 // Create mTensor view with an extra dimension of size 1 at specified axis.
 mTensor CreateMTensorWithExpandedDim(const Tensor& t, int axis,
@@ -98,6 +114,7 @@ class MusaPackOp : public MusaOpKernel {
       OP_REQUIRES(ctx, err == musaSuccess,
                   errors::Internal("musaMemcpyAsync failed: ",
                                    musaGetErrorString(err)));
+      SyncPackStreamIfNeeded(ctx, stream, NeedsHostVisiblePackSync<T>());
       return;
     }
 
@@ -121,6 +138,8 @@ class MusaPackOp : public MusaOpKernel {
     OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
                 errors::Internal("MUSA Concat Run failed for Pack. Status: ",
                                  static_cast<int>(status)));
+    SyncPackStreamIfNeeded(ctx, reinterpret_cast<musaStream_t>(handle.GetStream()),
+                           NeedsHostVisiblePackSync<T>());
   }
 
  private:
