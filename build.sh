@@ -52,7 +52,7 @@ case "$BUILD_TYPE" in
 esac
 
 # Clean previous build if needed
-# rm -rf build
+rm -rf build
 
 mkdir -p build
 cd build
