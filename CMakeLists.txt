@@ -21,6 +21,17 @@ if(NOT EXISTS "${MUSA_PATH}")
     message(FATAL_ERROR "MUSA_PATH '${MUSA_PATH}' does not exist. Please set correct MUSA installation path.")
 endif()
 
+find_library(MUDNNCXX_LIBRARY NAMES mudnncxx PATHS "${MUSA_PATH}/lib" "${MUSA_PATH}/lib64" NO_DEFAULT_PATH)
+find_library(MUDNN_LIBRARY NAMES mudnn PATHS "${MUSA_PATH}/lib" "${MUSA_PATH}/lib64" NO_DEFAULT_PATH)
+
+if(MUDNNCXX_LIBRARY)
+    set(MUSA_DNN_LIBRARY "${MUDNNCXX_LIBRARY}")
+elseif(MUDNN_LIBRARY)
+    set(MUSA_DNN_LIBRARY "${MUDNN_LIBRARY}")
+else()
+    message(FATAL_ERROR "Failed to find mudnncxx or mudnn under '${MUSA_PATH}/lib' or '${MUSA_PATH}/lib64'.")
+endif()
+
 # Get TensorFlow parameters
 execute_process(COMMAND python3 -c "import tensorflow as tf; print(tf.sysconfig.get_include())"
     OUTPUT_VARIABLE TF_INC OUTPUT_STRIP_TRAILING_WHITESPACE)
@@ -61,6 +72,9 @@ endif()
 
 # Include paths
 include_directories("${TF_INC}" "${MUSA_PATH}/include")
+if(EXISTS "${MUSA_PATH}/include/mudnncxx")
+    include_directories("${MUSA_PATH}/include/mudnncxx")
+endif()
 
 # Include TensorFlow C++ core headers for common_runtime
 # These are required for accessing BFCAllocator and device-specific headers
@@ -150,7 +164,7 @@ set_target_properties(musa_plugin PROPERTIES
 )
 
 # Link
-target_link_libraries(musa_plugin PRIVATE ${TF_LINK_FLAGS} musa mublas mudnn rt)
+target_link_libraries(musa_plugin PRIVATE ${TF_LINK_FLAGS} musa mublas ${MUSA_DNN_LIBRARY} rt)
 
 # Output configuration
 set_target_properties(musa_plugin PROPERTIES
@@ -171,6 +185,7 @@ list(LENGTH MU_SOURCES MU_SOURCES_COUNT)
 
 message(STATUS "TensorFlow MUSA Plugin Configuration:")
 message(STATUS "  MUSA Path: ${MUSA_PATH}")
+message(STATUS "  MuDNN Library: ${MUSA_DNN_LIBRARY}")
 message(STATUS "  TensorFlow Include: ${TF_INC}")
 message(STATUS "  MUSA Kernel Debug: ${MUSA_KERNEL_DEBUG}")
 message(STATUS "  Source Files: ${CPP_SOURCES_COUNT} C++ files, ${MU_SOURCES_COUNT} MUSA kernels")

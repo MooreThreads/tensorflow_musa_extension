@@ -73,6 +73,7 @@ struct MusaOptimizerConfigs {
   TriState memory_optimization = TriState::kDefault;
   TriState auto_parallel = TriState::kDefault;
   TriState scoped_allocator_optimization = TriState::kDefault;
+  TriState optimizer_remove_ios_node = TriState::kDefault;
 };
 
 // MUSA AMP Configuration
@@ -248,10 +249,13 @@ bool IsFusionResidualConst(const NodeDef& node) {
          node.name().find("/LayerNorm/") != string::npos;
 }
 
-int RemoveIsolatedFusionConstNodes(GraphDef* graph) {
+bool IsFullyIsolatedNode(const NodeDef& node) { return node.input_size() == 0; }
+
+int RemoveIsolatedNodes(GraphDef* graph) {
   // Fusion may leave behind folded scalar constants that no longer feed any
-  // live node. Prune them here so the dumped graph reflects the final shape
-  // of the executable graph more closely.
+  // live node. Also drop nodes that are completely disconnected from the
+  // executable graph. Prune them here so the dumped graph reflects the final
+  // shape of the executable graph more closely.
   int removed_count = 0;
 
   while (true) {
@@ -265,22 +269,24 @@ int RemoveIsolatedFusionConstNodes(GraphDef* graph) {
       }
     }
 
-    std::vector<int> isolated_const_indices;
+    std::vector<int> isolated_node_indices;
     for (int i = 0; i < graph->node_size(); ++i) {
       const auto& node = graph->node(i);
-      if (IsFusionResidualConst(node) &&
-          referenced_nodes.find(node.name()) == referenced_nodes.end()) {
-        isolated_const_indices.push_back(i);
+      const bool has_consumers =
+          referenced_nodes.find(node.name()) != referenced_nodes.end();
+      if ((IsFusionResidualConst(node) && !has_consumers) ||
+          (IsFullyIsolatedNode(node) && !has_consumers)) {
+        isolated_node_indices.push_back(i);
       }
     }
 
-    if (isolated_const_indices.empty()) {
+    if (isolated_node_indices.empty()) {
       return removed_count;
     }
 
-    std::sort(isolated_const_indices.begin(), isolated_const_indices.end(),
+    std::sort(isolated_node_indices.begin(), isolated_node_indices.end(),
               std::greater<int>());
-    for (int node_idx : isolated_const_indices) {
+    for (int node_idx : isolated_node_indices) {
       ::tensorflow::grappler::musa_fusion::FusionGraphUtils::RemoveNode(
           graph, node_idx);
       removed_count++;
@@ -367,14 +373,17 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
     if (configs_.remapping != TriState::kOff) {
       dumper.DumpBeforePass(*optimized_graph, "fusion");
       TF_RETURN_IF_ERROR(OptimizeFusion(optimized_graph));
-      const int removed_isolated_consts =
-          RemoveIsolatedFusionConstNodes(optimized_graph);
-      if (removed_isolated_consts > 0) {
-        VLOG(1) << "MusaGraphOptimizer: Removed " << removed_isolated_consts
-                << " isolated fusion Const node(s) after fusion";
-      }
       dumper.DumpAfterPass(*optimized_graph, "fusion");
     }
+
+    if(configs_.optimizer_remove_ios_node != TriState::kOff) {
+
+    const int removed_isolated_nodes = RemoveIsolatedNodes(optimized_graph);
+    if (removed_isolated_nodes > 0) {
+      VLOG(1) << "MusaGraphOptimizer: Removed " << removed_isolated_nodes
+              << " isolated node(s) after optimization";
+    }
+  }
 
     VLOG(1) << "MusaGraphOptimizer: Optimization complete, graph now has "
             << optimized_graph->node_size() << " nodes";
@@ -389,7 +398,6 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
         VLOG(2) << "  - " << node.name() << " (" << node.op() << ")";
       }
     }
-
     return Status::OK();
   }
 
@@ -422,58 +430,87 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
 
     bool graph_modified = true;
     int iteration = 0;
-    const int kMaxIterations = 200;  // Prevent infinite loops
+    const int kMaxIterations = 50;  // Prevent infinite loops
 
     while (graph_modified && iteration < kMaxIterations) {
       graph_modified = false;
       iteration++;
 
-      for (int node_idx = 0; node_idx < graph->node_size(); ++node_idx) {
-        for (const auto* pattern : patterns) {
-          if (!pattern->IsEnabled()) {
-            continue;
-          }
+      auto run_scan = [&](bool reverse) -> bool {
+        bool pass_modified = false;
 
-          auto match_result = pattern->Match(*graph, node_idx);
+        while (true) {
+          bool applied_in_sweep = false;
+          const int node_count = graph->node_size();
 
-          if (match_result.matched) {
-            // Check kernel availability
-            if (!pattern->IsKernelAvailable()) {
-              VLOG(1) << "MusaGraphOptimizer: Pattern '" << pattern->GetName()
-                      << "' matched at node " << node_idx
-                      << " but kernel not available - using fallback";
+          for (int offset = 0; offset < node_count; ++offset) {
+            const int node_idx = reverse ? (node_count - 1 - offset) : offset;
 
-              // Call Apply anyway to allow pattern to handle fallback
-              Status status = pattern->Apply(graph, match_result);
-              if (!status.ok()) {
-                LOG(WARNING) << "MusaGraphOptimizer: Fallback for pattern '"
-                             << pattern->GetName() << "' failed: " << status;
+            for (const auto* pattern : patterns) {
+              if (!pattern->IsEnabled()) {
+                continue;
               }
-              fusion_fallback_count++;
-              continue;
+
+              auto match_result = pattern->Match(*graph, node_idx);
+              if (!match_result.matched) {
+                continue;
+              }
+
+              // Check kernel availability
+              if (!pattern->IsKernelAvailable()) {
+                VLOG(1) << "MusaGraphOptimizer: Pattern '" << pattern->GetName()
+                        << "' matched at node " << node_idx
+                        << " but kernel not available - using fallback";
+
+                // Call Apply anyway to allow pattern to handle fallback
+                Status status = pattern->Apply(graph, match_result);
+                if (!status.ok()) {
+                  LOG(WARNING) << "MusaGraphOptimizer: Fallback for pattern '"
+                               << pattern->GetName()
+                               << "' failed: " << status;
+                }
+                fusion_fallback_count++;
+                continue;
+              }
+
+              VLOG(1) << "MusaGraphOptimizer: Applying pattern '"
+                      << pattern->GetName() << "' at node " << node_idx;
+
+              Status status = pattern->Apply(graph, match_result);
+              if (status.ok()) {
+                pass_modified = true;
+                fusion_applied_count++;
+                applied_in_sweep = true;
+                VLOG(1) << "MusaGraphOptimizer: Pattern '"
+                        << pattern->GetName() << "' applied successfully";
+                break;  // Restart this direction since graph was modified
+              } else {
+                LOG(WARNING) << "MusaGraphOptimizer: Pattern '"
+                             << pattern->GetName()
+                             << "' apply failed: " << status;
+              }
             }
 
-            VLOG(1) << "MusaGraphOptimizer: Applying pattern '"
-                    << pattern->GetName() << "' at node " << node_idx;
-
-            Status status = pattern->Apply(graph, match_result);
-            if (status.ok()) {
-              graph_modified = true;
-              fusion_applied_count++;
-              VLOG(1) << "MusaGraphOptimizer: Pattern '" << pattern->GetName()
-                      << "' applied successfully";
-              break;  // Restart scanning since graph was modified
-            } else {
-              LOG(WARNING) << "MusaGraphOptimizer: Pattern '"
-                           << pattern->GetName()
-                           << "' apply failed: " << status;
+            if (applied_in_sweep) {
+              break;
             }
           }
-        }
 
-        if (graph_modified) {
-          break;  // Restart from beginning after modification
+          if (!applied_in_sweep) {
+            return pass_modified;
+          }
         }
+      };
+
+      // Conservative improvement: keep the original "restart after each
+      // successful rewrite" behavior, but exhaust both forward and reverse
+      // traversals within one outer iteration so we can expose more patterns
+      // before consuming another iteration budget.
+      if (run_scan(false)) {
+        graph_modified = true;
+      }
+      if (run_scan(true)) {
+        graph_modified = true;
       }
     }
 

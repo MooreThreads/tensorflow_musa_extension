@@ -72,14 +72,14 @@ struct VectorLoader<double, 2> {
 // int specialization
 template <>
 struct VectorLoader<int, 4> {
-  using VecType = int4;
-  static __device__ __forceinline__ int4 load(const int* ptr) {
-    return *reinterpret_cast<const int4*>(ptr);
+  using VecType = ::int4;
+  static __device__ __forceinline__ ::int4 load(const int* ptr) {
+    return *reinterpret_cast<const ::int4*>(ptr);
   }
-  static __device__ __forceinline__ void store(int* ptr, int4 val) {
-    *reinterpret_cast<int4*>(ptr) = val;
+  static __device__ __forceinline__ void store(int* ptr, ::int4 val) {
+    *reinterpret_cast<::int4*>(ptr) = val;
   }
-  static __device__ __forceinline__ int4 negate(int4 val) {
+  static __device__ __forceinline__ ::int4 negate(::int4 val) {
     return make_int4(-val.x, -val.y, -val.z, -val.w);
   }
 };
@@ -102,14 +102,14 @@ struct VectorLoader<int64_t, 2> {
 // half specialization (process 8 elements at once for better memory bandwidth)
 template <>
 struct VectorLoader<Eigen::half, 8> {
-  using VecType = uint4;  // 8 half = 16 bytes
-  static __device__ __forceinline__ uint4 load(const Eigen::half* ptr) {
-    return *reinterpret_cast<const uint4*>(ptr);
+  using VecType = ::uint4;  // 8 half = 16 bytes
+  static __device__ __forceinline__ ::uint4 load(const Eigen::half* ptr) {
+    return *reinterpret_cast<const ::uint4*>(ptr);
   }
-  static __device__ __forceinline__ void store(Eigen::half* ptr, uint4 val) {
-    *reinterpret_cast<uint4*>(ptr) = val;
+  static __device__ __forceinline__ void store(Eigen::half* ptr, ::uint4 val) {
+    *reinterpret_cast<::uint4*>(ptr) = val;
   }
-  static __device__ __forceinline__ uint4 negate(uint4 val) {
+  static __device__ __forceinline__ ::uint4 negate(::uint4 val) {
     // Flip sign bits for all 8 half values at once
     // Each half has its sign bit at bit 15
     val.x ^= 0x80008000u;
@@ -123,14 +123,14 @@ struct VectorLoader<Eigen::half, 8> {
 // bfloat16 specialization (process 8 elements at once)
 template <>
 struct VectorLoader<bfloat16, 8> {
-  using VecType = uint4;  // 8 bfloat16 = 16 bytes
-  static __device__ __forceinline__ uint4 load(const bfloat16* ptr) {
-    return *reinterpret_cast<const uint4*>(ptr);
+  using VecType = ::uint4;  // 8 bfloat16 = 16 bytes
+  static __device__ __forceinline__ ::uint4 load(const bfloat16* ptr) {
+    return *reinterpret_cast<const ::uint4*>(ptr);
   }
-  static __device__ __forceinline__ void store(bfloat16* ptr, uint4 val) {
-    *reinterpret_cast<uint4*>(ptr) = val;
+  static __device__ __forceinline__ void store(bfloat16* ptr, ::uint4 val) {
+    *reinterpret_cast<::uint4*>(ptr) = val;
   }
-  static __device__ __forceinline__ uint4 negate(uint4 val) {
+  static __device__ __forceinline__ ::uint4 negate(::uint4 val) {
     // Flip sign bits for all 8 bfloat16 values at once
     val.x ^= 0x80008000u;
     val.y ^= 0x80008000u;

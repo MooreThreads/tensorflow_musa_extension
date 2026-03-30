@@ -1,5 +1,7 @@
 #include <mudnn.h>
 
+#include <type_traits>
+
 #include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/ops_util.h"
@@ -11,6 +13,23 @@
 namespace tensorflow {
 namespace musa {
 namespace {
+
+template <typename T>
+inline bool NeedsHostVisibleSliceSync() {
+  return std::is_same<T, int32>::value || std::is_same<T, int64>::value;
+}
+
+inline void SyncSliceStreamIfNeeded(OpKernelContext* context, mHandle& handle,
+                                    bool should_sync) {
+  if (!should_sync) return;
+
+  musaError_t err = musaStreamSynchronize(
+      reinterpret_cast<musaStream_t>(handle.GetStream()));
+  OP_REQUIRES(context, err == musaSuccess,
+              errors::Internal("MUSA StridedSlice stream sync failed: ",
+                               musaGetErrorString(err)));
+}
+
 template <typename T>
 class MusaStridedSliceOp : public OpKernel {
  public:
@@ -51,9 +70,14 @@ class MusaStridedSliceOp : public OpKernel {
                      context->allocate_output(0, final_tensor_shape, &output));
       if (input.NumElements() > 0) {
         auto& h = GetHandleByCtx(context);
-        musaMemcpyAsync(output->flat<T>().data(), input.flat<T>().data(),
-                        input.TotalBytes(), musaMemcpyDeviceToDevice,
-                        reinterpret_cast<musaStream_t>(h.GetStream()));
+        musaError_t err = musaMemcpyAsync(
+            output->flat<T>().data(), input.flat<T>().data(),
+            input.TotalBytes(), musaMemcpyDeviceToDevice,
+            reinterpret_cast<musaStream_t>(h.GetStream()));
+        OP_REQUIRES(context, err == musaSuccess,
+                    errors::Internal("MUSA StridedSlice memcpy failed: ",
+                                     musaGetErrorString(err)));
+        SyncSliceStreamIfNeeded(context, h, NeedsHostVisibleSliceSync<T>());
       }
       return;
     }
@@ -110,7 +134,7 @@ class MusaStridedSliceOp : public OpKernel {
                   "ConfigDimStride", context);
 
     MTOP_CHECK_OK_RUN(op.Run(h, out_mt, in_mt), "RunOp", context);
-    // Note: No explicit sync needed - TF's dependency tracking handles it
+    SyncSliceStreamIfNeeded(context, h, NeedsHostVisibleSliceSync<T>());
   }
 
  private:
