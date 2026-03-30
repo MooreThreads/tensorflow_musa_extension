@@ -22,10 +22,12 @@ limitations under the License.
 // All operations are element-wise with broadcasting support.
 //
 
-#include <mudnn.h>
-
+#include <algorithm>
+#include <limits>
 #include <vector>
 
+#include "kernels/math/musa_shifted_affine_map_kernel.h"
+#include "utils/logging.h"
 #include "../utils_op.h"
 #include "tensorflow/core/framework/common_shape_fns.h"
 #include "tensorflow/core/framework/op.h"
@@ -37,6 +39,67 @@ limitations under the License.
 
 namespace tensorflow {
 namespace musa {
+
+namespace {
+
+Status BroadcastShapes(const TensorShape& lhs, const TensorShape& rhs,
+                       TensorShape* output) {
+  BCast bcast(BCast::Vec(lhs.dim_sizes()), BCast::Vec(rhs.dim_sizes()));
+  if (!bcast.IsValid()) {
+    return errors::InvalidArgument("Incompatible shapes: ",
+                                   lhs.DebugString(), " vs ",
+                                   rhs.DebugString());
+  }
+  *output = BCast::ToShape(bcast.output_shape());
+  return Status::OK();
+}
+
+ShiftedAffineMapShape BuildKernelShape(const TensorShape& output_shape) {
+  ShiftedAffineMapShape kernel_shape{};
+  kernel_shape.rank = output_shape.dims();
+  for (int i = 0; i < kShiftedAffineMapMaxDims; ++i) {
+    kernel_shape.dims[i] = 1;
+  }
+  for (int i = 0; i < output_shape.dims(); ++i) {
+    kernel_shape.dims[i] = static_cast<int>(output_shape.dim_size(i));
+  }
+  return kernel_shape;
+}
+
+ShiftedAffineMapStrides BuildBroadcastStrides(const TensorShape& input_shape,
+                                              const TensorShape& output_shape) {
+  ShiftedAffineMapStrides kernel_strides{};
+  for (int i = 0; i < kShiftedAffineMapMaxDims; ++i) {
+    kernel_strides.values[i] = 0;
+  }
+
+  std::vector<int64_t> dense_strides(input_shape.dims(), 1);
+  int64_t acc = 1;
+  for (int i = input_shape.dims() - 1; i >= 0; --i) {
+    dense_strides[i] = acc;
+    acc *= input_shape.dim_size(i);
+  }
+
+  const int rank_delta = output_shape.dims() - input_shape.dims();
+  for (int out_axis = 0; out_axis < output_shape.dims(); ++out_axis) {
+    const int in_axis = out_axis - rank_delta;
+    if (in_axis < 0) {
+      kernel_strides.values[out_axis] = 0;
+      continue;
+    }
+
+    if (input_shape.dim_size(in_axis) == 1 &&
+        output_shape.dim_size(out_axis) > 1) {
+      kernel_strides.values[out_axis] = 0;
+    } else {
+      kernel_strides.values[out_axis] = static_cast<int>(dense_strides[in_axis]);
+    }
+  }
+
+  return kernel_strides;
+}
+
+}  // namespace
 
 // =============================================================================
 // Op Registration
@@ -50,11 +113,54 @@ REGISTER_OP("MusaShiftedAffineMap")
     .Output("output: T")
     .Attr("T: {float, double, half, bfloat16}")
     .SetShapeFn([](shape_inference::InferenceContext* c) {
-      // Output shape = broadcast(data_left, mask)
-      shape_inference::ShapeHandle out = c->input(0);
-      shape_inference::ShapeHandle mask_sh = c->input(2);
-      if (c->RankKnown(out) && c->RankKnown(mask_sh))
-        TF_RETURN_IF_ERROR(c->Merge(out, mask_sh, &out));
+      using ::tensorflow::shape_inference::DimensionHandle;
+      using ::tensorflow::shape_inference::ShapeHandle;
+
+      auto BroadcastTwoShapes = [&](ShapeHandle a, ShapeHandle b,
+                                    ShapeHandle* out) -> Status {
+        const int rank_a = c->Rank(a);
+        const int rank_b = c->Rank(b);
+        const int out_rank = std::max(rank_a, rank_b);
+
+        std::vector<DimensionHandle> dims;
+        dims.reserve(out_rank);
+
+        for (int i = 0; i < out_rank; ++i) {
+          const int ia = rank_a - 1 - i;
+          const int ib = rank_b - 1 - i;
+
+          auto dim_a = (ia >= 0) ? c->Dim(a, ia) : c->MakeDim(1);
+          auto dim_b = (ib >= 0) ? c->Dim(b, ib) : c->MakeDim(1);
+
+          if (c->ValueKnown(dim_a) && c->Value(dim_a) == 1) {
+            dims.push_back(dim_b);
+            continue;
+          }
+          if (c->ValueKnown(dim_b) && c->Value(dim_b) == 1) {
+            dims.push_back(dim_a);
+            continue;
+          }
+
+          DimensionHandle merged;
+          TF_RETURN_IF_ERROR(c->Merge(dim_a, dim_b, &merged));
+          dims.push_back(merged);
+        }
+
+        std::reverse(dims.begin(), dims.end());
+        *out = c->MakeShape(dims);
+        return Status::OK();
+      };
+
+      ShapeHandle out = c->input(0);
+      if (!c->RankKnown(out) || !c->RankKnown(c->input(1)) ||
+          !c->RankKnown(c->input(2)) || !c->RankKnown(c->input(3))) {
+        c->set_output(0, c->UnknownShape());
+        return Status::OK();
+      }
+
+      TF_RETURN_IF_ERROR(BroadcastTwoShapes(out, c->input(1), &out));
+      TF_RETURN_IF_ERROR(BroadcastTwoShapes(out, c->input(2), &out));
+      TF_RETURN_IF_ERROR(BroadcastTwoShapes(out, c->input(3), &out));
       c->set_output(0, out);
       return Status::OK();
     });
@@ -70,9 +176,11 @@ class MusaShiftedAffineMapOp : public MusaOpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
-    const Tensor& data_left      = ctx->input(0);
+    MUSA_KERNEL_TIMING_GUARD(ctx);
+
+    const Tensor& data_left = ctx->input(0);
     const Tensor& sliced_var_left = ctx->input(1);
-    const Tensor& mask            = ctx->input(2);
+    const Tensor& mask = ctx->input(2);
     const Tensor& sliced_var_right = ctx->input(3);
 
     VLOG(2) << "MusaShiftedAffineMap:"
@@ -81,90 +189,56 @@ class MusaShiftedAffineMapOp : public MusaOpKernel {
             << " mask=" << mask.shape().DebugString()
             << " sliced_var_right=" << sliced_var_right.shape().DebugString();
 
-    // -----------------------------------------------------------------
-    // Output shape = BCast(data_left, mask)
-    // -----------------------------------------------------------------
-    BCast bcast_main(BCast::Vec(data_left.shape().dim_sizes()),
-                     BCast::Vec(mask.shape().dim_sizes()));
-    OP_REQUIRES(ctx, bcast_main.IsValid(),
-                errors::InvalidArgument(
-                    "Incompatible shapes: data_left=",
-                    data_left.shape().DebugString(),
-                    " vs mask=", mask.shape().DebugString()));
+    TensorShape temp_left_shape;
+    OP_REQUIRES_OK(ctx, BroadcastShapes(data_left.shape(),
+                                        sliced_var_left.shape(),
+                                        &temp_left_shape));
 
-    TensorShape output_shape = BCast::ToShape(bcast_main.output_shape());
+    TensorShape temp_gated_shape;
+    OP_REQUIRES_OK(ctx, BroadcastShapes(temp_left_shape, mask.shape(),
+                                        &temp_gated_shape));
+
+    TensorShape output_shape;
+    OP_REQUIRES_OK(ctx, BroadcastShapes(temp_gated_shape,
+                                        sliced_var_right.shape(),
+                                        &output_shape));
+
+    OP_REQUIRES(
+        ctx, output_shape.dims() <= kShiftedAffineMapMaxDims,
+        errors::InvalidArgument("ShiftedAffineMap rank ", output_shape.dims(),
+                                " exceeds kernel limit ",
+                                kShiftedAffineMapMaxDims));
+
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
     if (output->NumElements() == 0) return;
 
-    auto& handle = GetHandleByCtx(ctx);
+    OP_REQUIRES(
+        ctx, output->NumElements() <= std::numeric_limits<int>::max(),
+        errors::InvalidArgument("ShiftedAffineMap output is too large for "
+                                "single-kernel indexing: ",
+                                output->NumElements()));
 
-    // -----------------------------------------------------------------
-    // Step 1: temp_left = data_left + sliced_var_left
-    // -----------------------------------------------------------------
-    BCast bcast_left(BCast::Vec(data_left.shape().dim_sizes()),
-                     BCast::Vec(sliced_var_left.shape().dim_sizes()));
-    OP_REQUIRES(ctx, bcast_left.IsValid(),
-                errors::InvalidArgument(
-                    "Incompatible shapes: data_left=",
-                    data_left.shape().DebugString(),
-                    " vs sliced_var_left=",
-                    sliced_var_left.shape().DebugString()));
+    ShiftedAffineMapShape kernel_shape = BuildKernelShape(output_shape);
+    ShiftedAffineMapStrides data_left_st =
+        BuildBroadcastStrides(data_left.shape(), output_shape);
+    ShiftedAffineMapStrides sliced_var_left_st =
+        BuildBroadcastStrides(sliced_var_left.shape(), output_shape);
+    ShiftedAffineMapStrides mask_st =
+        BuildBroadcastStrides(mask.shape(), output_shape);
+    ShiftedAffineMapStrides sliced_var_right_st =
+        BuildBroadcastStrides(sliced_var_right.shape(), output_shape);
 
-    Tensor temp_left;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(
-        data_left.dtype(), BCast::ToShape(bcast_left.output_shape()),
-        &temp_left));
-    {
-      mBinary op; op.SetMode(::musa::dnn::Binary::Mode::ADD);
-      mTensor temp_left_mt = CreateMTensor(temp_left, format_);
-      mTensor data_left_mt = CreateMTensor(data_left, format_);
-      mTensor sliced_var_left_mt = CreateMTensor(sliced_var_left, format_);
-      auto s = op.Run(handle,
-                      temp_left_mt,
-                      data_left_mt,
-                      sliced_var_left_mt);
-      OP_REQUIRES(ctx, s == mStatus::SUCCESS,
-                  errors::Internal("ShiftedAffineMap ADD left failed: ",
-                                   static_cast<int>(s)));
-    }
-
-    // -----------------------------------------------------------------
-    // Step 2: temp_gated = temp_left * mask
-    // -----------------------------------------------------------------
-    Tensor temp_gated;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(
-        data_left.dtype(), output_shape, &temp_gated));
-    {
-      mBinary op; op.SetMode(::musa::dnn::Binary::Mode::MUL);
-      mTensor temp_gated_mt = CreateMTensor(temp_gated, format_);
-      mTensor temp_left_mt = CreateMTensor(temp_left, format_);
-      mTensor mask_mt = CreateMTensor(mask, format_);
-      auto s = op.Run(handle,
-                      temp_gated_mt,
-                      temp_left_mt,
-                      mask_mt);
-      OP_REQUIRES(ctx, s == mStatus::SUCCESS,
-                  errors::Internal("ShiftedAffineMap MUL mask failed: ",
-                                   static_cast<int>(s)));
-    }
-
-    // -----------------------------------------------------------------
-    // Step 3: output = temp_gated + sliced_var_right
-    // -----------------------------------------------------------------
-    {
-      mBinary op; op.SetMode(::musa::dnn::Binary::Mode::ADD);
-      mTensor output_mt = CreateMTensor(*output, format_);
-      mTensor temp_gated_mt = CreateMTensor(temp_gated, format_);
-      mTensor sliced_var_right_mt = CreateMTensor(sliced_var_right, format_);
-      auto s = op.Run(handle,
-                      output_mt,
-                      temp_gated_mt,
-                      sliced_var_right_mt);
-      OP_REQUIRES(ctx, s == mStatus::SUCCESS,
-                  errors::Internal("ShiftedAffineMap ADD right failed: ",
-                                   static_cast<int>(s)));
-    }
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
+    MUSA_KERNEL_TRACE_START("Kernel");
+    LaunchShiftedAffineMapKernel<T>(
+        data_left.flat<T>().data(), data_left_st,
+        sliced_var_left.flat<T>().data(), sliced_var_left_st,
+        mask.flat<T>().data(), mask_st,
+        sliced_var_right.flat<T>().data(), sliced_var_right_st,
+        output->flat<T>().data(), kernel_shape,
+        static_cast<int>(output->NumElements()), stream);
+    MUSA_KERNEL_TRACE_END("Kernel");
 
     VLOG(2) << "MusaShiftedAffineMap output=" << output->shape().DebugString();
   }

@@ -147,6 +147,46 @@ class ShiftedAffineMapOpTest(MUSATestCase):
             atol=2e-2,
         )
 
+    def test_multi_axis_broadcast_float32(self):
+        """Exercise rank expansion and multi-axis broadcasting."""
+        rng = np.random.RandomState(1234)
+        data_left_np = rng.standard_normal([2, 1, 4, 8]).astype(np.float32)
+        sliced_var_left_np = (
+            rng.standard_normal([1, 4, 1]).astype(np.float32) * 0.1)
+        mask_np = (rng.random([2, 3, 1, 8]) > 0.35).astype(np.float32)
+        sliced_var_right_np = (
+            rng.standard_normal([1, 3, 4, 1]).astype(np.float32) * 0.1)
+
+        self._assert_shifted_affine_map_close(
+            data_left_np,
+            sliced_var_left_np,
+            mask_np,
+            sliced_var_right_np,
+            tf.float32,
+            rtol=1e-5,
+            atol=1e-6,
+        )
+
+    def test_broadcast_float64(self):
+        """Verify the dedicated float64 kernel path with broadcasting."""
+        rng = np.random.RandomState(2024)
+        data_left_np = rng.standard_normal([2, 3, 4]).astype(np.float64)
+        sliced_var_left_np = (
+            rng.standard_normal([1, 3, 1]).astype(np.float64) * 0.1)
+        mask_np = (rng.random([2, 1, 4]) > 0.45).astype(np.float64)
+        sliced_var_right_np = (
+            rng.standard_normal([4]).astype(np.float64) * 0.1)
+
+        self._assert_shifted_affine_map_close(
+            data_left_np,
+            sliced_var_left_np,
+            mask_np,
+            sliced_var_right_np,
+            tf.float64,
+            rtol=1e-12,
+            atol=1e-12,
+        )
+
     def test_empty_tensor(self):
         """Test zero-element tensor handling."""
         data_left_np = np.zeros([0, 8], dtype=np.float32)
