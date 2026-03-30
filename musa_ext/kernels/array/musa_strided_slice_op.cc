@@ -5,6 +5,7 @@
 #include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/ops_util.h"
+#include "tensorflow/core/kernels/strided_slice_op_impl.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/lib/core/errors.h"
@@ -14,9 +15,16 @@ namespace tensorflow {
 namespace musa {
 namespace {
 
+using CPUDevice = Eigen::ThreadPoolDevice;
+
 template <typename T>
 inline bool NeedsHostVisibleSliceSync() {
   return std::is_same<T, int32>::value || std::is_same<T, int64>::value;
+}
+
+template <typename T>
+inline bool UseHostMemorySlicePath() {
+  return std::is_same<T, int32>::value;
 }
 
 inline void SyncSliceStreamIfNeeded(OpKernelContext* context, mHandle& handle,
@@ -28,6 +36,62 @@ inline void SyncSliceStreamIfNeeded(OpKernelContext* context, mHandle& handle,
   OP_REQUIRES(context, err == musaSuccess,
               errors::Internal("MUSA StridedSlice stream sync failed: ",
                                musaGetErrorString(err)));
+}
+
+template <typename T>
+void ComputeHostStridedSlice(OpKernelContext* context, const Tensor& input,
+                             const PartialTensorShape& processing_shape,
+                             const PartialTensorShape& final_shape,
+                             bool is_identity, bool is_simple_slice,
+                             const gtl::InlinedVector<int64_t, 4>& begin,
+                             const gtl::InlinedVector<int64_t, 4>& end,
+                             const gtl::InlinedVector<int64_t, 4>& strides) {
+  TensorShape final_tensor_shape;
+  final_shape.AsTensorShape(&final_tensor_shape);
+
+  if (is_identity) {
+    Tensor tmp;
+    OP_REQUIRES(context, tmp.CopyFrom(input, final_tensor_shape),
+                errors::Internal("MUSA StridedSlice host CopyFrom failed."));
+    context->set_output(0, tmp);
+    return;
+  }
+
+  Tensor* result = nullptr;
+  OP_REQUIRES_OK(context,
+                 context->allocate_output(0, final_tensor_shape, &result));
+
+  if (result->NumElements() == 0 || input.NumElements() == 0) return;
+
+  TensorShape processing_tensor_shape;
+  processing_shape.AsTensorShape(&processing_tensor_shape);
+  const int processing_dims = processing_tensor_shape.dims();
+
+#define HANDLE_HOST_SLICE(NDIM)                                           \
+  if (processing_dims == NDIM) {                                           \
+    ::tensorflow::HandleStridedSliceCase<CPUDevice, T, NDIM>(              \
+        context, begin, end, strides, processing_tensor_shape,             \
+        is_simple_slice, result);                                          \
+    return;                                                                \
+  }
+
+  HANDLE_HOST_SLICE(0);
+  HANDLE_HOST_SLICE(1);
+  HANDLE_HOST_SLICE(2);
+  HANDLE_HOST_SLICE(3);
+  HANDLE_HOST_SLICE(4);
+  HANDLE_HOST_SLICE(5);
+  HANDLE_HOST_SLICE(6);
+  HANDLE_HOST_SLICE(7);
+  HANDLE_HOST_SLICE(8);
+
+#undef HANDLE_HOST_SLICE
+
+  OP_REQUIRES(context, false,
+              errors::Unimplemented(
+                  "MUSA host StridedSlice only supports up to 8 processing "
+                  "dims for int32, got ",
+                  processing_dims));
 }
 
 template <typename T>
@@ -61,6 +125,13 @@ class MusaStridedSliceOp : public OpKernel {
                      new_axis_mask_, shrink_axis_mask_, &processing_shape,
                      &final_shape, &is_identity, &is_simple_slice, &slice_dim0,
                      &begin, &end, &strides));
+
+    if (UseHostMemorySlicePath<T>()) {
+      ComputeHostStridedSlice<T>(context, input, processing_shape, final_shape,
+                                 is_identity, is_simple_slice, begin, end,
+                                 strides);
+      return;
+    }
 
     if (is_identity) {
       TensorShape final_tensor_shape;
@@ -152,11 +223,21 @@ class MusaStridedSliceOp : public OpKernel {
                           MusaStridedSliceOp<T>)
 
 REGISTER_STRIDED_SLICE_MUSA(float);
-REGISTER_STRIDED_SLICE_MUSA(int32);
 REGISTER_STRIDED_SLICE_MUSA(int64);
 REGISTER_STRIDED_SLICE_MUSA(Eigen::half);
 REGISTER_STRIDED_SLICE_MUSA(Eigen::bfloat16);
 REGISTER_STRIDED_SLICE_MUSA(bool);
+
+REGISTER_KERNEL_BUILDER(Name("StridedSlice")
+                            .Device("MUSA")
+                            .TypeConstraint<int32>("T")
+                            .HostMemory("input")
+                            .HostMemory("begin")
+                            .HostMemory("end")
+                            .HostMemory("strides")
+                            .HostMemory("output"),
+                        MusaStridedSliceOp<int32>);
+
 #undef REGISTER_STRIDED_SLICE_MUSA
 
 }  // namespace
