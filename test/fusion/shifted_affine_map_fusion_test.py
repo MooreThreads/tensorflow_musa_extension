@@ -211,6 +211,8 @@ class ShiftedAffineMapFusionTest(MUSATestCase):
         fused = _has_fused_op(run_meta.partition_graphs)
         ops = sorted({n.op for pg in run_meta.partition_graphs for n in pg.node})
         print(f"  shape={data_np.shape}, fused={fused}, ops={ops}")
+        self.assertTrue(
+            fused, "MusaShiftedAffineMap node not found in optimized graph")
         print("  COMPLETED")
 
     # -----------------------------------------------------------------
@@ -249,10 +251,13 @@ class ShiftedAffineMapFusionTest(MUSATestCase):
                 feed_dict={"data_left:0": data_np, "mask_cond:0": mask_np},
                 options=run_opts, run_metadata=run_meta)
 
+        fused = _has_fused_op(run_meta.partition_graphs)
         print(f"  max_diff={np.max(np.abs(result - expected)):.2e},"
-              f" fused={_has_fused_op(run_meta.partition_graphs)}")
+              f" fused={fused}")
         self.assertEqual(result.shape, expected.shape)
         self.assertAllClose(result, expected, rtol=_RTOL, atol=_ATOL)
+        self.assertTrue(
+            fused, "MusaShiftedAffineMap node not found in optimized graph")
         print("  PASSED")
 
     # -----------------------------------------------------------------
@@ -290,8 +295,11 @@ class ShiftedAffineMapFusionTest(MUSATestCase):
                 feed_dict={"data_left:0": data_np, "mask_cond:0": mask_np},
                 options=run_opts, run_metadata=run_meta)
 
-        print(f"  max_diff={np.max(np.abs(result - expected)):.2e}")
+        fused = _has_fused_op(run_meta.partition_graphs)
+        print(f"  max_diff={np.max(np.abs(result - expected)):.2e}, fused={fused}")
         self.assertAllClose(result, expected, rtol=_RTOL, atol=_ATOL)
+        self.assertTrue(
+            fused, "MusaShiftedAffineMap node not found in optimized graph")
         print("  PASSED")
 
     # -----------------------------------------------------------------
@@ -402,16 +410,16 @@ class ShiftedAffineMapFusionTest(MUSATestCase):
                      feed_dict={"data_left:0": data_np, "mask_cond:0": mask_np},
                      options=run_opts, run_metadata=run_meta)
 
-        if _has_fused_op(run_meta.partition_graphs):
-            intermediate = {"add_left", "mul_gated"}
-            remaining = [f"{n.op}({n.name})"
-                         for pg in run_meta.partition_graphs
-                         for n in pg.node if n.name in intermediate]
-            print(f"  remaining intermediate nodes: {len(remaining)}")
-            self.assertEqual(len(remaining), 0,
-                             f"Not cleaned up: {remaining}")
-        else:
-            print("  NOTE: fusion did not fire; skipping cleanup check")
+        fused = _has_fused_op(run_meta.partition_graphs)
+        intermediate = {"add_left", "mul_gated"}
+        remaining = [f"{n.op}({n.name})"
+                     for pg in run_meta.partition_graphs
+                     for n in pg.node if n.name in intermediate]
+        print(f"  fused={fused}, remaining intermediate nodes: {len(remaining)}")
+        self.assertTrue(
+            fused, "MusaShiftedAffineMap node not found in optimized graph")
+        self.assertEqual(len(remaining), 0,
+                         f"Not cleaned up: {remaining}")
         print("  COMPLETED")
 
 
