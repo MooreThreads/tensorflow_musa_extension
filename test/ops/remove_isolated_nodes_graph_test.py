@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+# Copyright 2026 The TensorFlow MUSA Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
+"""Build and verify a GraphDef that exercises RemoveIsolatedNodes.
+
+The graph contains:
+- a normal execution path used to trigger optimization
+- orphan Const nodes that should be removed later
+- an isolated node with neither producers nor consumers
+
+The script saves both the original and optimized graphs as ``.pbtxt`` and
+binary ``.pb`` files for inspection.
+"""
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+import numpy as np
+import tensorflow.compat.v1 as tf
+from google.protobuf import text_format
+from tensorflow.core.framework import graph_pb2
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from musa_test_utils import load_musa_plugin
+
+
+tf.disable_eager_execution()
+
+
+def build_graph_def() -> graph_pb2.GraphDef:
+    with tf.Graph().as_default() as graph:
+        with tf.device('/device:MUSA:0'):
+            x = tf.placeholder(tf.float32, shape=[1], name='input')
+            bias = tf.constant([2.0], dtype=tf.float32, name='bias')
+            added = tf.add(x, bias, name='main/add')
+            tf.identity(added, name='output')
+
+            # Matches the legacy fusion-residual naming convention.
+            tf.constant(0.5, dtype=tf.float32, name='cleanup/Gelu/orphan_const')
+
+            # Covered by the newer fully-isolated-node cleanup path.
+            tf.constant(3.0, dtype=tf.float32, name='cleanup/orphan_const')
+
+            # Explicitly covers a node with no inputs and no consumers.
+            tf.no_op(name='cleanup/isolated_noop')
+
+        return graph.as_graph_def()
+
+
+def create_session_config() -> tf.ConfigProto:
+    config = tf.ConfigProto()
+    config.allow_soft_placement = True
+    rewrite_options = config.graph_options.rewrite_options
+    rewrite_options.custom_optimizers.add().name = 'musa_graph_optimizer'
+    return config
+
+
+def load_latest_final_graph(dump_dir: Path):
+    final_pbtxts = sorted(
+        dump_dir.glob('*_final.pbtxt'), key=lambda path: path.stat().st_mtime
+    )
+    if not final_pbtxts:
+        raise FileNotFoundError(f'No *_final.pbtxt found under {dump_dir}')
+
+    latest = final_pbtxts[-1]
+    graph_def = graph_pb2.GraphDef()
+    with latest.open('r', encoding='utf-8') as handle:
+        text_format.Parse(handle.read(), graph_def)
+    return graph_def, latest
+
+
+def write_text_graph(graph_def: graph_pb2.GraphDef, output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open('w', encoding='utf-8') as handle:
+        handle.write(text_format.MessageToString(graph_def))
+
+
+def write_binary_graph(graph_def: graph_pb2.GraphDef, output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open('wb') as handle:
+        handle.write(graph_def.SerializeToString())
+
+
+def save_graph(graph_def: graph_pb2.GraphDef, pbtxt_path: Path, pb_path: Path) -> None:
+    write_text_graph(graph_def, pbtxt_path)
+    write_binary_graph(graph_def, pb_path)
+
+
+def main() -> None:
+    default_dir = Path(__file__).resolve().parent
+    parser = argparse.ArgumentParser(
+        description='Generate graph artifacts that exercise RemoveIsolatedNodes.'
+    )
+    parser.add_argument(
+        '--original-output-pb',
+        default=str(default_dir / 'remove_isolated_nodes_original.pb'),
+        help='Path to the original GraphDef .pb file to write.',
+    )
+    parser.add_argument(
+        '--original-output-pbtxt',
+        default=str(default_dir / 'remove_isolated_nodes_original.pbtxt'),
+        help='Path to the original GraphDef .pbtxt file to write.',
+    )
+    parser.add_argument(
+        '--optimized-output-pb',
+        default=str(default_dir / 'remove_isolated_nodes_optimized.pb'),
+        help='Path to the optimized GraphDef .pb file to write.',
+    )
+    parser.add_argument(
+        '--optimized-output-pbtxt',
+        default=str(default_dir / 'remove_isolated_nodes_optimized.pbtxt'),
+        help='Path to the optimized GraphDef .pbtxt file to write.',
+    )
+    parser.add_argument(
+        '--dump-dir',
+        default=str(default_dir / 'tmp_remove_isolated_nodes_dump'),
+        help='Directory for GraphDef dumps generated by the optimizer.',
+    )
+    args = parser.parse_args()
+
+    original_output_pb = Path(args.original_output_pb).resolve()
+    original_output_pbtxt = Path(args.original_output_pbtxt).resolve()
+    optimized_output_pb = Path(args.optimized_output_pb).resolve()
+    optimized_output_pbtxt = Path(args.optimized_output_pbtxt).resolve()
+    dump_dir = Path(args.dump_dir).resolve()
+    dump_dir.mkdir(parents=True, exist_ok=True)
+
+    os.environ['MUSA_DUMP_GRAPHDEF'] = '1'
+    os.environ['MUSA_DUMP_GRAPHDEF_DIR'] = str(dump_dir)
+
+    load_musa_plugin()
+    original_graph_def = build_graph_def()
+    save_graph(original_graph_def, original_output_pbtxt, original_output_pb)
+
+    with tf.Graph().as_default() as graph:
+        tf.import_graph_def(original_graph_def, name='')
+        output_tensor = graph.get_tensor_by_name('output:0')
+        input_tensor = graph.get_tensor_by_name('input:0')
+
+        with tf.Session(graph=graph, config=create_session_config()) as sess:
+            result = sess.run(
+                output_tensor,
+                feed_dict={input_tensor: np.array([1.0], dtype=np.float32)},
+            )
+            print(f'Ran optimized graph, output={result.tolist()}')
+
+    optimized_graph_def, final_pbtxt = load_latest_final_graph(dump_dir)
+    optimized_names = {node.name for node in optimized_graph_def.node}
+    removed_candidates = {
+        'cleanup/Gelu/orphan_const',
+        'cleanup/orphan_const',
+        'cleanup/isolated_noop',
+    }
+    still_present = sorted(
+        name for name in removed_candidates if name in optimized_names
+    )
+    if still_present:
+        raise AssertionError(
+            f'Expected isolated nodes to be removed, but still found: {still_present}'
+        )
+
+    save_graph(optimized_graph_def, optimized_output_pbtxt, optimized_output_pb)
+    print(
+        f'Saved original graph to {original_output_pbtxt} and {original_output_pb}'
+    )
+    print(
+        'Saved optimized graph from '
+        f'{final_pbtxt} to {optimized_output_pbtxt} and {optimized_output_pb}'
+    )
+    print(f'Final node count: {len(optimized_graph_def.node)}')
+
+
+if __name__ == '__main__':
+    main()
