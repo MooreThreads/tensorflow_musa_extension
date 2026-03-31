@@ -1,11 +1,11 @@
 #include <mudnn.h>
 
 #include <type_traits>
+#include <vector>
 
 #include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/ops_util.h"
-#include "tensorflow/core/kernels/strided_slice_op_impl.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/lib/core/errors.h"
@@ -15,16 +15,9 @@ namespace tensorflow {
 namespace musa {
 namespace {
 
-using CPUDevice = Eigen::ThreadPoolDevice;
-
 template <typename T>
 inline bool NeedsHostVisibleSliceSync() {
   return std::is_same<T, int32>::value || std::is_same<T, int64>::value;
-}
-
-template <typename T>
-inline bool UseHostMemorySlicePath() {
-  return std::is_same<T, int32>::value;
 }
 
 inline void SyncSliceStreamIfNeeded(OpKernelContext* context, mHandle& handle,
@@ -38,14 +31,21 @@ inline void SyncSliceStreamIfNeeded(OpKernelContext* context, mHandle& handle,
                                musaGetErrorString(err)));
 }
 
+inline int64_t ComputeSliceLength(int64_t begin, int64_t end, int64_t stride) {
+  int64_t size = 0;
+  for (int64_t idx = begin; stride > 0 ? idx < end : idx > end; idx += stride) {
+    ++size;
+  }
+  return size;
+}
+
 template <typename T>
-void ComputeHostStridedSlice(OpKernelContext* context, const Tensor& input,
-                             const PartialTensorShape& processing_shape,
-                             const PartialTensorShape& final_shape,
-                             bool is_identity, bool is_simple_slice,
-                             const gtl::InlinedVector<int64_t, 4>& begin,
-                             const gtl::InlinedVector<int64_t, 4>& end,
-                             const gtl::InlinedVector<int64_t, 4>& strides) {
+void ComputeHostStridedSliceInt32(
+    OpKernelContext* context, const Tensor& input,
+    const PartialTensorShape& processing_shape, const PartialTensorShape& final_shape,
+    bool is_identity, const gtl::InlinedVector<int64_t, 4>& begin,
+    const gtl::InlinedVector<int64_t, 4>& end,
+    const gtl::InlinedVector<int64_t, 4>& strides) {
   TensorShape final_tensor_shape;
   final_shape.AsTensorShape(&final_tensor_shape);
 
@@ -67,31 +67,80 @@ void ComputeHostStridedSlice(OpKernelContext* context, const Tensor& input,
   processing_shape.AsTensorShape(&processing_tensor_shape);
   const int processing_dims = processing_tensor_shape.dims();
 
-#define HANDLE_HOST_SLICE(NDIM)                                           \
-  if (processing_dims == NDIM) {                                           \
-    ::tensorflow::HandleStridedSliceCase<CPUDevice, T, NDIM>(              \
-        context, begin, end, strides, processing_tensor_shape,             \
-        is_simple_slice, result);                                          \
-    return;                                                                \
+  std::vector<int64_t> input_dims(processing_dims, 1);
+  std::vector<int64_t> input_strides(processing_dims, 1);
+  std::vector<int64_t> slice_sizes(processing_dims, 1);
+  for (int i = 0; i < processing_dims; ++i) {
+    input_dims[i] = processing_tensor_shape.dim_size(i);
+  }
+  for (int i = processing_dims - 2; i >= 0; --i) {
+    input_strides[i] = input_strides[i + 1] * input_dims[i + 1];
+  }
+  for (int i = 0; i < processing_dims; ++i) {
+    slice_sizes[i] = ComputeSliceLength(begin[i], end[i], strides[i]);
   }
 
-  HANDLE_HOST_SLICE(0);
-  HANDLE_HOST_SLICE(1);
-  HANDLE_HOST_SLICE(2);
-  HANDLE_HOST_SLICE(3);
-  HANDLE_HOST_SLICE(4);
-  HANDLE_HOST_SLICE(5);
-  HANDLE_HOST_SLICE(6);
-  HANDLE_HOST_SLICE(7);
-  HANDLE_HOST_SLICE(8);
+  int64_t expected_elements = 1;
+  for (int64_t size : slice_sizes) expected_elements *= size;
+  OP_REQUIRES(
+      context, expected_elements == result->NumElements(),
+      errors::Internal("MUSA host StridedSlice shape mismatch: expected ",
+                       expected_elements, " elements from validated slice, got ",
+                       result->NumElements()));
 
-#undef HANDLE_HOST_SLICE
+  auto input_flat = input.flat<T>();
+  auto output_flat = result->flat<T>();
+  const T* input_ptr = input_flat.data();
+  T* output_ptr = output_flat.data();
 
-  OP_REQUIRES(context, false,
-              errors::Unimplemented(
-                  "MUSA host StridedSlice only supports up to 8 processing "
-                  "dims for int32, got ",
-                  processing_dims));
+  if (processing_dims == 0) {
+    output_ptr[0] = input_ptr[0];
+    return;
+  }
+
+  std::vector<int64_t> output_index(processing_dims, 0);
+  int64_t written = 0;
+  while (true) {
+    int64_t input_offset = 0;
+    for (int i = 0; i < processing_dims; ++i) {
+      input_offset += (begin[i] + output_index[i] * strides[i]) * input_strides[i];
+    }
+    output_ptr[written++] = input_ptr[input_offset];
+
+    int dim = processing_dims - 1;
+    while (dim >= 0) {
+      ++output_index[dim];
+      if (output_index[dim] < slice_sizes[dim]) break;
+      output_index[dim] = 0;
+      --dim;
+    }
+    if (dim < 0) break;
+  }
+}
+
+template <typename T>
+bool MaybeComputeHostStridedSlice(OpKernelContext* context, const Tensor& input,
+                                  const PartialTensorShape& processing_shape,
+                                  const PartialTensorShape& final_shape,
+                                  bool is_identity,
+                                  const gtl::InlinedVector<int64_t, 4>& begin,
+                                  const gtl::InlinedVector<int64_t, 4>& end,
+                                  const gtl::InlinedVector<int64_t, 4>& strides) {
+  return false;
+}
+
+template <>
+bool MaybeComputeHostStridedSlice<int32>(
+    OpKernelContext* context, const Tensor& input,
+    const PartialTensorShape& processing_shape,
+    const PartialTensorShape& final_shape, bool is_identity,
+    const gtl::InlinedVector<int64_t, 4>& begin,
+    const gtl::InlinedVector<int64_t, 4>& end,
+    const gtl::InlinedVector<int64_t, 4>& strides) {
+  ComputeHostStridedSliceInt32<int32>(context, input, processing_shape,
+                                      final_shape, is_identity, begin, end,
+                                      strides);
+  return true;
 }
 
 template <typename T>
@@ -126,10 +175,9 @@ class MusaStridedSliceOp : public OpKernel {
                      &final_shape, &is_identity, &is_simple_slice, &slice_dim0,
                      &begin, &end, &strides));
 
-    if (UseHostMemorySlicePath<T>()) {
-      ComputeHostStridedSlice<T>(context, input, processing_shape, final_shape,
-                                 is_identity, is_simple_slice, begin, end,
-                                 strides);
+    if (MaybeComputeHostStridedSlice<T>(context, input, processing_shape,
+                                        final_shape, is_identity, begin, end,
+                                        strides)) {
       return;
     }
 
