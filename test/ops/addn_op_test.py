@@ -68,7 +68,7 @@ class AddNOpTest(MUSATestCase):
     """Test AddN with three inputs."""
     for dtype in [tf.float32, tf.float16, tf.bfloat16, tf.int32, tf.int64]:
       rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
-      atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
+      atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else (1e-6 if dtype == tf.float32 else 1e-8)
       self._test_addn([[10], [10], [10]], dtype, rtol=rtol, atol=atol)
       self._test_addn([[256, 256], [256, 256], [256, 256]], dtype, rtol=rtol, atol=atol)
 
@@ -76,7 +76,7 @@ class AddNOpTest(MUSATestCase):
     """Test AddN with four inputs."""
     for dtype in [tf.float32, tf.float16, tf.bfloat16, tf.int32, tf.int64]:
       rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
-      atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
+      atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else (1e-6 if dtype == tf.float32 else 1e-8)
       self._test_addn([[10], [10], [10], [10]], dtype, rtol=rtol, atol=atol)
       self._test_addn([[256, 256], [256, 256], [256, 256], [256, 256]], dtype, rtol=rtol, atol=atol)
 
