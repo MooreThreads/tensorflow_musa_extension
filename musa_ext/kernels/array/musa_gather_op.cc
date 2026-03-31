@@ -16,14 +16,17 @@ limitations under the License.
 // GatherV2 op implementation using muDNN GatherX for proper batch_dims support.
 //
 // TensorFlow GatherV2 op specification:
-// - batch_dims is an explicit ATTRIBUTE (defaults to 0), not inferred from shapes
+// - batch_dims is an explicit ATTRIBUTE (defaults to 0), not inferred from
+// shapes
 // - When batch_dims > 0, the first batch_dims dimensions of indices and params
 //   are treated as batch dimensions (must match in size)
 // - axis must be >= batch_dims
-// - Output shape: params.shape[:batch_dims] + indices.shape[batch_dims:] + params.shape[axis+1:]
+// - Output shape: params.shape[:batch_dims] + indices.shape[batch_dims:] +
+// params.shape[axis+1:]
 //
 // MuDNN GatherX API:
-// - SetAxis(axis): the axis in params to gather from (relative to full params shape)
+// - SetAxis(axis): the axis in params to gather from (relative to full params
+// shape)
 // - SetBatchDims(batch_dims): number of leading batch dimensions in indices
 // - Run(handle, output, indices, params): execute the gather operation
 
@@ -148,10 +151,10 @@ class MusaGatherV2Op : public MusaOpKernel {
       } else if (axis_tensor.dtype() == DT_INT64) {
         axis = axis_tensor.scalar<int64>()();
       } else {
-        OP_REQUIRES(ctx, false,
-                    errors::InvalidArgument(
-                        "axis must be int32 or int64, got: ",
-                        DataTypeString(axis_tensor.dtype())));
+        OP_REQUIRES(
+            ctx, false,
+            errors::InvalidArgument("axis must be int32 or int64, got: ",
+                                    DataTypeString(axis_tensor.dtype())));
       }
     } else {
       // Gather v1 has no axis input and defaults to axis=0.
@@ -177,15 +180,20 @@ class MusaGatherV2Op : public MusaOpKernel {
       batch_dims += indices_dims;
     }
 
-    OP_REQUIRES(ctx, axis >= 0 && axis < params_dims,
-                errors::InvalidArgument("Expected axis in range [", -params_dims,
-                                        ", ", params_dims, "), but got ", axis));
+    OP_REQUIRES(
+        ctx, axis >= 0 && axis < params_dims,
+        errors::InvalidArgument("Expected axis in range [", -params_dims, ", ",
+                                params_dims, "), but got ", axis));
 
     // batch_dims must be in range [0, min(axis, indices_dims)]
-    OP_REQUIRES(ctx, batch_dims >= 0 && batch_dims <= std::min(axis, static_cast<int64_t>(indices_dims)),
-                errors::InvalidArgument("batch_dims must be in range [0, min(axis, indices.dims())], "
-                                        "got batch_dims=", batch_dims, ", axis=", axis,
-                                        ", indices.dims()=", indices_dims));
+    OP_REQUIRES(
+        ctx,
+        batch_dims >= 0 &&
+            batch_dims <= std::min(axis, static_cast<int64_t>(indices_dims)),
+        errors::InvalidArgument(
+            "batch_dims must be in range [0, min(axis, indices.dims())], "
+            "got batch_dims=",
+            batch_dims, ", axis=", axis, ", indices.dims()=", indices_dims));
 
     // Validate indices dtype
     OP_REQUIRES(ctx, indices.dtype() == DT_INT32 || indices.dtype() == DT_INT64,
@@ -193,21 +201,26 @@ class MusaGatherV2Op : public MusaOpKernel {
                                         DataTypeString(indices.dtype())));
 
     // Validate batch dimension sizes match between params and indices
-    // When batch_dims > 0, params.shape[:batch_dims] must equal indices.shape[:batch_dims]
+    // When batch_dims > 0, params.shape[:batch_dims] must equal
+    // indices.shape[:batch_dims]
     for (int i = 0; i < batch_dims; ++i) {
       OP_REQUIRES(ctx, params.dim_size(i) == indices.dim_size(i),
-                  errors::InvalidArgument("batch dimension ", i, " must match: "
-                                          "params.dim_size(", i, ")=", params.dim_size(i),
-                                          " != indices.dim_size(", i, ")=", indices.dim_size(i)));
+                  errors::InvalidArgument("batch dimension ", i,
+                                          " must match: "
+                                          "params.dim_size(",
+                                          i, ")=", params.dim_size(i),
+                                          " != indices.dim_size(", i,
+                                          ")=", indices.dim_size(i)));
     }
 
     // Build output shape according to TensorFlow GatherV2 specification:
-    // output_shape = params.shape[:axis] + indices.shape[batch_dims:] + params.shape[axis+1:]
+    // output_shape = params.shape[:axis] + indices.shape[batch_dims:] +
+    // params.shape[axis+1:]
     //
     // Note: The formula is params.shape[:AXIS] not params.shape[:batch_dims]
     // This is the key difference that was causing the bug.
-    // When batch_dims > 0, the batch dimensions from params[:batch_dims] are included
-    // in params[:axis] since axis >= batch_dims is required.
+    // When batch_dims > 0, the batch dimensions from params[:batch_dims] are
+    // included in params[:axis] since axis >= batch_dims is required.
     TensorShape output_shape;
 
     // Add all params dimensions before axis (including batch dimensions)
@@ -233,7 +246,8 @@ class MusaGatherV2Op : public MusaOpKernel {
     }
 
     if (batch_dims == 0) {
-      // Fast path: legacy kernel with GPU-side clamping to avoid illegal access.
+      // Fast path: legacy kernel with GPU-side clamping to avoid illegal
+      // access.
       const int64_t limit = params.dim_size(axis);
 
       int64_t batch_size = 1;
@@ -287,15 +301,14 @@ class MusaGatherV2Op : public MusaOpKernel {
 };
 
 // Launcher specializations
-#define DEFINE_GATHER_LAUNCHER(T, IndexT, launcher_func)                   \
-  template <>                                                              \
-  void MusaGatherV2Op<T, IndexT>::LaunchKernel(                             \
-      const T* params, const IndexT* indices, T* output,                    \
-      int64_t batch_size, int64_t axis_size, int64_t inner_size,            \
-      int64_t indices_size, int64_t params_stride, IndexT limit,            \
-      musaStream_t stream) {                                                \
-    launcher_func(params, indices, output, batch_size, axis_size,           \
-                  inner_size, indices_size, params_stride, limit, stream); \
+#define DEFINE_GATHER_LAUNCHER(T, IndexT, launcher_func)                      \
+  template <>                                                                 \
+  void MusaGatherV2Op<T, IndexT>::LaunchKernel(                               \
+      const T* params, const IndexT* indices, T* output, int64_t batch_size,  \
+      int64_t axis_size, int64_t inner_size, int64_t indices_size,            \
+      int64_t params_stride, IndexT limit, musaStream_t stream) {             \
+    launcher_func(params, indices, output, batch_size, axis_size, inner_size, \
+                  indices_size, params_stride, limit, stream);                \
   }
 
 DEFINE_GATHER_LAUNCHER(float, int32, LaunchGatherV2FloatInt32)
@@ -309,16 +322,16 @@ DEFINE_GATHER_LAUNCHER(int64, int64, LaunchGatherV2Int64Int64)
 DEFINE_GATHER_LAUNCHER(bool, int32, LaunchGatherV2BoolInt32)
 DEFINE_GATHER_LAUNCHER(bool, int64, LaunchGatherV2BoolInt64)
 
-#define DEFINE_GATHER_LAUNCHER_HALF(IndexT, launcher_func)                 \
-  template <>                                                              \
-  void MusaGatherV2Op<Eigen::half, IndexT>::LaunchKernel(                   \
+#define DEFINE_GATHER_LAUNCHER_HALF(IndexT, launcher_func)                   \
+  template <>                                                                \
+  void MusaGatherV2Op<Eigen::half, IndexT>::LaunchKernel(                    \
       const Eigen::half* params, const IndexT* indices, Eigen::half* output, \
-      int64_t batch_size, int64_t axis_size, int64_t inner_size,            \
-      int64_t indices_size, int64_t params_stride, IndexT limit,            \
-      musaStream_t stream) {                                                \
-    launcher_func(reinterpret_cast<const void*>(params), indices,           \
-                  reinterpret_cast<void*>(output), batch_size, axis_size,   \
-                  inner_size, indices_size, params_stride, limit, stream); \
+      int64_t batch_size, int64_t axis_size, int64_t inner_size,             \
+      int64_t indices_size, int64_t params_stride, IndexT limit,             \
+      musaStream_t stream) {                                                 \
+    launcher_func(reinterpret_cast<const void*>(params), indices,            \
+                  reinterpret_cast<void*>(output), batch_size, axis_size,    \
+                  inner_size, indices_size, params_stride, limit, stream);   \
   }
 
 DEFINE_GATHER_LAUNCHER_HALF(int32, LaunchGatherV2HalfInt32)
@@ -326,13 +339,13 @@ DEFINE_GATHER_LAUNCHER_HALF(int64, LaunchGatherV2HalfInt64)
 
 #define DEFINE_GATHER_LAUNCHER_BF16(IndexT, launcher_func)                 \
   template <>                                                              \
-  void MusaGatherV2Op<bfloat16, IndexT>::LaunchKernel(                      \
-      const bfloat16* params, const IndexT* indices, bfloat16* output,      \
-      int64_t batch_size, int64_t axis_size, int64_t inner_size,            \
-      int64_t indices_size, int64_t params_stride, IndexT limit,            \
-      musaStream_t stream) {                                                \
-    launcher_func(reinterpret_cast<const void*>(params), indices,           \
-                  reinterpret_cast<void*>(output), batch_size, axis_size,   \
+  void MusaGatherV2Op<bfloat16, IndexT>::LaunchKernel(                     \
+      const bfloat16* params, const IndexT* indices, bfloat16* output,     \
+      int64_t batch_size, int64_t axis_size, int64_t inner_size,           \
+      int64_t indices_size, int64_t params_stride, IndexT limit,           \
+      musaStream_t stream) {                                               \
+    launcher_func(reinterpret_cast<const void*>(params), indices,          \
+                  reinterpret_cast<void*>(output), batch_size, axis_size,  \
                   inner_size, indices_size, params_stride, limit, stream); \
   }
 
@@ -344,8 +357,8 @@ DEFINE_GATHER_LAUNCHER_BF16(int64, LaunchGatherV2BFloat16Int64)
 #undef DEFINE_GATHER_LAUNCHER_BF16
 
 // Registration macros
-#define REGISTER_GATHER_V2_MUDNN(T, IndexT)                        \
-  REGISTER_KERNEL_BUILDER(Name("GatherV2")                         \
+#define REGISTER_GATHER_V2_MUDNN(T, IndexT)                       \
+  REGISTER_KERNEL_BUILDER(Name("GatherV2")                        \
                               .Device(DEVICE_MTGPU)               \
                               .TypeConstraint<T>("Tparams")       \
                               .TypeConstraint<IndexT>("Tindices") \
@@ -370,10 +383,10 @@ REGISTER_GATHER_V2_MUDNN(bfloat16, int64);
 
 // Also register Gather (v1) for backward compatibility
 // Note: Gather v1 does NOT have batch_dims attribute, so we use batch_dims=0
-#define REGISTER_GATHER_V1_MUDNN(T, IndexT)      \
-  REGISTER_KERNEL_BUILDER(Name("Gather")        \
-                              .Device(DEVICE_MTGPU) \
-                              .TypeConstraint<T>("Tparams") \
+#define REGISTER_GATHER_V1_MUDNN(T, IndexT)                        \
+  REGISTER_KERNEL_BUILDER(Name("Gather")                           \
+                              .Device(DEVICE_MTGPU)                \
+                              .TypeConstraint<T>("Tparams")        \
                               .TypeConstraint<IndexT>("Tindices"), \
                           MusaGatherV2Op<T, IndexT>);
 
