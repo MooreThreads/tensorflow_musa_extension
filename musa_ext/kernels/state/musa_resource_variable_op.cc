@@ -1,12 +1,11 @@
 #include "../utils_op.h"
+#include "mu/device/musa_device.h"
+#include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/resource_mgr.h"
 #include "tensorflow/core/framework/resource_var.h"
 #include "tensorflow/core/lib/core/notification.h"
-#include "mu/device/musa_memcpy.h"
-#include "mu/device/musa_device.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -189,11 +188,11 @@ class MusaReadVariableOp : public OpKernel {
     }
 
     const Tensor& t = *var->tensor();
-    OP_REQUIRES(ctx, dtype_ == t.dtype(),
-                errors::InvalidArgument(
-                    "Trying to read variable with wrong dtype. Expected ",
-                    DataTypeString(dtype_), " got ",
-                    DataTypeString(t.dtype())));
+    OP_REQUIRES(
+        ctx, dtype_ == t.dtype(),
+        errors::InvalidArgument(
+            "Trying to read variable with wrong dtype. Expected ",
+            DataTypeString(dtype_), " got ", DataTypeString(t.dtype())));
 
     // Always copy the tensor to ensure the returned tensor is independent
     // of the variable's underlying storage. This is critical for correct
