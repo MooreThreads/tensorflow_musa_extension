@@ -37,8 +37,8 @@ def create_config_with_musa_optimizer():
 class ConcatMatMulFusionTest(MUSATestCase):
     """Tests for ConcatV2+MatMul fusion."""
 
-    def test_concat_matmul_fusion_basic(self):
-        """Test ConcatV2 + MatMul pattern fusion."""
+    def _test_concat_matmul_fusion(self, dtype=tf.float32, rtol=1e-5, atol=1e-5):
+        """Helper to test ConcatV2 + MatMul pattern fusion with different dtypes."""
         # Set seeds for reproducibility
         np.random.seed(42)
         tf.compat.v1.set_random_seed(42)
@@ -49,15 +49,20 @@ class ConcatMatMulFusionTest(MUSATestCase):
         weight_shape = [32, 8]
 
         # Data for inputs
-        np_a = np.random.randn(*shape1).astype(np.float32)
-        np_b = np.random.randn(*shape2).astype(np.float32)
-        np_w = np.random.randn(*weight_shape).astype(np.float32)
+        if dtype == tf.bfloat16:
+            np_a = np.random.randn(*shape1).astype(np.float32)
+            np_b = np.random.randn(*shape2).astype(np.float32)
+            np_w = np.random.randn(*weight_shape).astype(np.float32)
+        else:
+            np_a = np.random.randn(*shape1).astype(dtype.as_numpy_dtype)
+            np_b = np.random.randn(*shape2).astype(dtype.as_numpy_dtype)
+            np_w = np.random.randn(*weight_shape).astype(dtype.as_numpy_dtype)
 
         # Reference implementation (CPU)
         with tf.device('/CPU:0'):
-            a_tf = tf.constant(np_a)
-            b_tf = tf.constant(np_b)
-            w_tf = tf.constant(np_w)
+            a_tf = tf.constant(np_a, dtype=dtype)
+            b_tf = tf.constant(np_b, dtype=dtype)
+            w_tf = tf.constant(np_w, dtype=dtype)
 
             concat_cpu = tf.concat([a_tf, b_tf], axis=1)
             expected_out = tf.matmul(concat_cpu, w_tf)
@@ -66,9 +71,9 @@ class ConcatMatMulFusionTest(MUSATestCase):
         graph = tf.Graph()
         with graph.as_default():
             with tf.device('/device:MUSA:0'):
-                a = tf.compat.v1.placeholder(tf.float32, shape=shape1, name="input_a")
-                b = tf.compat.v1.placeholder(tf.float32, shape=shape2, name="input_b")
-                w = tf.constant(np_w, dtype=tf.float32, name="weight")
+                a = tf.compat.v1.placeholder(dtype, shape=shape1, name="input_a")
+                b = tf.compat.v1.placeholder(dtype, shape=shape2, name="input_b")
+                w = tf.constant(np_w, dtype=dtype, name="weight")
 
                 # Concat + MatMul pattern
                 concat_node = tf.concat([a, b], axis=1, name="concat")
@@ -82,8 +87,17 @@ class ConcatMatMulFusionTest(MUSATestCase):
             actual_out = sess.run(output, feed_dict={a: np_a, b: np_b})
 
         # Verification
-        self.assertAllClose(actual_out, expected_out.numpy(), rtol=1e-5, atol=1e-5)
-        print("Successfully ran ConcatMatMul fusion test and verified results")
+        self.assertAllClose(actual_out, expected_out.numpy(), rtol=rtol, atol=atol)
+        print(f"Successfully ran ConcatMatMul fusion test for {dtype.name} and verified results")
+
+    def test_concat_matmul_fusion_float32(self):
+        self._test_concat_matmul_fusion(dtype=tf.float32)
+
+    def test_concat_matmul_fusion_float16(self):
+        self._test_concat_matmul_fusion(dtype=tf.float16, rtol=1e-3, atol=1e-3)
+        
+    def test_concat_matmul_fusion_bfloat16(self):
+        self._test_concat_matmul_fusion(dtype=tf.bfloat16, rtol=1e-2, atol=1e-2)
 
     def test_concat_matmul_fusion_applied(self):
         """Verify that ConcatV2+MatMul fusion is applied: MusaConcatMatMul node exists in optimized graph."""

@@ -3,7 +3,11 @@
 #include <musa_runtime.h>
 
 #include "../utils_op.h"
+#include "tensorflow/core/framework/op_kernel.h"
+#include "tensorflow/core/framework/register_types.h"
+#include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/util/matmul_bcast.h"
+#include "tensorflow/core/util/tensor_format.h"
 #include "utils/logging.h"
 
 namespace tensorflow {
@@ -129,6 +133,8 @@ class MusaConcatMatMulOp : public MusaOpKernel {
 
 REGISTER_MUSA_CONCAT_MATMUL(float);
 REGISTER_MUSA_CONCAT_MATMUL(Eigen::half);
+REGISTER_MUSA_CONCAT_MATMUL(double);
+REGISTER_MUSA_CONCAT_MATMUL(bfloat16);
 
 }  // namespace musa
 
@@ -137,7 +143,7 @@ REGISTER_OP("MusaConcatMatMul")
     .Input("axis: int32")
     .Input("other: T")
     .Output("output: T")
-    .Attr("T: {float, half}")
+    .Attr("T: {float, half, bfloat16, double}")
     .Attr("transpose_a: bool = false")
     .Attr("transpose_b: bool = false")
     .Attr("num_concat: int >= 1")
