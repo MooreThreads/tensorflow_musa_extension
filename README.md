@@ -99,85 +99,31 @@ tf.load_library("./build/libmusa_plugin.so")
 - 编译 MUSA 内核和主机代码
 - 生成动态链接库 `libmusa_plugin.so`
 
-### 3. Kernel 计时（Debug 模式）
+### 3. 调试与诊断
 
-仅在 `./build.sh debug` 构建下生效（`MUSA_KERNEL_DEBUG=ON`）：
+详细的调试指南请参阅 [docs/DEBUG_GUIDE.md](docs/DEBUG_GUIDE.md)，包含：
 
-运行时环境变量请见下方 [环境变量](#环境变量) 章节中的“日志调试”表格。
+- **Kernel 计时**：Debug 模式下的性能分析方法
+- **遥测系统（Telemetry）**：全链路追踪和脏数据诊断
+- **内存诊断**：Use-After-Free 检测和内存染色
+- **环境变量**：完整的环境变量配置表
 
-#### 3.1 宏使用方式
+快速启用遥测系统进行诊断：
 
-```cpp
-// 基础 guard
-MUSA_KERNEL_TIMING_GUARD(ctx);
-
-// 分段埋点
-MUSA_KERNEL_TRACE_START("Mem Alloc");
-// ... code block ...
-MUSA_KERNEL_TRACE_END("Mem Alloc");
-
-MUSA_KERNEL_TRACE_START("Kernel");
-// ... kernel launch ...
-MUSA_KERNEL_TRACE_END("Kernel");
-
-// 自定义阶段名
-MUSA_KERNEL_TRACE_START("State1");
-// ... allocate / pre-process ...
-MUSA_KERNEL_TRACE_END("State1");
-
-MUSA_KERNEL_TRACE_START("State2");
-// ... main kernel ...
-MUSA_KERNEL_TRACE_END("State2");
+```bash
+export MUSA_TELEMETRY_ENABLED=1
+export MUSA_TELEMETRY_LOG_PATH=/tmp/telemetry.json
+python test_runner.py
 ```
 
-### 4. 常用验证命令（MatMul）
+快速启用 Kernel 计时分析：
 
 ```bash
 ./build.sh debug
-
 export MUSA_TIMING_KERNEL_LEVEL=2
 export MUSA_TIMING_KERNEL_NAME=ALL
 export MUSA_TIMING_KERNEL_STATS=1
-
-```
-
-## 环境变量
-
-### 功能控制
-
-| 变量名 | 说明 | 示例 |
-|--------|------|------|
-| `MUSA_ENABLE_TF32` | 启用 TF32 加速 MatMul/Conv | `export MUSA_ENABLE_TF32=1` |
-| `MUSA_DUMP_GRAPHDEF` | 启用图优化调试，dump GraphDef | `export MUSA_DUMP_GRAPHDEF=1` |
-| `MUSA_DUMP_GRAPHDEF_DIR` | 指定 GraphDef dump 目录 | `export MUSA_DUMP_GRAPHDEF_DIR=/tmp/graphs` |
-
-### 日志调试
-
-| 变量名 | 说明 | 示例 |
-|--------|------|------|
-| `MUSA_TIMING_KERNEL_LEVEL` | Timing 模式控制（`1`=仅总耗时，`2`=总耗时+分段耗时） | `export MUSA_TIMING_KERNEL_LEVEL=2` |
-| `MUSA_TIMING_KERNEL_NAME` | 仅打印指定 Kernel（大小写不敏感子串匹配，`ALL` 为全部） | `export MUSA_TIMING_KERNEL_NAME=MatMul` |
-| `MUSA_TIMING_KERNEL_STATS` | 进程退出时打印 timing 汇总（`1`=开启，`0`=关闭） | `export MUSA_TIMING_KERNEL_STATS=1` |
-| `TF_CPP_MIN_LOG_LEVEL` | 全局日志级别（0=INFO, 1=WARNING, 2=ERROR） | `export TF_CPP_MIN_LOG_LEVEL=1` |
-| `TF_CPP_VMODULE` | 精确控制特定文件的 VLOG 级别 | `export TF_CPP_VMODULE="musa_graph_optimizer=1,layernorm_fusion=2"` |
-
-**常用调试组合：**
-
-```bash
-# 1. 查看图优化器的详细日志
-export TF_CPP_VMODULE="musa_graph_optimizer=1,fusion_pattern_manager=1"
-python -m fusion.layernorm_gelu_fusion_test
-
-# 2. 查看算子融合详细过程
-export TF_CPP_VMODULE="layernorm_fusion=2,gelu_fusion=1"
-python -m ops.layernorm_op_test
-
-# 3. 完全静音（只显示错误）
-export TF_CPP_MIN_LOG_LEVEL=2
 python test_runner.py
-
-# 4. 恢复默认日志
-unset TF_CPP_MIN_LOG_LEVEL TF_CPP_VMODULE
 ```
 
 ## 测试

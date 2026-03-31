@@ -3,6 +3,8 @@
 #include <musa_runtime.h>
 #include <stdio.h>
 
+#include "mu/device/musa_telemetry.h"
+
 namespace tensorflow {
 namespace musa {
 
@@ -23,11 +25,17 @@ mStatus MusaMemcpyD2H(void* h, const void* d, size_t size) {
     return static_cast<mStatus>(1);
   }
 
+  // Record telemetry event
+  int device_id = -1;
+  musaGetDevice(&device_id);
+  MUSA_TELEMETRY_ON_MEMCPY(h, const_cast<void*>(d), size, device_id, 0,
+                           TelemetryEventType::kMemcpyD2H);
+
   // Use async copy with immediate synchronization for better performance
   // and to allow potential optimizations in the driver
   musaStream_t sync_stream = GetSynchronousStream();
   musaError_t err = musaMemcpyAsync(h, d, size, musaMemcpyDeviceToHost, sync_stream);
-  
+
   if (err != musaSuccess) {
     fprintf(stderr, "[MUSA] ERROR: MusaMemcpyAsync D2H failed: %s "
             "(dst=%p, src=%p, size=%zu)\n",
@@ -56,10 +64,16 @@ mStatus MusaMemcpyH2D(void* d, const void* h, size_t size) {
     return static_cast<mStatus>(1);
   }
 
+  // Record telemetry event
+  int device_id = -1;
+  musaGetDevice(&device_id);
+  MUSA_TELEMETRY_ON_MEMCPY(d, const_cast<void*>(h), size, device_id, 0,
+                           TelemetryEventType::kMemcpyH2D);
+
   // Use async copy with immediate synchronization
   musaStream_t sync_stream = GetSynchronousStream();
   musaError_t err = musaMemcpyAsync(d, h, size, musaMemcpyHostToDevice, sync_stream);
-  
+
   if (err != musaSuccess) {
     fprintf(stderr, "[MUSA] ERROR: MusaMemcpyAsync H2D failed: %s "
             "(dst=%p, src=%p, size=%zu)\n",
@@ -87,6 +101,12 @@ mStatus MusaMemcpyD2D(void* d1, const void* d2, size_t size) {
             "(dst=%p, src=%p, size=%zu)\n", d1, d2, size);
     return static_cast<mStatus>(1);
   }
+
+  // Record telemetry event
+  int device_id = -1;
+  musaGetDevice(&device_id);
+  MUSA_TELEMETRY_ON_MEMCPY(d1, const_cast<void*>(d2), size, device_id, 0,
+                           TelemetryEventType::kMemcpyD2D);
 
   // For D2D, we can use the default stream since it's device-local
   musaStream_t sync_stream = GetSynchronousStream();
@@ -121,6 +141,13 @@ mStatus MusaMemcpyAsyncD2H(void* h, const void* d, size_t size,
     return static_cast<mStatus>(1);
   }
 
+  // Record telemetry event
+  int device_id = -1;
+  musaGetDevice(&device_id);
+  MUSA_TELEMETRY_ON_MEMCPY(h, const_cast<void*>(d), size, device_id,
+                           MUSA_TELEMETRY_STREAM_ID(s),
+                           TelemetryEventType::kMemcpyD2H);
+
   musaError_t err = musaMemcpyAsync(h, d, size, musaMemcpyDeviceToHost, s);
 
   if (err != musaSuccess) {
@@ -143,6 +170,13 @@ mStatus MusaMemcpyAsyncH2D(void* d, const void* h, size_t size,
     return static_cast<mStatus>(1);
   }
 
+  // Record telemetry event
+  int device_id = -1;
+  musaGetDevice(&device_id);
+  MUSA_TELEMETRY_ON_MEMCPY(d, const_cast<void*>(h), size, device_id,
+                           MUSA_TELEMETRY_STREAM_ID(s),
+                           TelemetryEventType::kMemcpyH2D);
+
   musaError_t err = musaMemcpyAsync(d, h, size, musaMemcpyHostToDevice, s);
 
   if (err != musaSuccess) {
@@ -164,6 +198,13 @@ mStatus MusaMemcpyAsyncD2D(void* d1, const void* d2, size_t size,
             "(dst=%p, src=%p, size=%zu)\n", d1, d2, size);
     return static_cast<mStatus>(1);
   }
+
+  // Record telemetry event
+  int device_id = -1;
+  musaGetDevice(&device_id);
+  MUSA_TELEMETRY_ON_MEMCPY(d1, const_cast<void*>(d2), size, device_id,
+                           MUSA_TELEMETRY_STREAM_ID(s),
+                           TelemetryEventType::kMemcpyD2D);
 
   musaError_t err = musaMemcpyAsync(d1, d2, size, musaMemcpyDeviceToDevice, s);
 
