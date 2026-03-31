@@ -1,3 +1,6 @@
+#include "../utils_op.h"
+#include "mu/device/musa_device.h"
+#include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/resource_mgr.h"
@@ -24,11 +27,11 @@ Status CopyTensorWithDeviceContext(OpKernelContext* ctx, const Tensor& src,
   Device* device = static_cast<Device*>(ctx->device());
   Notification n;
   Status status;
-  device_context->CopyTensorInSameDevice(
-      &src, device, dst, [&n, &status](const Status& s) {
-        status = s;
-        n.Notify();
-      });
+  device_context->CopyTensorInSameDevice(&src, device, dst,
+                                         [&n, &status](const Status& s) {
+                                           status = s;
+                                           n.Notify();
+                                         });
   n.WaitForNotification();
   return status;
 }
@@ -95,16 +98,17 @@ class MusaAssignVariableOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("dtype", &dtype_));
   }
 
-  // AssignVariableOp is a lightweight operation (just pointer/reference passing)
+  // AssignVariableOp is a lightweight operation (just pointer/reference
+  // passing)
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
     const Tensor& value = ctx->input(1);
-    OP_REQUIRES(ctx, dtype_ == value.dtype(),
-                errors::InvalidArgument(
-                    "Variable and value dtypes don't match; respectively, ",
-                    DataTypeString(dtype_), " and ",
-                    DataTypeString(value.dtype())));
+    OP_REQUIRES(
+        ctx, dtype_ == value.dtype(),
+        errors::InvalidArgument(
+            "Variable and value dtypes don't match; respectively, ",
+            DataTypeString(dtype_), " and ", DataTypeString(value.dtype())));
 
     if (ctx->num_outputs() > 0) {
       ctx->set_output(0, ctx->input(0));
@@ -121,13 +125,14 @@ class MusaAssignVariableOp : public OpKernel {
 
     mutex_lock lock(*var->mu());
 
-    OP_REQUIRES(ctx,
-                (var->tensor()->dtype() == DT_INVALID && !var->is_initialized) ||
-                    var->tensor()->dtype() == dtype_,
-                errors::InvalidArgument(
-                    "Trying to assign variable with wrong dtype. Expected ",
-                    DataTypeString(var->tensor()->dtype()), " got ",
-                    DataTypeString(dtype_)));
+    OP_REQUIRES(
+        ctx,
+        (var->tensor()->dtype() == DT_INVALID && !var->is_initialized) ||
+            var->tensor()->dtype() == dtype_,
+        errors::InvalidArgument(
+            "Trying to assign variable with wrong dtype. Expected ",
+            DataTypeString(var->tensor()->dtype()), " got ",
+            DataTypeString(dtype_)));
 
     if (var->copy_on_read_mode.load()) {
       AllocatorAttributes alloc_attr;
@@ -137,7 +142,8 @@ class MusaAssignVariableOp : public OpKernel {
       Tensor copied_value;
       OP_REQUIRES_OK(ctx, ctx->allocate_temp(value.dtype(), value.shape(),
                                              &copied_value, alloc_attr));
-      OP_REQUIRES_OK(ctx, CopyTensorWithDeviceContext(ctx, value, &copied_value));
+      OP_REQUIRES_OK(ctx,
+                     CopyTensorWithDeviceContext(ctx, value, &copied_value));
 
       *var->tensor() = copied_value;
     } else {
@@ -179,15 +185,11 @@ class MusaReadVariableOp : public OpKernel {
     }
 
     const Tensor& t = *var->tensor();
-    if (!var->copy_on_read_mode.load()) {
-      OP_REQUIRES(ctx, dtype_ == t.dtype(),
-                  errors::InvalidArgument(
-                      "Trying to read variable with wrong dtype. Expected ",
-                      DataTypeString(dtype_), " got ",
-                      DataTypeString(t.dtype())));
-      ctx->set_output(0, t);
-      return;
-    }
+    OP_REQUIRES(
+        ctx, dtype_ == t.dtype(),
+        errors::InvalidArgument(
+            "Trying to read variable with wrong dtype. Expected ",
+            DataTypeString(dtype_), " got ", DataTypeString(t.dtype())));
 
     Tensor* out = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, t.shape(), &out));
