@@ -58,7 +58,18 @@ class MusaExecutor : public internal::StreamExecutorInterface {
   }
 
   DeviceMemoryBase Allocate(uint64 size, int64 memory_space) override {
-    return DeviceMemoryBase(nullptr, 0);
+    if (size == 0) {
+      return DeviceMemoryBase(nullptr, 0);
+    }
+    musaSetDevice(device_ordinal_);
+    void* ptr = nullptr;
+    musaError_t err = musaMalloc(&ptr, size);
+    if (err != musaSuccess) {
+      LOG(ERROR) << "MusaExecutor::Allocate failed for " << size
+                 << " bytes: " << musaGetErrorString(err);
+      return DeviceMemoryBase(nullptr, 0);
+    }
+    return DeviceMemoryBase(ptr, size);
   }
 
   void* GetSubBuffer(DeviceMemoryBase* parent, uint64 offset,
@@ -177,6 +188,21 @@ class MusaExecutor : public internal::StreamExecutorInterface {
 
   bool HostCallback(Stream* stream,
                     std::function<port::Status()> callback) override {
+    // Execute callback asynchronously via a host function
+    // This ensures the callback runs after all preceding stream operations
+    musaStream_t musa_stream = GetMusaStream(stream);
+    musaError_t err = musaLaunchHostFunc(musa_stream,
+        [](void* user_data) {
+          auto* cb = static_cast<std::function<port::Status()>*>(user_data);
+          (*cb)();
+          delete cb;
+        },
+        new std::function<port::Status()>(std::move(callback)));
+    if (err != musaSuccess) {
+      LOG(WARNING) << "MusaExecutor::HostCallback failed: "
+                   << musaGetErrorString(err);
+      return false;
+    }
     return true;
   }
 
@@ -207,6 +233,40 @@ class MusaExecutor : public internal::StreamExecutorInterface {
   bool AllocateStream(Stream* stream) override { return true; }
   void DeallocateStream(Stream* stream) override {}
   bool CreateStreamDependency(Stream* dependent, Stream* other) override {
+    // Create an event on 'other' stream and wait on 'dependent' stream
+    musaEvent_t event;
+    musaError_t err = musaEventCreateWithFlags(&event, musaEventDisableTiming);
+    if (err != musaSuccess) {
+      LOG(ERROR) << "CreateStreamDependency: musaEventCreate failed: "
+                 << musaGetErrorString(err);
+      return false;
+    }
+
+    musaStream_t other_stream = GetMusaStream(other);
+    err = musaEventRecord(event, other_stream);
+    if (err != musaSuccess) {
+      LOG(ERROR) << "CreateStreamDependency: musaEventRecord failed: "
+                 << musaGetErrorString(err);
+      musaEventDestroy(event);
+      return false;
+    }
+
+    musaStream_t dependent_stream = GetMusaStream(dependent);
+    err = musaStreamWaitEvent(dependent_stream, event, 0);
+    if (err != musaSuccess) {
+      LOG(ERROR) << "CreateStreamDependency: musaStreamWaitEvent failed: "
+                 << musaGetErrorString(err);
+      musaEventDestroy(event);
+      return false;
+    }
+
+    // Event can be destroyed after wait is queued
+    err = musaEventDestroy(event);
+    if (err != musaSuccess) {
+      LOG(WARNING) << "CreateStreamDependency: musaEventDestroy failed: "
+                   << musaGetErrorString(err);
+    }
+
     return true;
   }
 
