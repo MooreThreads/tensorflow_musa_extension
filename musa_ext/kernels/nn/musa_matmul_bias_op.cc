@@ -1,13 +1,7 @@
-#include <mudnn.h>
-#include <mudnn_xmma.h>
-#include <musa_runtime.h>
-
-#include "../utils_op.h"
-#include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
-#include "tensorflow/core/framework/shape_inference.h"
-#include "tensorflow/core/util/matmul_bcast.h"
-#include "utils/logging.h"
+#include "tensorflow/core/framework/register_types.h"
+#include "tensorflow/core/framework/tensor.h"
+#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -16,175 +10,136 @@ template <typename T>
 class MusaMatMulBiasAddOp : public MusaOpKernel {
  public:
   explicit MusaMatMulBiasAddOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {
-    OP_REQUIRES_OK(ctx, ctx->GetAttr("transpose_a", &trans_a_));
-    OP_REQUIRES_OK(ctx, ctx->GetAttr("transpose_b", &trans_b_));
-  }
-
-  void Compute(OpKernelContext* ctx) override {
-    MUSA_KERNEL_TIMING_GUARD(ctx);
-
-    const Tensor& in0 = ctx->input(0);   // a
-    const Tensor& in1 = ctx->input(1);   // b
-    const Tensor& bias = ctx->input(2);  // bias
-
-    OP_REQUIRES(ctx, TensorShapeUtils::IsVector(bias.shape()),
-                errors::InvalidArgument(
-                    "bias must be a 1-D tensor, but got shape: ",
-                    bias.shape().DebugString()));
-
-    // ----------------------------
-    // 1. Infer MatMul output shape
-    // ----------------------------
-    MatMulBCast bcast(in0.shape().dim_sizes(), in1.shape().dim_sizes());
-    OP_REQUIRES(ctx, bcast.IsValid(),
-                errors::InvalidArgument(
-                    "Incompatible shapes for MatMul: ",
-                    in0.shape().DebugString(), " vs ",
-                    in1.shape().DebugString()));
-
-    OP_REQUIRES(ctx, in0.dims() >= 2,
-                errors::InvalidArgument("Input a must have rank >= 2, got rank ",
-                                        in0.dims()));
-    OP_REQUIRES(ctx, in1.dims() >= 2,
-                errors::InvalidArgument("Input b must have rank >= 2, got rank ",
-                                        in1.dims()));
-
-    int64 d0 = in0.dim_size(in0.dims() - 2);
-    int64 d1 = in0.dim_size(in0.dims() - 1);
-    int64 d2 = in1.dim_size(in1.dims() - 2);
-    int64 d3 = in1.dim_size(in1.dims() - 1);
-
-    int64 m = trans_a_ ? d1 : d0;
-    int64 k = trans_a_ ? d0 : d1;
-    int64 n = trans_b_ ? d2 : d3;
-    int64 k_check = trans_b_ ? d3 : d2;
-
-    OP_REQUIRES(
-        ctx, k == k_check,
-        errors::InvalidArgument("Matrix size incompatible: lhs k=", k,
-                                ", rhs k=", k_check,
-                                ", lhs shape=", in0.shape().DebugString(),
-                                ", rhs shape=", in1.shape().DebugString()));
-
-    OP_REQUIRES(
-        ctx, bias.dim_size(0) == n,
-        errors::InvalidArgument(
-            "Bias size mismatch: bias.shape[0] must equal MatMul output's last "
-            "dimension. Got bias size = ",
-            bias.dim_size(0), ", expected = ", n));
-
-    TensorShape out_shape = bcast.output_batch_shape();
-    out_shape.AddDim(m);
-    out_shape.AddDim(n);
-
-    TensorShape mm_out_shape = out_shape;
-
-    // -----------------------------------
-    // 2. Allocate temp for MatMul result
-    // -----------------------------------
-    Tensor mm_out_tensor;
-    OP_REQUIRES_OK(
-        ctx, ctx->allocate_temp(in0.dtype(), mm_out_shape, &mm_out_tensor));
-
-    Tensor* output = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, out_shape, &output));
-
-    if (output->NumElements() == 0) {
-      return;
-    }
-
-    // ----------------------------
-    // 3. mudnn MatMul / BatchMatMul
-    // ----------------------------
-    auto& handle = GetHandleByCtx(ctx);
-    handle.SetAllowTF32(tf32_enabled_);
-
-    mTensor mt_a = CreateMTensor(in0);
-    mTensor mt_b = CreateMTensor(in1);
-    mTensor mt_mm_out = CreateMTensor(mm_out_tensor);
-
-    ::musa::dnn::Status status;
-
-    if (in0.dims() == 2 && in1.dims() == 2) {
-      mMatMul op;
-      op.SetTranspose(trans_a_, trans_b_);
-      op.SetAlpha(1.0);
-      op.SetBeta(0.0);
-
-      status = op.Run(handle, mt_mm_out, mt_a, mt_b);
-    } else {
-      mBatchMatMul op;
-      op.SetTranspose(trans_a_, trans_b_);
-      op.SetAlpha(1.0);
-      op.SetBeta(0.0);
-
-      int64_t out_batch = bcast.output_batch_shape().num_elements();
-
-      auto ReshapeTo3D = [out_batch](mTensor& mt, const Tensor& t) {
-        int64_t dims = t.dims();
-        int64_t rows = t.dim_size(dims - 2);
-        int64_t cols = t.dim_size(dims - 1);
-        int64_t batch = t.NumElements() / (rows * cols);
-
-        
-        if (dims != 3 || (batch == 1 && out_batch > 1)) {
-          mt.SetNdInfo(
-              {batch == 1 && out_batch > 1 ? out_batch : batch, rows, cols},
-              {batch == 1 && out_batch > 1 ? 0 : rows * cols, cols, 1});
-        }
-      };
-
-      ReshapeTo3D(mt_a, in0);
-      ReshapeTo3D(mt_b, in1);
-      mt_mm_out.SetNdInfo({out_batch, m, n}, {m * n, n, 1});
-
-      status = op.Run(handle, mt_mm_out, mt_a, mt_b);
-    }
-
-    OP_REQUIRES(
-        ctx, status == ::musa::dnn::Status::SUCCESS,
-        errors::Internal("MUSA MatMul/BatchMatMul failed in MusaMatMulBiasAdd"));
-
-    // ----------------------------
-    // 4. mudnn BiasAdd
-    // ----------------------------
-    mTensor mt_bias = CreateMTensor(bias);
-    mTensor mt_out = CreateMTensor(*output);
-
-    const int dims_cnt = mm_out_shape.dims();
-    const int channel_dim = dims_cnt - 1;
-
-    std::vector<int64_t> b_dims(dims_cnt, 1);
-    std::vector<int64_t> b_strides(dims_cnt, 0);
-    b_dims[channel_dim] = bias.dim_size(0);
-    b_strides[channel_dim] = 1;
-
-    
-    mt_bias.SetNdInfo(dims_cnt, b_dims.data(), b_strides.data());
-
-    mBinary bias_add_op;
-    bias_add_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-
-    status = bias_add_op.Run(handle, mt_out, mt_mm_out, mt_bias);
-
-    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
-                errors::Internal("MUSA BiasAdd failed in MusaMatMulBiasAdd"));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("transpose_a", &transpose_a_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("transpose_b", &transpose_b_));
   }
 
   bool IsExpensive() override { return true; }
 
+  void Compute(OpKernelContext* ctx) override {
+    const Tensor& a = ctx->input(0);
+    const Tensor& b = ctx->input(1);
+    const Tensor& bias = ctx->input(2);
+
+    OP_REQUIRES(ctx, a.dims() == 2,
+                errors::InvalidArgument("MatMulBiasAdd requires input a to be 2D, got shape ",
+                                        a.shape().DebugString()));
+    OP_REQUIRES(ctx, b.dims() == 2,
+                errors::InvalidArgument("MatMulBiasAdd requires input b to be 2D, got shape ",
+                                        b.shape().DebugString()));
+    OP_REQUIRES(ctx, bias.dims() == 1,
+                errors::InvalidArgument("MatMulBiasAdd requires bias to be 1D, got shape ",
+                                        bias.shape().DebugString()));
+
+    if (a.NumElements() == 0 || b.NumElements() == 0 || bias.NumElements() == 0) {
+      TensorShape out_shape;
+      OP_REQUIRES_OK(ctx, ComputeOutputShape(a, b, &out_shape));
+
+      Tensor* output = nullptr;
+      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, out_shape, &output));
+      return;
+    }
+
+    const int64_t a_rows = a.dim_size(0);
+    const int64_t a_cols = a.dim_size(1);
+    const int64_t b_rows = b.dim_size(0);
+    const int64_t b_cols = b.dim_size(1);
+
+    const int64_t m = transpose_a_ ? a_cols : a_rows;
+    const int64_t k_a = transpose_a_ ? a_rows : a_cols;
+    const int64_t k_b = transpose_b_ ? b_cols : b_rows;
+    const int64_t n = transpose_b_ ? b_rows : b_cols;
+
+    OP_REQUIRES(
+        ctx, k_a == k_b,
+        errors::InvalidArgument("Matrix size-incompatible: a shape ",
+                                a.shape().DebugString(), ", b shape ",
+                                b.shape().DebugString(), ", transpose_a=",
+                                transpose_a_, ", transpose_b=", transpose_b_));
+
+    OP_REQUIRES(
+        ctx, bias.dim_size(0) == n,
+        errors::InvalidArgument("Bias dimension mismatch: bias shape ",
+                                bias.shape().DebugString(),
+                                ", expected [", n, "]"));
+
+    TensorShape out_shape({m, n});
+    Tensor* output = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, out_shape, &output));
+
+    auto& handle = GetHandleByCtx(ctx);
+
+    mTensor mt_a = CreateMTensor(a, format_);
+    mTensor mt_b = CreateMTensor(b, format_);
+    mTensor mt_bias = CreateMTensor(bias, format_);
+    mTensor mt_out = CreateMTensor(*output, format_);
+
+    ::musa::dnn::MatMul op;
+    auto status = op.SetTranspose(transpose_a_, transpose_b_);
+    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
+                errors::Internal("muDNN MatMul SetTranspose failed, status=",
+                                 static_cast<int>(status)));
+
+    status = op.SetAlpha(1.0);
+    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
+                errors::Internal("muDNN MatMul SetAlpha failed, status=",
+                                 static_cast<int>(status)));
+
+    status = op.SetBeta(0.0);
+    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
+                errors::Internal("muDNN MatMul SetBeta failed, status=",
+                                 static_cast<int>(status)));
+
+    status = op.SetGamma(1.0);
+    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
+                errors::Internal("muDNN MatMul SetGamma failed, status=",
+                                 static_cast<int>(status)));
+
+
+    status = op.RunWithBiasAdd(handle, mt_out, mt_a, mt_b, mt_bias);
+
+    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
+                errors::Internal("muDNN MatMulBiasAdd failed, status=",
+                                 static_cast<int>(status)));
+  }
+
  private:
-  bool trans_a_ = false;
-  bool trans_b_ = false;
-  bool tf32_enabled_ = false;
+  Status ComputeOutputShape(const Tensor& a, const Tensor& b,
+                            TensorShape* out_shape) {
+    const int64_t a_rows = a.dim_size(0);
+    const int64_t a_cols = a.dim_size(1);
+    const int64_t b_rows = b.dim_size(0);
+    const int64_t b_cols = b.dim_size(1);
+
+    const int64_t m = transpose_a_ ? a_cols : a_rows;
+    const int64_t k_a = transpose_a_ ? a_rows : a_cols;
+    const int64_t k_b = transpose_b_ ? b_cols : b_rows;
+    const int64_t n = transpose_b_ ? b_rows : b_cols;
+
+    if (k_a != k_b) {
+      return errors::InvalidArgument(
+          "Matrix size-incompatible: a shape ", a.shape().DebugString(),
+          ", b shape ", b.shape().DebugString(),
+          ", transpose_a=", transpose_a_,
+          ", transpose_b=", transpose_b_);
+    }
+
+    *out_shape = TensorShape({m, n});
+    return Status::OK();
+  }
+
+ private:
+  bool transpose_a_;
+  bool transpose_b_;
 };
 
-#define REGISTER_MUSA_MATMUL_BIASADD(TYPE)                                \
-  REGISTER_KERNEL_BUILDER(                                                \
-      Name("MusaMatMulBiasAdd").Device("MUSA").TypeConstraint<TYPE>("T"), \
-      MusaMatMulBiasAddOp<TYPE>)
+#define REGISTER_MUSA_MATMUL_BIASADD(TYPE)                                 \
+  REGISTER_KERNEL_BUILDER(                                                  \
+      Name("MusaMatMulBiasAdd").Device("MUSA").TypeConstraint<TYPE>("T"),       \
+      MusaMatMulBiasAddOp<TYPE>);
 
 REGISTER_MUSA_MATMUL_BIASADD(float);
+// REGISTER_MUSA_MATMUL_BIASADD(double);
 REGISTER_MUSA_MATMUL_BIASADD(Eigen::half);
 REGISTER_MUSA_MATMUL_BIASADD(bfloat16);
 
@@ -205,5 +160,4 @@ REGISTER_OP("MusaMatMulBiasAdd")
     .Attr("transpose_a: bool = false")
     .Attr("transpose_b: bool = false")
     .SetShapeFn(::tensorflow::shape_inference::MatMulShape);
-
 }  // namespace tensorflow
