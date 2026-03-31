@@ -47,7 +47,7 @@ class ConcatMatMulFusionTest(MUSATestCase):
         shape1 = [2, 16]
         shape2 = [2, 16]
         weight_shape = [32, 8]
-        
+
         # Data for inputs
         np_a = np.random.randn(*shape1).astype(np.float32)
         np_b = np.random.randn(*shape2).astype(np.float32)
@@ -58,7 +58,7 @@ class ConcatMatMulFusionTest(MUSATestCase):
             a_tf = tf.constant(np_a)
             b_tf = tf.constant(np_b)
             w_tf = tf.constant(np_w)
-            
+
             concat_cpu = tf.concat([a_tf, b_tf], axis=1)
             expected_out = tf.matmul(concat_cpu, w_tf)
 
@@ -69,7 +69,7 @@ class ConcatMatMulFusionTest(MUSATestCase):
                 a = tf.compat.v1.placeholder(tf.float32, shape=shape1, name="input_a")
                 b = tf.compat.v1.placeholder(tf.float32, shape=shape2, name="input_b")
                 w = tf.constant(np_w, dtype=tf.float32, name="weight")
-                
+
                 # Concat + MatMul pattern
                 concat_node = tf.concat([a, b], axis=1, name="concat")
                 matmul_node = tf.matmul(concat_node, w, name="matmul")
@@ -91,7 +91,7 @@ class ConcatMatMulFusionTest(MUSATestCase):
         shape1 = [2, 16]
         shape2 = [2, 16]
         weight_shape = [32, 8]
-        
+
         # Data for inputs
         np_a = np.random.randn(*shape1).astype(np.float32)
         np_b = np.random.randn(*shape2).astype(np.float32)
@@ -104,7 +104,7 @@ class ConcatMatMulFusionTest(MUSATestCase):
                 a = tf.compat.v1.placeholder(tf.float32, shape=shape1, name="input_a")
                 b = tf.compat.v1.placeholder(tf.float32, shape=shape2, name="input_b")
                 w = tf.constant(np_w, dtype=tf.float32, name="weight")
-                
+
                 # Concat + MatMul pattern
                 concat_node = tf.concat([a, b], axis=1, name="concat")
                 matmul_node = tf.matmul(concat_node, w, name="matmul")
@@ -116,7 +116,7 @@ class ConcatMatMulFusionTest(MUSATestCase):
         run_metadata = tf.compat.v1.RunMetadata()
 
         with tf.compat.v1.Session(graph=graph, config=config) as sess:
-            sess.run(output, feed_dict={a: np_a, b: np_b}, 
+            sess.run(output, feed_dict={a: np_a, b: np_b},
                      options=run_options, run_metadata=run_metadata)
 
         # Check for MusaConcatMatMul node in partitioned graphs
@@ -128,10 +128,9 @@ class ConcatMatMulFusionTest(MUSATestCase):
                     has_fused_node = True
                     fused_node_name = node.name
                     break
-        
+
         self.assertTrue(has_fused_node, "MusaConcatMatMul fusion was NOT applied to the graph")
         print(f"Verified: Found fused node '{fused_node_name}' with op 'MusaConcatMatMul'")
 
 if __name__ == "__main__":
     tf.test.main()
-
