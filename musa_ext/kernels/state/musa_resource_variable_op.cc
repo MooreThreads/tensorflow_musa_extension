@@ -4,6 +4,9 @@
 #include "tensorflow/core/framework/resource_mgr.h"
 #include "tensorflow/core/framework/resource_var.h"
 #include "tensorflow/core/lib/core/notification.h"
+#include "mu/device/musa_memcpy.h"
+#include "mu/device/musa_device.h"
+#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -18,7 +21,11 @@ Status CopyTensorWithDeviceContext(OpKernelContext* ctx, const Tensor& src,
 
   auto* device_context = ctx->op_device_context();
   if (device_context == nullptr) {
-    return errors::Internal("Resource variable op: null op device context.");
+    // Fall back to direct MUSA memcpy if device context is not available
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
+    MusaMemcpyAsyncD2D(const_cast<char*>(dst->tensor_data().data()),
+                       src.tensor_data().data(), src.TotalBytes(), stream);
+    return Status::OK();
   }
 
   Device* device = static_cast<Device*>(ctx->device());
@@ -182,19 +189,26 @@ class MusaReadVariableOp : public OpKernel {
     }
 
     const Tensor& t = *var->tensor();
-    if (!var->copy_on_read_mode.load()) {
-      OP_REQUIRES(
-          ctx, dtype_ == t.dtype(),
-          errors::InvalidArgument(
-              "Trying to read variable with wrong dtype. Expected ",
-              DataTypeString(dtype_), " got ", DataTypeString(t.dtype())));
-      ctx->set_output(0, t);
-      return;
-    }
+    OP_REQUIRES(ctx, dtype_ == t.dtype(),
+                errors::InvalidArgument(
+                    "Trying to read variable with wrong dtype. Expected ",
+                    DataTypeString(dtype_), " got ",
+                    DataTypeString(t.dtype())));
 
+    // Always copy the tensor to ensure the returned tensor is independent
+    // of the variable's underlying storage. This is critical for correct
+    // eager execution semantics where read_value() should return the value
+    // at the time of reading, not a reference that changes when the variable
+    // is modified.
     Tensor* out = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, t.shape(), &out));
-    OP_REQUIRES_OK(ctx, CopyTensorWithDeviceContext(ctx, t, out));
+
+    if (t.TotalBytes() > 0) {
+      // Use direct MUSA memcpy instead of device context
+      musaStream_t stream = GetMusaStreamByCtx(ctx);
+      MusaMemcpyAsyncD2D(const_cast<char*>(out->tensor_data().data()),
+                         t.tensor_data().data(), t.TotalBytes(), stream);
+    }
   }
 
  private:
