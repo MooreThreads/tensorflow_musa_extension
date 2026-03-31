@@ -1,9 +1,9 @@
 #include <mudnn.h>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/util/bcast.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -74,7 +74,15 @@ class MusaSelectOp : public MusaOpKernel {
     }
 
     Tensor* output = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
+    // ==: 合并output&&input
+    if (then_t.shape() == output_shape) {
+      const std::vector<int> forwardable_input_indices = {1};
+      OP_REQUIRES_OK(
+          ctx, ctx->forward_input_or_allocate_output(forwardable_input_indices,
+                                                     0, output_shape, &output));
+    } else {
+      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
+    }
     if (output->NumElements() == 0) return;
 
     MusaDevice* device = reinterpret_cast<MusaDevice*>(ctx->device());
@@ -83,13 +91,9 @@ class MusaSelectOp : public MusaOpKernel {
     std::vector<std::vector<int64_t>> shape_storage;
     shape_storage.reserve(10);
 
-    auto CreateMTensor = [&](const Tensor& input,
-                             bool force_left_align = false) -> mTensor {
-      mTensor mt;
-      mt.SetAddr(const_cast<void*>(
-          static_cast<const void*>(input.tensor_data().data())));
-      mt.SetType(GetMusaTypeLocal(input.dtype()));
-      mt.SetFormat(mFormat::NCHW);
+    auto CreateMTensor_b = [&](const Tensor& input,
+                               bool force_left_align = false) -> mTensor {
+      mTensor mt = CreateMTensor(input, mFormat::NCHW);
 
       int target_rank = output_shape.dims();
       std::vector<int64_t> t_dims(target_rank);
@@ -133,12 +137,12 @@ class MusaSelectOp : public MusaOpKernel {
       return mt;
     };
 
-    auto cond_mt = CreateMTensor(cond, use_legacy_broadcast);
+    auto cond_mt = CreateMTensor_b(cond, use_legacy_broadcast);
 
-    auto then_mt = CreateMTensor(then_t, false);
-    auto else_mt = CreateMTensor(else_t, false);
+    auto then_mt = CreateMTensor_b(then_t, false);
+    auto else_mt = CreateMTensor_b(else_t, false);
 
-    auto out_mt = CreateMTensor(*output, false);
+    auto out_mt = CreateMTensor_b(*output, false);
 
     ::musa::dnn::Ternary op;
     op.SetMode(::musa::dnn::Ternary::Mode::SELECT);
