@@ -1,4 +1,5 @@
 #include <cstdlib>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,24 @@ namespace tensorflow {
 namespace musa {
 
 namespace {
+
+extern "C" {
+void LaunchMusaAddContiguousFloat(const float* lhs, const float* rhs,
+                                  float* output, int64_t size,
+                                  musaStream_t stream);
+void LaunchMusaAddScalarFloat(const float* dense, const float* scalar,
+                              float* output, int64_t size,
+                              musaStream_t stream);
+void LaunchMusaAddTailVectorFloat(const float* dense, const float* tail_vector,
+                                  float* output, int64_t size, int64_t width,
+                                  musaStream_t stream);
+}
+
+enum class AddFastPathResult {
+  kNotHandled = 0,
+  kLaunched,
+  kFailed,
+};
 
 bool UseAddBroadcastViewOpt() {
   const char* env = std::getenv("MUSA_ADDV2_ENABLE_BCAST_VIEW_OPT");
@@ -90,6 +109,117 @@ bool IsSmallRepeatedBroadcast(const Tensor& tensor,
   }
 
   return tensor.dims() > 0 && tensor.dim_size(0) == 1;
+}
+
+bool UseAddCustomKernelFastPath() {
+  const char* env = std::getenv("MUSA_ADDV2_ENABLE_CUSTOM_KERNEL");
+  if (env == nullptr || std::string(env).empty()) {
+    return true;
+  }
+  const std::string value(env);
+  return !(value == "0" || value == "false" || value == "FALSE" ||
+           value == "off" || value == "OFF" || value == "no" ||
+           value == "NO");
+}
+
+bool IsTailVectorBroadcast(const Tensor& tensor, const TensorShape& output_shape,
+                          int64_t* width) {
+  if (output_shape.dims() <= 0) {
+    return false;
+  }
+  const int64_t last_dim = output_shape.dim_size(output_shape.dims() - 1);
+  if (last_dim <= 0 || tensor.NumElements() != last_dim || tensor.dims() == 0) {
+    return false;
+  }
+
+  // Accept [C], [1, C], [1, 1, C], ... as tail-vector broadcasts.
+  for (int i = tensor.dims() - 1; i >= 0; --i) {
+    const int64_t dim = tensor.dim_size(i);
+    if (i == tensor.dims() - 1) {
+      if (dim != last_dim) {
+        return false;
+      }
+      continue;
+    }
+    if (dim != 1) {
+      return false;
+    }
+  }
+
+  *width = last_dim;
+  return true;
+}
+
+template <typename T>
+AddFastPathResult TryLaunchAddFastPath(OpKernelContext* ctx, const Tensor& in0,
+                                       const Tensor& in1,
+                                       const TensorShape& output_shape,
+                                       bool same_shape, Tensor* out) {
+  return AddFastPathResult::kNotHandled;
+}
+
+template <>
+AddFastPathResult TryLaunchAddFastPath<float>(
+    OpKernelContext* ctx, const Tensor& in0, const Tensor& in1,
+    const TensorShape& output_shape, bool same_shape, Tensor* out) {
+  if (!UseAddCustomKernelFastPath()) {
+    return AddFastPathResult::kNotHandled;
+  }
+
+  const int64_t output_elements = output_shape.num_elements();
+  if (output_elements <= 0) {
+    return AddFastPathResult::kNotHandled;
+  }
+
+  const float* in0_ptr = in0.flat<float>().data();
+  const float* in1_ptr = in1.flat<float>().data();
+  float* out_ptr = out->flat<float>().data();
+  musaStream_t stream = GetMusaStreamByCtx(ctx);
+  if (stream == nullptr) {
+    return AddFastPathResult::kNotHandled;
+  }
+
+  bool launched = false;
+  if (same_shape) {
+    LaunchMusaAddContiguousFloat(in0_ptr, in1_ptr, out_ptr, output_elements,
+                                 stream);
+    launched = true;
+  } else if (in0.NumElements() == output_elements && in1.NumElements() == 1) {
+    LaunchMusaAddScalarFloat(in0_ptr, in1_ptr, out_ptr, output_elements,
+                             stream);
+    launched = true;
+  } else if (in1.NumElements() == output_elements && in0.NumElements() == 1) {
+    LaunchMusaAddScalarFloat(in1_ptr, in0_ptr, out_ptr, output_elements,
+                             stream);
+    launched = true;
+  } else if (in0.NumElements() == output_elements) {
+    int64_t width = 0;
+    if (IsTailVectorBroadcast(in1, output_shape, &width)) {
+      LaunchMusaAddTailVectorFloat(in0_ptr, in1_ptr, out_ptr, output_elements,
+                                   width, stream);
+      launched = true;
+    }
+  } else if (in1.NumElements() == output_elements) {
+    int64_t width = 0;
+    if (IsTailVectorBroadcast(in0, output_shape, &width)) {
+      LaunchMusaAddTailVectorFloat(in1_ptr, in0_ptr, out_ptr, output_elements,
+                                   width, stream);
+      launched = true;
+    }
+  }
+
+  if (!launched) {
+    return AddFastPathResult::kNotHandled;
+  }
+
+  auto launch_status = musaGetLastError();
+  if (launch_status != musaSuccess) {
+    ctx->CtxFailure(errors::Internal("MUSA Add fast path launch failed: ",
+                                     musaGetErrorString(launch_status)));
+    return AddFastPathResult::kFailed;
+  }
+
+  return AddFastPathResult::kLaunched;
 }
 
 Status ConfigureBroadcastView(const Tensor& tensor,
@@ -183,6 +313,12 @@ class MusaAddOp : public MusaOpKernel {
 
     if (in0.NumElements() == 0 || in1.NumElements() == 0 ||
         output_shape.num_elements() == 0) {
+      return;
+    }
+
+    const auto fast_path_status =
+        TryLaunchAddFastPath<T>(ctx, in0, in1, output_shape, same_shape, out);
+    if (fast_path_status != AddFastPathResult::kNotHandled) {
       return;
     }
 
