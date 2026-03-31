@@ -122,16 +122,7 @@ template <typename T, typename IndexT>
 class MusaGatherV2Op : public MusaOpKernel {
  public:
   explicit MusaGatherV2Op(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {
-    // Read batch_dims as an explicit attribute from the op definition.
-    // Gather v1 does not define batch_dims, so fall back to 0 if absent.
-    Status batch_status = ctx->GetAttr("batch_dims", &batch_dims_);
-    if (!batch_status.ok()) {
-      if (batch_status.code() == tensorflow::error::NOT_FOUND) {
-        batch_dims_ = 0;
-      } else {
-        OP_REQUIRES_OK(ctx, batch_status);
-      }
-    }
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("batch_dims", &batch_dims_));
   }
 
   bool IsExpensive() override { return true; }
@@ -139,42 +130,29 @@ class MusaGatherV2Op : public MusaOpKernel {
   void Compute(OpKernelContext* ctx) override {
     const Tensor& params = ctx->input(0);
     const Tensor& indices = ctx->input(1);
-    int64_t axis = 0;
-    if (ctx->num_inputs() >= 3) {
-      const Tensor& axis_tensor = ctx->input(2);
-      OP_REQUIRES(ctx, TensorShapeUtils::IsScalar(axis_tensor.shape()),
-                  errors::InvalidArgument("axis must be a scalar, got shape: ",
-                                          axis_tensor.shape().DebugString()));
+    const Tensor& axis_tensor = ctx->input(2);
 
-      if (axis_tensor.dtype() == DT_INT32) {
-        axis = static_cast<int64_t>(axis_tensor.scalar<int32>()());
-      } else if (axis_tensor.dtype() == DT_INT64) {
-        axis = axis_tensor.scalar<int64>()();
-      } else {
-        OP_REQUIRES(
-            ctx, false,
-            errors::InvalidArgument("axis must be int32 or int64, got: ",
-                                    DataTypeString(axis_tensor.dtype())));
-      }
+    OP_REQUIRES(ctx, TensorShapeUtils::IsScalar(axis_tensor.shape()),
+                errors::InvalidArgument("axis must be a scalar, got shape: ",
+                                        axis_tensor.shape().DebugString()));
+
+    int64_t axis = 0;
+    if (axis_tensor.dtype() == DT_INT32) {
+      axis = axis_tensor.scalar<int32>()();
+    } else if (axis_tensor.dtype() == DT_INT64) {
+      axis = axis_tensor.scalar<int64>()();
     } else {
-      // Gather v1 has no axis input and defaults to axis=0.
-      OP_REQUIRES(ctx, ctx->num_inputs() == 2,
-                  errors::InvalidArgument(
-                      "Gather expects 2 inputs (v1) or 3 inputs (v2), got ",
-                      ctx->num_inputs()));
-      axis = 0;
+      OP_REQUIRES(ctx, false,
+                  errors::InvalidArgument("axis must be int32 or int64, got: ",
+                                          DataTypeString(axis_tensor.dtype())));
     }
 
     const int64_t params_dims = params.dims();
     const int indices_dims = indices.dims();
-
-    // Normalize negative axis
     if (axis < 0) {
       axis += params_dims;
     }
 
-    // Normalize negative batch_dims (relative to indices rank)
-    // TensorFlow supports batch_dims=-1 to mean indices.dims()-1
     int batch_dims = batch_dims_;
     if (batch_dims < 0) {
       batch_dims += indices_dims;
@@ -185,7 +163,6 @@ class MusaGatherV2Op : public MusaOpKernel {
         errors::InvalidArgument("Expected axis in range [", -params_dims, ", ",
                                 params_dims, "), but got ", axis));
 
-    // batch_dims must be in range [0, min(axis, indices_dims)]
     OP_REQUIRES(
         ctx,
         batch_dims >= 0 &&
@@ -195,14 +172,10 @@ class MusaGatherV2Op : public MusaOpKernel {
             "got batch_dims=",
             batch_dims, ", axis=", axis, ", indices.dims()=", indices_dims));
 
-    // Validate indices dtype
     OP_REQUIRES(ctx, indices.dtype() == DT_INT32 || indices.dtype() == DT_INT64,
                 errors::InvalidArgument("indices must be int32 or int64, got: ",
                                         DataTypeString(indices.dtype())));
 
-    // Validate batch dimension sizes match between params and indices
-    // When batch_dims > 0, params.shape[:batch_dims] must equal
-    // indices.shape[:batch_dims]
     for (int i = 0; i < batch_dims; ++i) {
       OP_REQUIRES(ctx, params.dim_size(i) == indices.dim_size(i),
                   errors::InvalidArgument("batch dimension ", i,
@@ -213,27 +186,13 @@ class MusaGatherV2Op : public MusaOpKernel {
                                           ")=", indices.dim_size(i)));
     }
 
-    // Build output shape according to TensorFlow GatherV2 specification:
-    // output_shape = params.shape[:axis] + indices.shape[batch_dims:] +
-    // params.shape[axis+1:]
-    //
-    // Note: The formula is params.shape[:AXIS] not params.shape[:batch_dims]
-    // This is the key difference that was causing the bug.
-    // When batch_dims > 0, the batch dimensions from params[:batch_dims] are
-    // included in params[:axis] since axis >= batch_dims is required.
     TensorShape output_shape;
-
-    // Add all params dimensions before axis (including batch dimensions)
     for (int64_t i = 0; i < axis; ++i) {
       output_shape.AddDim(params.dim_size(i));
     }
-
-    // Add indices dimensions after batch_dims (the index dimensions)
     for (int64_t i = batch_dims; i < indices_dims; ++i) {
       output_shape.AddDim(indices.dim_size(i));
     }
-
-    // Add params dimensions after axis (the remaining params dims)
     for (int64_t i = axis + 1; i < params_dims; ++i) {
       output_shape.AddDim(params.dim_size(i));
     }
@@ -245,9 +204,8 @@ class MusaGatherV2Op : public MusaOpKernel {
       return;
     }
 
+    // use kernel when batch_dims == 0
     if (batch_dims == 0) {
-      // Fast path: legacy kernel with GPU-side clamping to avoid illegal
-      // access.
       const int64_t limit = params.dim_size(axis);
 
       int64_t batch_size = 1;
@@ -272,7 +230,7 @@ class MusaGatherV2Op : public MusaOpKernel {
       return;
     }
 
-    // Use muDNN GatherX for batch_dims > 0.
+    // use mudnn
     auto& handle = GetHandleByCtx(ctx);
 
     mTensor params_mt = CreateMTensor(params, format_);
