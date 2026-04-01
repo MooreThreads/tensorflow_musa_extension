@@ -35,12 +35,12 @@ class ResourceApplyNadamOpTest(MUSATestCase):
 
     def _test_resource_apply_nadam(self, shape, dtype, rtol=1e-5, atol=1e-5):
         np_dtype = np.float32 if dtype in [tf.bfloat16, tf.half] else dtype.as_numpy_dtype
-        
+
         var_np = np.random.uniform(-1, 1, size=shape).astype(np_dtype)
         m_np = np.random.uniform(-1, 1, size=shape).astype(np_dtype)
         v_np = np.random.uniform(0.1, 1, size=shape).astype(np_dtype)
         grad_np = np.random.uniform(-1, 1, size=shape).astype(np_dtype)
-        
+
         beta1_power_val = 0.9
         beta2_power_val = 0.99
         lr_val = 0.01
@@ -60,13 +60,13 @@ class ResourceApplyNadamOpTest(MUSATestCase):
                 beta2 = tf.constant(beta2_val, dtype=dtype)
                 epsilon = tf.constant(epsilon_val, dtype=dtype)
                 grad = tf.constant(grad_np, dtype=dtype)
-                
+
                 op_func = self._get_nadam_op()
                 if op_func is None:
                     self.skipTest("ResourceApplyNadam op not found")
-                
+
                 op_func(
-                    var=var.handle, m=m.handle, v=v.handle, 
+                    var=var.handle, m=m.handle, v=v.handle,
                     beta1_power=beta1_power, beta2_power=beta2_power,
                     lr=lr, beta1=beta1, beta2=beta2, epsilon=epsilon, grad=grad
                 )
@@ -74,7 +74,7 @@ class ResourceApplyNadamOpTest(MUSATestCase):
 
         cpu_var, cpu_m, cpu_v = run_nadam("/cpu:0")
         musa_var, musa_m, musa_v = run_nadam("/device:MUSA:0")
-        
+
         self.assertAllClose(cpu_var, musa_var, rtol=rtol, atol=atol)
         self.assertAllClose(cpu_m, musa_m, rtol=rtol, atol=atol)
         self.assertAllClose(cpu_v, musa_v, rtol=rtol, atol=atol)
