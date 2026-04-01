@@ -106,11 +106,10 @@ class MusaResourceApplyNadamOp : public MusaOpKernel {
     const Tensor& grad = ctx->input(9);
 
     MUSA_KERNEL_TRACE_START("NadamKernel");
-    UseMudnn(ctx, var_t, m_t, v_t, grad, beta1_power, beta2_power, lr, beta1,
-             beta2, epsilon);
-    // UseKernel(ctx, var_t, m_t, v_t, grad, beta1_power, beta2_power, lr,
-    // beta1,
-    //           beta2, epsilon);
+    // UseMudnn(ctx, var_t, m_t, v_t, grad, beta1_power, beta2_power, lr, beta1,
+    //          beta2, epsilon);
+    UseKernel(ctx, var_t, m_t, v_t, grad, beta1_power, beta2_power, lr, beta1,
+              beta2, epsilon);
     MUSA_KERNEL_TRACE_END("NadamKernel");
   }
 
@@ -119,175 +118,10 @@ class MusaResourceApplyNadamOp : public MusaOpKernel {
  private:
   bool use_exclusive_lock_;
 
-  void UseMudnn(OpKernelContext* ctx, Tensor& var_t, Tensor& m_t, Tensor& v_t,
-                const Tensor& grad, T beta1_power, T beta2_power, T lr, T beta1,
-                T beta2, T epsilon) {
-    auto& handle = GetHandleByCtx(ctx);
-    std::list<Tensor> temp_storage;
-    ::musa::dnn::Binary b_op;
-    ::musa::dnn::Unary u_op;
-
-    auto require_success = [&](::musa::dnn::Status status,
-                               const char* op_name) -> Status {
-      if (status != ::musa::dnn::Status::SUCCESS) {
-        return errors::Internal("ResourceApplyNadam ", op_name,
-                                " failed. Status: ", static_cast<int>(status));
-      }
-      return Status::OK();
-    };
-
-    auto fill_scalar = [&](T val, const TensorShape& shape,
-                           mTensor* out) -> Status {
-      temp_storage.emplace_back();
-      Status alloc_status = ctx->allocate_temp(DataTypeToEnum<T>::value, shape,
-                                               &temp_storage.back());
-      if (!alloc_status.ok()) {
-        return alloc_status;
-      }
-      *out = CreateMTensor(temp_storage.back(), format_);
-      return MusaFillCall(out, val, ctx);
-    };
-
-    mTensor t_var = CreateMTensor(var_t, format_);
-    mTensor t_m = CreateMTensor(m_t, format_);
-    mTensor t_v = CreateMTensor(v_t, format_);
-    mTensor t_grad = CreateMTensor(grad, format_);
-
-    // m_t = beta1 * m_{t-1} + (1 - beta1) * g_t
-    mTensor t_beta1;
-    mTensor t_one_minus_beta1;
-    OP_REQUIRES_OK(ctx, fill_scalar(beta1, m_t.shape(), &t_beta1));
-    OP_REQUIRES_OK(ctx, fill_scalar(static_cast<T>(1.0) - beta1, grad.shape(),
-                                    &t_one_minus_beta1));
-
-    b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_m, t_m, t_beta1),
-                                        "MUL m beta1"));
-
-    temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
-                                           grad.shape(), &temp_storage.back()));
-    mTensor t_g_scaled = CreateMTensor(temp_storage.back(), format_);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_g_scaled, t_grad,
-                                                 t_one_minus_beta1),
-                                        "MUL g one_minus_beta1"));
-
-    b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_m, t_m, t_g_scaled), "ADD m"));
-
-    // v_t = beta2 * v_{t-1} + (1 - beta2) * g_t^2
-    mTensor t_beta2;
-    mTensor t_one_minus_beta2;
-    OP_REQUIRES_OK(ctx, fill_scalar(beta2, v_t.shape(), &t_beta2));
-    OP_REQUIRES_OK(ctx, fill_scalar(static_cast<T>(1.0) - beta2, grad.shape(),
-                                    &t_one_minus_beta2));
-
-    // v = v * beta2
-    b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_v, t_v, t_beta2),
-                                        "MUL v beta2"));
-
-    // g^2
-    temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
-                                           grad.shape(), &temp_storage.back()));
-    mTensor t_g2 = CreateMTensor(temp_storage.back(), format_);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_g2, t_grad, t_grad),
-                                        "MUL g g"));
-
-    // (1-beta2) * g^2
-    temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
-                                           grad.shape(), &temp_storage.back()));
-    mTensor t_g2_scaled = CreateMTensor(temp_storage.back(), format_);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_g2_scaled, t_g2,
-                                                 t_one_minus_beta2),
-                                        "MUL g2 scaled"));
-
-    // v = v + (1-beta2)*g^2
-    b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_v, t_v, t_g2_scaled), "ADD v"));
-
-    // m_hat = (beta1 * m_t + (1 - beta1) * g_t) / (1 - beta1_power)
-    // First calculate beta1 * m_t + (1 - beta1) * g_t
-    temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
-                                           m_t.shape(), &temp_storage.back()));
-    mTensor t_m_hat_num = CreateMTensor(temp_storage.back(), format_);
-
-    b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    OP_REQUIRES_OK(ctx,
-                   require_success(b_op.Run(handle, t_m_hat_num, t_m, t_beta1),
-                                   "MUL m_t beta1"));
-
-    b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_m_hat_num,
-                                                 t_m_hat_num, t_g_scaled),
-                                        "ADD m_hat_num"));
-
-    // Divide by (1 - beta1_power)
-    mTensor t_one_minus_beta1_power;
-    OP_REQUIRES_OK(ctx, fill_scalar(static_cast<T>(1.0) - beta1_power,
-                                    m_t.shape(), &t_one_minus_beta1_power));
-    b_op.SetMode(::musa::dnn::Binary::Mode::DIV);
-    OP_REQUIRES_OK(ctx,
-                   require_success(b_op.Run(handle, t_m_hat_num, t_m_hat_num,
-                                            t_one_minus_beta1_power),
-                                   "DIV m_hat"));
-
-    // v_hat = v_t / (1 - beta2_power)
-    temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
-                                           v_t.shape(), &temp_storage.back()));
-    mTensor t_v_hat = CreateMTensor(temp_storage.back(), format_);
-
-    mTensor t_one_minus_beta2_power;
-    OP_REQUIRES_OK(ctx, fill_scalar(static_cast<T>(1.0) - beta2_power,
-                                    v_t.shape(), &t_one_minus_beta2_power));
-    b_op.SetMode(::musa::dnn::Binary::Mode::DIV);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_v_hat, t_v,
-                                                 t_one_minus_beta2_power),
-                                        "DIV v_hat"));
-
-    // var_t = var_{t-1} - lr * m_hat / (sqrt(v_hat) + epsilon)
-    temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
-                                           v_t.shape(), &temp_storage.back()));
-    mTensor t_den = CreateMTensor(temp_storage.back(), format_);
-    u_op.SetMode(::musa::dnn::Unary::Mode::SQRT);
-    OP_REQUIRES_OK(
-        ctx, require_success(u_op.Run(handle, t_den, t_v_hat), "SQRT v_hat"));
-
-    mTensor t_eps;
-    OP_REQUIRES_OK(ctx, fill_scalar(epsilon, v_t.shape(), &t_eps));
-    b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_den, t_den, t_eps),
-                                        "ADD epsilon"));
-
-    b_op.SetMode(::musa::dnn::Binary::Mode::DIV);
-    OP_REQUIRES_OK(ctx,
-                   require_success(b_op.Run(handle, t_den, t_m_hat_num, t_den),
-                                   "DIV update"));
-
-    mTensor t_lr;
-    OP_REQUIRES_OK(ctx, fill_scalar(lr, var_t.shape(), &t_lr));
-    b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_den, t_den, t_lr), "MUL lr"));
-
-    b_op.SetMode(::musa::dnn::Binary::Mode::SUB);
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_var, t_var, t_den), "SUB var"));
-
-    musaStream_t stream = GetMusaStreamByCtx(ctx);
-    musaError_t sync_err = musaStreamSynchronize(stream);
-    OP_REQUIRES(
-        ctx, sync_err == musaSuccess,
-        errors::Internal("ResourceApplyNadam: musaStreamSynchronize failed: ",
-                         musaGetErrorString(sync_err)));
-  }
+  // void UseMudnn(OpKernelContext* ctx, Tensor& var_t, Tensor& m_t, Tensor&
+  // v_t,
+  //               const Tensor& grad, T beta1_power, T beta2_power, T lr, T
+  //               beta1, T beta2, T epsilon) {}
 
   void UseKernel(OpKernelContext* ctx, Tensor& var_t, Tensor& m_t, Tensor& v_t,
                  const Tensor& grad, T beta1_power, T beta2_power, T lr,
