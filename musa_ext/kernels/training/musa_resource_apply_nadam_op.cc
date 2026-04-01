@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <list>
-#include <vector>
 #include <type_traits>
+#include <vector>
 
 #include "../array/musa_fill_functor.h"
 #include "../utils_op.h"
@@ -25,8 +25,8 @@ extern "C" {
 void LaunchResourceApplyNadamFloat(float* var, float* m, float* v,
                                    float beta1_power, float beta2_power,
                                    float lr, float beta1, float beta2,
-                                   float epsilon, const float* grad,
-                                   int64_t n, musaStream_t stream);
+                                   float epsilon, const float* grad, int64_t n,
+                                   musaStream_t stream);
 void LaunchResourceApplyNadamDouble(double* var, double* m, double* v,
                                     double beta1_power, double beta2_power,
                                     double lr, double beta1, double beta2,
@@ -35,8 +35,8 @@ void LaunchResourceApplyNadamDouble(double* var, double* m, double* v,
 void LaunchResourceApplyNadamHalf(void* var, void* m, void* v,
                                   float beta1_power, float beta2_power,
                                   float lr, float beta1, float beta2,
-                                  float epsilon, const void* grad,
-                                  int64_t n, musaStream_t stream);
+                                  float epsilon, const void* grad, int64_t n,
+                                  musaStream_t stream);
 void LaunchResourceApplyNadamBFloat16(void* var, void* m, void* v,
                                       float beta1_power, float beta2_power,
                                       float lr, float beta1, float beta2,
@@ -161,8 +161,7 @@ class MusaResourceApplyNadamOp : public MusaOpKernel {
             v_t.flat<float>().data(), static_cast<float>(beta1_power),
             static_cast<float>(beta2_power), static_cast<float>(lr),
             static_cast<float>(beta1), static_cast<float>(beta2),
-            static_cast<float>(epsilon), grad.flat<float>().data(), n,
-            stream);
+            static_cast<float>(epsilon), grad.flat<float>().data(), n, stream);
       } else if (std::is_same<T, double>::value) {
         LaunchResourceApplyNadamDouble(
             var_t.flat<double>().data(), m_t.flat<double>().data(),
@@ -173,22 +172,30 @@ class MusaResourceApplyNadamOp : public MusaOpKernel {
             stream);
       } else if (std::is_same<T, Eigen::half>::value) {
         LaunchResourceApplyNadamHalf(
-          const_cast<void*>(reinterpret_cast<const void*>(var_t.flat<Eigen::half>().data())),
-          const_cast<void*>(reinterpret_cast<const void*>(m_t.flat<Eigen::half>().data())),
-          const_cast<void*>(reinterpret_cast<const void*>(v_t.flat<Eigen::half>().data())),
-          static_cast<float>(beta1_power), static_cast<float>(beta2_power),
-          static_cast<float>(lr), static_cast<float>(beta1),
-          static_cast<float>(beta2), static_cast<float>(epsilon),
-          reinterpret_cast<const void*>(grad.flat<Eigen::half>().data()), n, stream);
+            const_cast<void*>(reinterpret_cast<const void*>(
+                var_t.flat<Eigen::half>().data())),
+            const_cast<void*>(
+                reinterpret_cast<const void*>(m_t.flat<Eigen::half>().data())),
+            const_cast<void*>(
+                reinterpret_cast<const void*>(v_t.flat<Eigen::half>().data())),
+            static_cast<float>(beta1_power), static_cast<float>(beta2_power),
+            static_cast<float>(lr), static_cast<float>(beta1),
+            static_cast<float>(beta2), static_cast<float>(epsilon),
+            reinterpret_cast<const void*>(grad.flat<Eigen::half>().data()), n,
+            stream);
       } else if (std::is_same<T, bfloat16>::value) {
         LaunchResourceApplyNadamBFloat16(
-          const_cast<void*>(reinterpret_cast<const void*>(var_t.flat<bfloat16>().data())),
-          const_cast<void*>(reinterpret_cast<const void*>(m_t.flat<bfloat16>().data())),
-          const_cast<void*>(reinterpret_cast<const void*>(v_t.flat<bfloat16>().data())),
-          static_cast<float>(beta1_power), static_cast<float>(beta2_power),
-          static_cast<float>(lr), static_cast<float>(beta1),
-          static_cast<float>(beta2), static_cast<float>(epsilon),
-          reinterpret_cast<const void*>(grad.flat<bfloat16>().data()), n, stream);
+            const_cast<void*>(
+                reinterpret_cast<const void*>(var_t.flat<bfloat16>().data())),
+            const_cast<void*>(
+                reinterpret_cast<const void*>(m_t.flat<bfloat16>().data())),
+            const_cast<void*>(
+                reinterpret_cast<const void*>(v_t.flat<bfloat16>().data())),
+            static_cast<float>(beta1_power), static_cast<float>(beta2_power),
+            static_cast<float>(lr), static_cast<float>(beta1),
+            static_cast<float>(beta2), static_cast<float>(epsilon),
+            reinterpret_cast<const void*>(grad.flat<bfloat16>().data()), n,
+            stream);
       }
     }
 
@@ -207,8 +214,8 @@ class MusaResourceApplyNadamOp : public MusaOpKernel {
   bool use_exclusive_lock_;
 };
 
-#define REGISTER_RESOURCE_NADAM(T)                        \
-  REGISTER_KERNEL_BUILDER(Name("ResourceApplyNadam")      \
+#define REGISTER_RESOURCE_NADAM(T)                       \
+  REGISTER_KERNEL_BUILDER(Name("ResourceApplyNadam")     \
                               .Device(DEVICE_MTGPU)      \
                               .HostMemory("var")         \
                               .HostMemory("m")           \
