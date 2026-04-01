@@ -99,87 +99,31 @@ The build script automatically completes the following steps:
 - Compiles MUSA kernels and host code
 - Generates the dynamic library `libmusa_plugin.so`
 
-### 3. Kernel Timing (Debug Build)
+### 3. Debugging and Diagnostics
 
-Only effective when built with `./build.sh debug` (`MUSA_KERNEL_DEBUG=ON`):
+For detailed debugging guide, see [docs/DEBUG_GUIDE.md](docs/DEBUG_GUIDE.md), including:
 
-Runtime environment variables are listed in the [Environment Variables](#environment-variables) section under "Logging and Debugging".
+- **Kernel Timing**: Performance analysis in Debug mode
+- **Telemetry System**: Full-stack tracing and dirty data diagnostics
+- **Memory Diagnostics**: Use-After-Free detection and memory coloring
+- **Environment Variables**: Complete environment variable configuration table
 
-#### 3.1 Macro Usage
+Quick telemetry setup for diagnostics:
 
-```cpp
-// Basic guard
-MUSA_KERNEL_TIMING_GUARD(ctx);
-
-// Section timing
-MUSA_KERNEL_TRACE_START("Mem Alloc");
-// ... code block ...
-MUSA_KERNEL_TRACE_END("Mem Alloc");
-
-MUSA_KERNEL_TRACE_START("Kernel");
-// ... kernel launch ...
-MUSA_KERNEL_TRACE_END("Kernel");
-
-// Custom section names
-MUSA_KERNEL_TRACE_START("State1");
-// ... allocate / pre-process ...
-MUSA_KERNEL_TRACE_END("State1");
-
-MUSA_KERNEL_TRACE_START("State2");
-// ... main kernel ...
-MUSA_KERNEL_TRACE_END("State2");
+```bash
+export MUSA_TELEMETRY_ENABLED=1
+export MUSA_TELEMETRY_LOG_PATH=/tmp/telemetry.json
+python test_runner.py
 ```
 
-### 4. Common Validation Commands (MatMul)
+Quick kernel timing setup for performance analysis:
 
 ```bash
 ./build.sh debug
-
 export MUSA_TIMING_KERNEL_LEVEL=2
 export MUSA_TIMING_KERNEL_NAME=ALL
 export MUSA_TIMING_KERNEL_STATS=1
-
-mkdir -p /tmp/musa_timing_logs
-python test/test_runner.py --single matmul_op_test.py 2>&1 | tee /tmp/musa_timing_logs/matmul_l2.log
-```
-
-## Environment Variables
-
-### Feature Control
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `MUSA_ENABLE_TF32` | Enable TF32 acceleration for MatMul/Conv | `export MUSA_ENABLE_TF32=1` |
-| `MUSA_DUMP_GRAPHDEF` | Enable graph optimization debugging | `export MUSA_DUMP_GRAPHDEF=1` |
-| `MUSA_DUMP_GRAPHDEF_DIR` | Specify GraphDef dump directory | `export MUSA_DUMP_GRAPHDEF_DIR=/tmp/graphs` |
-
-### Logging and Debugging
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `MUSA_TIMING_KERNEL_LEVEL` | Timing mode (`1`=total only, `2`=total + per-section breakdown) | `export MUSA_TIMING_KERNEL_LEVEL=2` |
-| `MUSA_TIMING_KERNEL_NAME` | Print only selected kernels (case-insensitive substring, `ALL` for all) | `export MUSA_TIMING_KERNEL_NAME=MatMul` |
-| `MUSA_TIMING_KERNEL_STATS` | Print timing summary at process exit (`1`=on, `0`=off) | `export MUSA_TIMING_KERNEL_STATS=1` |
-| `TF_CPP_MIN_LOG_LEVEL` | Global log level (0=INFO, 1=WARNING, 2=ERROR) | `export TF_CPP_MIN_LOG_LEVEL=1` |
-| `TF_CPP_VMODULE` | Per-file VLOG level control | `export TF_CPP_VMODULE="musa_graph_optimizer=1,layernorm_fusion=2"` |
-
-**Common debugging combinations:**
-
-```bash
-# 1. View detailed graph optimizer logs
-export TF_CPP_VMODULE="musa_graph_optimizer=1,fusion_pattern_manager=1"
-python -m fusion.layernorm_gelu_fusion_test
-
-# 2. View operator fusion details
-export TF_CPP_VMODULE="layernorm_fusion=2,gelu_fusion=1"
-python -m fusion.layernorm_gelu_fusion_test
-
-# 3. Silent mode (show errors only)
-export TF_CPP_MIN_LOG_LEVEL=2
 python test_runner.py
-
-# 4. Restore default logging
-unset TF_CPP_MIN_LOG_LEVEL TF_CPP_VMODULE
 ```
 
 ## Testing

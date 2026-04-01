@@ -80,7 +80,11 @@ class StridedSliceOpTest(MUSATestCase):
         x_np = input_data
     else:
         if shape is None: shape = [3, 5]
-        x_np = np.arange(np.prod(shape)).reshape(shape).astype(dtype.as_numpy_dtype)
+        if dtype == tf.bool:
+            x_np = (np.arange(np.prod(shape)).reshape(shape) % 2 == 0)
+        else:
+            np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+            x_np = np.arange(np.prod(shape)).reshape(shape).astype(np_dtype)
 
     x = tf.constant(x_np, dtype=dtype)
 
@@ -139,8 +143,35 @@ class StridedSliceOpTest(MUSATestCase):
 
   def testSliceDtypes(self):
     """Test different data types."""
-    for dtype in [tf.float32, tf.int32, tf.int64, tf.bool, tf.bfloat16]:
-      self._test_slice((slice(0, 2), slice(1, 3)), dtype=dtype)
+    slice_spec = (slice(0, 2), slice(1, 3))
+    shape = [3, 5]
+
+    for dtype in [tf.float32, tf.float16, tf.int32, tf.int64, tf.bool,
+                  tf.bfloat16]:
+      with self.subTest(dtype=dtype.name):
+        if dtype == tf.bool:
+          x_np = (np.arange(np.prod(shape)).reshape(shape) % 2 == 0)
+        else:
+          np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+          x_np = np.arange(np.prod(shape)).reshape(shape).astype(np_dtype)
+
+        x = tf.constant(x_np, dtype=dtype)
+
+        with tf.device('/CPU:0'):
+          cpu_result = x[slice_spec]
+        with tf.device('/device:MUSA:0'):
+          musa_result = x[slice_spec]
+
+        if dtype == tf.bool:
+          self.assertAllEqual(cpu_result.numpy(), musa_result.numpy())
+        elif dtype == tf.bfloat16:
+          self.assertAllClose(
+              tf.cast(cpu_result, tf.float32).numpy(),
+              tf.cast(musa_result, tf.float32).numpy(),
+              rtol=1e-2,
+              atol=1e-2)
+        else:
+          self.assertAllClose(cpu_result.numpy(), musa_result.numpy())
 
   def testValidateEquivalent_BasicStride(self):
     """Ref: ValidateStridedSliceOpTest.BasicStride
