@@ -12,6 +12,7 @@
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/resource_mgr.h"
 #include "tensorflow/core/framework/resource_var.h"
+#include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.h"
 #include "utils/logging.h"
@@ -105,10 +106,10 @@ class MusaResourceApplyNadamOp : public MusaOpKernel {
     const Tensor& grad = ctx->input(9);
 
     MUSA_KERNEL_TRACE_START("NadamKernel");
-    // UseMudnn(ctx, var_t, m_t, v_t, grad, beta1_power, beta2_power, lr, beta1,
-    //          beta2, epsilon);
-    UseKernel(ctx, var_t, m_t, v_t, grad, beta1_power, beta2_power, lr, beta1,
-              beta2, epsilon);
+    UseMudnn(ctx, var_t, m_t, v_t, grad, beta1_power, beta2_power, lr, beta1,
+             beta2, epsilon);
+    // UseKernel(ctx, var_t, m_t, v_t, grad, beta1_power, beta2_power, lr, beta1,
+    //           beta2, epsilon);
     MUSA_KERNEL_TRACE_END("NadamKernel");
   }
 
@@ -319,6 +320,21 @@ REGISTER_RESOURCE_NADAM(float);
 REGISTER_RESOURCE_NADAM(double);
 REGISTER_RESOURCE_NADAM(Eigen::half);
 REGISTER_RESOURCE_NADAM(bfloat16);
+
+REGISTER_OP("ResourceApplyNadam")
+    .Input("var: resource")
+    .Input("m: resource")
+    .Input("v: resource")
+    .Input("beta1_power: T")
+    .Input("beta2_power: T")
+    .Input("lr: T")
+    .Input("beta1: T")
+    .Input("beta2: T")
+    .Input("epsilon: T")
+    .Input("grad: T")
+    .Attr("T: {float, double, half, bfloat16}")
+    .Attr("use_locking: bool = false")
+    .SetShapeFn(shape_inference::NoOutputs);
 
 }  // namespace musa
 }  // namespace tensorflow
