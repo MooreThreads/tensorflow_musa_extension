@@ -55,22 +55,30 @@ enum class TriState { kDefault = 0, kOff = 1, kOn = 2 };
 // Optimizer configurations - controls interaction with TensorFlow built-in
 // optimizers Based on TF Modular Graph C API TP_OptimizerConfigs
 struct MusaOptimizerConfigs {
+  // Keep enabled
+  TriState arithmetic_optimization = TriState::kOn;
+  TriState constant_folding = TriState::kOn;
+  TriState remapping = TriState::kOn;
+  TriState shape_optimization = TriState::kOn;
+
+  // Recommended to enable (performance critical)
+  TriState implementation_selector = TriState::kOn;      // Select fastest algorithms
+  TriState function_optimization = TriState::kOn;        // Inlining optimization
+  TriState common_subgraph_elimination = TriState::kOn;  // Deduplication
+  TriState memory_optimization = TriState::kOn;          // Memory optimization (training scenarios)
+
+  // Inference-specific optimizations
+  TriState debug_stripper = TriState::kOn;
+  TriState pin_to_host_optimization = TriState::kOn;
+
+  // Keep disabled (handled internally by MUSA)
+  TriState auto_mixed_precision = TriState::kOff;
+  TriState layout_optimizer = TriState::kOff;
+
+  // Keep as Default or enable as needed
   TriState disable_model_pruning = TriState::kDefault;
-  TriState implementation_selector = TriState::kDefault;
-  TriState function_optimization = TriState::kDefault;
-  TriState common_subgraph_elimination = TriState::kDefault;
-  TriState arithmetic_optimization = TriState::kDefault;
-  TriState debug_stripper = TriState::kDefault;
-  TriState constant_folding = TriState::kDefault;
-  TriState shape_optimization = TriState::kDefault;
-  TriState auto_mixed_precision =
-      TriState::kOff;  // MUSA handles AMP internally
-  TriState pin_to_host_optimization = TriState::kDefault;
-  TriState layout_optimizer = TriState::kOff;  // MUSA handles layout internally
-  TriState remapping = TriState::kDefault;
   TriState loop_optimization = TriState::kDefault;
   TriState dependency_optimization = TriState::kDefault;
-  TriState memory_optimization = TriState::kDefault;
   TriState auto_parallel = TriState::kDefault;
   TriState scoped_allocator_optimization = TriState::kDefault;
   TriState optimizer_remove_ios_node = TriState::kDefault;
@@ -309,6 +317,36 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
 
   Status Init(
       const tensorflow::RewriterConfig_CustomGraphOptimizer* config) override {
+    // Environment variable control for AMP (performance quick win)
+    const char* amp_env = std::getenv("MUSA_AUTO_MIXED_PRECISION");
+    if (amp_env && std::string(amp_env) == "1") {
+      configs_.auto_mixed_precision = TriState::kOn;
+      VLOG(1) << "MusaGraphOptimizer: AMP enabled via MUSA_AUTO_MIXED_PRECISION=1";
+    }
+
+    // Environment variable for AMP mode (FP16 or BF16)
+    const char* amp_mode_env = std::getenv("MUSA_AMP_MODE");
+    if (amp_mode_env) {
+      std::string mode(amp_mode_env);
+      if (mode == "BF16" || mode == "BFLOAT16") {
+        amp_config_.target_dtype = DT_BFLOAT16;
+        VLOG(1) << "MusaGraphOptimizer: AMP mode set to BF16";
+      } else if (mode == "FP16") {
+        amp_config_.target_dtype = DT_HALF;
+        VLOG(1) << "MusaGraphOptimizer: AMP mode set to FP16";
+      }
+    }
+
+    // Environment variable to disable all Grappler optimizations
+    const char* disable_grappler_env = std::getenv("MUSA_DISABLE_GRAPPLER");
+    if (disable_grappler_env && std::string(disable_grappler_env) == "1") {
+      configs_.constant_folding = TriState::kOff;
+      configs_.remapping = TriState::kOff;
+      configs_.arithmetic_optimization = TriState::kOff;
+      configs_.shape_optimization = TriState::kOff;
+      VLOG(1) << "MusaGraphOptimizer: All Grappler optimizations disabled via MUSA_DISABLE_GRAPPLER=1";
+    }
+
     if (config) {
       for (const auto& param : config->parameter_map()) {
         if (param.first == "aggressive_mode") {

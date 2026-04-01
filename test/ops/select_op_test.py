@@ -108,5 +108,98 @@ class SelectOpTest(MUSATestCase):
             tf.float32
         )
 
+    def testUint8(self):
+        """测试 Uint8 类型"""
+        cond = np.array([False, True, False, False], dtype=np.bool_)
+        x = np.array([1, 2, 3, 4], dtype=np.uint8)
+        y = np.array([5, 6, 7, 8], dtype=np.uint8)
+
+        self._compare_cpu_musa_results(
+            tf.where,
+            [tf.constant(cond), tf.constant(x, dtype=tf.uint8), tf.constant(y, dtype=tf.uint8)],
+            tf.uint8
+        )
+
+    def testUint32(self):
+        """测试 Uint32 类型"""
+        cond = np.array([False, True, False, False], dtype=np.bool_)
+        x = np.array([1, 2, 3, 4], dtype=np.uint32)
+        y = np.array([5, 6, 7, 8], dtype=np.uint32)
+
+        self._compare_cpu_musa_results(
+            tf.where,
+            [tf.constant(cond), tf.constant(x, dtype=tf.uint32), tf.constant(y, dtype=tf.uint32)],
+            tf.uint32
+        )
+
+    def testInt8(self):
+        """测试 Int8 类型"""
+        cond = np.array([False, True, False, False], dtype=np.bool_)
+        x = np.array([1, -2, 3, 4], dtype=np.int8)
+        y = np.array([5, 6, 7, -8], dtype=np.int8)
+
+        self._compare_cpu_musa_results(
+            tf.where,
+            [tf.constant(cond), tf.constant(x, dtype=tf.int8), tf.constant(y, dtype=tf.int8)],
+            tf.int8
+        )
+
+    def testInt16(self):
+        """测试 Int16 类型"""
+        cond = np.array([False, True, False, False], dtype=np.bool_)
+        x = np.array([1, 2, 3, 4], dtype=np.int16)
+        y = np.array([5, 6, 7, 8], dtype=np.int16)
+
+        self._compare_cpu_musa_results(
+            tf.where,
+            [tf.constant(cond), tf.constant(x, dtype=tf.int16), tf.constant(y, dtype=tf.int16)],
+            tf.int16
+        )
+
+    def testRankOneBroadcastingInt32(self):
+        """Rank-one 条件广播到更高维度（参考 C++ RankOneSelectInt32）"""
+        cond = np.array([False, True], dtype=np.bool_)
+        x = np.array([1, 2, 3, 4], dtype=np.int32).reshape((2, 1, 2, 1))
+        y = np.array([5, 6, 7, 8], dtype=np.int32).reshape((2, 1, 2, 1))
+
+        self._compare_cpu_musa_results(
+            tf.where,
+            [tf.constant(cond), tf.constant(x, dtype=tf.int32), tf.constant(y, dtype=tf.int32)],
+            tf.int32
+        )
+
+    def testScalarConditionFloat32(self):
+        """标量条件选择整张张量（True/False）"""
+        # Scalar False
+        cond_false = np.array(False)
+        x = np.array([1, 2, 3, 4], dtype=np.float32).reshape((1, 1, 2, 2))
+        y = np.array([5, 6, 7, 8], dtype=np.float32).reshape((1, 1, 2, 2))
+
+        self._compare_cpu_musa_results(
+            tf.where,
+            [tf.constant(cond_false), tf.constant(x, dtype=tf.float32), tf.constant(y, dtype=tf.float32)],
+            tf.float32
+        )
+
+        # Scalar True
+        cond_true = np.array(True)
+        self._compare_cpu_musa_results(
+            tf.where,
+            [tf.constant(cond_true), tf.constant(x, dtype=tf.float32), tf.constant(y, dtype=tf.float32)],
+            tf.float32
+        )
+
+    def test5DBroadcasting(self):
+        """5D 广播场景（参考 C++ BroadcastSelectInt32OneDimensionConditionWithSingleValue5D）"""
+        cond = np.array(False)
+        x = np.arange(1, 9, dtype=np.int32).reshape((1, 2, 2, 2, 1))
+        y = np.arange(9, 13, dtype=np.int32).reshape((1, 2, 2, 1))
+
+        self._compare_cpu_musa_results(
+            tf.where,
+            [tf.constant(cond), tf.constant(x, dtype=tf.int32), tf.constant(y, dtype=tf.int32)],
+            tf.int32
+        )
+
 if __name__ == "__main__":
     tf.test.main()

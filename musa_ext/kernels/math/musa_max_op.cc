@@ -3,13 +3,13 @@
 #include <functional>
 #include <numeric>
 
-#include "../utils_op.h"
 #include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/lib/core/errors.h"
+#include "utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -21,10 +21,6 @@ class MusaMaxOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("keep_dims", &keep_dims_));
   }
 
-  // Max (reduction) is computationally intensive
-  // Mark as expensive to enable optimal scheduling
-  bool IsExpensive() override { return true; }
-
   void Compute(OpKernelContext* ctx) override {
     const Tensor& input = ctx->input(0);
     const Tensor& axes_tensor = ctx->input(1);
@@ -33,7 +29,14 @@ class MusaMaxOp : public MusaOpKernel {
     const int64_t num_axes = axes_tensor.NumElements();
 
     if (num_axes == 0) {
-      ctx->set_output(0, input);
+      Tensor* out = nullptr;
+      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &out));
+      if (out->NumElements() == 0) return;
+
+      auto& handle = GetHandleByCtx(ctx);
+      musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
+      MusaMemcpyAsyncD2D(const_cast<char*>(out->tensor_data().data()),
+                         input.tensor_data().data(), out->TotalBytes(), stream);
       return;
     }
 
@@ -87,13 +90,8 @@ class MusaMaxOp : public MusaOpKernel {
     musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 
     if (reduce_elements == 1) {
-      Tensor output;
-      // zero-copy: assign new output_shape, underlying GPU memory still points
-      // to input
-      bool success = output.CopyFrom(input, output_shape);
-      OP_REQUIRES(ctx, success,
-                  errors::Internal("MUSA Max: Tensor::CopyFrom failed."));
-      ctx->set_output(0, output);
+      MusaMemcpyAsyncD2D(const_cast<char*>(out->tensor_data().data()),
+                         input.tensor_data().data(), out->TotalBytes(), stream);
       return;
     }
 

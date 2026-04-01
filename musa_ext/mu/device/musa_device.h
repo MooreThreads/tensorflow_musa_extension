@@ -42,6 +42,23 @@ class MusaDeviceContext : public DeviceContext {
     return official_stream_;
   }
 
+  // Copy tensor from CPU host memory to MUSA device memory.
+  //
+  // Args:
+  //   cpu_tensor: Source tensor in CPU memory.
+  //   device: Target device.
+  //   device_tensor: Destination tensor in device memory.
+  //   done: Callback invoked when copy completes.
+  //   sync_dst_compute: If true (RECOMMENDED), wait for H2D copy to complete
+  //     before allowing kernels on the compute stream to access the tensor.
+  //     If false, caller MUST ensure that no kernel reads the tensor until
+  //     the H2D copy completes (e.g., via explicit synchronization or by
+  //     waiting for the done callback). Setting to false incorrectly can
+  //     cause race conditions leading to dirty data (NaN values).
+  //
+  // WARNING: Setting sync_dst_compute=false requires careful synchronization.
+  // The default TensorFlow behavior is to pass true. Only set to false if
+  // you have verified that the caller handles synchronization correctly.
   void CopyCPUTensorToDevice(const Tensor* cpu_tensor, Device* device,
                              Tensor* device_tensor, StatusCallback done,
                              bool sync_dst_compute) const override;

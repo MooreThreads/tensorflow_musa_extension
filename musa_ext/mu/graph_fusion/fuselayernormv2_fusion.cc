@@ -625,8 +625,6 @@ Status MusaFuseLayerNormV2Fusion::Apply(
 
   VLOG(1) << "FuseLayerNormV2: Replaced '" << original_name
           << "' with MusaLayerNorm (removed_nodes=" << removed_count << ")";
-  LOG(INFO) << "[FuseLayerNormV2][Apply] done apply for output="
-            << original_name << ", removed_nodes=" << removed_count;
 
   return Status::OK();
 }

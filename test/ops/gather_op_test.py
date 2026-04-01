@@ -90,13 +90,114 @@ class GatherOpTest(MUSATestCase):
           self._test_gather([3, 4], indices_data, axis=1, dtype=dtype, 
                            indices_dtype=indices_dtype, rtol=rtol, atol=atol)
 
-  def testGather3D(self):
-    """3D tensor gather test."""
+  def testGather3DAxis0(self):
+    """3D tensor gather along axis 0."""
     indices_data = [0, 1]
     for dtype in [tf.float32]:
       for indices_dtype in [tf.int32, tf.int64]:
         with self.subTest(dtype=dtype, indices_dtype=indices_dtype):
-          self._test_gather([2, 3, 4], indices_data, axis=0, dtype=dtype, 
+          self._test_gather([2, 3, 4], indices_data, axis=0, dtype=dtype,
+                           indices_dtype=indices_dtype)
+
+  def testGather3DAxis1(self):
+    """3D tensor gather along axis 1."""
+    indices_data = [0, 2]
+    for dtype in [tf.float32, tf.float16, tf.bfloat16]:
+      rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
+      atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
+      for indices_dtype in [tf.int32, tf.int64]:
+        with self.subTest(dtype=dtype, indices_dtype=indices_dtype):
+          self._test_gather([2, 4, 5], indices_data, axis=1, dtype=dtype,
+                           indices_dtype=indices_dtype, rtol=rtol, atol=atol)
+
+  def testGather3DAxis2(self):
+    """3D tensor gather along axis 2."""
+    indices_data = [1, 3]
+    for dtype in [tf.float32, tf.float16, tf.bfloat16]:
+      rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
+      atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
+      for indices_dtype in [tf.int32, tf.int64]:
+        with self.subTest(dtype=dtype, indices_dtype=indices_dtype):
+          self._test_gather([2, 3, 6], indices_data, axis=2, dtype=dtype,
+                           indices_dtype=indices_dtype, rtol=rtol, atol=atol)
+
+  def testGather4DAxis0(self):
+    """4D tensor gather along axis 0 (batch dimension)."""
+    indices_data = [0, 2, 1]
+    for dtype in [tf.float32, tf.float16, tf.bfloat16]:
+      rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
+      atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
+      for indices_dtype in [tf.int32, tf.int64]:
+        with self.subTest(dtype=dtype, indices_dtype=indices_dtype):
+          self._test_gather([4, 3, 8, 8], indices_data, axis=0, dtype=dtype,
+                           indices_dtype=indices_dtype, rtol=rtol, atol=atol)
+
+  def testGather4DAxis1(self):
+    """4D tensor gather along axis 1 (channel dimension in NCHW)."""
+    indices_data = [0, 2]
+    for dtype in [tf.float32]:
+      for indices_dtype in [tf.int32, tf.int64]:
+        with self.subTest(dtype=dtype, indices_dtype=indices_dtype):
+          self._test_gather([2, 4, 8, 8], indices_data, axis=1, dtype=dtype,
+                           indices_dtype=indices_dtype)
+
+  def testGather4DAxis2(self):
+    """4D tensor gather along axis 2 (height dimension in NCHW)."""
+    indices_data = [0, 3, 5]
+    for dtype in [tf.float32]:
+      for indices_dtype in [tf.int32, tf.int64]:
+        with self.subTest(dtype=dtype, indices_dtype=indices_dtype):
+          self._test_gather([2, 3, 8, 8], indices_data, axis=2, dtype=dtype,
+                           indices_dtype=indices_dtype)
+
+  def testGather4DAxis3(self):
+    """4D tensor gather along axis 3 (width dimension in NCHW)."""
+    indices_data = [1, 4, 6]
+    for dtype in [tf.float32]:
+      for indices_dtype in [tf.int32, tf.int64]:
+        with self.subTest(dtype=dtype, indices_dtype=indices_dtype):
+          self._test_gather([2, 3, 4, 8], indices_data, axis=3, dtype=dtype,
+                           indices_dtype=indices_dtype)
+
+  def testGather5D(self):
+    """5D tensor gather test across all axes."""
+    params_shape = [2, 3, 4, 5, 6]
+    indices_data = [0, 1]
+    for axis in range(5):
+      for dtype in [tf.float32]:
+        for indices_dtype in [tf.int32]:
+          with self.subTest(axis=axis, dtype=dtype, indices_dtype=indices_dtype):
+            self._test_gather(params_shape, indices_data, axis=axis, dtype=dtype,
+                             indices_dtype=indices_dtype)
+
+  def testGather3DMultiDimIndices(self):
+    """3D tensor gather with multi-dimensional indices."""
+    params_shape = [4, 3, 5]
+    indices_data = [[0, 1], [2, 0]]  # 2D indices
+    for dtype in [tf.float32]:
+      for indices_dtype in [tf.int32, tf.int64]:
+        with self.subTest(dtype=dtype, indices_dtype=indices_dtype):
+          self._test_gather(params_shape, indices_data, axis=0, dtype=dtype,
+                           indices_dtype=indices_dtype)
+
+  def testGather4DMultiDimIndices(self):
+    """4D tensor gather with multi-dimensional indices."""
+    params_shape = [4, 5, 6, 7]
+    indices_data = [[0, 2], [1, 3]]  # 2D indices
+    for dtype in [tf.float32]:
+      for indices_dtype in [tf.int32, tf.int64]:
+        with self.subTest(dtype=dtype, indices_dtype=indices_dtype):
+          self._test_gather(params_shape, indices_data, axis=1, dtype=dtype,
+                           indices_dtype=indices_dtype)
+
+  def testGather3DLargeTensor(self):
+    """3D tensor gather with larger dimensions."""
+    params_shape = [16, 32, 64]
+    indices_data = [0, 5, 10, 15]
+    for dtype in [tf.float32]:
+      for indices_dtype in [tf.int32, tf.int64]:
+        with self.subTest(dtype=dtype, indices_dtype=indices_dtype):
+          self._test_gather(params_shape, indices_data, axis=1, dtype=dtype,
                            indices_dtype=indices_dtype)
 
   def testGatherDifferentIndicesDtypes(self):
