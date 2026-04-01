@@ -56,7 +56,8 @@ class SafeClipFusionE2ETest(MUSATestCase):
 
         # Calculate expected using numpy
         clip_val = np.maximum(np.minimum(x_np, hi_np), lo_np)
-        expected = np.where(np.isnan(x_np), np.zeros_like(x_np), clip_val)
+        # In the image pattern: Select(IsNan(max_op), 0, max_op)
+        expected = np.where(np.isnan(clip_val), np.zeros_like(clip_val), clip_val)
 
         graph = tf.Graph()
         with graph.as_default():
@@ -65,14 +66,18 @@ class SafeClipFusionE2ETest(MUSATestCase):
                 lo = tf.constant(lo_np, dtype=dtype, name="lo")
                 hi = tf.constant(hi_np, dtype=dtype, name="hi")
 
-                # Pattern: Select(IsNan(x), 0, Maximum(Minimum(x, hi), lo))
-                clip_op = tf.maximum(tf.minimum(x, hi), lo)
-                isnan = tf.math.is_nan(x)
-                # Use a constant zero that's compatible with Select's expectations.
-                # In some cases, tf.where might be mapped to Select or SelectV2.
-                # The fusion pattern specifically checks for 'Select' or 'SelectV2'.
-                zero = tf.constant(0.0, dtype=dtype, name="zero")
-                output = tf.where(isnan, zero, clip_op)
+                # Pattern: Select(condition=IsNan(Maximum), x=Fill(Shape(Maximum)), y=Maximum)
+                # where Maximum = Maximum(Minimum(x, hi), lo)
+                min_op = tf.minimum(x, hi)
+                max_op = tf.maximum(min_op, lo)
+                
+                # Based on the provide image, IsNan and Shape/Fill depend on max_op
+                isnan = tf.math.is_nan(max_op)
+                shape = tf.shape(max_op)
+                zero_fill = tf.fill(shape, tf.constant(0.0, dtype=dtype))
+                
+                # Select node
+                output = tf.compat.v1.where(isnan, zero_fill, max_op)
 
         config = create_config_with_musa_optimizer()
         run_options = tf.compat.v1.RunOptions(output_partition_graphs=True)
