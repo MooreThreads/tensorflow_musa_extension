@@ -2,15 +2,12 @@
 #include <musa_fp16.h>
 #include <musa_runtime.h>
 #include <stdint.h>
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wignored-pragmas"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/types.h"
 #pragma GCC diagnostic pop
-
-// Fused Nadam kernel: updates var, m, v in-place
-// For numeric stability and TF compatibility we use float accumulation for
-// half/bfloat16 variants.
 
 namespace tensorflow {
 namespace musa {
@@ -23,6 +20,7 @@ __device__ __forceinline__ float LoadFloat(const Eigen::half* p) {
   const __half* h_ptr = reinterpret_cast<const __half*>(p);
   return __half2float(*h_ptr);
 }
+
 __device__ __forceinline__ void StoreFloat(Eigen::half* p, float v) {
   __half h = __float2half(v);
   *reinterpret_cast<__half*>(p) = h;
@@ -35,131 +33,76 @@ __device__ __forceinline__ float LoadFloat(const bfloat16* p) {
   *f_ptr = (static_cast<uint32_t>(*b_ptr)) << 16;
   return res;
 }
+
 __device__ __forceinline__ void StoreFloat(bfloat16* p, float v) {
   uint32_t* f_ptr = (uint32_t*)&v;
   uint16_t b_val = (*f_ptr) >> 16;
   *reinterpret_cast<uint16_t*>(p) = b_val;
 }
 
-// Double helpers
-__device__ __forceinline__ double LoadDouble(const double* p) { return *p; }
-__device__ __forceinline__ void StoreDouble(double* p, double v) { *p = v; }
-
+__device__ __forceinline__ double LoadFloat(const double* p) { return *p; }
+__device__ __forceinline__ void StoreFloat(double* p, double v) { *p = v; }
 }  // namespace
 
-// Kernel for float
 template <typename T>
 __global__ void ResourceApplyNadamKernel(T* __restrict__ var, T* __restrict__ m,
                                          T* __restrict__ v,
-                                         const T beta1_power,
-                                         const T beta2_power, const T lr,
-                                         const T beta1, const T beta2,
-                                         const T epsilon,
                                          const T* __restrict__ grad,
-                                         int64_t n) {
-  int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (i >= n) return;
-  // For template T=float/double, we perform typed math. For half/bf16 we will
-  // use specializations that load/store via float helpers.
-  T g = grad[i];
-  T m_old = m[i];
-  T v_old = v[i];
-  T m_new = beta1 * m_old + (static_cast<T>(1.0) - beta1) * g;
-  T v_new = beta2 * v_old + (static_cast<T>(1.0) - beta2) * (g * g);
-  T m_bar = (beta1 * m_new + (static_cast<T>(1.0) - beta1) * g) / (static_cast<T>(1.0) - beta1_power);
-  T v_hat = v_new / (static_cast<T>(1.0) - beta2_power);
-  T denom = sqrt(v_hat) + epsilon;
-  T var_new = var[i] - lr * m_bar / denom;
-  var[i] = var_new;
-  m[i] = m_new;
-  v[i] = v_new;
+                                         float beta1_power, float beta2_power,
+                                         float lr, float beta1, float beta2,
+                                         float epsilon, int64_t n) {
+  const int64_t tid = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
+  if (tid >= n) return;
+
+  float grad_val = LoadFloat(&grad[tid]);
+  float m_val = LoadFloat(&m[tid]);
+  float v_val = LoadFloat(&v[tid]);
+  float var_val = LoadFloat(&var[tid]);
+
+  // m_t = beta1 * m_{t-1} + (1 - beta1) * g_t
+  m_val = beta1 * m_val + (1.0f - beta1) * grad_val;
+  // v_t = beta2 * v_{t-1} + (1 - beta2) * g_t^2
+  v_val = beta2 * v_val + (1.0f - beta2) * grad_val * grad_val;
+
+  // m_hat = (beta1 * m_val + (1 - beta1) * grad_val) / (1 - beta1_power)
+  float m_hat =
+      (beta1 * m_val + (1.0f - beta1) * grad_val) / (1.0f - beta1_power);
+  // v_hat = v_t / (1 - beta2_power)
+  float v_hat = v_val / (1.0f - beta2_power);
+
+  // var_t = var_{t-1} - lr * m_hat / (sqrt(v_hat) + epsilon)
+  var_val -= lr * m_hat / (sqrtf(v_hat) + epsilon);
+
+  StoreFloat(&m[tid], m_val);
+  StoreFloat(&v[tid], v_val);
+  StoreFloat(&var[tid], var_val);
 }
 
-template <typename Tload, typename Tstore>
-__global__ void ResourceApplyNadamFloatAccumKernel(Tstore* __restrict__ var,
-                                                   Tstore* __restrict__ m,
-                                                   Tstore* __restrict__ v,
-                                                   const float beta1_power,
-                                                   const float beta2_power,
-                                                   const float lr, const float beta1,
-                                                   const float beta2,
-                                                   const float epsilon,
-                                                   const Tload* __restrict__ grad,
-                                                   int64_t n) {
-  int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (i >= n) return;
-  float g = LoadFloat(reinterpret_cast<const Tload*>(&grad[i]));
-  float m_old = LoadFloat(reinterpret_cast<const Tload*>(&m[i]));
-  float v_old = LoadFloat(reinterpret_cast<const Tload*>(&v[i]));
-  float m_new = beta1 * m_old + (1.0f - beta1) * g;
-  float v_new = beta2 * v_old + (1.0f - beta2) * (g * g);
-  float m_bar = (beta1 * m_new + (1.0f - beta1) * g) / (1.0f - beta1_power);
-  float v_hat = v_new / (1.0f - beta2_power);
-  float denom = sqrtf(v_hat) + epsilon;
-  float var_new = LoadFloat(reinterpret_cast<const Tload*>(&var[i])) - lr * m_bar / denom;
-  StoreFloat(reinterpret_cast<Tstore*>(&var[i]), var_new);
-  StoreFloat(reinterpret_cast<Tstore*>(&m[i]), m_new);
-  StoreFloat(reinterpret_cast<Tstore*>(&v[i]), v_new);
-}
-
-#define OPTIMAL_THREADS 256
-#define OPTIMAL_BLOCKS(n) (((n) + OPTIMAL_THREADS - 1) / OPTIMAL_THREADS)
-
-extern "C" {
-void LaunchResourceApplyNadamFloat(float* var, float* m, float* v,
-                                   float beta1_power, float beta2_power,
-                                   float lr, float beta1, float beta2,
-                                   float epsilon, const float* grad,
-                                   int64_t n, musaStream_t stream) {
+template <typename T>
+void LaunchResourceApplyNadamKernel(T* var, T* m, T* v, const T* grad,
+                                    float beta1_power, float beta2_power,
+                                    float lr, float beta1, float beta2,
+                                    float epsilon, int64_t n,
+                                    musaStream_t stream) {
   if (n <= 0) return;
-  ResourceApplyNadamKernel<float>
-      <<<OPTIMAL_BLOCKS(n), OPTIMAL_THREADS, 0, stream>>>(var, m, v,
-                                                         beta1_power,
-                                                         beta2_power, lr,
-                                                         beta1, beta2,
-                                                         epsilon, grad, n);
+  int block_size = 256;
+  int64_t num_blocks = (n + block_size - 1) / block_size;
+  ResourceApplyNadamKernel<T><<<num_blocks, block_size, 0, stream>>>(
+      var, m, v, grad, beta1_power, beta2_power, lr, beta1, beta2, epsilon, n);
 }
 
-void LaunchResourceApplyNadamDouble(double* var, double* m, double* v,
-                                    double beta1_power, double beta2_power,
-                                    double lr, double beta1, double beta2,
-                                    double epsilon, const double* grad,
-                                    int64_t n, musaStream_t stream) {
-  if (n <= 0) return;
-  ResourceApplyNadamKernel<double>
-      <<<OPTIMAL_BLOCKS(n), OPTIMAL_THREADS, 0, stream>>>(var, m, v,
-                                                          beta1_power,
-                                                          beta2_power, lr,
-                                                          beta1, beta2,
-                                                          epsilon, grad, n);
-}
+#define REGISTER_NADAM_LAUNCHER(T)                                          \
+  template void LaunchResourceApplyNadamKernel<T>(                          \
+      T * var, T * m, T * v, const T* grad, float beta1_power,              \
+      float beta2_power, float lr, float beta1, float beta2, float epsilon, \
+      int64_t n, musaStream_t stream);
 
-void LaunchResourceApplyNadamHalf(void* var, void* m, void* v,
-                                  float beta1_power, float beta2_power,
-                                  float lr, float beta1, float beta2,
-                                  float epsilon, const void* grad,
-                                  int64_t n, musaStream_t stream) {
-  if (n <= 0) return;
-  ResourceApplyNadamFloatAccumKernel<Eigen::half, Eigen::half>
-      <<<OPTIMAL_BLOCKS(n), OPTIMAL_THREADS, 0, stream>>>(
-          reinterpret_cast<Eigen::half*>(var), reinterpret_cast<Eigen::half*>(m),
-          reinterpret_cast<Eigen::half*>(v), beta1_power, beta2_power, lr,
-          beta1, beta2, epsilon, reinterpret_cast<const Eigen::half*>(grad), n);
-}
+REGISTER_NADAM_LAUNCHER(float);
+REGISTER_NADAM_LAUNCHER(Eigen::half);
+REGISTER_NADAM_LAUNCHER(bfloat16);
+REGISTER_NADAM_LAUNCHER(double);
 
-void LaunchResourceApplyNadamBFloat16(void* var, void* m, void* v,
-                                      float beta1_power, float beta2_power,
-                                      float lr, float beta1, float beta2,
-                                      float epsilon, const void* grad,
-                                      int64_t n, musaStream_t stream) {
-  if (n <= 0) return;
-  ResourceApplyNadamFloatAccumKernel<bfloat16, bfloat16>
-      <<<OPTIMAL_BLOCKS(n), OPTIMAL_THREADS, 0, stream>>>(
-          reinterpret_cast<bfloat16*>(var), reinterpret_cast<bfloat16*>(m),
-          reinterpret_cast<bfloat16*>(v), beta1_power, beta2_power, lr,
-          beta1, beta2, epsilon, reinterpret_cast<const bfloat16*>(grad), n);
-}
-}  // extern "C"
+#undef REGISTER_NADAM_LAUNCHER
 
 }  // namespace musa
 }  // namespace tensorflow
