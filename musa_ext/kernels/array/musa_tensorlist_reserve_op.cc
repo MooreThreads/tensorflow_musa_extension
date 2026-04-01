@@ -1,3 +1,4 @@
+#include "../../utils/musa_tensor_list_utils.h"
 #include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
@@ -9,6 +10,36 @@
 
 namespace tensorflow {
 namespace musa {
+
+// Helper function to convert tensor to PartialTensorShape, handling both
+// vector and scalar (-1 for unknown shape) inputs, same as EmptyTensorList.
+Status TensorShapeFromTensorReserve(const Tensor& t, PartialTensorShape* out) {
+  if (t.shape() == TensorShape({})) {
+    // Scalar case: only valid if value is -1 (unknown shape)
+    if ((t.dtype() == DT_INT32 && t.scalar<int32_t>()() == -1) ||
+        (t.dtype() == DT_INT64 && t.scalar<int64_t>()() == -1)) {
+      *out = PartialTensorShape();  // Fully unknown shape
+      return Status::OK();
+    }
+    return errors::InvalidArgument(
+        "The only valid scalar shape tensor is the fully unknown shape "
+        "specified as -1.");
+  } else if (t.shape().dims() != 1) {
+    return errors::InvalidArgument("Shape must be at most rank 1 but is rank ",
+                                   t.shape().dims());
+  }
+  // Vector case: standard path
+  if (t.dtype() == DT_INT32) {
+    return PartialTensorShape::MakePartialShape(t.vec<int32_t>().data(),
+                                                t.NumElements(), out);
+  } else if (t.dtype() == DT_INT64) {
+    return PartialTensorShape::MakePartialShape(t.vec<int64_t>().data(),
+                                                t.NumElements(), out);
+  }
+  return errors::InvalidArgument(
+      "Expected an int32 or int64 shape tensor; found ",
+      DataTypeString(t.dtype()));
+}
 
 class MusaTensorListReserveOp : public MusaOpKernel {
  public:
@@ -23,34 +54,14 @@ class MusaTensorListReserveOp : public MusaOpKernel {
     const Tensor& element_shape_tensor = ctx->input(0);
     const Tensor& num_elements_tensor = ctx->input(1);
 
-    OP_REQUIRES(
-        ctx, TensorShapeUtils::IsVector(element_shape_tensor.shape()),
-        errors::InvalidArgument("element_shape must be a vector, got shape ",
-                                element_shape_tensor.shape().DebugString()));
+    // Handle both scalar (-1 for unknown shape) and vector element_shape
+    PartialTensorShape element_shape;
+    OP_REQUIRES_OK(ctx, TensorShapeFromTensorReserve(element_shape_tensor, &element_shape));
 
     OP_REQUIRES(
         ctx, TensorShapeUtils::IsScalar(num_elements_tensor.shape()),
         errors::InvalidArgument("num_elements must be a scalar, got shape ",
                                 num_elements_tensor.shape().DebugString()));
-
-    PartialTensorShape element_shape;
-
-    if (element_shape_tensor.NumElements() > 0) {
-      OP_REQUIRES(ctx, element_shape_tensor.dtype() == DT_INT32,
-                  errors::InvalidArgument(
-                      "element_shape must be int32, got ",
-                      DataTypeString(element_shape_tensor.dtype())));
-
-      auto vec = element_shape_tensor.vec<int32>();
-      std::vector<int64_t> dims(vec.size());
-      for (int i = 0; i < vec.size(); ++i) {
-        dims[i] = static_cast<int64_t>(vec(i));
-      }
-
-      OP_REQUIRES_OK(
-          ctx, PartialTensorShape::MakePartialShape(
-                   dims.data(), static_cast<int>(dims.size()), &element_shape));
-    }
 
     int64_t num_elements = 0;
     if (num_elements_tensor.dtype() == DT_INT32) {

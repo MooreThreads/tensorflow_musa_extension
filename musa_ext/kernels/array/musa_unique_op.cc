@@ -81,14 +81,15 @@ class MusaUniqueOp : public MusaOpKernel {
     // This avoids the need for D2H sync
     // For now, allocate maximum size output and use copy/trim approach
     // which is compatible with async execution
-    Tensor* out_values = nullptr;
-    OP_REQUIRES_OK(
-        ctx, ctx->allocate_output(0, TensorShape({num_elements}), &out_values));
 
     // Copy all values (unique ones are at the beginning)
     if (num_elements > 0) {
       Tensor final_out = temp_out_values.Slice(0, num_elements);
       ctx->set_output(0, final_out);
+    } else {
+      // Empty case: allocate empty output
+      Tensor* out_values = nullptr;
+      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &out_values));
     }
   }
 };

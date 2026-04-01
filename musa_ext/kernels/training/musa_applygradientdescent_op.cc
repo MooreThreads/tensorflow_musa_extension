@@ -102,19 +102,21 @@ class MusaResourceApplyGradientDescentOp : public MusaOpKernel {
     // Get scalar learning rate value
     const T lr = lr_t.scalar<T>()();
 
-    // Fill lr scalar tensor
-    auto fill_scalar = [&](T val, const TensorShape& shape, mTensor* out) {
+    // Fill lr scalar tensor with proper precision preservation
+    // Use double for fill value to preserve precision for all types
+    auto fill_scalar = [&](double val, const TensorShape& shape, mTensor* out) {
       temp_storage.emplace_back();
       ctx->allocate_temp(DataTypeToEnum<T>::value, shape, &temp_storage.back());
       *out = CreateMTensor(temp_storage.back(), format_);
       ::musa::dnn::Fill fill_op;
-      fill_op.SetValue(static_cast<float>(val));
+      // SetValue accepts double, which preserves precision for float64
+      fill_op.SetValue(val);
       return fill_op.Run(handle, *out);
     };
 
     // Create lr tensor for multiplication
     mTensor t_lr;
-    fill_scalar(lr, grad_t.shape(), &t_lr);
+    fill_scalar(static_cast<double>(lr), grad_t.shape(), &t_lr);
 
     // Compute: lr * grad
     temp_storage.emplace_back();
@@ -155,8 +157,8 @@ REGISTER_RESOURCE_GRADIENT_DESCENT(float);
 REGISTER_RESOURCE_GRADIENT_DESCENT(Eigen::half);
 REGISTER_RESOURCE_GRADIENT_DESCENT(bfloat16);
 
-// Also register for double
-REGISTER_RESOURCE_GRADIENT_DESCENT(double);
+// Note: muDNN does not support DOUBLE (float64) for binary operations (MUL, SUB).
+// Do not register for double - TensorFlow will fall back to CPU implementation.
 
 // ApplyGradientDescent (non-resource version)
 template <typename T>
@@ -192,18 +194,20 @@ class MusaApplyGradientDescentOp : public MusaOpKernel {
 
     const T lr = lr_t.scalar<T>()();
 
-    // Fill lr scalar tensor
-    auto fill_scalar = [&](T val, const TensorShape& shape, mTensor* out) {
+    // Fill lr scalar tensor with proper precision preservation
+    // Use double for fill value to preserve precision for all types
+    auto fill_scalar = [&](double val, const TensorShape& shape, mTensor* out) {
       temp_storage.emplace_back();
       ctx->allocate_temp(DataTypeToEnum<T>::value, shape, &temp_storage.back());
       *out = CreateMTensor(temp_storage.back(), format_);
       ::musa::dnn::Fill fill_op;
-      fill_op.SetValue(static_cast<float>(val));
+      // SetValue accepts double, which preserves precision for float64
+      fill_op.SetValue(val);
       return fill_op.Run(handle, *out);
     };
 
     mTensor t_lr;
-    fill_scalar(lr, grad_t.shape(), &t_lr);
+    fill_scalar(static_cast<double>(lr), grad_t.shape(), &t_lr);
 
     // Compute: lr * grad
     temp_storage.emplace_back();
@@ -235,7 +239,7 @@ class MusaApplyGradientDescentOp : public MusaOpKernel {
 REGISTER_APPLY_GRADIENT_DESCENT(float);
 REGISTER_APPLY_GRADIENT_DESCENT(Eigen::half);
 REGISTER_APPLY_GRADIENT_DESCENT(bfloat16);
-REGISTER_APPLY_GRADIENT_DESCENT(double);
+// Note: muDNN does not support DOUBLE for binary operations. Not registered.
 
 }  // namespace musa
 }  // namespace tensorflow

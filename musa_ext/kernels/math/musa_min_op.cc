@@ -79,13 +79,8 @@ class MusaMinOp : public MusaOpKernel {
       }
     }
 
-    Tensor* out = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &out));
-    if (out->NumElements() == 0) return;
-
-    auto& handle = GetHandleByCtx(ctx);
-    musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
-
+    // Early return for trivial reduce_elements == 1 case BEFORE allocate_output
+    // to avoid double assignment bug (outputs_[index].tensor == nullptr)
     if (reduce_elements == 1) {
       Tensor output;
       // zero-copy: assign new output_shape, but underlying GPU memory still
@@ -96,6 +91,13 @@ class MusaMinOp : public MusaOpKernel {
       ctx->set_output(0, output);
       return;
     }
+
+    Tensor* out = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &out));
+    if (out->NumElements() == 0) return;
+
+    auto& handle = GetHandleByCtx(ctx);
+    musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 
     Tensor out_reshaped(out->dtype());
     OP_REQUIRES(ctx, out_reshaped.CopyFrom(*out, musa_output_shape),
