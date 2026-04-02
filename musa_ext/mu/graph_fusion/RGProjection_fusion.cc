@@ -175,8 +175,7 @@ Status BiasAddReluMatMulFusion::Apply(
 
   // Avoid duplicates
   for (const auto& node : graph->node()) {
-    if (node.name() == original_name &&
-        node.op() == "MusaBiasAddReluMatMul") {
+    if (node.name() == original_name && node.op() == "MusaBiasAddReluMatMul") {
       VLOG(1) << "MusaBiasAddReluMatMul: Output node " << original_name
               << " is already fused, skipping";
       return Status::OK();
@@ -278,8 +277,8 @@ Status BiasAddReluMatMulFusion::Apply(
       {bias_add_node->input(0), bias_add_node->input(1), other_input,
        original_name});
 
-  VLOG(1) << "BiasAddReluMatMulFusion: Successfully replaced '"
-          << original_name << "' with MusaBiasAddReluMatMul";
+  VLOG(1) << "BiasAddReluMatMulFusion: Successfully replaced '" << original_name
+          << "' with MusaBiasAddReluMatMul";
 
   return Status::OK();
 }

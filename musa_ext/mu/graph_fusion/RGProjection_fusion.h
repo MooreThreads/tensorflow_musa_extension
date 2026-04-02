@@ -23,13 +23,11 @@ class BiasAddReluMatMulFusion : public FusionPattern {
   Status Apply(GraphDef* graph,
                const FusionMatchResult& match_result) const override;
 
-  int GetPriority() const override { return 100; }
+  int GetPriority() const override { return 97; }
 
   bool IsKernelAvailable() const override;
 
-  std::string GetName() const override {
-    return "BiasAddReluMatMulFusion";
-  }
+  std::string GetName() const override { return "BiasAddReluMatMulFusion"; }
 
   std::string GetFallbackReason() const override {
     if (!kernel_available_) {

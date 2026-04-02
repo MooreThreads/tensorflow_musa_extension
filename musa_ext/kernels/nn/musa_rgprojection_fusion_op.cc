@@ -28,10 +28,9 @@ class MusaBiasAddReluMatMulOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("transpose_a", &trans_a_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("transpose_b", &trans_b_));
 
-    OP_REQUIRES(
-        ctx, relu_input_slot_ == 0 || relu_input_slot_ == 1,
-        errors::InvalidArgument("relu_input_slot must be 0 or 1, got ",
-                                relu_input_slot_));
+    OP_REQUIRES(ctx, relu_input_slot_ == 0 || relu_input_slot_ == 1,
+                errors::InvalidArgument("relu_input_slot must be 0 or 1, got ",
+                                        relu_input_slot_));
   }
 
   void Compute(OpKernelContext* ctx) override {
@@ -42,30 +41,28 @@ class MusaBiasAddReluMatMulOp : public MusaOpKernel {
     const Tensor& other = ctx->input(2);
 
     OP_REQUIRES(ctx, input.dims() >= 2,
-                errors::InvalidArgument(
-                    "input must have rank >= 2, got ", input.shape().DebugString()));
+                errors::InvalidArgument("input must have rank >= 2, got ",
+                                        input.shape().DebugString()));
     OP_REQUIRES(ctx, other.dims() >= 2,
-                errors::InvalidArgument(
-                    "other must have rank >= 2, got ", other.shape().DebugString()));
+                errors::InvalidArgument("other must have rank >= 2, got ",
+                                        other.shape().DebugString()));
     OP_REQUIRES(ctx, bias_input.dims() == 1,
-                errors::InvalidArgument(
-                    "bias must be rank 1, got ", bias_input.shape().DebugString()));
+                errors::InvalidArgument("bias must be rank 1, got ",
+                                        bias_input.shape().DebugString()));
 
     // 1. BiasAdd + Relu on input
     TensorShape bias_relu_shape = input.shape();
     OP_REQUIRES(
-        ctx,
-        bias_input.dim_size(0) == input.dim_size(input.dims() - 1),
+        ctx, bias_input.dim_size(0) == input.dim_size(input.dims() - 1),
         errors::InvalidArgument(
             "Dimension mismatch in BiasAddReluMatMul BiasAdd: input shape=",
-            input.shape().DebugString(), ", bias shape=",
-            bias_input.shape().DebugString(),
+            input.shape().DebugString(),
+            ", bias shape=", bias_input.shape().DebugString(),
             ", expected bias dim == input last dim"));
 
     Tensor bias_relu_tensor;
-    OP_REQUIRES_OK(
-        ctx,
-        ctx->allocate_temp(input.dtype(), bias_relu_shape, &bias_relu_tensor));
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(input.dtype(), bias_relu_shape,
+                                           &bias_relu_tensor));
 
     if (bias_relu_tensor.NumElements() == 0) {
       Tensor* output = nullptr;
@@ -183,17 +180,15 @@ class MusaBiasAddReluMatMulOp : public MusaOpKernel {
     bias_op.SetMode(::musa::dnn::Binary::Mode::ADD);
     mStatus status = bias_op.Run(handle, mt_tmp, mt_input, mt_bias);
 
-    OP_REQUIRES(
-        ctx, status == ::musa::dnn::Status::SUCCESS,
-        errors::Internal("MUSA BiasAdd failed in BiasAddReluMatMul."));
+    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
+                errors::Internal("MUSA BiasAdd failed in BiasAddReluMatMul."));
 
     mUnary relu_op;
     relu_op.SetMode(::musa::dnn::Unary::Mode::RELU);
     status = relu_op.Run(handle, mt_tmp, mt_tmp);
 
-    OP_REQUIRES(
-        ctx, status == ::musa::dnn::Status::SUCCESS,
-        errors::Internal("MUSA Relu failed in BiasAddReluMatMul."));
+    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
+                errors::Internal("MUSA Relu failed in BiasAddReluMatMul."));
   }
 
   void RunMatMul(OpKernelContext* ctx, const Tensor& lhs, const Tensor& rhs,
@@ -214,9 +209,9 @@ class MusaBiasAddReluMatMulOp : public MusaOpKernel {
     int64 n = trans_b_ ? d2 : d3;
     int64 k_check = trans_b_ ? d3 : d2;
 
-    OP_REQUIRES(ctx, k == k_check,
-                errors::InvalidArgument(
-                    "Matrix size-incompatible: lhs mismatch rhs"));
+    OP_REQUIRES(
+        ctx, k == k_check,
+        errors::InvalidArgument("Matrix size-incompatible: lhs mismatch rhs"));
 
     auto& handle = GetHandleByCtx(ctx);
     handle.SetAllowTF32(tf32_enabled_);
@@ -265,11 +260,9 @@ class MusaBiasAddReluMatMulOp : public MusaOpKernel {
   }
 };
 
-#define REGISTER_MUSA_BIASADD_RELU_MATMUL(TYPE)                           \
-  REGISTER_KERNEL_BUILDER(                                                \
-      Name("MusaBiasAddReluMatMul")                                       \
-          .Device("MUSA")                                                 \
-          .TypeConstraint<TYPE>("T"),                                     \
+#define REGISTER_MUSA_BIASADD_RELU_MATMUL(TYPE)                               \
+  REGISTER_KERNEL_BUILDER(                                                    \
+      Name("MusaBiasAddReluMatMul").Device("MUSA").TypeConstraint<TYPE>("T"), \
       MusaBiasAddReluMatMulOp<TYPE>);
 
 REGISTER_MUSA_BIASADD_RELU_MATMUL(float);
