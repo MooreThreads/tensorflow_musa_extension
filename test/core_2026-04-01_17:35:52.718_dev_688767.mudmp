@@ -1,7 +1,0 @@
-[2026-04-01_17:35:52.718] pid:688767, Application: python3 encountered MUSA_ERROR_ILLEGAL_ADDRESS in stream 4 of context 0 of device 0 when executing a command of type Command Dispatch at void tensorflow::musa::AssignCopyKernel<float><<<{1, 1, 1}, {256, 1, 1}>>>(float const* 0x00000111e8600100, float* 0x000000f7c0007740, long 0x0000000000000003)
-ExceptionType: IllegalAddress
-Schedule Info: ccbToken:0x00000000008910f8, pageTableRootAddr:0x00110039d61e8000, in process 964904 of Compute queue
-Device Info: PCIe Domain:0000, Bus:4c, Device:00, Function:00 (MTT S5000) 
-Core[0]-MMU:[0x401f00f7b4007781|0x01000407],QMASK:15,BIF:0(MPX0 TEXAS0) Writing to 0x00f7b4007780, L1(IP0 MP), Fault (Page Directory)
-Core[4]-MMU:[0x401f00f7c0007741|0x01001401],QMASK:15,BIF:1(MPX0 TEXAS1) Writing to 0x00f7c0007740, L1(IP0 MP), Fault (Page Directory)
-
