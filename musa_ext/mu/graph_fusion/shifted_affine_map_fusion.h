@@ -28,16 +28,15 @@ namespace musa_fusion {
 /**
  * ShiftedAffineMap Fusion Pattern
  *
- * Matches the pattern:
- *   AddV2
- *   ├─ Mul
- *   │   ├─ AddV2
- *   │   │   └─ StridedSlice
- *   │   │      └─  ReadVariableOp
- *   │   └─ Select
- *   └─ StridedSlice
- *       └─ ReadVariableOp
- * output = mask * (1.0 + slice(var_left)) + slice(var_right)
+ * Matches the pattern (Top-Down, Post-Constant-Folding):
+ * AddV2 (output_add)
+ * ├─ Mul
+ * │   ├─ Const (const_left)
+ * │   └─ Select (mask)
+ * └─ Const (const_right)
+ *
+ * Semantics:
+ * output = mask * const_left + const_right
  */
 
 class MusaShiftedAffineMapFusion : public FusionPattern {
@@ -69,7 +68,7 @@ class MusaShiftedAffineMapFusion : public FusionPattern {
   }
 
  private:
-  // Match starting from the top-level AddV2 (add_5) output node.
+  // Match starting from the top-level AddV2 output node.
   FusionMatchResult MatchFromOutputAddNode(const GraphDef& graph,
                                            int add_node_idx) const;
 
