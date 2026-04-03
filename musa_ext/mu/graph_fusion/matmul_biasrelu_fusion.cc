@@ -1,4 +1,4 @@
-#include "mu/graph_fusion/linear_relu_fusion.h"
+#include "mu/graph_fusion/matmul_biasrelu_fusion.h"
 
 #include <algorithm>
 #include <vector>
@@ -47,7 +47,7 @@ bool HasOriginalSuffix(const std::string& node_name) {
 
 }  // namespace
 
-bool LinearReluFusion::IsKernelAvailable() const {
+bool MatmulBiasReluFusion::IsKernelAvailable() const {
   if (!kernel_checked_) {
     kernel_available_ = true;
     kernel_checked_ = true;
@@ -55,8 +55,8 @@ bool LinearReluFusion::IsKernelAvailable() const {
   return kernel_available_;
 }
 
-FusionMatchResult LinearReluFusion::Match(const GraphDef& graph,
-                                          int start_node_idx) const {
+FusionMatchResult MatmulBiasReluFusion::Match(const GraphDef& graph,
+                                              int start_node_idx) const {
   FusionMatchResult result;
   if (start_node_idx < 0 || start_node_idx >= graph.node_size()) {
     return result;
@@ -117,10 +117,11 @@ FusionMatchResult LinearReluFusion::Match(const GraphDef& graph,
   return result;
 }
 
-Status LinearReluFusion::Apply(GraphDef* graph,
-                               const FusionMatchResult& match_result) const {
+Status MatmulBiasReluFusion::Apply(
+    GraphDef* graph, const FusionMatchResult& match_result) const {
   if (!match_result.IsValid()) {
-    return Status(error::INVALID_ARGUMENT, "Invalid LinearRelu match result");
+    return Status(error::INVALID_ARGUMENT,
+                  "Invalid MatmulBiasReluFusion match result");
   }
 
   if (!IsKernelAvailable()) {
@@ -136,7 +137,7 @@ Status LinearReluFusion::Apply(GraphDef* graph,
       matmul_it == match_result.captured_nodes.end() ||
       bias_it == match_result.captured_nodes.end()) {
     return Status(error::INVALID_ARGUMENT,
-                  "Missing required nodes in LinearRelu pattern");
+                  "Missing required nodes in MatmulBiasReluFusion pattern");
   }
 
   const NodeDef* output_node = output_it->second;
@@ -148,8 +149,8 @@ Status LinearReluFusion::Apply(GraphDef* graph,
 
   // Check if this output node has already been fused (avoid duplicates)
   for (const auto& node : graph->node()) {
-    if (node.name() == original_name && node.op() == "MusaLinearRelu") {
-      VLOG(1) << "MusaLinearRelu: Output node " << original_name
+    if (node.name() == original_name && node.op() == "MusaMatmulBiasRelu") {
+      VLOG(1) << "MusaMatmulBiasRelu: Output node " << original_name
               << " is already a fused node, skipping";
       return Status::OK();
     }
@@ -168,8 +169,8 @@ Status LinearReluFusion::Apply(GraphDef* graph,
                   "Failed to find output node in graph: " + original_name);
   }
 
-  VLOG(1) << "LinearReluFusion: Replacing " << original_name
-          << " with MusaLinearRelu";
+  VLOG(1) << "MusaMatmulBiasReluFusion: Replacing " << original_name
+          << " with MusaMatmulBiasReluFusion";
 
   NodeDef* original_output_node = graph->mutable_node(output_node_idx);
   const std::string output_device = original_output_node->device();
@@ -192,10 +193,10 @@ Status LinearReluFusion::Apply(GraphDef* graph,
 
   NodeDef* fused_node = graph->add_node();
   fused_node->set_name(original_name);
-  fused_node->set_op("MusaLinearRelu");
+  fused_node->set_op("MusaMatmulBiasRelu");
   fused_node->set_device(output_device);
 
-  // MusaLinearRelu inputs: a, b, bias
+  // MusaMatmulBiasRelu inputs: a, b, bias
   fused_node->add_input(matmul_node->input(0));
   fused_node->add_input(matmul_node->input(1));
   // bias input might need port handling if it's more than just a name
@@ -230,17 +231,17 @@ Status LinearReluFusion::Apply(GraphDef* graph,
       {matmul_node->input(0), matmul_node->input(1), bias_node->name(),
        original_name});
 
-  VLOG(1) << "LinearReluFusion: Successfully replaced '" << original_name
-          << "' with MusaLinearRelu";
+  VLOG(1) << "MatmulBiasReluFusion: Successfully replaced '" << original_name
+          << "' with MusaMatmulBiasRelu";
 
   return Status::OK();
 }
 
 // Register the pattern
-REGISTER_FUSION_PATTERN(LinearReluFusion);
+REGISTER_FUSION_PATTERN(MatmulBiasReluFusion);
 
 // Register kernel availability
-REGISTER_FUSION_KERNEL(LinearReluFusion, []() { return true; });
+REGISTER_FUSION_KERNEL(MatmulBiasReluFusion, []() { return true; });
 
 }  // namespace musa_fusion
 }  // namespace grappler

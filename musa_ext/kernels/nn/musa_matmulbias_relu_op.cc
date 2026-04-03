@@ -9,7 +9,7 @@
 namespace tensorflow {
 namespace musa {
 
-// The fused op for MusaLinearRelu, which computes MatMul + BiasAdd + Relu
+// The fused op for MusaMatmulBiasRelu, which computes MatMul + BiasAdd + Relu
 // Provides two types of implementations:
 // 1) A pure MUSA implementation using mudnn for MatMul and a custom kernel for
 // BiasAdd+Relu
@@ -20,9 +20,9 @@ template <typename T>
 void LaunchBiasAddReluKernel(const T*, const T*, T*, int, int, musaStream_t);
 
 template <typename T>
-class MusaLinearReluOp : public MusaOpKernel {
+class MusaMatmulBiasReluOp : public MusaOpKernel {
  public:
-  explicit MusaLinearReluOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {
+  explicit MusaMatmulBiasReluOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("transpose_a", &trans_a_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("transpose_b", &trans_b_));
   }
@@ -106,9 +106,10 @@ class MusaLinearReluOp : public MusaOpKernel {
       status = op.Run(handle, mt_mm_out, mt_a, mt_b);
     }
 
-    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
-                errors::Internal(
-                    "MUSA MatMul/BatchMatMul execution failed in LinearRelu."));
+    OP_REQUIRES(
+        ctx, status == ::musa::dnn::Status::SUCCESS,
+        errors::Internal(
+            "MUSA Matmul/BatchMatmul execution failed in MatmulBiasRelu."));
 
     // 2. BiasAdd + Relu
     MUSA_KERNEL_TRACE_START("UseMudnn");
@@ -137,9 +138,10 @@ class MusaLinearReluOp : public MusaOpKernel {
     mTensor mt_out = CreateMTensor(*output);
 
     int channel_dim = mm_out_shape.dims() - 1;
-    OP_REQUIRES(
-        ctx, bias_input.dim_size(0) == mm_out_shape.dim_size(channel_dim),
-        errors::InvalidArgument("Dimension mismatch in BiasAdd of LinearRelu"));
+    OP_REQUIRES(ctx,
+                bias_input.dim_size(0) == mm_out_shape.dim_size(channel_dim),
+                errors::InvalidArgument(
+                    "Dimension mismatch in BiasAdd of MatmulBiasRelu"));
 
     int dims_cnt = mm_out_shape.dims();
     std::vector<int64_t> b_dims(dims_cnt, 1);
@@ -154,7 +156,7 @@ class MusaLinearReluOp : public MusaOpKernel {
     mStatus status = bias_op.Run(handle, mt_out, mt_mm_out, mt_bias);
 
     OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
-                errors::Internal("MUSA BiasAdd failed in LinearRelu."));
+                errors::Internal("MUSA BiasAdd failed in MatmulBiasRelu."));
 
     // 3. Relu (In-place on current output)
     mUnary relu_op;
@@ -162,7 +164,7 @@ class MusaLinearReluOp : public MusaOpKernel {
     status = relu_op.Run(handle, mt_out, mt_out);
 
     OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
-                errors::Internal("MUSA Relu failed in LinearRelu."));
+                errors::Internal("MUSA Relu failed in MatmulBiasRelu."));
   }
 
   void UseKernel(OpKernelContext* ctx, const Tensor& bias_input,
@@ -178,20 +180,20 @@ class MusaLinearReluOp : public MusaOpKernel {
   }
 };
 
-#define REGISTER_MUSA_LINEAR_RELU(TYPE)                                \
-  REGISTER_KERNEL_BUILDER(                                             \
-      Name("MusaLinearRelu").Device("MUSA").TypeConstraint<TYPE>("T"), \
-      MusaLinearReluOp<TYPE>);
+#define REGISTER_MUSA_MatmulBias_RELU(TYPE)                                \
+  REGISTER_KERNEL_BUILDER(                                                 \
+      Name("MusaMatmulBiasRelu").Device("MUSA").TypeConstraint<TYPE>("T"), \
+      MusaMatmulBiasReluOp<TYPE>);
 
-REGISTER_MUSA_LINEAR_RELU(float);
-REGISTER_MUSA_LINEAR_RELU(Eigen::half);
-REGISTER_MUSA_LINEAR_RELU(bfloat16);
-REGISTER_MUSA_LINEAR_RELU(double);
+REGISTER_MUSA_MatmulBias_RELU(float);
+REGISTER_MUSA_MatmulBias_RELU(Eigen::half);
+REGISTER_MUSA_MatmulBias_RELU(bfloat16);
+REGISTER_MUSA_MatmulBias_RELU(double);
 
-#undef REGISTER_MUSA_LINEAR_RELU
+#undef REGISTER_MUSA_MatmulBias_RELU
 }  // namespace musa
 
-REGISTER_OP("MusaLinearRelu")
+REGISTER_OP("MusaMatmulBiasRelu")
     .Input("a: T")
     .Input("b: T")
     .Input("bias: T")
