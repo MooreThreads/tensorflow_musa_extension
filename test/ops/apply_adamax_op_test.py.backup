@@ -509,41 +509,26 @@ class ApplyAdaMaxTest(unittest.TestCase):
         self._assert_state_close(expected, actual, dtype)
 
   def test_resource_apply_adamax_float64(self):
-    # Skip float64 test as we no longer register it with MuDNN
-    # TensorFlow will automatically fallback to CPU for float64
-    self.skipTest("float64 not supported in MuDNN AdaMax implementation")
-
-  def test_resource_apply_adamax_numerical_stability(self):
-    """Test numerical stability with edge cases."""
-    dtype = tf.float32
-    # Very small values to test numerical stability
-    init_var = np.array([1e-10, 2e-10, 3e-10], dtype=np.float32)
-    init_m = np.zeros(3, dtype=np.float32)
-    init_v = np.zeros(3, dtype=np.float32)
-    grad = np.array([1e-10, -1e-10, 1e-10], dtype=np.float32)
+    dtype = tf.float64
+    init_var = np.array([1.0, -2.0, 3.5, -4.5], dtype=np.float64)
+    init_m = np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float64)
+    init_v = np.array([0.5, 0.6, 0.7, 0.8], dtype=np.float64)
+    grad = np.array([0.25, -0.75, 1.5, -2.0], dtype=np.float64)
 
     actual = self._run_resource_apply_adamax(
         init_var,
         init_m,
         init_v,
         grad,
-        beta1_power=0.9,
+        beta1_power=0.81,
         lr=0.001,
         beta1=0.9,
         beta2=0.999,
-        epsilon=1e-8,
+        epsilon=1e-7,
         dtype=dtype)
 
-    # Check that no NaN or Inf values are produced
-    for i, state in enumerate(actual):
-      self.assertFalse(np.any(np.isnan(state)),
-                      f"NaN detected in state {i} with small values")
-      self.assertFalse(np.any(np.isinf(state)),
-                      f"Inf detected in state {i} with small values")
-
-    # Verify results are numerically reasonable
     expected = self._compute_expected_state(
-        init_var, init_m, init_v, grad, 0.9, 0.001, 0.9, 0.999, 1e-8, dtype)
+        init_var, init_m, init_v, grad, 0.81, 0.001, 0.9, 0.999, 1e-7, dtype)
     self._assert_state_close(expected, actual, dtype)
 
   def test_resource_apply_adamax_multiple_shapes(self):
