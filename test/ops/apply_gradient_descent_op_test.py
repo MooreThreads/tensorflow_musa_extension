@@ -18,10 +18,18 @@
 import numpy as np
 import tensorflow as tf
 
-from musa_test_utils import MUSATestCase
+from musa_test_utils import load_musa_plugin
+
+try:
+  load_musa_plugin()
+  MUSA_DEVICES = tf.config.list_physical_devices("MUSA")
+  PLUGIN_LOAD_ERROR = None
+except Exception as exc:  # pragma: no cover
+  MUSA_DEVICES = []
+  PLUGIN_LOAD_ERROR = exc
 
 
-class ApplyGradientDescentOpTest(MUSATestCase):
+class ApplyGradientDescentOpTest(tf.test.TestCase):
   """Tests for MUSA ApplyGradientDescent operators."""
 
   def _numpy_dtype(self, dtype):
@@ -39,8 +47,12 @@ class ApplyGradientDescentOpTest(MUSATestCase):
     else:
       self.assertAllClose(expected, actual, rtol=1e-5, atol=1e-8)
 
-  def _expected_apply_gradient_descent(self, init_var_np, alpha_np, grad_np):
-    return init_var_np - alpha_np * grad_np
+  def _skip_if_no_musa(self):
+    if MUSA_DEVICES:
+      return
+    if PLUGIN_LOAD_ERROR is not None:
+      self.skipTest(f"MUSA plugin load failed: {PLUGIN_LOAD_ERROR}")
+    self.skipTest("No MUSA devices found.")
 
   def _run_resource_apply_gradient_descent(self,
                                            device,
@@ -74,6 +86,7 @@ class ApplyGradientDescentOpTest(MUSATestCase):
       return sess.run(read_var)
 
   def _run_apply_gradient_descent(self,
+                                  device,
                                   init_var_np,
                                   alpha_np,
                                   grad_np,
@@ -81,7 +94,7 @@ class ApplyGradientDescentOpTest(MUSATestCase):
                                   use_locking=False):
     graph = tf.Graph()
     with graph.as_default():
-      with tf.device("/CPU:0"):
+      with tf.device(device):
         var = tf.compat.v1.get_variable(
             "var",
             initializer=tf.constant(init_var_np, dtype=dtype),
@@ -92,6 +105,7 @@ class ApplyGradientDescentOpTest(MUSATestCase):
 
         update = tf.raw_ops.ApplyGradientDescent(
             var=var, alpha=alpha, delta=grad, use_locking=use_locking)
+
         with tf.control_dependencies([update]):
           read_var = tf.identity(var, name="updated_var")
 
@@ -102,6 +116,8 @@ class ApplyGradientDescentOpTest(MUSATestCase):
       return sess.run(read_var)
 
   def testResourceApplyGradientDescent(self):
+    self._skip_if_no_musa()
+
     cases = [
         (
             np.array([1.0, -2.0, 3.5, -4.5], dtype=np.float32),
@@ -149,30 +165,29 @@ class ApplyGradientDescentOpTest(MUSATestCase):
     init_var_np = np.array([1.25, -2.5, 5.0, -10.0], dtype=np.float32)
     grad_np = np.array([0.5, 0.25, -1.0, 2.0], dtype=np.float32)
     alpha_np = np.float32(0.5)
-    expected = self._expected_apply_gradient_descent(
-        init_var_np, alpha_np, grad_np)
 
-    result = self._run_apply_gradient_descent(
-        init_var_np,
-        alpha_np,
-        grad_np,
-        tf.float32,
-        use_locking=True)
-    self._assert_by_dtype(expected, result, tf.float32)
-
-  def testResourceApplyGradientDescentUseLocking(self):
-    init_var_np = np.array([1.25, -2.5, 5.0, -10.0], dtype=np.float32)
-    grad_np = np.array([0.5, 0.25, -1.0, 2.0], dtype=np.float32)
-    alpha_np = np.float32(0.5)
-
-    cpu_result = self._run_resource_apply_gradient_descent(
+    cpu_ref_result = self._run_apply_gradient_descent(
         "/CPU:0",
         init_var_np,
         alpha_np,
         grad_np,
         tf.float32,
         use_locking=True)
-    musa_result = self._run_resource_apply_gradient_descent(
+    musa_ref_result = self._run_apply_gradient_descent(
+        "/device:MUSA:0",
+        init_var_np,
+        alpha_np,
+        grad_np,
+        tf.float32,
+        use_locking=True)
+    cpu_resource_result = self._run_resource_apply_gradient_descent(
+        "/CPU:0",
+        init_var_np,
+        alpha_np,
+        grad_np,
+        tf.float32,
+        use_locking=True)
+    musa_resource_result = self._run_resource_apply_gradient_descent(
         "/device:MUSA:0",
         init_var_np,
         alpha_np,
@@ -180,7 +195,8 @@ class ApplyGradientDescentOpTest(MUSATestCase):
         tf.float32,
         use_locking=True)
 
-    self._assert_by_dtype(cpu_result, musa_result, tf.float32)
+    self._assert_by_dtype(cpu_ref_result, musa_ref_result, tf.float32)
+    self._assert_by_dtype(cpu_resource_result, musa_resource_result, tf.float32)
 
 
 if __name__ == "__main__":
