@@ -8,9 +8,9 @@ import tensorflow as tf
 from musa_test_utils import MUSATestCase
 
 
-def shifted_affine_map_ref(data_left, sliced_var_left, mask, sliced_var_right):
+def shifted_affine_map_ref(data_left, mask, sliced_var_right):
     """NumPy reference implementation of ShiftedAffineMap."""
-    return mask * (data_left + sliced_var_left) + sliced_var_right
+    return mask * data_left + sliced_var_right
 
 
 class ShiftedAffineMapOpTest(MUSATestCase):
@@ -46,7 +46,7 @@ class ShiftedAffineMapOpTest(MUSATestCase):
                   "\n".join(f"  - {loc}" for loc in searched_locations))
             cls._musa_ops = None
 
-    def _run_musa_shifted_affine_map(self, data_left, sliced_var_left, mask,
+    def _run_musa_shifted_affine_map(self, data_left, mask,
                                      sliced_var_right):
         if (self._musa_ops is None or
                 not hasattr(self._musa_ops, "musa_shifted_affine_map")):
@@ -59,28 +59,24 @@ class ShiftedAffineMapOpTest(MUSATestCase):
         with tf.device("/device:MUSA:0"):
             return self._musa_ops.musa_shifted_affine_map(
                 data_left=data_left,
-                sliced_var_left=sliced_var_left,
                 mask=mask,
                 sliced_var_right=sliced_var_right,
             )
 
-    def _assert_shifted_affine_map_close(self, data_left_np, sliced_var_left_np,
+    def _assert_shifted_affine_map_close(self, data_left_np,
                                          mask_np, sliced_var_right_np, dtype,
                                          rtol, atol):
         np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
 
         data_left = tf.constant(np.array(data_left_np, dtype=np_dtype), dtype=dtype)
-        sliced_var_left = tf.constant(
-            np.array(sliced_var_left_np, dtype=np_dtype), dtype=dtype)
         mask = tf.constant(np.array(mask_np, dtype=np_dtype), dtype=dtype)
         sliced_var_right = tf.constant(
             np.array(sliced_var_right_np, dtype=np_dtype), dtype=dtype)
 
         actual = self._run_musa_shifted_affine_map(
-            data_left, sliced_var_left, mask, sliced_var_right)
+            data_left, mask, sliced_var_right)
         expected = shifted_affine_map_ref(
             np.array(data_left_np, dtype=np_dtype),
-            np.array(sliced_var_left_np, dtype=np_dtype),
             np.array(mask_np, dtype=np_dtype),
             np.array(sliced_var_right_np, dtype=np_dtype),
         )
@@ -97,13 +93,11 @@ class ShiftedAffineMapOpTest(MUSATestCase):
         """Basic broadcasted test with float32 inputs."""
         rng = np.random.RandomState(42)
         data_left_np = rng.standard_normal([2, 4, 8]).astype(np.float32)
-        sliced_var_left_np = rng.standard_normal([8]).astype(np.float32) * 0.1
         mask_np = (rng.random([2, 4, 8]) > 0.3).astype(np.float32)
         sliced_var_right_np = rng.standard_normal([8]).astype(np.float32) * 0.1
 
         self._assert_shifted_affine_map_close(
             data_left_np,
-            sliced_var_left_np,
             mask_np,
             sliced_var_right_np,
             tf.float32,
@@ -115,13 +109,11 @@ class ShiftedAffineMapOpTest(MUSATestCase):
         """Basic broadcasted test with float16 inputs."""
         rng = np.random.RandomState(7)
         data_left_np = rng.standard_normal([2, 4, 8]).astype(np.float16)
-        sliced_var_left_np = (rng.standard_normal([8]) * 0.1).astype(np.float16)
         mask_np = (rng.random([2, 4, 8]) > 0.5).astype(np.float16)
         sliced_var_right_np = (rng.standard_normal([8]) * 0.1).astype(np.float16)
 
         self._assert_shifted_affine_map_close(
             data_left_np,
-            sliced_var_left_np,
             mask_np,
             sliced_var_right_np,
             tf.float16,
@@ -133,13 +125,11 @@ class ShiftedAffineMapOpTest(MUSATestCase):
         """Basic broadcasted test with bfloat16 inputs."""
         rng = np.random.RandomState(11)
         data_left_np = rng.standard_normal([2, 4, 8]).astype(np.float32)
-        sliced_var_left_np = rng.standard_normal([8]).astype(np.float32) * 0.1
         mask_np = (rng.random([2, 4, 8]) > 0.4).astype(np.float32)
         sliced_var_right_np = rng.standard_normal([8]).astype(np.float32) * 0.1
 
         self._assert_shifted_affine_map_close(
             data_left_np,
-            sliced_var_left_np,
             mask_np,
             sliced_var_right_np,
             tf.bfloat16,
@@ -151,15 +141,12 @@ class ShiftedAffineMapOpTest(MUSATestCase):
         """Exercise rank expansion and multi-axis broadcasting."""
         rng = np.random.RandomState(1234)
         data_left_np = rng.standard_normal([2, 1, 4, 8]).astype(np.float32)
-        sliced_var_left_np = (
-            rng.standard_normal([1, 4, 1]).astype(np.float32) * 0.1)
         mask_np = (rng.random([2, 3, 1, 8]) > 0.35).astype(np.float32)
         sliced_var_right_np = (
             rng.standard_normal([1, 3, 4, 1]).astype(np.float32) * 0.1)
 
         self._assert_shifted_affine_map_close(
             data_left_np,
-            sliced_var_left_np,
             mask_np,
             sliced_var_right_np,
             tf.float32,
@@ -171,15 +158,12 @@ class ShiftedAffineMapOpTest(MUSATestCase):
         """Verify the dedicated float64 kernel path with broadcasting."""
         rng = np.random.RandomState(2024)
         data_left_np = rng.standard_normal([2, 3, 4]).astype(np.float64)
-        sliced_var_left_np = (
-            rng.standard_normal([1, 3, 1]).astype(np.float64) * 0.1)
         mask_np = (rng.random([2, 1, 4]) > 0.45).astype(np.float64)
         sliced_var_right_np = (
             rng.standard_normal([4]).astype(np.float64) * 0.1)
 
         self._assert_shifted_affine_map_close(
             data_left_np,
-            sliced_var_left_np,
             mask_np,
             sliced_var_right_np,
             tf.float64,
@@ -190,13 +174,11 @@ class ShiftedAffineMapOpTest(MUSATestCase):
     def test_empty_tensor(self):
         """Test zero-element tensor handling."""
         data_left_np = np.zeros([0, 8], dtype=np.float32)
-        sliced_var_left_np = np.linspace(-0.1, 0.1, num=8).astype(np.float32)
         mask_np = np.zeros([0, 8], dtype=np.float32)
         sliced_var_right_np = np.linspace(0.2, -0.2, num=8).astype(np.float32)
 
         self._assert_shifted_affine_map_close(
             data_left_np,
-            sliced_var_left_np,
             mask_np,
             sliced_var_right_np,
             tf.float32,

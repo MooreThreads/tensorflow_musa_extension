@@ -38,12 +38,8 @@ class MusaBiasAddGradOp : public MusaOpKernel {
         ctx, channel_dim >= 0 && channel_dim < output_backprop.dims(),
         errors::InvalidArgument("Invalid channel dimension calculation."));
 
-    TensorShape output_shape({output_backprop.dim_size(channel_dim)});
-    Tensor* output = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
-
-    if (output_backprop.NumElements() == 0) return;
-
+    // Check if reduce_dims will be empty before allocating output.
+    // For 1D tensors, there are no dimensions to reduce (identity case).
     std::vector<int> reduce_dims;
     reduce_dims.reserve(output_backprop.dims() - 1);
     for (int i = 0; i < output_backprop.dims(); ++i) {
@@ -52,12 +48,20 @@ class MusaBiasAddGradOp : public MusaOpKernel {
       }
     }
 
-    auto& handle = GetHandleByCtx(ctx);
-
+    // When reduce_dims is empty, output_backprop is already the correct result.
+    // Use set_output() directly without allocating (avoid double assignment bug).
     if (reduce_dims.empty()) {
       ctx->set_output(0, output_backprop);
       return;
     }
+
+    TensorShape output_shape({output_backprop.dim_size(channel_dim)});
+    Tensor* output = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
+
+    if (output_backprop.NumElements() == 0) return;
+
+    auto& handle = GetHandleByCtx(ctx);
 
     TensorShape mudnn_output_shape = output_backprop.shape();
     for (int dim : reduce_dims) {
