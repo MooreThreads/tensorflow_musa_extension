@@ -3,6 +3,8 @@
 
 #include <musa_runtime.h>
 
+#include <cstdint>
+
 namespace tensorflow {
 namespace musa {
 
@@ -19,12 +21,16 @@ struct ShiftedAffineMapStrides {
 
 template <typename T>
 void LaunchShiftedAffineMapKernel(
-    const T* data_left, ShiftedAffineMapStrides data_left_st,
-    const T* sliced_var_left, ShiftedAffineMapStrides sliced_var_left_st,
-    const T* mask, ShiftedAffineMapStrides mask_st,
-    const T* sliced_var_right, ShiftedAffineMapStrides sliced_var_right_st,
-    T* output, ShiftedAffineMapShape shape, int total_elements,
-    musaStream_t stream);
+    const T* data_left, ShiftedAffineMapStrides data_left_st, const T* mask,
+    ShiftedAffineMapStrides mask_st, const T* sliced_var_right,
+    ShiftedAffineMapStrides sliced_var_right_st, T* output,
+    ShiftedAffineMapShape shape, int total_elements, musaStream_t stream);
+
+template <typename T>
+void LaunchShiftedAffineMapContiguous(const T* data_left, const T* mask,
+                                      const T* sliced_var_right, T* output,
+                                      int64_t total_elements,
+                                      musaStream_t stream);
 
 }  // namespace musa
 }  // namespace tensorflow

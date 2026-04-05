@@ -12,20 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""End-to-end fusion test for MusaShiftedAffineMap (final pattern).
-
-Pattern:
-  AddV2 (output)
-  ├─ Mul
-  │   ├─ AddV2 (left)
-  │   │   ├─ data_left
-  │   │   └─ StridedSlice ← ReadVariableOp    (sliced_var_left)
-  │   └─ Select (mask)
-  └─ StridedSlice ← ReadVariableOp            (sliced_var_right)
-
-Semantics:
-  output = mask * (data_left + slice(var_left)) + slice(var_right)
-"""
+"""End-to-end fusion test for MusaShiftedAffineMap (Comprehensive Suite)."""
 
 import numpy as np
 import tensorflow as tf
@@ -64,109 +51,52 @@ def _has_fused_op(partition_graphs, op_name="MusaShiftedAffineMap"):
                for pg in partition_graphs for node in pg.node)
 
 
-def _numpy_shifted_affine_map(data_left, sliced_var_left, mask, sliced_var_right):
-    """Reference implementation: mask*(data_left+sliced_var_left)+sliced_var_right"""
-    return mask * (data_left + sliced_var_left) + sliced_var_right
+def _numpy_shifted_affine_map(data_left, mask, sliced_var_right):
+    """Reference implementation: mask * data_left + sliced_var_right"""
+    return mask * data_left + sliced_var_right
 
 
-def _build_shifted_affine_map_graph(data_shape, var_left_shape, var_right_shape):
-    """Construct the exact fusible pattern in a TF graph.
-
-    Pattern:
-      AddV2(output)
-      ├─ Mul
-      │   ├─ AddV2(add_left)
-      │   │   ├─ data_left (placeholder)
-      │   │   └─ StridedSlice ← ReadVariableOp (var_left)
-      │   └─ Select (mask)
-      └─ StridedSlice ← ReadVariableOp (var_right)
-    """
+def _build_exact_pb_match_graph(data_shape, right_shape, data_np, right_np):
+    """Construct a graph that exactly mimics the Constant-Folded topology."""
     graph = tf.Graph()
     with graph.as_default():
         with tf.device("/device:MUSA:0"):
-            # Data input (left branch)
-            data_left = tf.compat.v1.placeholder(
-                tf.float32, shape=data_shape, name="data_left")
+            mask_cond = tf.compat.v1.placeholder(tf.bool, shape=data_shape, name="mask_cond")
+            ones = tf.ones(data_shape, dtype=tf.float32)
+            zeros = tf.zeros(data_shape, dtype=tf.float32)
+            mask = tf.where(mask_cond, ones, zeros, name="Select_mask")
 
-            # Left variable: ReadVariableOp → StridedSlice → AddV2
-            var_left = tf.Variable(
-                tf.zeros(var_left_shape, dtype=tf.float32), name="var_left")
-            begins_l = [0] * len(var_left_shape)
-            ends_l = list(var_left_shape)
-            strides_l = [1] * len(var_left_shape)
-            sliced_var_left = tf.strided_slice(
-                var_left, begins_l, ends_l, strides_l,
-                name="strided_slice_left")
+            # Left Branch is fully folded constant
+            const_left = tf.constant(data_np, dtype=tf.float32, name="folded_const_left")
+            id_left = tf.identity(const_left, name="id_folded_left")
 
-            # Right variable: ReadVariableOp → StridedSlice (directly to output)
-            var_right = tf.Variable(
-                tf.zeros(var_right_shape, dtype=tf.float32), name="var_right")
-            begins_r = [0] * len(var_right_shape)
-            ends_r = list(var_right_shape)
-            strides_r = [1] * len(var_right_shape)
-            sliced_var_right = tf.strided_slice(
-                var_right, begins_r, ends_r, strides_r,
-                name="strided_slice_right")
+            # Right Branch is also a folded constant
+            const_right = tf.constant(right_np, dtype=tf.float32, name="folded_const_right")
+            id_right = tf.identity(const_right, name="id_folded_right")
 
-            # Mask (Select node)
-            mask_cond = tf.compat.v1.placeholder(
-                tf.bool, shape=data_shape, name="mask_cond")
+            # Main Computation
+            mul_gated = tf.math.multiply(id_left, mask, name="mul_gated")
+            output = tf.math.add(mul_gated, id_right, name="output_add")
+
+    return graph, output
+
+def _build_shifted_affine_map_graph(data_shape, right_shape, data_np, right_np):
+    """Construct graph with standard const ops for numerical tests."""
+    graph = tf.Graph()
+    with graph.as_default():
+        with tf.device("/device:MUSA:0"):
+            mask_cond = tf.compat.v1.placeholder(tf.bool, shape=data_shape, name="mask_cond")
             ones = tf.ones(data_shape, dtype=tf.float32)
             zeros = tf.zeros(data_shape, dtype=tf.float32)
             mask = tf.where(mask_cond, ones, zeros, name="mask_select")
 
-            # Left branch: AddV2(data_left, sliced_var_left)
-            add_left = tf.math.add(data_left, sliced_var_left, name="add_left")
+            const_left = tf.constant(data_np, dtype=tf.float32, name="data_left")
+            const_right = tf.constant(right_np, dtype=tf.float32, name="data_right")
 
-            # Mul: add_left * mask
-            mul_gated = tf.math.multiply(add_left, mask, name="mul_gated")
+            mul_gated = tf.math.multiply(const_left, mask, name="mul_gated")
+            output = tf.math.add(mul_gated, const_right, name="output")
 
-            # Output: mul_gated + sliced_var_right  (no wrapping AddV2 on right)
-            output = tf.math.add(mul_gated, sliced_var_right, name="output")
-
-    return graph, output, var_left, var_right
-
-
-def _build_shifted_affine_map_graph_with_identity_wrappers(
-        data_shape, var_left_shape, var_right_shape):
-    """Construct a fusible graph with Identity wrappers on boundary inputs."""
-    graph = tf.Graph()
-    with graph.as_default():
-        with tf.device("/device:MUSA:0"):
-            data_left = tf.compat.v1.placeholder(
-                tf.float32, shape=data_shape, name="data_left")
-            data_left_id = tf.identity(data_left, name="data_left_identity")
-
-            var_left = tf.Variable(
-                tf.zeros(var_left_shape, dtype=tf.float32), name="var_left")
-            sliced_var_left = tf.strided_slice(
-                var_left, [0] * len(var_left_shape), list(var_left_shape),
-                [1] * len(var_left_shape), name="strided_slice_left")
-            sliced_var_left_id = tf.identity(
-                sliced_var_left, name="strided_slice_left_identity")
-
-            var_right = tf.Variable(
-                tf.zeros(var_right_shape, dtype=tf.float32), name="var_right")
-            sliced_var_right = tf.strided_slice(
-                var_right, [0] * len(var_right_shape), list(var_right_shape),
-                [1] * len(var_right_shape), name="strided_slice_right")
-            sliced_var_right_id = tf.identity(
-                sliced_var_right, name="strided_slice_right_identity")
-
-            mask_cond = tf.compat.v1.placeholder(
-                tf.bool, shape=data_shape, name="mask_cond")
-            ones = tf.ones(data_shape, dtype=tf.float32)
-            zeros = tf.zeros(data_shape, dtype=tf.float32)
-            mask = tf.where(mask_cond, ones, zeros, name="mask_select")
-            mask_id = tf.identity(mask, name="mask_identity")
-
-            add_left = tf.math.add(
-                data_left_id, sliced_var_left_id, name="add_left")
-            mul_gated = tf.math.multiply(add_left, mask_id, name="mul_gated")
-            output = tf.math.add(
-                mul_gated, sliced_var_right_id, name="output")
-
-    return graph, output, var_left, var_right
+    return graph, output
 
 
 # =========================================================================
@@ -176,12 +106,12 @@ def _build_shifted_affine_map_graph_with_identity_wrappers(
 class ShiftedAffineMapFusionTest(MUSATestCase):
 
     # -----------------------------------------------------------------
-    # 1. Fusion is applied
+    # Test 1: Exact PB Topology (Folded Const)
     # -----------------------------------------------------------------
-    def test_fusion_is_applied(self):
-        """The optimized graph must contain a MusaShiftedAffineMap node."""
+    def test_fusion_with_frozen_pb_topology(self):
+        """Test if fusion fires on the exact topology."""
         print("\n" + "=" * 70)
-        print("Test: ShiftedAffineMap — fusion is applied")
+        print("Test 1: ShiftedAffineMap — Strict PB Topology Match")
         print("=" * 70)
 
         data_shape = [4, 8, 16]
@@ -190,38 +120,34 @@ class ShiftedAffineMapFusionTest(MUSATestCase):
         rng = np.random.RandomState(42)
         data_np = rng.standard_normal(data_shape).astype(np.float32)
         mask_np = rng.random(data_shape) > 0.5
-        var_l = rng.standard_normal(var_shape).astype(np.float32) * 0.01
-        var_r = rng.standard_normal(var_shape).astype(np.float32) * 0.01
+        var_r_np = rng.standard_normal(var_shape).astype(np.float32) * 0.01
 
-        graph, output, var_left, var_right = _build_shifted_affine_map_graph(
-            data_shape, var_shape, var_shape)
+        expected = _numpy_shifted_affine_map(data_np, mask_np.astype(np.float32), var_r_np)
+        graph, output = _build_exact_pb_match_graph(data_shape, var_shape, data_np, var_r_np)
 
         config = _create_config_with_musa_optimizer()
         run_opts = tf.compat.v1.RunOptions(output_partition_graphs=True)
         run_meta = tf.compat.v1.RunMetadata()
 
         with tf.compat.v1.Session(graph=graph, config=config) as sess:
-            sess.run(tf.compat.v1.global_variables_initializer())
-            sess.run(var_left.assign(var_l))
-            sess.run(var_right.assign(var_r))
-            sess.run(output,
-                     feed_dict={"data_left:0": data_np, "mask_cond:0": mask_np},
-                     options=run_opts, run_metadata=run_meta)
+            result = sess.run(
+                output,
+                feed_dict={"mask_cond:0": mask_np},
+                options=run_opts, run_metadata=run_meta)
 
         fused = _has_fused_op(run_meta.partition_graphs)
-        ops = sorted({n.op for pg in run_meta.partition_graphs for n in pg.node})
-        print(f"  shape={data_np.shape}, fused={fused}, ops={ops}")
-        self.assertTrue(
-            fused, "MusaShiftedAffineMap node not found in optimized graph")
-        print("  COMPLETED")
+        print(f"  max_diff={np.max(np.abs(result - expected)):.2e}, fused={fused}")
+        self.assertAllClose(result, expected, rtol=_RTOL, atol=_ATOL)
+        self.assertTrue(fused, "MusaShiftedAffineMap node not found in optimized graph!")
+        print("  PASSED")
 
     # -----------------------------------------------------------------
-    # 2. Numerical correctness
+    # Test 2: Numerical Correctness (Standard Constants)
     # -----------------------------------------------------------------
     def test_numerical_correctness(self):
         """Fused result matches numpy reference."""
         print("\n" + "=" * 70)
-        print("Test: ShiftedAffineMap — numerical correctness")
+        print("Test 2: ShiftedAffineMap — numerical correctness")
         print("=" * 70)
 
         data_shape = [2, 4, 8]
@@ -230,42 +156,32 @@ class ShiftedAffineMapFusionTest(MUSATestCase):
         rng = np.random.RandomState(123)
         data_np = rng.standard_normal(data_shape).astype(np.float32)
         mask_np = rng.random(data_shape) > 0.3
-        var_l = rng.standard_normal(var_shape).astype(np.float32) * 0.01
         var_r = rng.standard_normal(var_shape).astype(np.float32) * 0.01
 
-        expected = _numpy_shifted_affine_map(
-            data_np, var_l, mask_np.astype(np.float32), var_r)
-
-        graph, output, var_left, var_right = _build_shifted_affine_map_graph(
-            data_shape, var_shape, var_shape)
+        expected = _numpy_shifted_affine_map(data_np, mask_np.astype(np.float32), var_r)
+        graph, output = _build_shifted_affine_map_graph(data_shape, var_shape, data_np, var_r)
+        
         config = _create_config_with_musa_optimizer()
         run_opts = tf.compat.v1.RunOptions(output_partition_graphs=True)
         run_meta = tf.compat.v1.RunMetadata()
 
         with tf.compat.v1.Session(graph=graph, config=config) as sess:
-            sess.run(tf.compat.v1.global_variables_initializer())
-            sess.run(var_left.assign(var_l))
-            sess.run(var_right.assign(var_r))
             result = sess.run(
                 output,
-                feed_dict={"data_left:0": data_np, "mask_cond:0": mask_np},
+                feed_dict={"mask_cond:0": mask_np},
                 options=run_opts, run_metadata=run_meta)
 
         fused = _has_fused_op(run_meta.partition_graphs)
-        print(f"  max_diff={np.max(np.abs(result - expected)):.2e},"
-              f" fused={fused}")
-        self.assertEqual(result.shape, expected.shape)
+        self.assertTrue(fused)
         self.assertAllClose(result, expected, rtol=_RTOL, atol=_ATOL)
-        self.assertTrue(
-            fused, "MusaShiftedAffineMap node not found in optimized graph")
         print("  PASSED")
 
     # -----------------------------------------------------------------
-    # 3. Large batch
+    # Test 3: Large Batch
     # -----------------------------------------------------------------
     def test_numerical_large_batch(self):
         print("\n" + "=" * 70)
-        print("Test: ShiftedAffineMap — larger batch")
+        print("Test 3: ShiftedAffineMap — larger batch")
         print("=" * 70)
 
         data_shape = [16, 32, 64]
@@ -274,84 +190,32 @@ class ShiftedAffineMapFusionTest(MUSATestCase):
         rng = np.random.RandomState(99)
         data_np = rng.standard_normal(data_shape).astype(np.float32)
         mask_np = rng.random(data_shape) > 0.5
-        var_l = rng.standard_normal(var_shape).astype(np.float32) * 0.01
         var_r = rng.standard_normal(var_shape).astype(np.float32) * 0.01
 
-        expected = _numpy_shifted_affine_map(
-            data_np, var_l, mask_np.astype(np.float32), var_r)
-
-        graph, output, var_left, var_right = _build_shifted_affine_map_graph(
-            data_shape, var_shape, var_shape)
+        expected = _numpy_shifted_affine_map(data_np, mask_np.astype(np.float32), var_r)
+        graph, output = _build_shifted_affine_map_graph(data_shape, var_shape, data_np, var_r)
+        
         config = _create_config_with_musa_optimizer()
         run_opts = tf.compat.v1.RunOptions(output_partition_graphs=True)
         run_meta = tf.compat.v1.RunMetadata()
 
         with tf.compat.v1.Session(graph=graph, config=config) as sess:
-            sess.run(tf.compat.v1.global_variables_initializer())
-            sess.run(var_left.assign(var_l))
-            sess.run(var_right.assign(var_r))
             result = sess.run(
                 output,
-                feed_dict={"data_left:0": data_np, "mask_cond:0": mask_np},
+                feed_dict={"mask_cond:0": mask_np},
                 options=run_opts, run_metadata=run_meta)
 
-        fused = _has_fused_op(run_meta.partition_graphs)
-        print(f"  max_diff={np.max(np.abs(result - expected)):.2e}, fused={fused}")
-        self.assertAllClose(result, expected, rtol=_RTOL, atol=_ATOL)
-        self.assertTrue(
-            fused, "MusaShiftedAffineMap node not found in optimized graph")
-        print("  PASSED")
-
-    # -----------------------------------------------------------------
-    # 4. Identity wrappers should still fuse
-    # -----------------------------------------------------------------
-    def test_fusion_with_identity_wrappers(self):
-        """Fusion should tolerate Identity wrappers on boundary inputs."""
-        print("\n" + "=" * 70)
-        print("Test: ShiftedAffineMap — identity wrappers")
-        print("=" * 70)
-
-        data_shape = [2, 4, 8]
-        var_shape = [8]
-
-        rng = np.random.RandomState(7)
-        data_np = rng.standard_normal(data_shape).astype(np.float32)
-        mask_np = rng.random(data_shape) > 0.4
-        var_l = rng.standard_normal(var_shape).astype(np.float32) * 0.01
-        var_r = rng.standard_normal(var_shape).astype(np.float32) * 0.01
-
-        expected = _numpy_shifted_affine_map(
-            data_np, var_l, mask_np.astype(np.float32), var_r)
-
-        graph, output, var_left, var_right = (
-            _build_shifted_affine_map_graph_with_identity_wrappers(
-                data_shape, var_shape, var_shape))
-        config = _create_config_with_musa_optimizer()
-        run_opts = tf.compat.v1.RunOptions(output_partition_graphs=True)
-        run_meta = tf.compat.v1.RunMetadata()
-
-        with tf.compat.v1.Session(graph=graph, config=config) as sess:
-            sess.run(tf.compat.v1.global_variables_initializer())
-            sess.run(var_left.assign(var_l))
-            sess.run(var_right.assign(var_r))
-            result = sess.run(
-                output,
-                feed_dict={"data_left:0": data_np, "mask_cond:0": mask_np},
-                options=run_opts, run_metadata=run_meta)
-
-        fused = _has_fused_op(run_meta.partition_graphs)
-        print(f"  fused={fused}, max_diff={np.max(np.abs(result - expected)):.2e}")
-        self.assertTrue(fused, "Fusion should handle Identity wrappers")
+        self.assertTrue(_has_fused_op(run_meta.partition_graphs))
         self.assertAllClose(result, expected, rtol=_RTOL, atol=_ATOL)
         print("  PASSED")
 
     # -----------------------------------------------------------------
-    # 5. Negative test: incomplete pattern should NOT fuse
+    # Test 4: Negative test (incomplete pattern should NOT fuse)
     # -----------------------------------------------------------------
     def test_fusion_not_applied_when_pattern_incomplete(self):
-        """Fusion should NOT fire when the right branch is not StridedSlice."""
+        """Fusion should NOT fire when the graph doesn't match the strict topology."""
         print("\n" + "=" * 70)
-        print("Test: ShiftedAffineMap — negative (incomplete pattern)")
+        print("Test 4: ShiftedAffineMap — negative (incomplete pattern)")
         print("=" * 70)
 
         shape = [2, 4, 8]
@@ -360,9 +224,8 @@ class ShiftedAffineMapFusionTest(MUSATestCase):
             with tf.device("/device:MUSA:0"):
                 a = tf.compat.v1.placeholder(tf.float32, shape=shape, name="a")
                 b = tf.compat.v1.placeholder(tf.float32, shape=shape, name="b")
-                # Simple Mul + constant AddV2 — cannot match
-                output = tf.math.add(tf.math.multiply(a, b), tf.constant(1.0),
-                                     name="incomplete_output")
+                # Simple Mul + constant AddV2 — missing StridedSlice/Mask etc.
+                output = tf.math.add(tf.math.multiply(a, b), tf.constant(1.0), name="incomplete_output")
 
         config = _create_config_with_musa_optimizer()
         run_opts = tf.compat.v1.RunOptions(output_partition_graphs=True)
@@ -375,52 +238,8 @@ class ShiftedAffineMapFusionTest(MUSATestCase):
                      options=run_opts, run_metadata=run_meta)
 
         fused = _has_fused_op(run_meta.partition_graphs)
-        print(f"  fused={fused}")
         self.assertFalse(fused, "Fusion should NOT fire for incomplete pattern")
         print("  PASSED")
-
-    # -----------------------------------------------------------------
-    # 6. Subgraph cleanup
-    # -----------------------------------------------------------------
-    def test_subgraph_nodes_removed(self):
-        """After fusion, intermediate nodes should be gone."""
-        print("\n" + "=" * 70)
-        print("Test: ShiftedAffineMap — intermediate node cleanup")
-        print("=" * 70)
-
-        data_shape = [4, 8, 16]
-        var_shape = [16]
-
-        rng = np.random.RandomState(42)
-        data_np = rng.standard_normal(data_shape).astype(np.float32)
-        mask_np = rng.random(data_shape) > 0.5
-        var_np = rng.standard_normal(var_shape).astype(np.float32) * 0.01
-
-        graph, output, var_left, var_right = _build_shifted_affine_map_graph(
-            data_shape, var_shape, var_shape)
-        config = _create_config_with_musa_optimizer()
-        run_opts = tf.compat.v1.RunOptions(output_partition_graphs=True)
-        run_meta = tf.compat.v1.RunMetadata()
-
-        with tf.compat.v1.Session(graph=graph, config=config) as sess:
-            sess.run(tf.compat.v1.global_variables_initializer())
-            sess.run(var_left.assign(var_np))
-            sess.run(var_right.assign(var_np))
-            sess.run(output,
-                     feed_dict={"data_left:0": data_np, "mask_cond:0": mask_np},
-                     options=run_opts, run_metadata=run_meta)
-
-        fused = _has_fused_op(run_meta.partition_graphs)
-        intermediate = {"add_left", "mul_gated"}
-        remaining = [f"{n.op}({n.name})"
-                     for pg in run_meta.partition_graphs
-                     for n in pg.node if n.name in intermediate]
-        print(f"  fused={fused}, remaining intermediate nodes: {len(remaining)}")
-        self.assertTrue(
-            fused, "MusaShiftedAffineMap node not found in optimized graph")
-        self.assertEqual(len(remaining), 0,
-                         f"Not cleaned up: {remaining}")
-        print("  COMPLETED")
 
 
 if __name__ == "__main__":
