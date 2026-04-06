@@ -15,9 +15,12 @@ limitations under the License.
 
 #include "mu/graph_fusion/tensordot_bias_fusion.h"
 
+#include <cstdlib>
+#include <string>
 #include <unordered_set>
 
 #include "mu/optimizer/graph_utils.h"
+#include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/framework/attr_value.pb.h"
 #include "tensorflow/core/platform/logging.h"
 
@@ -30,6 +33,13 @@ namespace {
 // Weight node valid types
 const std::unordered_set<std::string> kWeightOps = {
     "Identity", "ReadVariableOp", "Const", "Reshape"};
+
+bool IsTruthyEnvVar(const char* env_name) {
+  const char* env_val = std::getenv(env_name);
+  if (env_val == nullptr) return false;
+  return env_val[0] == '1' || env_val[0] == 't' || env_val[0] == 'T' ||
+         env_val[0] == 'y' || env_val[0] == 'Y';
+}
 
 // Helper to check if node has specific op type
 bool IsOp(const NodeDef& node, const std::string& op_type) {
@@ -77,6 +87,42 @@ std::string GetCleanName(const std::string& input) {
     name = name.substr(0, colon_pos);
   }
   return name;
+}
+
+bool TryGetStaticShape(const NodeDef& node, TensorShape* shape) {
+  auto it = node.attr().find("_output_shapes");
+  if (it == node.attr().end()) return false;
+
+  const auto& shape_list = it->second.list().shape();
+  if (shape_list.empty()) return false;
+  const auto& shape_proto = shape_list.Get(0);
+  if (shape_proto.unknown_rank()) return false;
+
+  TensorShape out;
+  for (const auto& d : shape_proto.dim()) {
+    if (d.size() < 0) return false;
+    out.AddDim(d.size());
+  }
+  *shape = out;
+  return true;
+}
+
+std::string BuildTensorDotBiasBackendConfig(const std::vector<int>& axes_a,
+                                            const std::vector<int>& axes_b) {
+  std::string cfg = "{";
+  cfg += "\"impl\":\"musa_tensordot_bias\",";
+  cfg += "\"axes_a\":[";
+  for (size_t i = 0; i < axes_a.size(); ++i) {
+    if (i > 0) cfg += ",";
+    cfg += std::to_string(axes_a[i]);
+  }
+  cfg += "],\"axes_b\":[";
+  for (size_t i = 0; i < axes_b.size(); ++i) {
+    if (i > 0) cfg += ",";
+    cfg += std::to_string(axes_b[i]);
+  }
+  cfg += "]}";
+  return cfg;
 }
 
 }  // namespace
@@ -443,26 +489,69 @@ Status MusaTensorDotBiasFusion::Apply(GraphDef* graph,
   // =========================================================================
   // Create fused node
   // =========================================================================
-  NodeDef* fused_node = graph->add_node();
-  fused_node->set_name(output_name);
-  fused_node->set_op("MusaTensorDotBias");
-  fused_node->set_device(output_device);
+  const bool use_custom_call =
+      IsTruthyEnvVar("MUSA_ENABLE_XLA_CUSTOM_CALL_TD_BIAS");
+  bool custom_call_emitted = false;
 
-  // Inputs: original_input, tensordot_weight, bias_weights
-  fused_node->add_input(input_a_name);
-  fused_node->add_input(tensordot_weight_name);
-  fused_node->add_input(bias_weights_name);
+  if (use_custom_call) {
+    TensorShape result_shape;
+    if (TryGetStaticShape(*bias_add_node, &result_shape)) {
+      NodeDef* fused_node = graph->add_node();
+      fused_node->set_name(output_name);
+      fused_node->set_op("XlaCustomCallV2");
+      fused_node->set_device(output_device);
 
-  auto* attr = fused_node->mutable_attr();
-  (*attr)["T"].set_type(dtype);
+      fused_node->add_input(input_a_name);
+      fused_node->add_input(tensordot_weight_name);
+      fused_node->add_input(bias_weights_name);
 
-  auto* axes_a_list = (*attr)["axes_a"].mutable_list();
-  for (int a : axes_a) axes_a_list->add_i(a);
+      auto* attr = fused_node->mutable_attr();
+      (*attr)["call_target_name"].set_s("__musa$TensorDotBias");
+      (*attr)["backend_config"].set_s(
+          BuildTensorDotBiasBackendConfig(axes_a, axes_b));
+      (*attr)["has_side_effect"].set_b(false);
 
-  auto* axes_b_list = (*attr)["axes_b"].mutable_list();
-  for (int b : axes_b) axes_b_list->add_i(b);
+      auto* operand_dtypes = (*attr)["operand_dtypes"].mutable_list();
+      operand_dtypes->add_type(dtype);
+      operand_dtypes->add_type(dtype);
+      operand_dtypes->add_type(dtype);
+
+      auto* result_dtypes = (*attr)["result_dtypes"].mutable_list();
+      result_dtypes->add_type(dtype);
+
+      auto* result_shapes = (*attr)["result_shapes"].mutable_list();
+      result_shape.AsProto(result_shapes->add_shape());
+      custom_call_emitted = true;
+    } else {
+      VLOG(1) << "[TensorDotBias::Apply] MUSA_ENABLE_XLA_CUSTOM_CALL_TD_BIAS=1 "
+              << "but output shape is dynamic; fallback to MusaTensorDotBias";
+    }
+  }
+
+  if (!custom_call_emitted) {
+    NodeDef* fused_node = graph->add_node();
+    fused_node->set_name(output_name);
+    fused_node->set_op("MusaTensorDotBias");
+    fused_node->set_device(output_device);
+
+    // Inputs: original_input, tensordot_weight, bias_weights
+    fused_node->add_input(input_a_name);
+    fused_node->add_input(tensordot_weight_name);
+    fused_node->add_input(bias_weights_name);
+
+    auto* attr = fused_node->mutable_attr();
+    (*attr)["T"].set_type(dtype);
+
+    auto* axes_a_list = (*attr)["axes_a"].mutable_list();
+    for (int a : axes_a) axes_a_list->add_i(a);
+
+    auto* axes_b_list = (*attr)["axes_b"].mutable_list();
+    for (int b : axes_b) axes_b_list->add_i(b);
+  }
 
   VLOG(1) << "[TensorDotBias::Apply] SUCCESS fused to " << output_name
+          << ", mode="
+          << (custom_call_emitted ? "XlaCustomCallV2" : "MusaTensorDotBias")
           << ", removed=" << removed_count
           << ", graph_nodes=" << graph->node_size();
 
