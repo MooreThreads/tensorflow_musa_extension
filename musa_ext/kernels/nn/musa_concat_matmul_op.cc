@@ -34,7 +34,6 @@ class MusaConcatMatMulOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
-    MUSA_KERNEL_TIMING_GUARD(ctx);
 
     auto& handle = GetHandleByCtx(ctx);
     handle.SetAllowTF32(tf32_enabled_);

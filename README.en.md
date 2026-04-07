@@ -9,7 +9,7 @@ TensorFlow MUSA Extension is a high-performance TensorFlow plugin specifically d
 - **Automatic Graph Optimization**: Supports automatic layout conversion, operator fusion, and Automatic Mixed Precision (AMP)
 - **Seamless Integration**: Fully compatible with TensorFlow ecosystem without requiring code modifications
 - **Device Management**: Complete MUSA device registration, memory management, and stream processing support
-- **Kernel Debugging Support**: Built-in kernel execution time statistics for performance analysis
+- **Kernel Debugging Support**: Debug builds print operator type, input types, and input shapes, with optional terminal color highlighting
 
 ## Quick Start
 
@@ -77,7 +77,7 @@ Both Release and Debug modes are supported:
 | Mode | Command | Description |
 |------|---------|-------------|
 | **Release** | `./build.sh` or `./build.sh release` | Optimized for performance, no debug overhead |
-| **Debug** | `./build.sh debug` | Enables `MUSA_KERNEL_DEBUG` and kernel timing macros |
+| **Debug** | `./build.sh debug` | Enables `MUSA_KERNEL_DEBUG` and prints kernel debug logs |
 
 ### 2. Compilation Process
 
@@ -90,7 +90,7 @@ Execute the automated build script:
 # Release (explicit)
 ./build.sh release
 
-# Debug (timing instrumentation)
+# Debug (kernel debug logs)
 ./build.sh debug
 ```
 
@@ -101,9 +101,9 @@ The build script automatically completes the following steps:
 
 ### 3. Debugging and Diagnostics
 
-For detailed debugging guide, see [docs/DEBUG_GUIDE.md](docs/DEBUG_GUIDE.md), including:
+For a more detailed debugging guide, see [docs/DEBUG_GUIDE.md](docs/DEBUG_GUIDE.md). The README has been updated to describe the current kernel debug logging flow; the old timing-macro path has been removed.
 
-- **Kernel Timing**: Performance analysis in Debug mode
+- **Kernel Debug Logs**: `MUSA_DEBUG_LOG_KERNEL(ctx)` prints `op_type`, `input_types`, and `input_shapes`
 - **Telemetry System**: Full-stack tracing and dirty data diagnostics
 - **Memory Diagnostics**: Use-After-Free detection and memory coloring
 - **Environment Variables**: Complete environment variable configuration table
@@ -116,14 +116,54 @@ export MUSA_TELEMETRY_LOG_PATH=/tmp/telemetry.json
 python test_runner.py
 ```
 
-Quick kernel timing setup for performance analysis:
+### 4. Kernel Debug Change Summary
+
+The kernel debug flow was updated as follows:
+
+- Added a unified debug macro, `MUSA_DEBUG_LOG_KERNEL(ctx)`, to print lightweight debug metadata at the beginning of `Compute()`
+- Centralized formatting and logging helpers in `musa_ext/kernels/utils_op.h` and `musa_ext/kernels/utils_op.cc`
+- Kept example instrumentation in four kernels: `Add`, `AddN`, `Conv2D`, and `GELU`
+- Removed the old timing macros entirely: `MUSA_KERNEL_TIMING_GUARD`, `MUSA_KERNEL_TRACE_START`, `MUSA_KERNEL_TRACE_END`, `MUSA_KERNEL_TRACE`, and `MUSA_PROFILE_OP`
+
+The new log format looks like this:
+
+```txt
+[MUSA_KERNEL_DEBUG] op_type=AddV2 input_types=[float, float] input_shapes=[[1024,1024], [1024,1024]]
+```
+
+Notes:
+
+- `input_types` is highlighted in cyan by default
+- `input_shapes` is highlighted in yellow by default
+- When output is redirected to a file, plain text is emitted by default to avoid ANSI escape codes in logs
+- To force color even when using `tee` or redirection, set `MUSA_KERNEL_DEBUG_COLOR=1`
+- To explicitly disable colors, set `NO_COLOR=1`
+
+Quick setup for the new kernel debug logs:
+
+Option 1: run from the repository root.
 
 ```bash
 ./build.sh debug
-export MUSA_TIMING_KERNEL_LEVEL=2
-export MUSA_TIMING_KERNEL_NAME=ALL
-export MUSA_TIMING_KERNEL_STATS=1
-python test_runner.py
+export PYTHONPATH=$PWD/test
+python3 test/ops/add_op_test.py 2>&1 | tee /tmp/tme_add.log
+grep 'MUSA_KERNEL_DEBUG' /tmp/tme_add.log
+```
+
+Option 2: enter the `test/` directory directly. In this mode you do not need to set `PYTHONPATH`.
+
+```bash
+./build.sh debug
+cd test
+python3 ops/add_op_test.py 2>&1 | tee /tmp/tme_add.log
+grep 'MUSA_KERNEL_DEBUG' /tmp/tme_add.log
+```
+
+To force colored terminal output:
+
+```bash
+cd test
+MUSA_KERNEL_DEBUG_COLOR=1 python3 ops/add_op_test.py
 ```
 
 ## Testing

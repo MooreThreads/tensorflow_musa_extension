@@ -281,7 +281,7 @@ class MusaAddOp : public MusaOpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
-    MUSA_KERNEL_TIMING_GUARD(ctx);
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& in0 = ctx->input(0);
     const Tensor& in1 = ctx->input(1);
 
@@ -290,7 +290,6 @@ class MusaAddOp : public MusaOpKernel {
     if (same_shape) {
       output_shape = in0.shape();
     } else {
-      MUSA_KERNEL_TRACE_START("BCast");
       BCast bcast(BCast::Vec(in0.shape().dim_sizes()),
                   BCast::Vec(in1.shape().dim_sizes()));
       OP_REQUIRES(ctx, bcast.IsValid(),
@@ -299,17 +298,14 @@ class MusaAddOp : public MusaOpKernel {
                       in0.shape().DebugString(), " and ",
                       in1.shape().DebugString()));
       output_shape = BCast::ToShape(bcast.output_shape());
-      MUSA_KERNEL_TRACE_END("BCast");
     }
 
     // Reuse the left input buffer when TensorFlow determines it is safe.
     // This particularly helps the common [N, C] + [C] broadcast pattern where
     // the output shape matches input 0.
-    MUSA_KERNEL_TRACE_START("Alloc");
     Tensor* out = nullptr;
     OP_REQUIRES_OK(ctx, ctx->forward_input_or_allocate_output(
                             {0}, 0, output_shape, &out));
-    MUSA_KERNEL_TRACE_END("Alloc");
 
     if (in0.NumElements() == 0 || in1.NumElements() == 0 ||
         output_shape.num_elements() == 0) {
@@ -322,7 +318,6 @@ class MusaAddOp : public MusaOpKernel {
       return;
     }
 
-    MUSA_KERNEL_TRACE_START("Tensor Wrap");
     auto& handle = GetHandleByCtx(ctx);
     mTensor t0 = CreateMTensor(in0, format_);
     mTensor t1 = CreateMTensor(in1, format_);
@@ -339,14 +334,11 @@ class MusaAddOp : public MusaOpKernel {
                                                    &t1_dims, &t1_strides));
       }
     }
-    MUSA_KERNEL_TRACE_END("Tensor Wrap");
 
     ::musa::dnn::Binary op;
     op.SetMode(::musa::dnn::Binary::Mode::ADD);
 
-    MUSA_KERNEL_TRACE_START("Kernel");
     auto status = op.Run(handle, t_out, t0, t1);
-    MUSA_KERNEL_TRACE_END("Kernel");
     OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
                 errors::Internal("MUSA Add execution failed."));
   }

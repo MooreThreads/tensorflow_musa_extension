@@ -15,6 +15,7 @@
 
 """Utilities for MUSA kernel tests."""
 
+import argparse
 import logging
 import os
 import sys
@@ -78,6 +79,56 @@ import tensorflow as tf
 
 # Load plugin immediately after importing tensorflow
 load_musa_plugin()
+
+
+_ORIGINAL_TF_TEST_MAIN = tf.test.main
+
+
+def _parse_progress_runner_args(argv):
+  """Parse lightweight flags for direct test execution."""
+  parser = argparse.ArgumentParser(add_help=False)
+  parser.add_argument('--detail', '-d', action='store_true')
+  parser.add_argument('--quiet', '-q', action='store_true')
+  parser.add_argument('--log-file', default='test_results.log')
+  return parser.parse_known_args(argv[1:])
+
+
+
+def _use_progress_runner_for_direct_execution():
+  return os.environ.get('MUSA_TEST_DISABLE_PROGRESS_RUNNER') != '1'
+
+
+
+def _musa_tf_test_main(argv=None):
+  """Run direct test files with the custom progress runner when possible."""
+  args = list(sys.argv if argv is None else argv)
+
+  if not _use_progress_runner_for_direct_execution():
+    return _ORIGINAL_TF_TEST_MAIN(args)
+
+  parsed_args, remaining = _parse_progress_runner_args(args)
+  if remaining:
+    return _ORIGINAL_TF_TEST_MAIN(args)
+
+  main_module = sys.modules.get('__main__')
+  if main_module is None:
+    return _ORIGINAL_TF_TEST_MAIN(args)
+
+  from test_runner import run_module_tests
+
+  quiet_mode = not parsed_args.detail
+  if parsed_args.quiet:
+    quiet_mode = True
+
+  return run_module_tests(main_module,
+                          quiet=quiet_mode,
+                          detail_mode=parsed_args.detail,
+                          log_file=parsed_args.log_file if parsed_args.detail else None)
+
+
+# Make direct `python test/ops/foo_test.py` executions use the same
+# progress bar runner as `test_runner.py`, while preserving an opt-out.
+tf.test.main = _musa_tf_test_main
 
 
 class MUSATestCase(tf.test.TestCase):
