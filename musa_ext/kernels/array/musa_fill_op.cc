@@ -60,6 +60,7 @@ class MusaFillOp : public MusaOpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* context) override {
+    MUSA_DEBUG_LOG_KERNEL(context);
     const Tensor& Tdims = context->input(0);
     const Tensor& Tvalue = context->input(1);
 

@@ -78,6 +78,7 @@ class MusaResourceApplyAdamOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     core::RefCountPtr<Var> var;
     core::RefCountPtr<Var> m;
     core::RefCountPtr<Var> v;
@@ -258,6 +259,7 @@ class MusaApplyAdamKernelOp : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     Var* var = nullptr;
     Var* m = nullptr;
     Var* v = nullptr;

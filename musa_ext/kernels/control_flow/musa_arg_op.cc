@@ -2,6 +2,7 @@
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/resource_handle.h"
+#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -13,6 +14,7 @@ class MusaArgOp : public OpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     auto* frame = ctx->call_frame();
     OP_REQUIRES(ctx, frame != nullptr,
                 errors::Internal("MUSA _Arg: No call frame found."));
@@ -37,6 +39,7 @@ class MusaRetvalOp : public OpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& input = ctx->input(0);
     auto* frame = ctx->call_frame();
     OP_REQUIRES(ctx, frame != nullptr,

@@ -42,6 +42,7 @@ class MusaPReluOp : public MusaOpKernel {
 
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& input = ctx->input(0);   // x
     const Tensor& alpha = ctx->input(1);    // alpha (slope for negative part)
 

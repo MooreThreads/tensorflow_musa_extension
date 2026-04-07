@@ -52,6 +52,7 @@ class MusaGatherV2Op : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& params = ctx->input(0);
     const Tensor& indices = ctx->input(1);
     const Tensor& axis_tensor = ctx->input(2);

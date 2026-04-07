@@ -1,5 +1,6 @@
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/util/tensor_bundle/tensor_bundle.h"
+#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -13,6 +14,7 @@ class MusaMergeV2CheckpointsOp : public OpKernel {
   }
 
   void Compute(OpKernelContext* context) override {
+    MUSA_DEBUG_LOG_KERNEL(context);
     const Tensor& prefixes = context->input(0);
     const Tensor& destination = context->input(1);
 

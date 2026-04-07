@@ -5,6 +5,7 @@
 #include "tensorflow/core/framework/tensor_util.h"
 #include "tensorflow/core/lib/random/philox_random.h"
 #include "tensorflow/core/lib/random/random_distributions.h"
+#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -66,6 +67,7 @@ class MusaRandomOp : public MusaOpKernel {
   explicit MusaRandomOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& shape_t = ctx->input(0);
     const Tensor& seed_t = ctx->input(1);
 

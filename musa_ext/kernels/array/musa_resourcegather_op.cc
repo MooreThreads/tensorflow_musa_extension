@@ -94,6 +94,7 @@ class MusaResourceGatherOp : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* c) override {
+    MUSA_DEBUG_LOG_KERNEL(c);
     core::RefCountPtr<Var> v;
     Status s = LookupResource(c, HandleFromInput(c, 0), &v);
     if (!s.ok()) {
@@ -219,6 +220,7 @@ class MusaResourceScatterAddOp : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* c) override {
+    MUSA_DEBUG_LOG_KERNEL(c);
     core::RefCountPtr<Var> v;
     OP_REQUIRES_OK(c, LookupResource(c, HandleFromInput(c, 0), &v));
     mutex_lock ml(*v->mu());
@@ -272,6 +274,7 @@ class MusaAssignUpdateVariableOp : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* c) override {
+    MUSA_DEBUG_LOG_KERNEL(c);
     core::RefCountPtr<Var> variable;
     OP_REQUIRES_OK(c, LookupResource(c, HandleFromInput(c, 0), &variable));
     mutex_lock ml(*variable->mu());
@@ -302,6 +305,7 @@ class MusaVariableShapeOp : public OpKernel {
  public:
   explicit MusaVariableShapeOp(OpKernelConstruction* c) : OpKernel(c) {}
   void Compute(OpKernelContext* c) override {
+    MUSA_DEBUG_LOG_KERNEL(c);
     core::RefCountPtr<Var> v;
     OP_REQUIRES_OK(c, LookupResource(c, HandleFromInput(c, 0), &v));
     tf_shared_lock ml(*v->mu());

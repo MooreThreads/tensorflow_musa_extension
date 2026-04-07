@@ -41,6 +41,7 @@ class MusaSelectOp : public MusaOpKernel {
   explicit MusaSelectOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& cond = ctx->input(0);
     const Tensor& then_t = ctx->input(1);
     const Tensor& else_t = ctx->input(2);

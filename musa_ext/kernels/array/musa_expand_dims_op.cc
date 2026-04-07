@@ -18,6 +18,7 @@ class MusaExpandDimsOp : public MusaOpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* context) override {
+    MUSA_DEBUG_LOG_KERNEL(context);
     // Reject Variant type early to align with TensorFlow official behavior.
     OP_REQUIRES(
         context, context->input(0).dtype() != DT_VARIANT,

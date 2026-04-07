@@ -64,6 +64,7 @@ class MusaNormalizeOp : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
 
     const Tensor& x = ctx->input(0);
     // gamma and beta are inputs 1 and 2, but we ignore them

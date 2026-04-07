@@ -58,6 +58,7 @@ class MusaStatelessWhileOp : public OpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const int num_inputs = ctx->num_inputs();
 
     // Collect input tensors

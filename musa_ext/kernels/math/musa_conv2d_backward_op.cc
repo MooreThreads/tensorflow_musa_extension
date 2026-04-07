@@ -371,6 +371,7 @@ class MusaConv2DBackpropInputOp : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& input_sizes = ctx->input(0);
     const Tensor& filter = ctx->input(1);
     const Tensor& out_backprop = ctx->input(2);
@@ -572,6 +573,7 @@ class MusaConv2DBackpropFilterOp : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& input = ctx->input(0);
     const Tensor& filter_sizes = ctx->input(1);
     const Tensor& out_backprop = ctx->input(2);

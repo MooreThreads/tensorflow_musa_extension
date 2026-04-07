@@ -55,6 +55,7 @@ class UnsortedSegmentSumOp : public OpKernel {
   explicit UnsortedSegmentSumOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& data = ctx->input(0);
     const Tensor& segment_ids = ctx->input(1);
     const Tensor& num_segments_t = ctx->input(2);

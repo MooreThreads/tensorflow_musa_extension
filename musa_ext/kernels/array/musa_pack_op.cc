@@ -94,6 +94,7 @@ class MusaPackOp : public MusaOpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const int N = ctx->num_inputs();
 
     OP_REQUIRES(ctx, N > 0,
@@ -225,6 +226,7 @@ class MusaUnpackOp : public MusaOpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& input = ctx->input(0);
     const int N = num_outputs_attr_;
 

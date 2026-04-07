@@ -175,6 +175,7 @@ class MusaShiftedAffineMapOp : public MusaOpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
 
     const Tensor& data_left = ctx->input(0);
     const Tensor& mask = ctx->input(1);

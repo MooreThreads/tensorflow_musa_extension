@@ -11,6 +11,7 @@ class MusaSwitchOp : public MusaOpKernel {
       : MusaOpKernel(context) {}
 
   void Compute(OpKernelContext* context) override {
+    MUSA_DEBUG_LOG_KERNEL(context);
     const Tensor& input = context->input(0);
     const Tensor& pred = context->input(1);
 

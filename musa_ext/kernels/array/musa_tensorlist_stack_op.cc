@@ -22,6 +22,7 @@ class MusaTensorListStackOp : public MusaOpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& input_handle = ctx->input(0);
     OP_REQUIRES(
         ctx, TensorShapeUtils::IsScalar(input_handle.shape()),
