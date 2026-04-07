@@ -230,10 +230,10 @@ Status MatMulBiasAddFusion::Apply(GraphDef* graph,
 }
 
 // Register the pattern
-REGISTER_FUSION_PATTERN(MatMulBiasAddFusion);
+// REGISTER_FUSION_PATTERN(MatMulBiasAddFusion);
 
-// Register kernel availability
-REGISTER_FUSION_KERNEL(MatMulBiasAddFusion, []() { return true; });
+// // Register kernel availability
+// REGISTER_FUSION_KERNEL(MatMulBiasAddFusion, []() { return true; });
 
 }  // namespace musa_fusion
 }  // namespace grappler
