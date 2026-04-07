@@ -41,9 +41,13 @@
 // Use those for consistency across the codebase
 
 #ifdef MUSA_KERNEL_DEBUG
+
 namespace tensorflow {
 namespace musa {
+
 // Defined in kernels/utils_op.h.
+int GetMusaDeviceIdByCtx(tensorflow::OpKernelContext* context);
+musaError_t CachedMusaSetDevice(int device_id);
 musaStream_t GetMusaStreamByCtx(tensorflow::OpKernelContext* context);
 
 namespace timing {
@@ -233,22 +237,32 @@ inline KernelTimingStatsPrinter& GlobalKernelTimingStatsPrinter() {
 
 class KernelTimingScope {
  public:
+  struct CompletedStageEvent {
+    std::string stage_id;
+    musaEvent_t start_event = nullptr;
+    musaEvent_t end_event = nullptr;
+
+    CompletedStageEvent(std::string id, musaEvent_t start, musaEvent_t end)
+        : stage_id(std::move(id)), start_event(start), end_event(end) {}
+  };
+
+  KernelTimingScope(OpKernelContext* ctx, const std::string& kernel_name,
+                    KernelTimingLayout layout = KernelTimingLayout())
+      : layout_(std::move(layout)) {
+    InitFromContext(ctx, kernel_name);
+  }
+
   KernelTimingScope(const std::string& kernel_name,
                     const std::string& input_shape,
                     musaStream_t stream,
-                    KernelTimingLayout layout = KernelTimingLayout())
+                    KernelTimingLayout layout = KernelTimingLayout(),
+                    int device_id = -1)
       : kernel_name_(kernel_name),
         input_shape_(input_shape),
         stream_(stream),
+        device_id_(device_id),
         layout_(std::move(layout)) {
-    const auto& cfg = GetKernelTimingConfig();
-    level_ = cfg.level;
-    stats_enabled_ = cfg.stats;
-    active_ = ShouldTraceKernelName(kernel_name_);
-    if (!active_) return;
-
-    host_start_ns_ = NowNs();
-    InitTotalDeviceTimer();
+    InitFromExplicitArgs();
   }
 
   ~KernelTimingScope() {
@@ -258,6 +272,7 @@ class KernelTimingScope {
 
     const double host_total_ms = NsToMs(NowNs() - host_start_ns_);
     const double device_total_ms = FinalizeTotalDeviceTimer(host_total_ms);
+    FinalizeStageDeviceTimers();
 
     double stage_sum_ms = 0.0;
     for (const auto& item : stage_ms_) {
@@ -293,7 +308,7 @@ class KernelTimingScope {
   }
 
   void TraceStart(const char* stage_name) {
-    if (!active_) return;
+    if (!active_ || !ShouldCollectStageTiming()) return;
 
     const std::string stage_id = MakeStageId(stage_name);
     if (stage_id.empty()) {
@@ -307,7 +322,7 @@ class KernelTimingScope {
       return;
     }
 
-    if (stage_ms_.find(stage_id) == stage_ms_.end()) {
+    if (stage_seen_ids_.insert(stage_id).second) {
       stage_order_.push_back(stage_id);
     }
 
@@ -321,7 +336,7 @@ class KernelTimingScope {
   }
 
   void TraceEnd(const char* stage_name) {
-    if (!active_) return;
+    if (!active_ || !ShouldCollectStageTiming()) return;
 
     const std::string stage_id = MakeStageId(stage_name);
     if (stage_id.empty()) {
@@ -343,31 +358,50 @@ class KernelTimingScope {
       return;
     }
 
-    if (!RecordEvent(end_event, "stage_end") ||
-        !SyncEvent(end_event, "stage_end")) {
+    if (!RecordEvent(end_event, "stage_end")) {
       DestroyEvent(it->second);
       DestroyEvent(end_event);
       stage_start_events_.erase(it);
       return;
     }
 
-    float elapsed_ms = 0.0f;
-    if (ElapsedMs(it->second, end_event, &elapsed_ms, stage_id)) {
-      stage_ms_[stage_id] += static_cast<double>(elapsed_ms);
-    }
-
-    DestroyEvent(it->second);
-    DestroyEvent(end_event);
+    completed_stage_events_.emplace_back(stage_id, it->second, end_event);
     stage_start_events_.erase(it);
   }
 
-  // Backward-compatible one-shot API.
   void Trace(const char* stage_name) {
     TraceStart(stage_name);
     TraceEnd(stage_name);
   }
 
  private:
+  void InitFromContext(OpKernelContext* ctx, const std::string& kernel_name) {
+    const auto& cfg = GetKernelTimingConfig();
+    level_ = cfg.level;
+    stats_enabled_ = cfg.stats;
+    kernel_name_ = kernel_name;
+
+    if (!cfg.enabled || !ShouldTraceKernelName(kernel_name_)) return;
+
+    input_shape_ = BuildInputShapeSummary(ctx);
+    stream_ = GetMusaStreamByCtx(ctx);
+    device_id_ = GetMusaDeviceIdByCtx(ctx);
+    active_ = true;
+    host_start_ns_ = NowNs();
+    InitTotalDeviceTimer();
+  }
+
+  void InitFromExplicitArgs() {
+    const auto& cfg = GetKernelTimingConfig();
+    level_ = cfg.level;
+    stats_enabled_ = cfg.stats;
+    active_ = ShouldTraceKernelName(kernel_name_);
+    if (!active_) return;
+
+    host_start_ns_ = NowNs();
+    InitTotalDeviceTimer();
+  }
+
   static uint64_t NowNs() {
     return static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -384,6 +418,8 @@ class KernelTimingScope {
     std::snprintf(buf, sizeof(buf), "%.6f", v);
     return std::string(buf);
   }
+
+  bool ShouldCollectStageTiming() const { return level_ >= 2; }
 
   static std::mutex& GetPrintMutex() {
     static std::mutex print_mu;
@@ -426,7 +462,21 @@ class KernelTimingScope {
 
   musaStream_t GetTimingStream() const { return stream_; }
 
+  bool EnsureTimingDevice(const char* tag) {
+    if (device_id_ < 0) return true;
+
+    musaError_t err = CachedMusaSetDevice(device_id_);
+    if (err != musaSuccess) {
+      AddWarning(std::string("musaSetDevice failed before ") + tag +
+                 ", device_id=" + std::to_string(device_id_) +
+                 ", err=" + musaGetErrorString(err));
+      return false;
+    }
+    return true;
+  }
+
   bool CreateEvent(musaEvent_t* event, const char* tag) {
+    if (!EnsureTimingDevice(tag)) return false;
     musaError_t err = musaEventCreate(event);
     if (err != musaSuccess) {
       AddWarning(std::string("musaEventCreate failed on ") + tag +
@@ -437,6 +487,7 @@ class KernelTimingScope {
   }
 
   bool RecordEvent(musaEvent_t event, const char* tag) {
+    if (!EnsureTimingDevice(tag)) return false;
     musaError_t err = musaEventRecord(event, GetTimingStream());
     if (err != musaSuccess) {
       AddWarning(std::string("musaEventRecord failed on ") + tag +
@@ -447,6 +498,7 @@ class KernelTimingScope {
   }
 
   bool SyncEvent(musaEvent_t event, const char* tag) {
+    if (!EnsureTimingDevice(tag)) return false;
     musaError_t err = musaEventSynchronize(event);
     if (err != musaSuccess) {
       AddWarning(std::string("musaEventSynchronize failed on ") + tag +
@@ -458,6 +510,7 @@ class KernelTimingScope {
 
   bool ElapsedMs(musaEvent_t start, musaEvent_t end, float* ms,
                  const std::string& stage_id) {
+    if (!EnsureTimingDevice("elapsed_time")) return false;
     musaError_t err = musaEventElapsedTime(ms, start, end);
     if (err != musaSuccess) {
       AddWarning("musaEventElapsedTime failed. kernel=" + kernel_name_ +
@@ -470,6 +523,7 @@ class KernelTimingScope {
 
   void DestroyEvent(musaEvent_t event) {
     if (event == nullptr) return;
+    if (!EnsureTimingDevice("event_destroy")) return;
     musaError_t err = musaEventDestroy(event);
     if (err != musaSuccess) {
       AddWarning(std::string("musaEventDestroy failed, err=") +
@@ -520,6 +574,19 @@ class KernelTimingScope {
     return total_device_ms;
   }
 
+  void FinalizeStageDeviceTimers() {
+    for (auto& item : completed_stage_events_) {
+      float elapsed_ms = 0.0f;
+      if (ElapsedMs(item.start_event, item.end_event, &elapsed_ms,
+                    item.stage_id)) {
+        stage_ms_[item.stage_id] += static_cast<double>(elapsed_ms);
+      }
+      DestroyEvent(item.start_event);
+      DestroyEvent(item.end_event);
+    }
+    completed_stage_events_.clear();
+  }
+
   static void PrintDeviceInfoOnceLocked() {
     static bool printed = false;
     if (printed) return;
@@ -532,7 +599,6 @@ class KernelTimingScope {
     if (stage_name == nullptr) return "";
     std::string id(stage_name);
 
-    // Trim leading/trailing spaces to avoid accidental duplicates.
     const auto begin = id.find_first_not_of(" \t\n\r");
     if (begin == std::string::npos) return "";
     const auto end = id.find_last_not_of(" \t\n\r");
@@ -631,12 +697,15 @@ class KernelTimingScope {
   std::string kernel_name_;
   std::string input_shape_;
   musaStream_t stream_ = nullptr;
+  int device_id_ = -1;
 
   uint64_t host_start_ns_ = 0;
   musaEvent_t total_start_event_ = nullptr;
   bool total_start_event_valid_ = false;
   std::unordered_map<std::string, musaEvent_t> stage_start_events_;
+  std::vector<CompletedStageEvent> completed_stage_events_;
   std::unordered_map<std::string, double> stage_ms_;
+  std::unordered_set<std::string> stage_seen_ids_;
   std::vector<std::string> stage_order_;
   KernelTimingLayout layout_;
   std::vector<std::string> warnings_;
@@ -655,13 +724,11 @@ class KernelTimingScope {
 
 #define MUSA_KERNEL_TIMING_GUARD_WITH_NAME_AND_LAYOUT(ctx, kernel_name, layout) \
   ::tensorflow::musa::timing::KernelTimingScope __musa_kernel_timing_scope(      \
-      (kernel_name), ::tensorflow::musa::timing::BuildInputShapeSummary(ctx),     \
-      ::tensorflow::musa::GetMusaStreamByCtx((ctx)), (layout))
+      (ctx), (kernel_name), (layout))
 
-#define MUSA_KERNEL_TIMING_GUARD_WITH_NAME(ctx, kernel_name)                     \
-  ::tensorflow::musa::timing::KernelTimingScope __musa_kernel_timing_scope(      \
-      (kernel_name), ::tensorflow::musa::timing::BuildInputShapeSummary(ctx),    \
-      ::tensorflow::musa::GetMusaStreamByCtx((ctx)))
+#define MUSA_KERNEL_TIMING_GUARD_WITH_NAME(ctx, kernel_name)                \
+  ::tensorflow::musa::timing::KernelTimingScope __musa_kernel_timing_scope( \
+      (ctx), (kernel_name))
 
 #define MUSA_KERNEL_TIMING_GUARD_WITH_LAYOUT(ctx, layout) \
   MUSA_KERNEL_TIMING_GUARD_WITH_NAME_AND_LAYOUT((ctx), (this)->def().op(), \

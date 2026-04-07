@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "device/musa_device.h"
+#include "mu/device/musa_telemetry.h"
 #include "tensorflow/core/common_runtime/device_factory.h"
 #include "tensorflow/core/framework/device_attributes.pb.h"
 #include "tensorflow/core/platform/env.h"
@@ -76,8 +77,21 @@ REGISTER_LOCAL_DEVICE_FACTORY("MUSA", MusaDeviceFactory, 210);
 
 extern "C" {
 void __attribute__((constructor)) OnMusaPluginLoad() {
+  // Initialize telemetry system from environment variables
+  auto config = ::tensorflow::musa::TelemetryConfig::FromEnv();
+  if (config.enabled) {
+    ::tensorflow::musa::MusaTelemetry::Instance().Initialize(config);
+    LOG(INFO) << "[MUSA] Telemetry system initialized. "
+              << "Log path: " << (config.log_path.empty() ? "stderr" : config.log_path)
+              << ", Buffer size: " << config.buffer_size;
+  }
   // fprintf(stderr, "\n>>>> [MUSA] SUCCESS: MUSA Factory Object Registered via
   // Global Constructor! <<<<\n");
+}
+
+void __attribute__((destructor)) OnMusaPluginUnload() {
+  // Shutdown telemetry system
+  ::tensorflow::musa::MusaTelemetry::Instance().Shutdown();
 }
 }
 // extern "C" void ForceLinkMusaAmpOptimizer();

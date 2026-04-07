@@ -38,7 +38,7 @@ class CastOpTest(MUSATestCase):
             x_np = np.random.randn(*shape).astype(np_dtype) * 10.0
     else:
         x_np = np.array(data)
-        
+
     x = tf.constant(x_np, dtype=src_dtype)
 
     # Define Operator Wrapper
@@ -80,8 +80,12 @@ class StridedSliceOpTest(MUSATestCase):
         x_np = input_data
     else:
         if shape is None: shape = [3, 5]
-        x_np = np.arange(np.prod(shape)).reshape(shape).astype(dtype.as_numpy_dtype)
-        
+        if dtype == tf.bool:
+            x_np = (np.arange(np.prod(shape)).reshape(shape) % 2 == 0)
+        else:
+            np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+            x_np = np.arange(np.prod(shape)).reshape(shape).astype(np_dtype)
+
     x = tf.constant(x_np, dtype=dtype)
 
     # Define Operator Wrapper
@@ -118,9 +122,109 @@ class StridedSliceOpTest(MUSATestCase):
   def testSliceHighDim(self):
     """Test slicing on higher dimensional tensors."""
     shape = [2, 3, 4, 5]
-    # x[0, :, 1:3, ::2]
+    # Equivalent to x[0, :, 1:3, ::2]
     spec = (0, slice(None), slice(1, 3), slice(None, None, 2))
     self._test_slice(spec, shape=shape)
+
+  def testSliceEllipsis(self):
+    """Test ellipsis (e.g., [..., 1:3])."""
+    shape = [2, 3, 4, 5]
+    # x[..., 1:3]
+    self._test_slice((Ellipsis, slice(1, 3)), shape=shape)
+    # x[0, ..., 1]
+    self._test_slice((0, Ellipsis, 1), shape=shape)
+
+  def testSliceNewAxis(self):
+    """Test new axis (e.g., [np.newaxis, :])."""
+    # x[np.newaxis, :] -> shape (1, 3, 5)
+    self._test_slice((np.newaxis, slice(None)))
+    # x[:, np.newaxis, :] -> shape (3, 1, 5)
+    self._test_slice((slice(None), np.newaxis, slice(None)))
+
+  def testSliceDtypes(self):
+    """Test different data types."""
+    slice_spec = (slice(0, 2), slice(1, 3))
+    shape = [3, 5]
+
+    for dtype in [tf.float32, tf.float16, tf.int32, tf.int64, tf.bool,
+                  tf.bfloat16]:
+      with self.subTest(dtype=dtype.name):
+        if dtype == tf.bool:
+          x_np = (np.arange(np.prod(shape)).reshape(shape) % 2 == 0)
+        else:
+          np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+          x_np = np.arange(np.prod(shape)).reshape(shape).astype(np_dtype)
+
+        x = tf.constant(x_np, dtype=dtype)
+
+        with tf.device('/CPU:0'):
+          cpu_result = x[slice_spec]
+        with tf.device('/device:MUSA:0'):
+          musa_result = x[slice_spec]
+
+        if dtype == tf.bool:
+          self.assertAllEqual(cpu_result.numpy(), musa_result.numpy())
+        elif dtype == tf.bfloat16:
+          self.assertAllClose(
+              tf.cast(cpu_result, tf.float32).numpy(),
+              tf.cast(musa_result, tf.float32).numpy(),
+              rtol=1e-2,
+              atol=1e-2)
+        else:
+          self.assertAllClose(cpu_result.numpy(), musa_result.numpy())
+
+  def testValidateEquivalent_BasicStride(self):
+    """Ref: ValidateStridedSliceOpTest.BasicStride
+    input_shape={10, 10}, begin=[1, 1], end=[7, 7], strides=[2, 2], begin_mask=0x2, end_mask=0x1
+    Equivalent to: x[1:, :7:2] -> since begin_mask=0x2 means ignore begin[1], end_mask=0x1 means ignore end[0]
+    Wait, begin_mask bit i=1 means ignore begin[1]. So it's [1, 0] to [10, 7] with stride [2, 2].
+    """
+    input_data = np.zeros((10, 10))
+    # TF slice syntax with masks is better tested via raw op or specific indices:
+    # x[1:10:2, 0:7:2]
+    self._test_slice((slice(1, 10, 2), slice(0, 7, 2)), input_data=input_data)
+
+  def testValidateEquivalent_NegativeBeginEnd(self):
+    """Ref: ValidateStridedSliceOpTest.NegativeBeginEnd
+    input_shape={10, 10}, begin=[-9, -20], end=[-3, -3], strides=[2, 2]
+    """
+    input_data = np.zeros((10, 10))
+    # x[-9:-3:2, -20:-3:2]
+    self._test_slice((slice(-9, -3, 2), slice(-20, -3, 2)), input_data=input_data)
+
+  def testValidateEquivalent_ShrinkAxis(self):
+    """Ref: ValidateStridedSliceOpTest.ShrinkAxis
+    input_shape={3, 4, 5}, begin=[0, 1, 0], end=[3, 1, 5], shrink_axis_mask=0x2 (index 1)
+    Equivalent to x[:, 1, :]
+    """
+    shape = [3, 4, 5]
+    self._test_slice((slice(None), 1, slice(None)), shape=shape)
+
+  def testValidateEquivalent_NewAxis(self):
+    """Ref: ValidateStridedSliceOpTest.NewAxis
+    input_shape={10, 10}, new_axis_mask=0x2 (index 1)
+    Equivalent to x[:, np.newaxis, :]
+    """
+    shape = [10, 10]
+    self._test_slice((slice(None), np.newaxis, slice(None)), shape=shape)
+
+  def testValidateEquivalent_Ellipsis(self):
+    """Ref: ValidateStridedSliceOpTest.Ellipsis
+    input_shape={10, 10}, ellipsis_mask=0x1, new_axis_mask=0x2
+    x[..., np.newaxis, :]
+    """
+    shape = [10, 10]
+    self._test_slice((Ellipsis, np.newaxis, slice(None)), shape=shape)
+
+  def testLargeStrides(self):
+    """Test very large strides that might exceed dimensions."""
+    shape = [10, 10]
+    self._test_slice((slice(0, 10, 20), slice(0, 10, 5)), shape=shape)
+
+  def testOutOfRangeIndices(self):
+    """Test indices that are far out of bounds."""
+    shape = [5, 5]
+    self._test_slice((slice(-100, 100), slice(2, 10)), shape=shape)
 
 
 if __name__ == "__main__":
