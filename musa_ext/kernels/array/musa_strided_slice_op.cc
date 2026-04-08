@@ -1,7 +1,6 @@
 #include <mudnn.h>
 
 #include <type_traits>
-#include <vector>
 
 #include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
@@ -29,118 +28,6 @@ inline void SyncSliceStreamIfNeeded(OpKernelContext* context, mHandle& handle,
   OP_REQUIRES(context, err == musaSuccess,
               errors::Internal("MUSA StridedSlice stream sync failed: ",
                                musaGetErrorString(err)));
-}
-
-inline int64_t ComputeSliceLength(int64_t begin, int64_t end, int64_t stride) {
-  int64_t size = 0;
-  for (int64_t idx = begin; stride > 0 ? idx < end : idx > end; idx += stride) {
-    ++size;
-  }
-  return size;
-}
-
-template <typename T>
-void ComputeHostStridedSliceInt32(
-    OpKernelContext* context, const Tensor& input,
-    const PartialTensorShape& processing_shape, const PartialTensorShape& final_shape,
-    bool is_identity, const gtl::InlinedVector<int64_t, 4>& begin,
-    const gtl::InlinedVector<int64_t, 4>& end,
-    const gtl::InlinedVector<int64_t, 4>& strides) {
-  TensorShape final_tensor_shape;
-  final_shape.AsTensorShape(&final_tensor_shape);
-
-  if (is_identity) {
-    Tensor tmp;
-    OP_REQUIRES(context, tmp.CopyFrom(input, final_tensor_shape),
-                errors::Internal("MUSA StridedSlice host CopyFrom failed."));
-    context->set_output(0, tmp);
-    return;
-  }
-
-  Tensor* result = nullptr;
-  OP_REQUIRES_OK(context,
-                 context->allocate_output(0, final_tensor_shape, &result));
-
-  if (result->NumElements() == 0 || input.NumElements() == 0) return;
-
-  TensorShape processing_tensor_shape;
-  processing_shape.AsTensorShape(&processing_tensor_shape);
-  const int processing_dims = processing_tensor_shape.dims();
-
-  std::vector<int64_t> input_dims(processing_dims, 1);
-  std::vector<int64_t> input_strides(processing_dims, 1);
-  std::vector<int64_t> slice_sizes(processing_dims, 1);
-  for (int i = 0; i < processing_dims; ++i) {
-    input_dims[i] = processing_tensor_shape.dim_size(i);
-  }
-  for (int i = processing_dims - 2; i >= 0; --i) {
-    input_strides[i] = input_strides[i + 1] * input_dims[i + 1];
-  }
-  for (int i = 0; i < processing_dims; ++i) {
-    slice_sizes[i] = ComputeSliceLength(begin[i], end[i], strides[i]);
-  }
-
-  int64_t expected_elements = 1;
-  for (int64_t size : slice_sizes) expected_elements *= size;
-  OP_REQUIRES(
-      context, expected_elements == result->NumElements(),
-      errors::Internal("MUSA host StridedSlice shape mismatch: expected ",
-                       expected_elements, " elements from validated slice, got ",
-                       result->NumElements()));
-
-  auto input_flat = input.flat<T>();
-  auto output_flat = result->flat<T>();
-  const T* input_ptr = input_flat.data();
-  T* output_ptr = output_flat.data();
-
-  if (processing_dims == 0) {
-    output_ptr[0] = input_ptr[0];
-    return;
-  }
-
-  std::vector<int64_t> output_index(processing_dims, 0);
-  int64_t written = 0;
-  while (true) {
-    int64_t input_offset = 0;
-    for (int i = 0; i < processing_dims; ++i) {
-      input_offset += (begin[i] + output_index[i] * strides[i]) * input_strides[i];
-    }
-    output_ptr[written++] = input_ptr[input_offset];
-
-    int dim = processing_dims - 1;
-    while (dim >= 0) {
-      ++output_index[dim];
-      if (output_index[dim] < slice_sizes[dim]) break;
-      output_index[dim] = 0;
-      --dim;
-    }
-    if (dim < 0) break;
-  }
-}
-
-template <typename T>
-bool MaybeComputeHostStridedSlice(OpKernelContext* context, const Tensor& input,
-                                  const PartialTensorShape& processing_shape,
-                                  const PartialTensorShape& final_shape,
-                                  bool is_identity,
-                                  const gtl::InlinedVector<int64_t, 4>& begin,
-                                  const gtl::InlinedVector<int64_t, 4>& end,
-                                  const gtl::InlinedVector<int64_t, 4>& strides) {
-  return false;
-}
-
-template <>
-bool MaybeComputeHostStridedSlice<int32>(
-    OpKernelContext* context, const Tensor& input,
-    const PartialTensorShape& processing_shape,
-    const PartialTensorShape& final_shape, bool is_identity,
-    const gtl::InlinedVector<int64_t, 4>& begin,
-    const gtl::InlinedVector<int64_t, 4>& end,
-    const gtl::InlinedVector<int64_t, 4>& strides) {
-  ComputeHostStridedSliceInt32<int32>(context, input, processing_shape,
-                                      final_shape, is_identity, begin, end,
-                                      strides);
-  return true;
 }
 
 template <typename T>
@@ -174,12 +61,6 @@ class MusaStridedSliceOp : public OpKernel {
                      new_axis_mask_, shrink_axis_mask_, &processing_shape,
                      &final_shape, &is_identity, &is_simple_slice, &slice_dim0,
                      &begin, &end, &strides));
-
-    if (MaybeComputeHostStridedSlice<T>(context, input, processing_shape,
-                                        final_shape, is_identity, begin, end,
-                                        strides)) {
-      return;
-    }
 
     if (is_identity) {
       TensorShape final_tensor_shape;
@@ -271,21 +152,11 @@ class MusaStridedSliceOp : public OpKernel {
                           MusaStridedSliceOp<T>)
 
 REGISTER_STRIDED_SLICE_MUSA(float);
+REGISTER_STRIDED_SLICE_MUSA(int32);
 REGISTER_STRIDED_SLICE_MUSA(int64);
 REGISTER_STRIDED_SLICE_MUSA(Eigen::half);
 REGISTER_STRIDED_SLICE_MUSA(Eigen::bfloat16);
 REGISTER_STRIDED_SLICE_MUSA(bool);
-
-REGISTER_KERNEL_BUILDER(Name("StridedSlice")
-                            .Device("MUSA")
-                            .TypeConstraint<int32>("T")
-                            .HostMemory("input")
-                            .HostMemory("begin")
-                            .HostMemory("end")
-                            .HostMemory("strides")
-                            .HostMemory("output"),
-                        MusaStridedSliceOp<int32>);
-
 #undef REGISTER_STRIDED_SLICE_MUSA
 
 }  // namespace
