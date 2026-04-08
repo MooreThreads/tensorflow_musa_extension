@@ -54,22 +54,24 @@ enum class TriState { kDefault = 0, kOff = 1, kOn = 2 };
 
 // Optimizer configurations - controls interaction with TensorFlow built-in
 // optimizers Based on TF Modular Graph C API TP_OptimizerConfigs
+// CRITICAL FIX: Restore to kDefault to match working 9ded154 configuration
 struct MusaOptimizerConfigs {
-  // Keep enabled
-  TriState arithmetic_optimization = TriState::kOn;
-  TriState constant_folding = TriState::kOn;
-  TriState remapping = TriState::kOn;
-  TriState shape_optimization = TriState::kOn;
+  // Keep as Default for stability (was kOn, causing OOM and illegal memory
+  // access)
+  TriState arithmetic_optimization = TriState::kDefault;
+  TriState constant_folding = TriState::kDefault;
+  TriState remapping = TriState::kDefault;
+  TriState shape_optimization = TriState::kDefault;
 
-  // Recommended to enable (performance critical)
-  TriState implementation_selector = TriState::kOn;      // Select fastest algorithms
-  TriState function_optimization = TriState::kOn;        // Inlining optimization
-  TriState common_subgraph_elimination = TriState::kOn;  // Deduplication
-  TriState memory_optimization = TriState::kOn;          // Memory optimization (training scenarios)
+  // Restore to kDefault to avoid unexpected memory layout changes
+  TriState implementation_selector = TriState::kDefault;
+  TriState function_optimization = TriState::kDefault;
+  TriState common_subgraph_elimination = TriState::kDefault;
+  TriState memory_optimization = TriState::kDefault;
 
-  // Inference-specific optimizations
-  TriState debug_stripper = TriState::kOn;
-  TriState pin_to_host_optimization = TriState::kOn;
+  // Inference-specific optimizations - use Default for safety
+  TriState debug_stripper = TriState::kDefault;
+  TriState pin_to_host_optimization = TriState::kDefault;
 
   // Keep disabled (handled internally by MUSA)
   TriState auto_mixed_precision = TriState::kOff;
@@ -321,7 +323,8 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
     const char* amp_env = std::getenv("MUSA_AUTO_MIXED_PRECISION");
     if (amp_env && std::string(amp_env) == "1") {
       configs_.auto_mixed_precision = TriState::kOn;
-      VLOG(1) << "MusaGraphOptimizer: AMP enabled via MUSA_AUTO_MIXED_PRECISION=1";
+      VLOG(1)
+          << "MusaGraphOptimizer: AMP enabled via MUSA_AUTO_MIXED_PRECISION=1";
     }
 
     // Environment variable for AMP mode (FP16 or BF16)
@@ -344,7 +347,8 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
       configs_.remapping = TriState::kOff;
       configs_.arithmetic_optimization = TriState::kOff;
       configs_.shape_optimization = TriState::kOff;
-      VLOG(1) << "MusaGraphOptimizer: All Grappler optimizations disabled via MUSA_DISABLE_GRAPPLER=1";
+      VLOG(1) << "MusaGraphOptimizer: All Grappler optimizations disabled via "
+                 "MUSA_DISABLE_GRAPPLER=1";
     }
 
     if (config) {
@@ -414,14 +418,13 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
       dumper.DumpAfterPass(*optimized_graph, "fusion");
     }
 
-    if(configs_.optimizer_remove_ios_node != TriState::kOff) {
-
-    const int removed_isolated_nodes = RemoveIsolatedNodes(optimized_graph);
-    if (removed_isolated_nodes > 0) {
-      VLOG(1) << "MusaGraphOptimizer: Removed " << removed_isolated_nodes
-              << " isolated node(s) after optimization";
+    if (configs_.optimizer_remove_ios_node != TriState::kOff) {
+      const int removed_isolated_nodes = RemoveIsolatedNodes(optimized_graph);
+      if (removed_isolated_nodes > 0) {
+        VLOG(1) << "MusaGraphOptimizer: Removed " << removed_isolated_nodes
+                << " isolated node(s) after optimization";
+      }
     }
-  }
 
     VLOG(1) << "MusaGraphOptimizer: Optimization complete, graph now has "
             << optimized_graph->node_size() << " nodes";
@@ -504,8 +507,7 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
                 Status status = pattern->Apply(graph, match_result);
                 if (!status.ok()) {
                   LOG(WARNING) << "MusaGraphOptimizer: Fallback for pattern '"
-                               << pattern->GetName()
-                               << "' failed: " << status;
+                               << pattern->GetName() << "' failed: " << status;
                 }
                 fusion_fallback_count++;
                 continue;
@@ -519,13 +521,13 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
                 pass_modified = true;
                 fusion_applied_count++;
                 applied_in_sweep = true;
-                VLOG(1) << "MusaGraphOptimizer: Pattern '"
-                        << pattern->GetName() << "' applied successfully";
+                VLOG(1) << "MusaGraphOptimizer: Pattern '" << pattern->GetName()
+                        << "' applied successfully";
                 break;  // Restart this direction since graph was modified
               } else {
-                LOG(WARNING) << "MusaGraphOptimizer: Pattern '"
-                             << pattern->GetName()
-                             << "' apply failed: " << status;
+                LOG(WARNING)
+                    << "MusaGraphOptimizer: Pattern '" << pattern->GetName()
+                    << "' apply failed: " << status;
               }
             }
 
