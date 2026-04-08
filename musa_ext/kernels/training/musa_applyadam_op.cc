@@ -158,16 +158,31 @@ class MusaResourceApplyAdamOp : public MusaOpKernel {
       return Status::OK();
     };
 
-    auto fill_scalar = [&](T val, const TensorShape& shape,
-                           mTensor* out) -> Status {
+    // ============================================================================
+    // Use scalar tensor (shape=[]) instead of full-size tensor
+    // musa::dnn::Binary supports broadcasting, so scalar will be broadcast
+    // automatically This reduces memory from 6*var_size to 6*sizeof(scalar)
+    // (negligible)
+    // ============================================================================
+    auto fill_scalar = [&](T val, mTensor* out) -> Status {
       temp_storage.emplace_back();
-      Status alloc_status = ctx->allocate_temp(DataTypeToEnum<T>::value, shape,
-                                               &temp_storage.back());
+      // Allocate scalar tensor with shape [] (empty shape = scalar)
+      Status alloc_status = ctx->allocate_temp(
+          DataTypeToEnum<T>::value,
+          TensorShape({}),  // Scalar shape instead of var_t.shape()
+          &temp_storage.back());
       if (!alloc_status.ok()) {
         return alloc_status;
       }
       *out = CreateMTensor(temp_storage.back(), format_);
-      return MusaFillCall(out, val, ctx);
+      ::musa::dnn::Fill fill_op;
+      fill_op.SetValue(static_cast<float>(val));
+      ::musa::dnn::Status status = fill_op.Run(handle, *out);
+      if (status != ::musa::dnn::Status::SUCCESS) {
+        return errors::Internal("Fill op failed, status: ",
+                                static_cast<int>(status));
+      }
+      return Status::OK();
     };
 
     const T beta1_power = ctx->input(3).scalar<T>()();
@@ -194,14 +209,6 @@ class MusaResourceApplyAdamOp : public MusaOpKernel {
                   one_minus_beta1_power;
     }
 
-    // // Log shapes for debugging
-    // LOG(INFO) << "ResourceApplyAdam shapes: var=" <<
-    // var_t.shape().DebugString()
-    //           << " m=" << m_t.shape().DebugString()
-    //           << " v=" << v_t.shape().DebugString()
-    //           << " grad=" << grad.shape().DebugString()
-    //           << " dtype=" << var_t.dtype();
-
     mTensor t_var = CreateMTensor(var_t, format_);
     mTensor t_m = CreateMTensor(m_t, format_);
     mTensor t_v = CreateMTensor(v_t, format_);
@@ -213,19 +220,16 @@ class MusaResourceApplyAdamOp : public MusaOpKernel {
     mTensor t_inv_beta2;
     mTensor t_eps;
     mTensor t_alpha;
-    // Use var_t.shape() consistently for all scalar fills (var, m, v, grad
-    // should all have same shape)
-    OP_REQUIRES_OK(ctx, fill_scalar(beta1, var_t.shape(), &t_beta1));
-    OP_REQUIRES_OK(ctx, fill_scalar(static_cast<T>(1.0) - beta1, var_t.shape(),
-                                    &t_inv_beta1));
-    OP_REQUIRES_OK(ctx, fill_scalar(beta2, var_t.shape(), &t_beta2));
-    OP_REQUIRES_OK(ctx, fill_scalar(static_cast<T>(1.0) - beta2, var_t.shape(),
-                                    &t_inv_beta2));
-    OP_REQUIRES_OK(ctx, fill_scalar(epsilon, v_t.shape(), &t_eps));
-    OP_REQUIRES_OK(
-        ctx, fill_scalar(static_cast<T>(alpha_val), var_t.shape(), &t_alpha));
+
+    OP_REQUIRES_OK(ctx, fill_scalar(beta1, &t_beta1));
+    OP_REQUIRES_OK(ctx, fill_scalar(static_cast<T>(1.0) - beta1, &t_inv_beta1));
+    OP_REQUIRES_OK(ctx, fill_scalar(beta2, &t_beta2));
+    OP_REQUIRES_OK(ctx, fill_scalar(static_cast<T>(1.0) - beta2, &t_inv_beta2));
+    OP_REQUIRES_OK(ctx, fill_scalar(epsilon, &t_eps));
+    OP_REQUIRES_OK(ctx, fill_scalar(static_cast<T>(alpha_val), &t_alpha));
+
     // Step 1: m = beta1 * m + (1 - beta1) * grad
-    // Following RMSProp pattern: allow in-place operations for MUL and ADD
+    // musa::dnn::Binary will broadcast scalar tensors automatically
     b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
     OP_REQUIRES_OK(
         ctx, require_success(b_op.Run(handle, t_m, t_m, t_beta1), "MUL beta1"));
@@ -395,13 +399,28 @@ class MusaApplyAdamKernelOp : public MusaOpKernel {
     mTensor t_v = CreateMTensor(*v_t, format_);
     mTensor t_grad = CreateMTensor(grad, format_);
 
-    auto fill_scalar = [&](T val, const TensorShape& shape, mTensor* out) {
+    // ============================================================================
+    // Use scalar tensor (shape=[]) instead of full-size tensor
+    // musa::dnn::Binary supports broadcasting, so scalar will be broadcast
+    // automatically This reduces memory from 6*var_size to 6*sizeof(scalar)
+    // (negligible)
+    // ============================================================================
+    auto fill_scalar = [&](T val, mTensor* out) -> Status {
       temp_storage.emplace_back();
-      ctx->allocate_temp(DataTypeToEnum<T>::value, shape, &temp_storage.back());
+      Status alloc_status = ctx->allocate_temp(
+          DataTypeToEnum<T>::value, TensorShape({}), &temp_storage.back());
+      if (!alloc_status.ok()) {
+        return alloc_status;
+      }
       *out = CreateMTensor(temp_storage.back(), format_);
       ::musa::dnn::Fill fill_op;
       fill_op.SetValue(static_cast<float>(val));
-      return fill_op.Run(handle, *out);
+      ::musa::dnn::Status status = fill_op.Run(handle, *out);
+      if (status != ::musa::dnn::Status::SUCCESS) {
+        return errors::Internal("Fill op failed, status: ",
+                                static_cast<int>(status));
+      }
+      return Status::OK();
     };
 
     ::musa::dnn::Binary b_op;
@@ -427,14 +446,13 @@ class MusaApplyAdamKernelOp : public MusaOpKernel {
     mTensor t_inv_beta2;
     mTensor t_eps;
     mTensor t_alpha;
-    // Use var_t->shape() consistently for all scalar fills (var, m, v, grad
-    // should all have same shape)
-    fill_scalar(beta1, var_t->shape(), &t_beta1);
-    fill_scalar(static_cast<T>(1.0) - beta1, var_t->shape(), &t_inv_beta1);
-    fill_scalar(beta2, var_t->shape(), &t_beta2);
-    fill_scalar(static_cast<T>(1.0) - beta2, var_t->shape(), &t_inv_beta2);
-    fill_scalar(epsilon, v_t->shape(), &t_eps);
-    fill_scalar(static_cast<T>(alpha_val), var_t->shape(), &t_alpha);
+
+    OP_REQUIRES_OK(ctx, fill_scalar(beta1, &t_beta1));
+    OP_REQUIRES_OK(ctx, fill_scalar(static_cast<T>(1.0) - beta1, &t_inv_beta1));
+    OP_REQUIRES_OK(ctx, fill_scalar(beta2, &t_beta2));
+    OP_REQUIRES_OK(ctx, fill_scalar(static_cast<T>(1.0) - beta2, &t_inv_beta2));
+    OP_REQUIRES_OK(ctx, fill_scalar(epsilon, &t_eps));
+    OP_REQUIRES_OK(ctx, fill_scalar(static_cast<T>(alpha_val), &t_alpha));
 
     // Step 1: m = beta1 * m + (1 - beta1) * grad
     // Avoid all in-place operations for safety

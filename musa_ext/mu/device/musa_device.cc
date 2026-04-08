@@ -404,13 +404,21 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
   size_t total_memory = 0, free_memory = 0;
   musaMemGetInfo(&free_memory, &total_memory);
 
-  // Use the memory_limit from DeviceAttributes if set (by device_register.cc),
-  // otherwise calculate from current free memory.
-  // DeviceAttributes.memory_limit is set in device_register.cc using the
-  // same 90% of free_memory formula, but we check it here for consistency.
-  size_t bfc_memory_limit = attributes.memory_limit() > 0
-                                ? attributes.memory_limit()
-                                : static_cast<size_t>(free_memory * 0.9);
+  // Get memory_limit from DeviceAttributes (set by device_register.cc)
+  // If it's too small or zero (possible serialization issue), use total_memory
+  size_t bfc_memory_limit = attributes.memory_limit();
+
+  // Safety check: if the passed limit is less than 50% of total memory,
+  // it may have been corrupted or not properly passed. Use total_memory.
+  if (bfc_memory_limit == 0 || bfc_memory_limit < total_memory * 0.5) {
+    LOG(WARNING) << "[MUSA] Device " << device_id_
+                 << " attributes.memory_limit()=" << bfc_memory_limit
+                 << " seems incorrect (total free=" << free_memory
+                 << "), using free memory * 0.9";
+    bfc_memory_limit = static_cast<size_t>(free_memory * 0.9);
+    // Align up to 256
+    bfc_memory_limit = (bfc_memory_limit + 255) & ~255;
+  }
 
   VLOG(1) << ">>> [MUSA] Device " << device_id_
           << " total_memory=" << total_memory << " free_memory=" << free_memory

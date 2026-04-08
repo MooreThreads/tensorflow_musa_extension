@@ -59,8 +59,20 @@ class MusaDeviceFactory : public DeviceFactory {
       musaSetDevice(i);
       size_t total_memory = 0, free_memory = 0;
       musaMemGetInfo(&free_memory, &total_memory);
-      size_t memory_limit =
-          static_cast<size_t>(free_memory * 0.9);  // 90% of free memory
+
+      // Use environment variable or default (0.9 of total memory)
+      const char* mem_fraction_env = getenv("MUSA_MEMORY_FRACTION");
+      double mem_fraction = 0.9;
+      if (mem_fraction_env) {
+        mem_fraction = std::stod(mem_fraction_env);
+        if (mem_fraction < 0.1 || mem_fraction > 0.95) {
+          LOG(WARNING)
+              << "MUSA_MEMORY_FRACTION out of range (0.1-0.95), using 0.9";
+          mem_fraction = 0.9;
+        }
+      }
+      size_t memory_limit = static_cast<size_t>(total_memory * mem_fraction);
+
       attr.set_memory_limit(memory_limit);
 
       attr.mutable_locality()->set_bus_id(i);
