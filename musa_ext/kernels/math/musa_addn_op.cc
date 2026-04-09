@@ -22,18 +22,24 @@ struct InlinePointers {
 };
 
 extern "C" {
-void LaunchAddNKernelFloat(const float** inputs, InlinePointers inline_inputs, float* output, int num_inputs,
-                           int size, musaStream_t stream);
-void LaunchAddNKernelDouble(const double** inputs, InlinePointers inline_inputs, double* output,
-                            int num_inputs, int size, musaStream_t stream);
-void LaunchAddNKernelHalf(const void** inputs, InlinePointers inline_inputs, void* output, int num_inputs,
-                          int size, musaStream_t stream);
-void LaunchAddNKernelBFloat16(const void** inputs, InlinePointers inline_inputs, void* output, int num_inputs,
-                              int size, musaStream_t stream);
-void LaunchAddNKernelInt32(const int** inputs, InlinePointers inline_inputs, int* output, int num_inputs,
-                           int size, musaStream_t stream);
-void LaunchAddNKernelInt64(const int64_t** inputs, InlinePointers inline_inputs, int64_t* output,
-                           int num_inputs, int size, musaStream_t stream);
+void LaunchAddNKernelFloat(const float** inputs, InlinePointers inline_inputs,
+                           float* output, int num_inputs, int size,
+                           musaStream_t stream);
+void LaunchAddNKernelDouble(const double** inputs, InlinePointers inline_inputs,
+                            double* output, int num_inputs, int size,
+                            musaStream_t stream);
+void LaunchAddNKernelHalf(const void** inputs, InlinePointers inline_inputs,
+                          void* output, int num_inputs, int size,
+                          musaStream_t stream);
+void LaunchAddNKernelBFloat16(const void** inputs, InlinePointers inline_inputs,
+                              void* output, int num_inputs, int size,
+                              musaStream_t stream);
+void LaunchAddNKernelInt32(const int** inputs, InlinePointers inline_inputs,
+                           int* output, int num_inputs, int size,
+                           musaStream_t stream);
+void LaunchAddNKernelInt64(const int64_t** inputs, InlinePointers inline_inputs,
+                           int64_t* output, int num_inputs, int size,
+                           musaStream_t stream);
 }
 
 namespace tensorflow {
@@ -115,7 +121,8 @@ inline mStatus MusaZeroMemoryAsync(void* ptr, size_t size,
 // Common implementation for AddN Compute
 template <typename T>
 void AddNCompute(OpKernelContext* ctx, mFormat format,
-                 void (*launcher)(const T**, InlinePointers, T*, int, int, musaStream_t)) {
+                 void (*launcher)(const T**, InlinePointers, T*, int, int,
+                                  musaStream_t)) {
   MUSA_KERNEL_TIMING_GUARD_WITH_NAME(ctx, "AddN");
   MUSA_KERNEL_TRACE_START("FULL");
 
@@ -215,8 +222,9 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
       }
     } else {
       Tensor d_inputs_tensor;
-      OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_UINT64, TensorShape({num_inputs}),
-                                             &d_inputs_tensor));
+      OP_REQUIRES_OK(ctx,
+                     ctx->allocate_temp(DT_UINT64, TensorShape({num_inputs}),
+                                        &d_inputs_tensor));
       d_inputs =
           reinterpret_cast<const void**>(d_inputs_tensor.flat<uint64>().data());
 
@@ -284,22 +292,23 @@ class MusaAddNOp : public MusaOpKernel {
   }
 
  private:
-  static void (*GetLauncher())(const T**, InlinePointers, T*, int, int, musaStream_t);
+  static void (*GetLauncher())(const T**, InlinePointers, T*, int, int,
+                               musaStream_t);
 };
 
 // ============================================================================
 // Launchers
 // ============================================================================
 
-#define DEFINE_ADDN_LAUNCHER_GETTER(T, launcher, input_cast, output_cast) \
-  template <>                                                             \
-  void (*MusaAddNOp<T>::GetLauncher())(const T**, InlinePointers, T*, int, int, \
-                                       musaStream_t) {                    \
-    return [](const T** inputs, InlinePointers inline_inputs, T* output, int num_inputs, int size, \
-              musaStream_t stream) {                                      \
-      launcher(input_cast(inputs), inline_inputs, output_cast(output), num_inputs, size, \
-               stream);                                                   \
-    };                                                                    \
+#define DEFINE_ADDN_LAUNCHER_GETTER(T, launcher, input_cast, output_cast)  \
+  template <>                                                              \
+  void (*MusaAddNOp<T>::GetLauncher())(const T**, InlinePointers, T*, int, \
+                                       int, musaStream_t) {                \
+    return [](const T** inputs, InlinePointers inline_inputs, T* output,   \
+              int num_inputs, int size, musaStream_t stream) {             \
+      launcher(input_cast(inputs), inline_inputs, output_cast(output),     \
+               num_inputs, size, stream);                                  \
+    };                                                                     \
   }
 
 DEFINE_ADDN_LAUNCHER_GETTER(float, LaunchAddNKernelFloat,

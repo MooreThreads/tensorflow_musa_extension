@@ -1,6 +1,6 @@
 // MUSA AddN Custom Kernel
 // Performs element-wise addition of N tensors in a single kernel launch
-// 
+//
 // Copyright 2026 The TensorFlow MUSA Authors. All Rights Reserved.
 // Licensed under the Apache License, Version 2.0.
 
@@ -79,8 +79,8 @@ __global__ void AddNKernelHalf(const half** inputs, half* output, int num_inputs
 }
 
 // BFloat16 kernel (needs float accumulation for precision)
-__global__ void AddNKernelBFloat16(const __mt_bfloat16** inputs, 
-                                    __mt_bfloat16* output, 
+__global__ void AddNKernelBFloat16(const __mt_bfloat16** inputs,
+                                    __mt_bfloat16* output,
                                     int num_inputs, int size) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < size) {
