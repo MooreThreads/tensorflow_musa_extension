@@ -403,9 +403,6 @@ class MusaApplyAdaMaxKernelOp : public MusaOpKernel {
 #define REGISTER_RESOURCE_ADAMAX(T)                       \
   REGISTER_KERNEL_BUILDER(Name("ResourceApplyAdaMax")     \
                               .Device(DEVICE_MTGPU)       \
-                              .HostMemory("var")          \
-                              .HostMemory("m")            \
-                              .HostMemory("v")            \
                               .TypeConstraint<T>("T")     \
                               .HostMemory("beta1_power")  \
                               .HostMemory("lr")           \
