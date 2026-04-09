@@ -3,6 +3,7 @@
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/platform/macros.h"
+#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -12,6 +13,7 @@ class MusaConcatOffsetOp : public OpKernel {
   explicit MusaConcatOffsetOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& concat_dim_tensor = ctx->input(0);
     OP_REQUIRES(ctx, TensorShapeUtils::IsScalar(concat_dim_tensor.shape()),
                 errors::InvalidArgument(

@@ -52,6 +52,7 @@ class MusaRangeOp : public OpKernel {
   explicit MusaRangeOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& start_in = ctx->input(0);
     const Tensor& limit_in = ctx->input(1);
     const Tensor& delta_in = ctx->input(2);

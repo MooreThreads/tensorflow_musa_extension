@@ -20,6 +20,7 @@ class MusaClipOp : public MusaOpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& input_x = ctx->input(0);
     const Tensor& input_lo = ctx->input(1);
     const Tensor& input_hi = ctx->input(2);

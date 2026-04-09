@@ -21,6 +21,7 @@ class MusaDiagPartOp : public MusaOpKernel {
   explicit MusaDiagPartOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
   void Compute(OpKernelContext* context) override {
+    MUSA_DEBUG_LOG_KERNEL(context);
     const Tensor& tensor = context->input(0);
     const int num_dims = tensor.dims();
     const int out_dims = num_dims / 2;

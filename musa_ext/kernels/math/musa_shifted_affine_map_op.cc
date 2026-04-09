@@ -175,7 +175,7 @@ class MusaShiftedAffineMapOp : public MusaOpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
-    MUSA_KERNEL_TIMING_GUARD(ctx);
+    MUSA_DEBUG_LOG_KERNEL(ctx);
 
     const Tensor& data_left = ctx->input(0);
     const Tensor& mask = ctx->input(1);
@@ -195,12 +195,10 @@ class MusaShiftedAffineMapOp : public MusaOpKernel {
       if (output->NumElements() == 0) return;
 
       musaStream_t stream = GetMusaStreamByCtx(ctx);
-      MUSA_KERNEL_TRACE_START("Kernel_FastPath");
       LaunchShiftedAffineMapContiguous<T>(
           data_left.flat<T>().data(), mask.flat<T>().data(),
           sliced_var_right.flat<T>().data(), output->flat<T>().data(),
           static_cast<int64_t>(output->NumElements()), stream);
-      MUSA_KERNEL_TRACE_END("Kernel_FastPath");
 
       auto launch_status = musaGetLastError();
       OP_REQUIRES(
@@ -251,13 +249,11 @@ class MusaShiftedAffineMapOp : public MusaOpKernel {
         BuildBroadcastStrides(sliced_var_right.shape(), output_shape);
 
     musaStream_t stream = GetMusaStreamByCtx(ctx);
-    MUSA_KERNEL_TRACE_START("Kernel");
     LaunchShiftedAffineMapKernel<T>(
         data_left.flat<T>().data(), data_left_st, mask.flat<T>().data(),
         mask_st, sliced_var_right.flat<T>().data(), sliced_var_right_st,
         output->flat<T>().data(), kernel_shape,
         static_cast<int>(output->NumElements()), stream);
-    MUSA_KERNEL_TRACE_END("Kernel");
 
     auto launch_status = musaGetLastError();
     OP_REQUIRES(

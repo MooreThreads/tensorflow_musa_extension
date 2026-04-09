@@ -51,6 +51,7 @@ class MusaTensorListReserveOp : public MusaOpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& element_shape_tensor = ctx->input(0);
     const Tensor& num_elements_tensor = ctx->input(1);
 

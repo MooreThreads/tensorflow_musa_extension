@@ -20,6 +20,7 @@ class MusaIsNanOp : public MusaOpKernel {
   explicit MusaIsNanOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& x = ctx->input(0);
 
     Tensor* y = nullptr;

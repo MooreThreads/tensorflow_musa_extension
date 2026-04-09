@@ -8,9 +8,9 @@ set(CMAKE_CXX_COMPILER g++)
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Kernel debug/timing instrumentation switch.
-# OFF by default to keep production performance unchanged.
-option(MUSA_KERNEL_DEBUG "Enable MUSA kernel compute timing instrumentation" OFF)
+# Kernel debug metadata switch.
+# OFF by default to keep production behavior unchanged.
+option(MUSA_KERNEL_DEBUG "Enable MUSA kernel debug metadata logging" OFF)
 
 # Set MUSA path
 set(MUSA_PATH "/usr/local/musa" CACHE STRING "Path to MUSA installation")
@@ -63,9 +63,10 @@ set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=0")
 # refcount aborts during session/resource destruction.
 #
 # Keep NDEBUG enabled in every build to match the TensorFlow wheel, and use
-# MUSA_KERNEL_DEBUG only for plugin-local timing/debug instrumentation.
+# MUSA_KERNEL_DEBUG only for plugin-local kernel metadata logging.
 if(MUSA_KERNEL_DEBUG)
-    set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_KERNEL_DEBUG -DNDEBUG")
+    message(STATUS "MUSA kernel debug info enabled")
+    set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_KERNEL_DEBUG=1 -DNDEBUG")
 else()
     set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_DISABLE_DEBUG_LOGGING -DNDEBUG -DMUSA_DISABLE_TRACE_LOGGING -DMUSA_DISABLE_AUTO_TRACE")
 endif()

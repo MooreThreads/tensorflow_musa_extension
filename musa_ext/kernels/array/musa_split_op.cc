@@ -16,6 +16,7 @@ class MusaSplitOp : public OpKernel {
   explicit MusaSplitOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
 
   void Compute(OpKernelContext* context) override {
+    MUSA_DEBUG_LOG_KERNEL(context);
     const Tensor& split_dim_tensor = context->input(0);
     const Tensor& input = context->input(1);
     const TensorShape& input_shape = input.shape();

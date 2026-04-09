@@ -69,6 +69,7 @@ class MusaTensorListFromTensorOp : public MusaOpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     Tensor* output_tensor = nullptr;
     AllocatorAttributes attr;
     attr.set_on_host(true);

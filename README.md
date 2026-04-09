@@ -9,7 +9,7 @@ TensorFlow MUSA Extension 是一个高性能的 TensorFlow 插件，专为摩尔
 - **自动图优化**：支持 Layout 自动转换、算子融合和自动混合精度（AMP）
 - **无缝集成**：与 TensorFlow 生态系统完全兼容，无需修改现有代码
 - **设备管理**：完整的 MUSA 设备注册、内存管理和流式处理支持
-- **Kernel 调试支持**：内置 Kernel 执行时间统计功能，便于性能分析
+- **Kernel 调试支持**：Debug 模式下输出算子类型、输入类型和输入 shape，并支持终端颜色高亮
 
 ## 快速开始
 
@@ -77,7 +77,7 @@ tf.load_library("./build/libmusa_plugin.so")
 | 模式 | 命令 | 说明 |
 |------|------|------|
 | **Release** | `./build.sh` 或 `./build.sh release` | 优化性能，无调试开销 |
-| **Debug** | `./build.sh debug` | 开启 `MUSA_KERNEL_DEBUG`，启用 kernel timing 宏 |
+| **Debug** | `./build.sh debug` | 开启 `MUSA_KERNEL_DEBUG`，输出 Kernel 调试日志 |
 
 ### 2. 编译流程
 
@@ -90,7 +90,7 @@ tf.load_library("./build/libmusa_plugin.so")
 # Release（显式）
 ./build.sh release
 
-# Debug（计时调试）
+# Debug（Kernel 调试日志）
 ./build.sh debug
 ```
 
@@ -101,9 +101,9 @@ tf.load_library("./build/libmusa_plugin.so")
 
 ### 3. 调试与诊断
 
-详细的调试指南请参阅 [docs/DEBUG_GUIDE.md](docs/DEBUG_GUIDE.md)，包含：
+详细的调试指南请参阅 [docs/DEBUG_GUIDE.md](docs/DEBUG_GUIDE.md)。当前 README 中与 Kernel 调试相关的说明已经更新为新的 debug 日志方案；旧的 timing 宏路径已移除。
 
-- **Kernel 计时**：Debug 模式下的性能分析方法
+- **Kernel 调试日志**：通过 `MUSA_DEBUG_LOG_KERNEL(ctx)` 输出 `op_type`、`input_types`、`input_shapes`
 - **遥测系统（Telemetry）**：全链路追踪和脏数据诊断
 - **内存诊断**：Use-After-Free 检测和内存染色
 - **环境变量**：完整的环境变量配置表
@@ -116,14 +116,58 @@ export MUSA_TELEMETRY_LOG_PATH=/tmp/telemetry.json
 python test_runner.py
 ```
 
-快速启用 Kernel 计时分析：
+### 4. 本次 Kernel Debug 改动说明
+
+本次调试链路做了如下调整：
+
+- 新增统一调试宏 `MUSA_DEBUG_LOG_KERNEL(ctx)`，在算子 `Compute()` 开始时打印详细调试信息，并在 `Compute()` 退出时自动打印极简结束提示
+- 公共格式化和输出逻辑集中在 `musa_ext/kernels/utils_op.h` 与 `musa_ext/kernels/utils_op.cc`
+- 当前 `musa_ext/kernels` 下所有已接入 `MUSA_DEBUG_LOG_KERNEL(ctx)` 的算子 `Compute()` 入口都会输出这套日志
+- 旧的 timing 宏已经删除，不再使用 `MUSA_KERNEL_TIMING_GUARD`、`MUSA_KERNEL_TRACE_START`、`MUSA_KERNEL_TRACE_END`、`MUSA_KERNEL_TRACE`、`MUSA_PROFILE_OP`
+
+新的日志格式如下：
+
+```txt
+[MUSA_KERNEL_DEBUG] op_type=AddV2 input_types=[float, float] input_shapes=[[1024,1024], [1024,1024]]
+[MUSA_KERNEL_DEBUG] END AddV2
+```
+
+其中：
+
+- 开始日志保留 `op_type`、`input_types`、`input_shapes`
+- 结束日志只保留极简提示，成功时打印 `END <OpName>`，失败时打印 `FAIL <OpName>`
+- `input_types` 默认使用青色高亮
+- `input_shapes` 默认使用黄色高亮
+- `END` 日志默认使用亮绿色高亮，`FAIL` 日志默认使用亮红色高亮
+- 当输出被重定向到文件时，默认保持纯文本，避免 ANSI 颜色码污染日志
+- 如需在 `tee` 或重定向场景中强制保留颜色，可设置 `MUSA_KERNEL_DEBUG_COLOR=1`
+- 如需显式关闭颜色，可设置 `NO_COLOR=1`
+
+快速启用新的 Kernel 调试日志：
+
+方式一：在仓库根目录运行。
 
 ```bash
 ./build.sh debug
-export MUSA_TIMING_KERNEL_LEVEL=2
-export MUSA_TIMING_KERNEL_NAME=ALL
-export MUSA_TIMING_KERNEL_STATS=1
-python test_runner.py
+export PYTHONPATH=$PWD/test
+python3 test/ops/add_op_test.py 2>&1 | tee /tmp/tme_add.log
+grep 'MUSA_KERNEL_DEBUG' /tmp/tme_add.log
+```
+
+方式二：直接进入 `test/` 目录运行，这种方式不需要设置 `PYTHONPATH`。
+
+```bash
+./build.sh debug
+cd test
+python3 -m ops.add_op_test 2>&1 | tee /tmp/tme_add.log
+grep 'MUSA_KERNEL_DEBUG' /tmp/tme_add.log
+```
+
+如需强制保留颜色输出：
+
+```bash
+cd test
+MUSA_KERNEL_DEBUG_COLOR=1 python3 -m ops.add_op_test
 ```
 
 ## 测试

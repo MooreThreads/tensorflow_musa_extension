@@ -5,6 +5,7 @@
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/framework/types.h"
+#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -15,6 +16,7 @@ class MusaShapeOp : public OpKernel {
   explicit MusaShapeOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& input = ctx->input(0);
     const TensorShape& shape = input.shape();
     const int rank = shape.dims();
@@ -35,6 +37,7 @@ class MusaShapeNOp : public OpKernel {
   explicit MusaShapeNOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     for (int i = 0; i < ctx->num_inputs(); ++i) {
       const Tensor& inp = ctx->input(i);
       const TensorShape& shape = inp.shape();

@@ -16,6 +16,7 @@ class MusaLeakyReluGradOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& gradients = ctx->input(0);
     const Tensor& features = ctx->input(1);
 

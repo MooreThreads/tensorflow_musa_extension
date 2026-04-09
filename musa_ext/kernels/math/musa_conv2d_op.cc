@@ -256,7 +256,7 @@ class MusaConv2DOp : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
-    MUSA_KERNEL_TIMING_GUARD(ctx);
+    MUSA_DEBUG_LOG_KERNEL(ctx);
 
     const Tensor& input = ctx->input(0);
     const Tensor& filter = ctx->input(1);
@@ -316,20 +316,16 @@ class MusaConv2DOp : public MusaOpKernel {
     }
 
     Tensor* output = nullptr;
-    MUSA_KERNEL_TRACE_START("Mem Alloc");
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
-    MUSA_KERNEL_TRACE_END("Mem Alloc");
     if (output->NumElements() == 0) {
       return;
     }
 
     if (data_format_ == FORMAT_NHWC) {
-      MUSA_KERNEL_TRACE_START("Kernel");
       OP_REQUIRES_OK(
           ctx, RunMusaConv2D<T>(ctx, input, filter, output, FORMAT_NHWC,
                                 stride_h_, stride_w_, dilation_h_, dilation_w_,
                                 pad_top, pad_left, tf32_enabled_));
-      MUSA_KERNEL_TRACE_END("Kernel");
       return;
     }
 
@@ -337,7 +333,6 @@ class MusaConv2DOp : public MusaOpKernel {
     // back. This avoids current native NCHW path instability.
     Tensor input_nhwc;
     Tensor output_nhwc;
-    MUSA_KERNEL_TRACE_START("Mem Alloc");
     OP_REQUIRES_OK(ctx,
                    ctx->allocate_temp(input.dtype(),
                                       TensorShape({batch, in_h, in_w, in_c}),
@@ -346,24 +341,17 @@ class MusaConv2DOp : public MusaOpKernel {
                    ctx->allocate_temp(output->dtype(),
                                       TensorShape({batch, out_h, out_w, out_c}),
                                       &output_nhwc));
-    MUSA_KERNEL_TRACE_END("Mem Alloc");
 
     static const std::vector<int64_t> kPermNchwToNhwc = {0, 2, 3, 1};
     static const std::vector<int64_t> kPermNhwcToNchw = {0, 3, 1, 2};
-    MUSA_KERNEL_TRACE_START("Kernel");
     OP_REQUIRES_OK(
         ctx, PermuteTensorOnMusa(ctx, input, &input_nhwc, kPermNchwToNhwc));
-    MUSA_KERNEL_TRACE_END("Kernel");
-    MUSA_KERNEL_TRACE_START("Kernel");
     OP_REQUIRES_OK(
         ctx, RunMusaConv2D<T>(ctx, input_nhwc, filter, &output_nhwc,
                               FORMAT_NHWC, stride_h_, stride_w_, dilation_h_,
                               dilation_w_, pad_top, pad_left, tf32_enabled_));
-    MUSA_KERNEL_TRACE_END("Kernel");
-    MUSA_KERNEL_TRACE_START("Kernel");
     OP_REQUIRES_OK(
         ctx, PermuteTensorOnMusa(ctx, output_nhwc, output, kPermNhwcToNchw));
-    MUSA_KERNEL_TRACE_END("Kernel");
   }
 
  private:

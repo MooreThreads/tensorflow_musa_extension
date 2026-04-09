@@ -19,6 +19,7 @@ class MusaAllOp : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* context) override {
+    MUSA_DEBUG_LOG_KERNEL(context);
     const Tensor& input = context->input(0);
     const Tensor& axes_tensor = context->input(1);
 
