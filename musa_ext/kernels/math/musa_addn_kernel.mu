@@ -8,7 +8,7 @@
 #include <musa_fp16.h>
 #include <musa_bf16.h>
 
-#define MAX_INLINE_ADDN_INPUTS 8
+#define MAX_INLINE_ADDN_INPUTS 16
 
 struct InlinePointers {
   const void* ptrs[MAX_INLINE_ADDN_INPUTS];
@@ -18,8 +18,8 @@ template <typename T>
 __global__ void AddNKernelInline(InlinePointers inputs, T* output, int num_inputs, int size) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < size) {
-    T sum = static_cast<const T*>(inputs.ptrs[0])[idx];
-    for (int i = 1; i < num_inputs; ++i) {
+    T sum = T(0);
+    for (int i = 0; i < num_inputs; ++i) {
       sum += static_cast<const T*>(inputs.ptrs[i])[idx];
     }
     output[idx] = sum;
@@ -29,8 +29,8 @@ __global__ void AddNKernelInline(InlinePointers inputs, T* output, int num_input
 __global__ void AddNKernelInlineBFloat16(InlinePointers inputs, __mt_bfloat16* output, int num_inputs, int size) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < size) {
-    float sum = __bfloat162float(static_cast<const __mt_bfloat16*>(inputs.ptrs[0])[idx]);
-    for (int i = 1; i < num_inputs; ++i) {
+    float sum = 0.0f;
+    for (int i = 0; i < num_inputs; ++i) {
       sum += __bfloat162float(static_cast<const __mt_bfloat16*>(inputs.ptrs[i])[idx]);
     }
     output[idx] = __float2bfloat16(sum);
