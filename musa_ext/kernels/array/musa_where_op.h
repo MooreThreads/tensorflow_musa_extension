@@ -27,7 +27,7 @@ template <typename T, typename TIndex>
 void LaunchMusaSelectFlaggedKernel(const T* input, TIndex* selected_indices,
                                    const TIndex* d_scanned,
                                    const TIndex* d_marks, int num_items,
-                                   musaStream_t stream);
+                                   int output_size, musaStream_t stream);
 
 template <int NDIM, typename TIndex>
 void LaunchPropagateWhereIndicesKernel(const TIndex output_rows,
@@ -162,7 +162,8 @@ struct Where {
 
     LaunchMusaSelectFlaggedKernel<T, TIndex>(
         input.data(), selected_indices, d_scanned, d_marks,
-        static_cast<int>(num_items), stream);
+        static_cast<int>(num_items), static_cast<int>(output.dimension(0)),
+        stream);
 
     const Eigen::array<TIndex, NDIM> strides =
         CalculateStrides<TIndex, T, NDIM>(input);
