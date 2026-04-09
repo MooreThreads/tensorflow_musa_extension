@@ -15,10 +15,13 @@ limitations under the License.
 
 #include "mu/graph_fusion/tensordot_bias_fusion.h"
 
+#include <cstdlib>
+#include <string>
 #include <unordered_set>
 
 #include "mu/optimizer/graph_utils.h"
 #include "tensorflow/core/framework/attr_value.pb.h"
+#include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/platform/logging.h"
 
 namespace tensorflow {
@@ -30,6 +33,13 @@ namespace {
 // Weight node valid types
 const std::unordered_set<std::string> kWeightOps = {
     "Identity", "ReadVariableOp", "Const", "Reshape"};
+
+bool IsTruthyEnvVar(const char* env_name) {
+  const char* env_val = std::getenv(env_name);
+  if (env_val == nullptr) return false;
+  return env_val[0] == '1' || env_val[0] == 't' || env_val[0] == 'T' ||
+         env_val[0] == 'y' || env_val[0] == 'Y';
+}
 
 // Helper to check if node has specific op type
 bool IsOp(const NodeDef& node, const std::string& op_type) {
@@ -77,6 +87,42 @@ std::string GetCleanName(const std::string& input) {
     name = name.substr(0, colon_pos);
   }
   return name;
+}
+
+bool TryGetStaticShape(const NodeDef& node, TensorShape* shape) {
+  auto it = node.attr().find("_output_shapes");
+  if (it == node.attr().end()) return false;
+
+  const auto& shape_list = it->second.list().shape();
+  if (shape_list.empty()) return false;
+  const auto& shape_proto = shape_list.Get(0);
+  if (shape_proto.unknown_rank()) return false;
+
+  TensorShape out;
+  for (const auto& d : shape_proto.dim()) {
+    if (d.size() < 0) return false;
+    out.AddDim(d.size());
+  }
+  *shape = out;
+  return true;
+}
+
+std::string BuildTensorDotBiasBackendConfig(const std::vector<int>& axes_a,
+                                            const std::vector<int>& axes_b) {
+  std::string cfg = "{";
+  cfg += "\"impl\":\"musa_tensordot_bias\",";
+  cfg += "\"axes_a\":[";
+  for (size_t i = 0; i < axes_a.size(); ++i) {
+    if (i > 0) cfg += ",";
+    cfg += std::to_string(axes_a[i]);
+  }
+  cfg += "],\"axes_b\":[";
+  for (size_t i = 0; i < axes_b.size(); ++i) {
+    if (i > 0) cfg += ",";
+    cfg += std::to_string(axes_b[i]);
+  }
+  cfg += "]}";
+  return cfg;
 }
 
 }  // namespace
@@ -147,22 +193,24 @@ FusionMatchResult MusaTensorDotBiasFusion::MatchFromBiasAddNode(
 
   // Check input[0] is MusaTensorDot (already fused by tensordot_fusion)
   if (!tensordot_output || !IsOp(*tensordot_output, "MusaTensorDot")) {
-    VLOG(2) << "[TensorDotBias::Match] FAIL: input[0] is not MusaTensorDot, actual="
-            << (tensordot_output ? tensordot_output->op() : "NULL")
-            << ", node=" << bias_add.name();
+    VLOG(2)
+        << "[TensorDotBias::Match] FAIL: input[0] is not MusaTensorDot, actual="
+        << (tensordot_output ? tensordot_output->op() : "NULL")
+        << ", node=" << bias_add.name();
     return result;
   }
 
   // Check input[1] is a valid weight node
   if (!bias_weights || !IsWeightOp(*bias_weights)) {
-    VLOG(2) << "[TensorDotBias::Match] FAIL: input[1] is not weight node, actual="
-            << (bias_weights ? bias_weights->op() : "NULL")
-            << ", node=" << bias_add.name();
+    VLOG(2)
+        << "[TensorDotBias::Match] FAIL: input[1] is not weight node, actual="
+        << (bias_weights ? bias_weights->op() : "NULL")
+        << ", node=" << bias_add.name();
     return result;
   }
 
-  VLOG(2) << "[TensorDotBias::Match] PASS initial check: BiasAdd=" << bias_add.name()
-          << ", MusaTensorDot=" << tensordot_output->name()
+  VLOG(2) << "[TensorDotBias::Match] PASS initial check: BiasAdd="
+          << bias_add.name() << ", MusaTensorDot=" << tensordot_output->name()
           << ", bias_weights=" << bias_weights->name();
 
   // =========================================================================
@@ -194,17 +242,16 @@ FusionMatchResult MusaTensorDotBiasFusion::MatchFromBiasAddNode(
     axes_b.push_back(0);
   }
 
-  VLOG(2) << "[TensorDotBias::Match] extracted axes_a=" 
-          << [&]() {
-               std::string s;
-               for (size_t i = 0; i < axes_a.size(); ++i) {
-                 if (i > 0) s += ",";
-                 s += std::to_string(axes_a[i]);
-               }
-               return s;
-             }()
-          << ", axes_b="
-          << [&]() {
+  VLOG(2) << "[TensorDotBias::Match] extracted axes_a=" <<
+      [&]() {
+        std::string s;
+        for (size_t i = 0; i < axes_a.size(); ++i) {
+          if (i > 0) s += ",";
+          s += std::to_string(axes_a[i]);
+        }
+        return s;
+      }()
+          << ", axes_b=" << [&]() {
                std::string s;
                for (size_t i = 0; i < axes_b.size(); ++i) {
                  if (i > 0) s += ",";
@@ -230,9 +277,10 @@ FusionMatchResult MusaTensorDotBiasFusion::MatchFromBiasAddNode(
   // Capture attributes needed for Apply
   result.captured_attrs["original_input"] = tensordot_output->input(0);
   result.captured_attrs["tensordot_weight_input"] = tensordot_output->input(1);
-  // Use BiasAdd.input(1) instead of bias_weights->name() to preserve port information
+  // Use BiasAdd.input(1) instead of bias_weights->name() to preserve port
+  // information
   result.captured_attrs["bias_weights_input"] = bias_add.input(1);
-  
+
   // Serialize axes
   std::string axes_a_str, axes_b_str;
   for (size_t i = 0; i < axes_a.size(); ++i) {
@@ -253,20 +301,21 @@ FusionMatchResult MusaTensorDotBiasFusion::MatchFromBiasAddNode(
   return result;
 }
 
-Status MusaTensorDotBiasFusion::Apply(GraphDef* graph,
-                                      const FusionMatchResult& match_result) const {
+Status MusaTensorDotBiasFusion::Apply(
+    GraphDef* graph, const FusionMatchResult& match_result) const {
   VLOG(2) << "[TensorDotBias::Apply] ENTER, matched=" << match_result.matched
           << ", nodes_count=" << match_result.matched_nodes.size()
           << ", kernel_available=" << IsKernelAvailable();
 
   if (!match_result.IsValid()) {
     VLOG(2) << "[TensorDotBias::Apply] RETURN: invalid match result";
-    return Status(error::INVALID_ARGUMENT, "Invalid TensorDotBias match result");
+    return Status(error::INVALID_ARGUMENT,
+                  "Invalid TensorDotBias match result");
   }
 
   if (!IsKernelAvailable()) {
-    VLOG(2)
-        << "[TensorDotBias::Apply] RETURN: kernel not available, skipping fusion";
+    VLOG(2) << "[TensorDotBias::Apply] RETURN: kernel not available, skipping "
+               "fusion";
     return Status::OK();
   }
 
@@ -276,8 +325,8 @@ Status MusaTensorDotBiasFusion::Apply(GraphDef* graph,
   auto bias_weights_it = match_result.captured_nodes.find("bias_weights");
 
   if (bias_add_it == match_result.captured_nodes.end()) {
-    VLOG(2)
-        << "[TensorDotBias::Apply] RETURN: missing bias_add node in captured_nodes";
+    VLOG(2) << "[TensorDotBias::Apply] RETURN: missing bias_add node in "
+               "captured_nodes";
     return Status(error::INVALID_ARGUMENT,
                   "Missing bias_add node in TensorDotBias pattern");
   }
@@ -311,17 +360,20 @@ Status MusaTensorDotBiasFusion::Apply(GraphDef* graph,
                   "Cannot determine TensorDotBias input A");
   }
 
-  auto tensordot_weight_input_it = match_result.captured_attrs.find("tensordot_weight_input");
+  auto tensordot_weight_input_it =
+      match_result.captured_attrs.find("tensordot_weight_input");
   if (tensordot_weight_input_it != match_result.captured_attrs.end() &&
       !tensordot_weight_input_it->second.empty()) {
     tensordot_weight_name = tensordot_weight_input_it->second;
   } else {
-    VLOG(2) << "[TensorDotBias::Apply] RETURN: cannot determine tensordot weight";
+    VLOG(2)
+        << "[TensorDotBias::Apply] RETURN: cannot determine tensordot weight";
     return Status(error::INVALID_ARGUMENT,
                   "Cannot determine TensorDotBias tensordot weight");
   }
 
-  auto bias_weights_input_it = match_result.captured_attrs.find("bias_weights_input");
+  auto bias_weights_input_it =
+      match_result.captured_attrs.find("bias_weights_input");
   if (bias_weights_input_it != match_result.captured_attrs.end() &&
       !bias_weights_input_it->second.empty()) {
     bias_weights_name = bias_weights_input_it->second;
@@ -383,7 +435,7 @@ Status MusaTensorDotBiasFusion::Apply(GraphDef* graph,
   // =========================================================================
   std::unordered_set<std::string> nodes_to_remove;
   nodes_to_remove.insert(output_name);  // BiasAdd will be replaced
-  
+
   auto tensordot_node_it = match_result.captured_nodes.find("tensordot");
   if (tensordot_node_it != match_result.captured_nodes.end() &&
       tensordot_node_it->second) {
@@ -396,16 +448,17 @@ Status MusaTensorDotBiasFusion::Apply(GraphDef* graph,
   if (tensordot_node_it != match_result.captured_nodes.end() &&
       tensordot_node_it->second) {
     tensordot_output_name = tensordot_node_it->second->name();
-    
+
     for (int i = 0; i < graph->node_size(); ++i) {
       const NodeDef& node = graph->node(i);
       if (nodes_to_remove.count(node.name())) continue;
-      
+
       for (int j = 0; j < node.input_size(); ++j) {
         std::string producer = GetCleanName(node.input(j));
         if (producer == tensordot_output_name && producer != output_name) {
           // External node depends on tensordot output, keep it
-          VLOG(2) << "[TensorDotBias::Apply] keeping tensordot due to external dep from "
+          VLOG(2) << "[TensorDotBias::Apply] keeping tensordot due to external "
+                     "dep from "
                   << node.name();
           nodes_to_remove.erase(tensordot_output_name);
           break;
@@ -421,7 +474,7 @@ Status MusaTensorDotBiasFusion::Apply(GraphDef* graph,
   // Remove fused nodes (in reverse topological order)
   // =========================================================================
   int removed_count = 0;
-  
+
   // First remove BiasAdd (will be replaced by fused node)
   int bias_add_idx = FusionGraphUtils::FindNodeIndex(*graph, output_name);
   if (bias_add_idx >= 0) {
@@ -431,7 +484,8 @@ Status MusaTensorDotBiasFusion::Apply(GraphDef* graph,
 
   // Then remove MusaTensorDot if not kept
   if (nodes_to_remove.count(tensordot_output_name)) {
-    int tensordot_idx = FusionGraphUtils::FindNodeIndex(*graph, tensordot_output_name);
+    int tensordot_idx =
+        FusionGraphUtils::FindNodeIndex(*graph, tensordot_output_name);
     if (tensordot_idx >= 0) {
       FusionGraphUtils::RemoveNode(graph, tensordot_idx);
       removed_count++;
@@ -443,26 +497,69 @@ Status MusaTensorDotBiasFusion::Apply(GraphDef* graph,
   // =========================================================================
   // Create fused node
   // =========================================================================
-  NodeDef* fused_node = graph->add_node();
-  fused_node->set_name(output_name);
-  fused_node->set_op("MusaTensorDotBias");
-  fused_node->set_device(output_device);
+  const bool use_custom_call =
+      IsTruthyEnvVar("MUSA_ENABLE_XLA_CUSTOM_CALL_TD_BIAS");
+  bool custom_call_emitted = false;
 
-  // Inputs: original_input, tensordot_weight, bias_weights
-  fused_node->add_input(input_a_name);
-  fused_node->add_input(tensordot_weight_name);
-  fused_node->add_input(bias_weights_name);
+  if (use_custom_call) {
+    TensorShape result_shape;
+    if (TryGetStaticShape(*bias_add_node, &result_shape)) {
+      NodeDef* fused_node = graph->add_node();
+      fused_node->set_name(output_name);
+      fused_node->set_op("XlaCustomCallV2");
+      fused_node->set_device(output_device);
 
-  auto* attr = fused_node->mutable_attr();
-  (*attr)["T"].set_type(dtype);
+      fused_node->add_input(input_a_name);
+      fused_node->add_input(tensordot_weight_name);
+      fused_node->add_input(bias_weights_name);
 
-  auto* axes_a_list = (*attr)["axes_a"].mutable_list();
-  for (int a : axes_a) axes_a_list->add_i(a);
+      auto* attr = fused_node->mutable_attr();
+      (*attr)["call_target_name"].set_s("__musa$TensorDotBias");
+      (*attr)["backend_config"].set_s(
+          BuildTensorDotBiasBackendConfig(axes_a, axes_b));
+      (*attr)["has_side_effect"].set_b(false);
 
-  auto* axes_b_list = (*attr)["axes_b"].mutable_list();
-  for (int b : axes_b) axes_b_list->add_i(b);
+      auto* operand_dtypes = (*attr)["operand_dtypes"].mutable_list();
+      operand_dtypes->add_type(dtype);
+      operand_dtypes->add_type(dtype);
+      operand_dtypes->add_type(dtype);
+
+      auto* result_dtypes = (*attr)["result_dtypes"].mutable_list();
+      result_dtypes->add_type(dtype);
+
+      auto* result_shapes = (*attr)["result_shapes"].mutable_list();
+      result_shape.AsProto(result_shapes->add_shape());
+      custom_call_emitted = true;
+    } else {
+      VLOG(1) << "[TensorDotBias::Apply] MUSA_ENABLE_XLA_CUSTOM_CALL_TD_BIAS=1 "
+              << "but output shape is dynamic; fallback to MusaTensorDotBias";
+    }
+  }
+
+  if (!custom_call_emitted) {
+    NodeDef* fused_node = graph->add_node();
+    fused_node->set_name(output_name);
+    fused_node->set_op("MusaTensorDotBias");
+    fused_node->set_device(output_device);
+
+    // Inputs: original_input, tensordot_weight, bias_weights
+    fused_node->add_input(input_a_name);
+    fused_node->add_input(tensordot_weight_name);
+    fused_node->add_input(bias_weights_name);
+
+    auto* attr = fused_node->mutable_attr();
+    (*attr)["T"].set_type(dtype);
+
+    auto* axes_a_list = (*attr)["axes_a"].mutable_list();
+    for (int a : axes_a) axes_a_list->add_i(a);
+
+    auto* axes_b_list = (*attr)["axes_b"].mutable_list();
+    for (int b : axes_b) axes_b_list->add_i(b);
+  }
 
   VLOG(1) << "[TensorDotBias::Apply] SUCCESS fused to " << output_name
+          << ", mode="
+          << (custom_call_emitted ? "XlaCustomCallV2" : "MusaTensorDotBias")
           << ", removed=" << removed_count
           << ", graph_nodes=" << graph->node_size();
 
