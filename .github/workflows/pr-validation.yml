@@ -168,6 +168,49 @@ jobs:
         continue-on-error: true
 
       # ==============================
+      # Training
+      # ==============================
+      - name: Training Test
+        id: run-training
+        run: |
+          set -euo pipefail
+
+          exit_code=0
+
+          bash -l -c "
+            cd /home/runner/tf_test_model-master/training &&
+            LOG_FILE='$LOG_DIR/training.log' &&
+            ERROR_LOG_DIR='$LOG_DIR/training_error_logs' &&
+            timeout 120m python run_all_training_tests.py \
+              --epochs 10 \
+              --log-dir \$ERROR_LOG_DIR \
+              --musa-plugin '$WORKSPACE/build/libmusa_plugin.so' > \$LOG_FILE 2>&1
+          " || exit_code=$?
+
+          if [ $exit_code -eq 0 ]; then
+            if grep -q '^\[FAIL\]' "$LOG_DIR/training.log" || \
+               grep -Eq '^失败:[[:space:]]*[1-9][0-9]*' "$LOG_DIR/training.log"; then
+              echo "❌ Training 摘要显示存在失败模型"
+              exit_code=1
+            fi
+          fi
+
+          if [ $exit_code -ne 0 ]; then
+            echo "❌ Training 测试执行失败"
+            tail -50 "$LOG_DIR/training.log" || true
+            if [ -d "$LOG_DIR/training_error_logs" ]; then
+              echo "===== Training 错误日志 ====="
+              find "$LOG_DIR/training_error_logs" -maxdepth 1 -type f | sort || true
+            fi
+            echo "status=failure" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          echo "✅ Training 测试通过"
+          echo "status=success" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+      # ==============================
       # 测试 prunedGraph 性能
       # ==============================
       - name: Check prunedGraph performance
@@ -453,6 +496,7 @@ jobs:
           echo "- Format: ${{ steps.run-format.outputs.status || 'skipped' }}" >> "$SUMMARY"
           echo "- Build: ${{ steps.run-build.outputs.status || 'skipped' }}" >> "$SUMMARY"
           echo "- Test: ${{ steps.run-integration.outputs.status || 'skipped' }}" >> "$SUMMARY"
+          echo "- Training: ${{ steps.run-training.outputs.status || 'skipped' }}" >> "$SUMMARY"
           echo "- PrunedGraph Performance: ${{ steps.run-pruned-graph-performance.outputs.status || 'skipped' }}" >> "$SUMMARY"
           echo "- PrunedGraph Accuracy: ${{ steps.run-pruned-graph-accuracy.outputs.status || 'skipped' }}" >> "$SUMMARY"
           echo "- MetaGraph 1 Performance: ${{ steps.run-meta-graph-1-performance.outputs.status || 'skipped' }}" >> "$SUMMARY"
@@ -474,6 +518,7 @@ jobs:
           echo "| Format | ${{ steps.run-format.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Build | ${{ steps.run-build.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Test | ${{ steps.run-integration.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Training | ${{ steps.run-training.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| PrunedGraph Performance | ${{ steps.run-pruned-graph-performance.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| PrunedGraph Accuracy | ${{ steps.run-pruned-graph-accuracy.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| MetaGraph 1 Performance | ${{ steps.run-meta-graph-1-performance.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
@@ -482,6 +527,7 @@ jobs:
 
           if [ "${{ steps.run-build.outputs.status }}" == "failure" ] || \
              [ "${{ steps.run-integration.outputs.status }}" == "failure" ] || \
+             [ "${{ steps.run-training.outputs.status }}" == "failure" ] || \
              [ "${{ steps.run-pruned-graph-performance.outputs.status }}" == "failure" ] || \
              [ "${{ steps.run-pruned-graph-accuracy.outputs.status }}" == "failure" ] || \
              [ "${{ steps.run-meta-graph-1-performance.outputs.status }}" == "failure" ] || \
