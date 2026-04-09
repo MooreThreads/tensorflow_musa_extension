@@ -168,86 +168,279 @@ jobs:
         continue-on-error: true
 
       # ==============================
-      # 测试整网性能 part1
+      # 测试 prunedGraph 性能
       # ==============================
-      - name: Check Performance part1
-        id: run-performance-part1
+      - name: Check prunedGraph performance
+        id: run-pruned-graph-performance
         run: |
           set -euo pipefail
 
           exit_code=0
 
           bash -l -c "
-            cd /home/runner/tf_test_model/prunedGraph &&
-            LOG_FILE='$LOG_DIR/performance-part1.log' &&
-            timeout 20m python run_graph_tf_musa.py --inference-only --inference-rounds 1000 > \$LOG_FILE 2>&1
+            cd /home/runner/tf_test_model-master/inference/prunedGraph &&
+            LOG_FILE='$LOG_DIR/prunedGraph-performance.log' &&
+            timeout 20m python run_inference.py \
+              --device musa \
+              --musa-plugin '$WORKSPACE/build/libmusa_plugin.so' \
+              --infer-iters 1000 > \$LOG_FILE 2>&1
           " || exit_code=$?
 
           if [ $exit_code -ne 0 ]; then
+            echo "❌ prunedGraph 性能测试执行失败"
+            tail -50 "$LOG_DIR/prunedGraph-performance.log" || true
             echo "status=failure" >> $GITHUB_OUTPUT
             exit 1
           fi
 
-          CURRENT_TIME=$(grep "Average Time (s)" "$LOG_DIR/performance-part1.log" | tail -1 | awk -F'|' '{print $3}' | tr -d ' ')
+          CURRENT_TIME_MS=$(python3 -c 'import pathlib,re,sys; text=pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="ignore"); matches=re.findall(r"平均:\s*([0-9]+(?:\.[0-9]+)?)\s*ms", text); print(matches[-1] if matches else "")' "$LOG_DIR/prunedGraph-performance.log" || true)
 
-          if [ -z "$CURRENT_TIME" ]; then
-            echo "❌ 无法解析性能结果"
+          if [ -z "$CURRENT_TIME_MS" ]; then
+            echo "❌ 无法解析 prunedGraph 性能结果"
+            tail -50 "$LOG_DIR/prunedGraph-performance.log" || true
             echo "status=failure" >> $GITHUB_OUTPUT
             exit 1
           fi
 
+          CURRENT_TIME=$(awk -v cur_ms="$CURRENT_TIME_MS" 'BEGIN {printf "%.6f", cur_ms / 1000}')
           BASELINE=0.038332
           THRESHOLD=$(awk -v base="$BASELINE" 'BEGIN {printf "%.6f", base * 1.05}')
 
-          echo "Baseline : $BASELINE"
-          echo "Threshold: $THRESHOLD"
-          echo "Current  : $CURRENT_TIME"
+          echo "Baseline : $BASELINE s"
+          echo "Threshold: $THRESHOLD s"
+          echo "Current  : $CURRENT_TIME s (${CURRENT_TIME_MS} ms)"
 
           if awk -v cur="$CURRENT_TIME" -v thr="$THRESHOLD" 'BEGIN {exit !(cur > thr)}'; then
-            echo "❌ 性能退化"
+            echo "❌ prunedGraph 性能退化"
             echo "status=failure" >> $GITHUB_OUTPUT
             exit 1
           else
-            echo "✅ 性能正常"
+            echo "✅ prunedGraph 性能正常"
             echo "status=success" >> $GITHUB_OUTPUT
           fi
         continue-on-error: true
 
       # ==============================
-      # 测试整网性能 part2
+      # 测试 prunedGraph 精度
       # ==============================
-      - name: Check Performance part2
-        id: run-performance-part2
+      - name: Check prunedGraph accuracy
+        id: run-pruned-graph-accuracy
         run: |
           set -euo pipefail
 
           exit_code=0
 
           bash -l -c "
-            cd /home/runner/tf_test_model/prunedGraph &&
-            LOG_FILE='$LOG_DIR/performance-part2.log' &&
-            timeout 20m python run_graph_tf_musa.py --compare-accuracy --rtol 1e-2 --atol 1e-2 > \$LOG_FILE 2>&1
+            cd /home/runner/tf_test_model-master/inference/prunedGraph &&
+            LOG_FILE='$LOG_DIR/prunedGraph-accuracy.log' &&
+            timeout 20m python run_inference.py \
+              --device musa \
+              --musa-plugin '$WORKSPACE/build/libmusa_plugin.so' \
+              --check-acc \
+              --rtol 1e-2 \
+              --atol 1e-2 > \$LOG_FILE 2>&1
           " || exit_code=$?
 
           if [ $exit_code -ne 0 ]; then
-            echo "❌ 精度测试脚本执行失败"
+            echo "❌ prunedGraph 精度测试脚本执行失败"
+            tail -50 "$LOG_DIR/prunedGraph-accuracy.log" || true
             echo "status=failure" >> $GITHUB_OUTPUT
             exit 1
           fi
 
-          if grep -q "精度对比通过！CPU 与 MUSA 结果一致" "$LOG_DIR/performance-part2.log"; then
-            echo "✅ 精度对比通过"
+          if grep -q "整体状态:.*PASSED" "$LOG_DIR/prunedGraph-accuracy.log"; then
+            echo "✅ prunedGraph 精度对比通过"
             echo "status=success" >> $GITHUB_OUTPUT
           else
-            echo "❌ 精度对比失败"
+            echo "❌ prunedGraph 精度对比失败"
             echo "status=failure" >> $GITHUB_OUTPUT
-
             echo "===== 日志最后50行 ====="
-            tail -50 "$LOG_DIR/performance-part2.log"
-
+            tail -50 "$LOG_DIR/prunedGraph-accuracy.log" || true
             exit 1
           fi
         continue-on-error: true
+
+      # ==============================
+      # 测试 metaGraph_1 性能
+      # ==============================
+      - name: Check metaGraph_1 performance
+        id: run-meta-graph-1-performance
+        run: |
+          set -euo pipefail
+
+          exit_code=0
+
+          bash -l -c "
+            [ -e /home/runner/tf_test_model ] || ln -s /home/runner/tf_test_model-master /home/runner/tf_test_model &&
+            cd /home/runner/tf_test_model-master/inference/metaGraph &&
+            LOG_FILE='$LOG_DIR/metaGraph-1-performance.log' &&
+            OUT_ROOT='$LOG_DIR/metaGraph-1-runner-out' &&
+            timeout 30m python musa_run_pb_graph.py \
+              --spec /home/runner/tf_test_model-master/inference/metaGraph/meta_graph/meta_graph_1.spec \
+              --bs 4096 \
+              --out_root \$OUT_ROOT \
+              --musa-plugin '$WORKSPACE/build/libmusa_plugin.so' > \$LOG_FILE 2>&1
+          " || exit_code=$?
+
+          if [ $exit_code -ne 0 ]; then
+            echo "❌ metaGraph_1 性能测试执行失败"
+            tail -50 "$LOG_DIR/metaGraph-1-performance.log" || true
+            echo "status=failure" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          REPORT_PATH=$(grep '^\[OK\] report=' "$LOG_DIR/metaGraph-1-performance.log" | tail -1 | sed 's/^\[OK\] report=//' || true)
+
+          if [ -z "$REPORT_PATH" ] || [ ! -f "$REPORT_PATH" ]; then
+            echo "❌ 无法定位 metaGraph_1 性能报告"
+            tail -50 "$LOG_DIR/metaGraph-1-performance.log" || true
+            echo "status=failure" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          CURRENT_TIME_MS=$(python -c 'import json,sys; data=json.load(open(sys.argv[1])); vals=[x.get("average_time_ms") for x in data.get("average_time_summary", []) if x.get("status")=="ok" and x.get("average_time_ms") is not None]; print(vals[0] if vals else "")' "$REPORT_PATH" || true)
+
+          if [ -z "$CURRENT_TIME_MS" ]; then
+            echo "❌ 无法解析 metaGraph_1 性能结果"
+            tail -50 "$LOG_DIR/metaGraph-1-performance.log" || true
+            echo "status=failure" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          echo "metaGraph_1 Average: ${CURRENT_TIME_MS} ms"
+          BASELINE_MS=239.1032
+          THRESHOLD_MS=$(awk -v base="$BASELINE_MS" 'BEGIN {printf "%.4f", base * 1.05}')
+
+          echo "Baseline : ${BASELINE_MS} ms"
+          echo "Threshold: ${THRESHOLD_MS} ms"
+
+          if awk -v cur="$CURRENT_TIME_MS" -v thr="$THRESHOLD_MS" 'BEGIN {exit !(cur > thr)}'; then
+            echo "❌ metaGraph_1 性能退化"
+            echo "status=failure" >> $GITHUB_OUTPUT
+            exit 1
+          else
+            echo "✅ metaGraph_1 性能正常"
+            echo "status=success" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      # ==============================
+      # 测试 metaGraph_2 性能
+      # 暂时关闭：当前脚本仍有待修复的问题，先不纳入 CI 执行。
+      # ==============================
+      - name: Check metaGraph_2 performance
+        id: run-meta-graph-2-performance
+        if: ${{ false }}
+        run: |
+          set -euo pipefail
+
+          exit_code=0
+
+          bash -l -c "
+            [ -e /home/runner/tf_test_model ] || ln -s /home/runner/tf_test_model-master /home/runner/tf_test_model &&
+            cd /home/runner/tf_test_model-master/inference/metaGraph &&
+            LOG_FILE='$LOG_DIR/metaGraph-2-performance.log' &&
+            OUT_ROOT='$LOG_DIR/metaGraph-2-runner-out' &&
+            timeout 30m python musa_run_pb_graph.py \
+              --spec /home/runner/tf_test_model-master/inference/metaGraph/meta_graph/meta_graph_2.spec \
+              --bs 4096 \
+              --out_root \$OUT_ROOT \
+              --musa-plugin '$WORKSPACE/build/libmusa_plugin.so' > \$LOG_FILE 2>&1
+          " || exit_code=$?
+
+          if [ $exit_code -ne 0 ]; then
+            echo "❌ metaGraph_2 性能测试执行失败"
+            tail -50 "$LOG_DIR/metaGraph-2-performance.log" || true
+            echo "status=failure" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          REPORT_PATH=$(grep '^\[OK\] report=' "$LOG_DIR/metaGraph-2-performance.log" | tail -1 | sed 's/^\[OK\] report=//' || true)
+
+          if [ -z "$REPORT_PATH" ] || [ ! -f "$REPORT_PATH" ]; then
+            echo "❌ 无法定位 metaGraph_2 性能报告"
+            tail -50 "$LOG_DIR/metaGraph-2-performance.log" || true
+            echo "status=failure" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          CURRENT_TIME_MS=$(python -c 'import json,sys; data=json.load(open(sys.argv[1])); vals=[x.get("average_time_ms") for x in data.get("average_time_summary", []) if x.get("status")=="ok" and x.get("average_time_ms") is not None]; print(vals[0] if vals else "")' "$REPORT_PATH" || true)
+
+          if [ -z "$CURRENT_TIME_MS" ]; then
+            echo "❌ 无法解析 metaGraph_2 性能结果"
+            tail -50 "$LOG_DIR/metaGraph-2-performance.log" || true
+            echo "status=failure" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          echo "metaGraph_2 Average: ${CURRENT_TIME_MS} ms"
+          echo "status=success" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+      # ==============================
+      # 测试 metaGraph_3 性能
+      # ==============================
+      - name: Check metaGraph_3 performance
+        id: run-meta-graph-3-performance
+        run: |
+          set -euo pipefail
+
+          exit_code=0
+
+          bash -l -c "
+            [ -e /home/runner/tf_test_model ] || ln -s /home/runner/tf_test_model-master /home/runner/tf_test_model &&
+            cd /home/runner/tf_test_model-master/inference/metaGraph &&
+            LOG_FILE='$LOG_DIR/metaGraph-3-performance.log' &&
+            OUT_ROOT='$LOG_DIR/metaGraph-3-runner-out' &&
+            timeout 30m python musa_run_pb_graph.py \
+              --spec /home/runner/tf_test_model-master/inference/metaGraph/meta_graph/meta_graph_3.spec \
+              --bs 4096 \
+              --out_root \$OUT_ROOT \
+              --musa-plugin '$WORKSPACE/build/libmusa_plugin.so' > \$LOG_FILE 2>&1
+          " || exit_code=$?
+
+          if [ $exit_code -ne 0 ]; then
+            echo "❌ metaGraph_3 性能测试执行失败"
+            tail -50 "$LOG_DIR/metaGraph-3-performance.log" || true
+            echo "status=failure" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          REPORT_PATH=$(grep '^\[OK\] report=' "$LOG_DIR/metaGraph-3-performance.log" | tail -1 | sed 's/^\[OK\] report=//' || true)
+
+          if [ -z "$REPORT_PATH" ] || [ ! -f "$REPORT_PATH" ]; then
+            echo "❌ 无法定位 metaGraph_3 性能报告"
+            tail -50 "$LOG_DIR/metaGraph-3-performance.log" || true
+            echo "status=failure" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          CURRENT_TIME_MS=$(python -c 'import json,sys; data=json.load(open(sys.argv[1])); vals=[x.get("average_time_ms") for x in data.get("average_time_summary", []) if x.get("status")=="ok" and x.get("average_time_ms") is not None]; print(vals[0] if vals else "")' "$REPORT_PATH" || true)
+
+          if [ -z "$CURRENT_TIME_MS" ]; then
+            echo "❌ 无法解析 metaGraph_3 性能结果"
+            tail -50 "$LOG_DIR/metaGraph-3-performance.log" || true
+            echo "status=failure" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          echo "metaGraph_3 Average: ${CURRENT_TIME_MS} ms"
+          BASELINE_MS=444.3835
+          THRESHOLD_MS=$(awk -v base="$BASELINE_MS" 'BEGIN {printf "%.4f", base * 1.05}')
+
+          echo "Baseline : ${BASELINE_MS} ms"
+          echo "Threshold: ${THRESHOLD_MS} ms"
+
+          if awk -v cur="$CURRENT_TIME_MS" -v thr="$THRESHOLD_MS" 'BEGIN {exit !(cur > thr)}'; then
+            echo "❌ metaGraph_3 性能退化"
+            echo "status=failure" >> $GITHUB_OUTPUT
+            exit 1
+          else
+            echo "✅ metaGraph_3 性能正常"
+            echo "status=success" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
 
       # ==============================
       # Summary（写入日志目录）
@@ -260,8 +453,12 @@ jobs:
           echo "- Format: ${{ steps.run-format.outputs.status || 'skipped' }}" >> "$SUMMARY"
           echo "- Build: ${{ steps.run-build.outputs.status || 'skipped' }}" >> "$SUMMARY"
           echo "- Test: ${{ steps.run-integration.outputs.status || 'skipped' }}" >> "$SUMMARY"
-          echo "- Performance: ${{ steps.run-performance-part1.outputs.status || 'skipped' }}" >> "$SUMMARY"
-          echo "- Performance: ${{ steps.run-performance-part2.outputs.status || 'skipped' }}" >> "$SUMMARY"
+          echo "- PrunedGraph Performance: ${{ steps.run-pruned-graph-performance.outputs.status || 'skipped' }}" >> "$SUMMARY"
+          echo "- PrunedGraph Accuracy: ${{ steps.run-pruned-graph-accuracy.outputs.status || 'skipped' }}" >> "$SUMMARY"
+          echo "- MetaGraph 1 Performance: ${{ steps.run-meta-graph-1-performance.outputs.status || 'skipped' }}" >> "$SUMMARY"
+          echo "- MetaGraph 2 Performance: ${{ steps.run-meta-graph-2-performance.outputs.status || 'skipped' }}" >> "$SUMMARY"
+          echo "- MetaGraph 3 Performance: ${{ steps.run-meta-graph-3-performance.outputs.status || 'skipped' }}" >> "$SUMMARY"
+
 
       # ==============================
       # CI Summary（GitHub UI）
@@ -277,12 +474,18 @@ jobs:
           echo "| Format | ${{ steps.run-format.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Build | ${{ steps.run-build.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Test | ${{ steps.run-integration.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Performance | ${{ steps.run-performance-part1.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Performance | ${{ steps.run-performance-part2.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| PrunedGraph Performance | ${{ steps.run-pruned-graph-performance.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| PrunedGraph Accuracy | ${{ steps.run-pruned-graph-accuracy.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| MetaGraph 1 Performance | ${{ steps.run-meta-graph-1-performance.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| MetaGraph 2 Performance | ${{ steps.run-meta-graph-2-performance.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| MetaGraph 3 Performance | ${{ steps.run-meta-graph-3-performance.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ steps.run-build.outputs.status }}" == "failure" ] || \
              [ "${{ steps.run-integration.outputs.status }}" == "failure" ] || \
-             [ "${{ steps.run-performance-part1.outputs.status }}" == "failure" ] || \
-             [ "${{ steps.run-performance-part2.outputs.status }}" == "failure" ]; then
+             [ "${{ steps.run-pruned-graph-performance.outputs.status }}" == "failure" ] || \
+             [ "${{ steps.run-pruned-graph-accuracy.outputs.status }}" == "failure" ] || \
+             [ "${{ steps.run-meta-graph-1-performance.outputs.status }}" == "failure" ] || \
+             [ "${{ steps.run-meta-graph-2-performance.outputs.status }}" == "failure" ] || \
+             [ "${{ steps.run-meta-graph-3-performance.outputs.status }}" == "failure" ]; then
             exit 1
           fi
