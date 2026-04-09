@@ -1,3 +1,5 @@
+#pragma once
+
 #include <string>
 #include <vector>
 
@@ -7,12 +9,12 @@ namespace tensorflow {
 namespace grappler {
 namespace musa_fusion {
 
-// Computes: MatMul + BiasAdd + Relu
+// Computes: MatMul + BiasAdd
 
-class LinearReluFusion : public FusionPattern {
+class MatMulBiasAddFusion : public FusionPattern {
  public:
-  LinearReluFusion() = default;
-  ~LinearReluFusion() override = default;
+  MatMulBiasAddFusion() = default;
+  ~MatMulBiasAddFusion() override = default;
 
   FusionMatchResult Match(const GraphDef& graph,
                           int start_node_idx) const override;
@@ -20,15 +22,15 @@ class LinearReluFusion : public FusionPattern {
   Status Apply(GraphDef* graph,
                const FusionMatchResult& match_result) const override;
 
-  int GetPriority() const override { return 120; }
+  int GetPriority() const override { return 98; }
 
   bool IsKernelAvailable() const override;
 
-  std::string GetName() const override { return "LinearReluFusion"; }
+  std::string GetName() const override { return "MatMulBiasAddFusion"; }
 
   std::string GetFallbackReason() const override {
     if (!kernel_available_) {
-      return "LinearReluFusion kernel not available on this device";
+      return "MatMulBiasAddFusion kernel not available on this device";
     }
     return "";
   }
