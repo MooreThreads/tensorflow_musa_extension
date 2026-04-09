@@ -100,6 +100,164 @@ inline Status ValidateAdaMaxShapes(const Tensor& var_t, const Tensor& m_t,
 }
 
 template <typename T>
+Status RunAdaMaxUpdate(OpKernelContext* ctx, mFormat format, Tensor* var_t,
+                       Tensor* m_t, Tensor* v_t, const Tensor& grad,
+                       T beta1_power, T lr, T beta1, T beta2, T epsilon,
+                       const char* op_name) {
+  auto& handle = GetHandleByCtx(ctx);
+  std::list<Tensor> temp_storage;
+  ::musa::dnn::Binary b_op;
+  ::musa::dnn::Unary u_op;
+
+  auto require_success = [&](::musa::dnn::Status status,
+                             const char* step) -> Status {
+    if (status != ::musa::dnn::Status::SUCCESS) {
+      return errors::Internal(op_name, " ", step,
+                              " failed. Status: ",
+                              static_cast<int>(status));
+    }
+    return Status::OK();
+  };
+
+  auto fill_scalar = [&](T val, const TensorShape& shape,
+                         mTensor* out) -> Status {
+    temp_storage.emplace_back();
+    TF_RETURN_IF_ERROR(ctx->allocate_temp(DataTypeToEnum<T>::value, shape,
+                                          &temp_storage.back()));
+    *out = CreateMTensor(temp_storage.back(), format);
+    return MusaFillCall(out, val, ctx);
+  };
+
+  const double denom = 1.0 - static_cast<double>(beta1_power);
+  if (denom == 0.0) {
+    return errors::InvalidArgument("beta1_power must not be 1.");
+  }
+  const T lr_t = static_cast<T>(static_cast<double>(lr) / denom);
+
+  mTensor t_var = CreateMTensor(*var_t, format);
+  mTensor t_m = CreateMTensor(*m_t, format);
+  mTensor t_v = CreateMTensor(*v_t, format);
+  mTensor t_grad = CreateMTensor(grad, format);
+
+  // Step 1: m = beta1 * m + (1 - beta1) * grad
+  mTensor t_beta1;
+  mTensor t_inv_beta1;
+  TF_RETURN_IF_ERROR(fill_scalar(beta1, m_t->shape(), &t_beta1));
+  TF_RETURN_IF_ERROR(fill_scalar(static_cast<T>(1.0) - beta1, grad.shape(),
+                                 &t_inv_beta1));
+
+  b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
+  TF_RETURN_IF_ERROR(
+      require_success(b_op.Run(handle, t_m, t_m, t_beta1), "MUL beta1"));
+
+  temp_storage.emplace_back();
+  TF_RETURN_IF_ERROR(ctx->allocate_temp(DataTypeToEnum<T>::value, grad.shape(),
+                                        &temp_storage.back()));
+  mTensor t_g_scaled = CreateMTensor(temp_storage.back(), format);
+  TF_RETURN_IF_ERROR(require_success(
+      b_op.Run(handle, t_g_scaled, t_grad, t_inv_beta1), "MUL inv_beta1"));
+
+  b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
+  TF_RETURN_IF_ERROR(
+      require_success(b_op.Run(handle, t_m, t_m, t_g_scaled), "ADD m"));
+
+  // Step 2: v = max(beta2 * v, abs(grad))
+  // max(a, b) = (a + b + |a - b|) / 2
+  mTensor t_beta2;
+  TF_RETURN_IF_ERROR(fill_scalar(beta2, v_t->shape(), &t_beta2));
+  temp_storage.emplace_back();
+  TF_RETURN_IF_ERROR(ctx->allocate_temp(DataTypeToEnum<T>::value, v_t->shape(),
+                                        &temp_storage.back()));
+  mTensor t_v_scaled = CreateMTensor(temp_storage.back(), format);
+  b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
+  TF_RETURN_IF_ERROR(
+      require_success(b_op.Run(handle, t_v_scaled, t_v, t_beta2),
+                      "MUL beta2"));
+
+  temp_storage.emplace_back();
+  TF_RETURN_IF_ERROR(ctx->allocate_temp(DataTypeToEnum<T>::value, grad.shape(),
+                                        &temp_storage.back()));
+  mTensor t_abs_grad = CreateMTensor(temp_storage.back(), format);
+  u_op.SetMode(::musa::dnn::Unary::Mode::ABS);
+  TF_RETURN_IF_ERROR(
+      require_success(u_op.Run(handle, t_abs_grad, t_grad), "ABS grad"));
+
+  temp_storage.emplace_back();
+  TF_RETURN_IF_ERROR(ctx->allocate_temp(DataTypeToEnum<T>::value, v_t->shape(),
+                                        &temp_storage.back()));
+  mTensor t_diff = CreateMTensor(temp_storage.back(), format);
+  b_op.SetMode(::musa::dnn::Binary::Mode::SUB);
+  TF_RETURN_IF_ERROR(
+      require_success(b_op.Run(handle, t_diff, t_v_scaled, t_abs_grad),
+                      "SUB diff"));
+
+  temp_storage.emplace_back();
+  TF_RETURN_IF_ERROR(ctx->allocate_temp(DataTypeToEnum<T>::value, v_t->shape(),
+                                        &temp_storage.back()));
+  mTensor t_abs_diff = CreateMTensor(temp_storage.back(), format);
+  u_op.SetMode(::musa::dnn::Unary::Mode::ABS);
+  TF_RETURN_IF_ERROR(
+      require_success(u_op.Run(handle, t_abs_diff, t_diff), "ABS diff"));
+
+  temp_storage.emplace_back();
+  TF_RETURN_IF_ERROR(ctx->allocate_temp(DataTypeToEnum<T>::value, v_t->shape(),
+                                        &temp_storage.back()));
+  mTensor t_sum = CreateMTensor(temp_storage.back(), format);
+  b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
+  TF_RETURN_IF_ERROR(
+      require_success(b_op.Run(handle, t_sum, t_v_scaled, t_abs_grad),
+                      "ADD sum1"));
+  TF_RETURN_IF_ERROR(
+      require_success(b_op.Run(handle, t_sum, t_sum, t_abs_diff),
+                      "ADD sum2"));
+
+  mTensor t_half;
+  TF_RETURN_IF_ERROR(fill_scalar(static_cast<T>(0.5), v_t->shape(), &t_half));
+  b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
+  TF_RETURN_IF_ERROR(
+      require_success(b_op.Run(handle, t_v, t_sum, t_half), "MUL half"));
+
+  // Step 3: var = var - lr_t * m / (v + epsilon)
+  temp_storage.emplace_back();
+  TF_RETURN_IF_ERROR(ctx->allocate_temp(DataTypeToEnum<T>::value, v_t->shape(),
+                                        &temp_storage.back()));
+  mTensor t_den = CreateMTensor(temp_storage.back(), format);
+  mTensor t_eps;
+  TF_RETURN_IF_ERROR(fill_scalar(epsilon, v_t->shape(), &t_eps));
+  b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
+  TF_RETURN_IF_ERROR(
+      require_success(b_op.Run(handle, t_den, t_v, t_eps), "ADD epsilon"));
+
+  temp_storage.emplace_back();
+  TF_RETURN_IF_ERROR(ctx->allocate_temp(DataTypeToEnum<T>::value, m_t->shape(),
+                                        &temp_storage.back()));
+  mTensor t_update = CreateMTensor(temp_storage.back(), format);
+  b_op.SetMode(::musa::dnn::Binary::Mode::DIV);
+  TF_RETURN_IF_ERROR(
+      require_success(b_op.Run(handle, t_update, t_m, t_den), "DIV update"));
+
+  mTensor t_lr_t;
+  TF_RETURN_IF_ERROR(fill_scalar(lr_t, m_t->shape(), &t_lr_t));
+  b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
+  TF_RETURN_IF_ERROR(
+      require_success(b_op.Run(handle, t_update, t_update, t_lr_t),
+                      "MUL lr_t"));
+
+  b_op.SetMode(::musa::dnn::Binary::Mode::SUB);
+  TF_RETURN_IF_ERROR(
+      require_success(b_op.Run(handle, t_var, t_var, t_update), "SUB var"));
+
+  musaStream_t stream = GetMusaStreamByCtx(ctx);
+  musaError_t sync_err = musaStreamSynchronize(stream);
+  if (sync_err != musaSuccess) {
+    return errors::Internal(op_name, ": musaStreamSynchronize failed: ",
+                            musaGetErrorString(sync_err));
+  }
+
+  return Status::OK();
+}
+
+template <typename T>
 class MusaResourceApplyAdaMaxOp : public MusaOpKernel {
  public:
   explicit MusaResourceApplyAdaMaxOp(OpKernelConstruction* ctx)
@@ -142,6 +300,8 @@ class MusaResourceApplyAdaMaxOp : public MusaOpKernel {
                 errors::FailedPrecondition(
                     "AdaMax variables (var/m/v) not initialized."));
 
+    OP_REQUIRES_OK(ctx, ValidateAdaMaxHyperParams(ctx));
+
     OP_REQUIRES_OK(ctx, PrepareTensorForMusaUpdate(ctx, var.get()));
     OP_REQUIRES_OK(ctx, PrepareTensorForMusaUpdate(ctx, m.get()));
     OP_REQUIRES_OK(ctx, PrepareTensorForMusaUpdate(ctx, v.get()));
@@ -149,189 +309,20 @@ class MusaResourceApplyAdaMaxOp : public MusaOpKernel {
     Tensor var_t = *var->tensor();
     Tensor m_t = *m->tensor();
     Tensor v_t = *v->tensor();
+    const Tensor& grad = ctx->input(8);
 
-    auto& handle = GetHandleByCtx(ctx);
-    std::list<Tensor> temp_storage;
-    ::musa::dnn::Binary b_op;
-    ::musa::dnn::Unary u_op;
-
-    auto require_success = [&](::musa::dnn::Status status,
-                               const char* op_name) -> Status {
-      if (status != ::musa::dnn::Status::SUCCESS) {
-        return errors::Internal("ResourceApplyAdaMax ", op_name,
-                                " failed. Status: ", static_cast<int>(status));
-      }
-      return Status::OK();
-    };
-
-    auto fill_scalar = [&](T val, const TensorShape& shape,
-                           mTensor* out) -> Status {
-      temp_storage.emplace_back();
-      Status alloc_status = ctx->allocate_temp(DataTypeToEnum<T>::value, shape,
-                                               &temp_storage.back());
-      if (!alloc_status.ok()) {
-        return alloc_status;
-      }
-      *out = CreateMTensor(temp_storage.back(), format_);
-      return MusaFillCall(out, val, ctx);
-    };
+    OP_REQUIRES_OK(ctx, ValidateAdaMaxShapes(var_t, m_t, v_t, grad));
 
     const T beta1_power = ctx->input(3).scalar<T>()();
     const T lr = ctx->input(4).scalar<T>()();
     const T beta1 = ctx->input(5).scalar<T>()();
     const T beta2 = ctx->input(6).scalar<T>()();
     const T epsilon = ctx->input(7).scalar<T>()();
-    const Tensor& grad = ctx->input(8);
 
-    // AdaMax algorithm:
-    // m_t = beta1 * m_{t-1} + (1 - beta1) * g_t
-    // v_t = max(beta2 * v_{t-1}, |g_t|)
-    // lr_t = lr / (1 - beta1^t)
-    // var_t = var_{t-1} - lr_t * m_t / (v_t + epsilon)
-
-    // Calculate learning rate decay
-    const double denom = 1.0 - static_cast<double>(beta1_power);
-    if (denom == 0.0) {
-      ctx->CtxFailure(errors::InvalidArgument("beta1_power must not be 1."));
-      return;
-    }
-    const T lr_t = static_cast<T>(static_cast<double>(lr) / denom);
-
-    mTensor t_var = CreateMTensor(var_t, format_);
-    mTensor t_m = CreateMTensor(m_t, format_);
-    mTensor t_v = CreateMTensor(v_t, format_);
-    mTensor t_grad = CreateMTensor(grad, format_);
-
-    // Step 1: Update m: m = beta1 * m + (1 - beta1) * grad
-    mTensor t_beta1;
-    mTensor t_inv_beta1;
-    OP_REQUIRES_OK(ctx, fill_scalar(beta1, m_t.shape(), &t_beta1));
-    OP_REQUIRES_OK(ctx, fill_scalar(static_cast<T>(1.0) - beta1, grad.shape(),
-                                    &t_inv_beta1));
-
-    // m *= beta1
-    b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_m, t_m, t_beta1), "MUL beta1"));
-
-    // grad * (1-beta1)
-    temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
-                                           grad.shape(), &temp_storage.back()));
-    mTensor t_g_scaled = CreateMTensor(temp_storage.back(), format_);
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_g_scaled, t_grad, t_inv_beta1),
-                             "MUL inv_beta1"));
-
-    // m += grad * (1-beta1)
-    b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_m, t_m, t_g_scaled), "ADD m"));
-
-    // Step 2: Update v: v = max(beta2 * v, |grad|)
-    // Note: MuDNN doesn't have MAX, so we use: max(a,b) = (a+b+|a-b|)/2
-
-    // beta2 * v
-    mTensor t_beta2;
-    OP_REQUIRES_OK(ctx, fill_scalar(beta2, v_t.shape(), &t_beta2));
-    temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
-                                           v_t.shape(), &temp_storage.back()));
-    mTensor t_v_scaled = CreateMTensor(temp_storage.back(), format_);
-    b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_v_scaled, t_v, t_beta2),
-                             "MUL beta2"));
-
-    // |grad|
-    temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
-                                           grad.shape(), &temp_storage.back()));
-    mTensor t_abs_grad = CreateMTensor(temp_storage.back(), format_);
-    u_op.SetMode(::musa::dnn::Unary::Mode::ABS);
-    OP_REQUIRES_OK(
-        ctx, require_success(u_op.Run(handle, t_abs_grad, t_grad), "ABS grad"));
-
-    // diff = beta2*v - |grad|
-    temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
-                                           v_t.shape(), &temp_storage.back()));
-    mTensor t_diff = CreateMTensor(temp_storage.back(), format_);
-    b_op.SetMode(::musa::dnn::Binary::Mode::SUB);
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_diff, t_v_scaled, t_abs_grad),
-                             "SUB diff"));
-
-    // |diff|
-    temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
-                                           v_t.shape(), &temp_storage.back()));
-    mTensor t_abs_diff = CreateMTensor(temp_storage.back(), format_);
-    u_op.SetMode(::musa::dnn::Unary::Mode::ABS);
-    OP_REQUIRES_OK(
-        ctx, require_success(u_op.Run(handle, t_abs_diff, t_diff), "ABS diff"));
-
-    // sum = beta2*v + |grad| + |diff|
-    temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
-                                           v_t.shape(), &temp_storage.back()));
-    mTensor t_sum = CreateMTensor(temp_storage.back(), format_);
-    b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_sum, t_v_scaled, t_abs_grad),
-                             "ADD sum1"));
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_sum, t_sum, t_abs_diff),
-                             "ADD sum2"));
-
-    // max = sum / 2
-    mTensor t_half;
-    OP_REQUIRES_OK(ctx, fill_scalar(static_cast<T>(0.5), v_t.shape(), &t_half));
-    b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_v, t_sum, t_half), "MUL half"));
-
-    // Step 3: Update var: var = var - lr_t * m / (v + epsilon)
-
-    // denominator = v + epsilon
-    temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
-                                           v_t.shape(), &temp_storage.back()));
-    mTensor t_den = CreateMTensor(temp_storage.back(), format_);
-    mTensor t_eps;
-    OP_REQUIRES_OK(ctx, fill_scalar(epsilon, v_t.shape(), &t_eps));
-    b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_den, t_v, t_eps),
-                                        "ADD epsilon"));
-
-    // m / (v + epsilon)
-    temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
-                                           m_t.shape(), &temp_storage.back()));
-    mTensor t_update = CreateMTensor(temp_storage.back(), format_);
-    b_op.SetMode(::musa::dnn::Binary::Mode::DIV);
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_update, t_m, t_den), "DIV"));
-
-    // lr_t * m / (v + epsilon)
-    mTensor t_lr_t;
-    OP_REQUIRES_OK(ctx, fill_scalar(lr_t, m_t.shape(), &t_lr_t));
-    b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_update, t_update, t_lr_t),
-                             "MUL lr_t"));
-
-    // var -= lr_t * m / (v + epsilon)
-    b_op.SetMode(::musa::dnn::Binary::Mode::SUB);
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_var, t_var, t_update), "SUB var"));
-
-    musaStream_t stream = GetMusaStreamByCtx(ctx);
-    musaError_t sync_err = musaStreamSynchronize(stream);
-    OP_REQUIRES(ctx, sync_err == musaSuccess,
-                errors::Internal("ResourceApplyAdaMax: musaStreamSynchronize "
-                                 "failed: ",
-                                 musaGetErrorString(sync_err)));
+    OP_REQUIRES_OK(ctx,
+                   RunAdaMaxUpdate(ctx, format_, &var_t, &m_t, &v_t, grad,
+                                   beta1_power, lr, beta1, beta2, epsilon,
+                                   "ResourceApplyAdaMax"));
   }
 
  private:
@@ -378,9 +369,9 @@ class MusaApplyAdaMaxKernelOp : public MusaOpKernel {
       ctx->forward_ref_input_to_ref_output(0, 0);
     }
 
-    Tensor var_t = ctx->mutable_input(0, true);
-    Tensor m_t = ctx->mutable_input(1, true);
-    Tensor v_t = ctx->mutable_input(2, true);
+    Tensor var_t = ctx->mutable_input(0, use_exclusive_lock_);
+    Tensor m_t = ctx->mutable_input(1, use_exclusive_lock_);
+    Tensor v_t = ctx->mutable_input(2, use_exclusive_lock_);
     const Tensor& grad = ctx->input(8);
 
     // Unified initialization check (consistent with Resource version)
@@ -398,142 +389,11 @@ class MusaApplyAdaMaxKernelOp : public MusaOpKernel {
     const T beta2 = ctx->input(6).scalar<T>()();
     const T epsilon = ctx->input(7).scalar<T>()();
 
-    auto& handle = GetHandleByCtx(ctx);
-    std::list<Tensor> temp_storage;
-    ::musa::dnn::Binary b_op;
-    ::musa::dnn::Unary u_op;
-
-    auto fill_scalar = [&](T val, const TensorShape& shape, mTensor* out) {
-      temp_storage.emplace_back();
-      ctx->allocate_temp(DataTypeToEnum<T>::value, shape, &temp_storage.back());
-      *out = CreateMTensor(temp_storage.back(), format_);
-      ::musa::dnn::Fill fill_op;
-      fill_op.SetValue(static_cast<float>(val));
-      return fill_op.Run(handle, *out);
-    };
-
     // Calculate learning rate decay
-    const double denom = 1.0 - static_cast<double>(beta1_power);
-    if (denom == 0.0) {
-      ctx->CtxFailure(errors::InvalidArgument("beta1_power must not be 1."));
-      return;
-    }
-    const T lr_t = static_cast<T>(static_cast<double>(lr) / denom);
-
-    mTensor t_var = CreateMTensor(var_t, format_);
-    mTensor t_m = CreateMTensor(m_t, format_);
-    mTensor t_v = CreateMTensor(v_t, format_);
-    mTensor t_grad = CreateMTensor(grad, format_);
-
-    // Step 1: Update m: m = beta1 * m + (1 - beta1) * grad
-    mTensor t_beta1;
-    mTensor t_inv_beta1;
-    fill_scalar(beta1, m_t.shape(), &t_beta1);
-    fill_scalar(static_cast<T>(1.0) - beta1, grad.shape(), &t_inv_beta1);
-
-    // m *= beta1
-    b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    b_op.Run(handle, t_m, t_m, t_beta1);
-
-    // grad * (1-beta1)
-    temp_storage.emplace_back();
-    ctx->allocate_temp(DataTypeToEnum<T>::value, grad.shape(),
-                       &temp_storage.back());
-    mTensor t_g_scaled = CreateMTensor(temp_storage.back(), format_);
-    b_op.Run(handle, t_g_scaled, t_grad, t_inv_beta1);
-
-    // m += grad * (1-beta1)
-    b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    b_op.Run(handle, t_m, t_m, t_g_scaled);
-
-    // Step 2: Update v: v = max(beta2 * v, |grad|)
-    // max(a,b) = (a+b+|a-b|)/2
-
-    // beta2 * v
-    mTensor t_beta2;
-    fill_scalar(beta2, v_t.shape(), &t_beta2);
-    temp_storage.emplace_back();
-    ctx->allocate_temp(DataTypeToEnum<T>::value, v_t.shape(),
-                       &temp_storage.back());
-    mTensor t_v_scaled = CreateMTensor(temp_storage.back(), format_);
-    b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    b_op.Run(handle, t_v_scaled, t_v, t_beta2);
-
-    // |grad|
-    temp_storage.emplace_back();
-    ctx->allocate_temp(DataTypeToEnum<T>::value, grad.shape(),
-                       &temp_storage.back());
-    mTensor t_abs_grad = CreateMTensor(temp_storage.back(), format_);
-    u_op.SetMode(::musa::dnn::Unary::Mode::ABS);
-    u_op.Run(handle, t_abs_grad, t_grad);
-
-    // diff = beta2*v - |grad|
-    temp_storage.emplace_back();
-    ctx->allocate_temp(DataTypeToEnum<T>::value, v_t.shape(),
-                       &temp_storage.back());
-    mTensor t_diff = CreateMTensor(temp_storage.back(), format_);
-    b_op.SetMode(::musa::dnn::Binary::Mode::SUB);
-    b_op.Run(handle, t_diff, t_v_scaled, t_abs_grad);
-
-    // |diff|
-    temp_storage.emplace_back();
-    ctx->allocate_temp(DataTypeToEnum<T>::value, v_t.shape(),
-                       &temp_storage.back());
-    mTensor t_abs_diff = CreateMTensor(temp_storage.back(), format_);
-    u_op.SetMode(::musa::dnn::Unary::Mode::ABS);
-    u_op.Run(handle, t_abs_diff, t_diff);
-
-    // sum = beta2*v + |grad| + |diff|
-    temp_storage.emplace_back();
-    ctx->allocate_temp(DataTypeToEnum<T>::value, v_t.shape(),
-                       &temp_storage.back());
-    mTensor t_sum = CreateMTensor(temp_storage.back(), format_);
-    b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    b_op.Run(handle, t_sum, t_v_scaled, t_abs_grad);
-    b_op.Run(handle, t_sum, t_sum, t_abs_diff);
-
-    // max = sum / 2
-    mTensor t_half;
-    fill_scalar(static_cast<T>(0.5), v_t.shape(), &t_half);
-    b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    b_op.Run(handle, t_v, t_sum, t_half);
-
-    // Step 3: Update var: var = var - lr_t * m / (v + epsilon)
-
-    // denominator = v + epsilon
-    temp_storage.emplace_back();
-    ctx->allocate_temp(DataTypeToEnum<T>::value, v_t.shape(),
-                       &temp_storage.back());
-    mTensor t_den = CreateMTensor(temp_storage.back(), format_);
-    mTensor t_eps;
-    fill_scalar(epsilon, v_t.shape(), &t_eps);
-    b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    b_op.Run(handle, t_den, t_v, t_eps);
-
-    // m / (v + epsilon)
-    temp_storage.emplace_back();
-    ctx->allocate_temp(DataTypeToEnum<T>::value, m_t.shape(),
-                       &temp_storage.back());
-    mTensor t_update = CreateMTensor(temp_storage.back(), format_);
-    b_op.SetMode(::musa::dnn::Binary::Mode::DIV);
-    b_op.Run(handle, t_update, t_m, t_den);
-
-    // lr_t * m / (v + epsilon)
-    mTensor t_lr_t;
-    fill_scalar(lr_t, m_t.shape(), &t_lr_t);
-    b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    b_op.Run(handle, t_update, t_update, t_lr_t);
-
-    // var -= lr_t * m / (v + epsilon)
-    b_op.SetMode(::musa::dnn::Binary::Mode::SUB);
-    b_op.Run(handle, t_var, t_var, t_update);
-
-    musaStream_t stream = GetMusaStreamByCtx(ctx);
-    musaError_t sync_err = musaStreamSynchronize(stream);
-    OP_REQUIRES(ctx, sync_err == musaSuccess,
-                errors::Internal("ApplyAdaMax: musaStreamSynchronize "
-                                 "failed: ",
-                                 musaGetErrorString(sync_err)));
+    OP_REQUIRES_OK(ctx,
+                   RunAdaMaxUpdate(ctx, format_, &var_t, &m_t, &v_t, grad,
+                                   beta1_power, lr, beta1, beta2, epsilon,
+                                   "ApplyAdaMax"));
   }
 
  private:
