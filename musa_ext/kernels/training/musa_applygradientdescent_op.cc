@@ -150,7 +150,7 @@ class MusaResourceApplyGradientDescentOp : public MusaOpKernel {
 #define REGISTER_RESOURCE_GRADIENT_DESCENT(T)                     \
   REGISTER_KERNEL_BUILDER(Name("ResourceApplyGradientDescent")    \
                               .Device(DEVICE_MTGPU)               \
-                              .HostMemory("alpha")                \
+                              .HostMemory("lr")                   \
                               .TypeConstraint<T>("T"),            \
                           MusaResourceApplyGradientDescentOp<T>);
 

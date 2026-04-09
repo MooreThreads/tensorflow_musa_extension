@@ -7,7 +7,6 @@
 
 #include <mudnn.h>
 
-#include <cstring>
 #include <type_traits>
 #include <vector>
 
@@ -24,11 +23,6 @@ namespace musa {
 template <typename T>
 inline bool NeedsHostVisiblePackSync() {
   return std::is_same<T, int32>::value || std::is_same<T, int64>::value;
-}
-
-template <typename T>
-inline bool UseHostMemoryPackPath() {
-  return std::is_same<T, int32>::value;
 }
 
 inline void SyncPackStreamIfNeeded(OpKernelContext* ctx, musaStream_t stream,
@@ -55,32 +49,6 @@ mTensor CreateMTensorWithExpandedDim(const Tensor& t, int axis,
 
   rst.SetNdInfo(orig_rank + 1, new_dims.data());
   return rst;
-}
-
-template <typename T>
-void ComputeHostPack(OpKernelContext* ctx, int axis, Tensor* output) {
-  const Tensor& first_input = ctx->input(0);
-  const int num_inputs = ctx->num_inputs();
-  const int dims = first_input.dims();
-
-  int64_t outer_size = 1;
-  for (int i = 0; i < axis; ++i) {
-    outer_size *= first_input.dim_size(i);
-  }
-
-  int64_t inner_size = 1;
-  for (int i = axis; i < dims; ++i) {
-    inner_size *= first_input.dim_size(i);
-  }
-
-  T* output_ptr = output->flat<T>().data();
-  for (int64_t outer = 0; outer < outer_size; ++outer) {
-    for (int i = 0; i < num_inputs; ++i) {
-      const T* input_ptr = ctx->input(i).flat<T>().data() + outer * inner_size;
-      std::memcpy(output_ptr + (outer * num_inputs + i) * inner_size, input_ptr,
-                  static_cast<size_t>(inner_size) * sizeof(T));
-    }
-  }
 }
 
 // Pack concatenates tensors along a new dimension via muDNN Concat.
@@ -136,11 +104,6 @@ class MusaPackOp : public MusaOpKernel {
 
     // Handle empty tensors
     if (output->NumElements() == 0) return;
-
-    if (UseHostMemoryPackPath<T>()) {
-      ComputeHostPack<T>(ctx, axis, output);
-      return;
-    }
 
     // Handle single input - just copy with expanded dim
     if (N == 1) {
@@ -403,18 +366,12 @@ void MusaUnpackOp<bfloat16>::LaunchUnpackSingleForType(
 // Register Pack operators
 REGISTER_MUSA_PACK_KERNELS(float)
 REGISTER_MUSA_PACK_KERNELS(double)
+REGISTER_MUSA_PACK_KERNELS(int32)
 REGISTER_MUSA_PACK_KERNELS(int64)
 REGISTER_MUSA_PACK_KERNELS(Eigen::half)
 REGISTER_MUSA_PACK_KERNELS(bfloat16)
 REGISTER_MUSA_PACK_KERNELS(bool)
 REGISTER_MUSA_PACK_KERNELS(uint8)
-
-REGISTER_KERNEL_BUILDER(Name("Pack")
-                            .Device("MUSA")
-                            .TypeConstraint<int32>("T")
-                            .HostMemory("values")
-                            .HostMemory("output"),
-                        MusaPackOp<int32>);
 
 // Register Unpack operators
 REGISTER_MUSA_UNPACK_KERNELS(float)
