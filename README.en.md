@@ -120,21 +120,25 @@ python test_runner.py
 
 The kernel debug flow was updated as follows:
 
-- Added a unified debug macro, `MUSA_DEBUG_LOG_KERNEL(ctx)`, to print lightweight debug metadata at the beginning of `Compute()`
+- Added a unified debug macro, `MUSA_DEBUG_LOG_KERNEL(ctx)`, to print detailed debug metadata at the beginning of `Compute()` and an automatic short completion message when `Compute()` exits
 - Centralized formatting and logging helpers in `musa_ext/kernels/utils_op.h` and `musa_ext/kernels/utils_op.cc`
-- Kept example instrumentation in four kernels: `Add`, `AddN`, `Conv2D`, and `GELU`
+- All kernel `Compute()` entry points currently wired with `MUSA_DEBUG_LOG_KERNEL(ctx)` under `musa_ext/kernels` use this logging flow
 - Removed the old timing macros entirely: `MUSA_KERNEL_TIMING_GUARD`, `MUSA_KERNEL_TRACE_START`, `MUSA_KERNEL_TRACE_END`, `MUSA_KERNEL_TRACE`, and `MUSA_PROFILE_OP`
 
 The new log format looks like this:
 
 ```txt
 [MUSA_KERNEL_DEBUG] op_type=AddV2 input_types=[float, float] input_shapes=[[1024,1024], [1024,1024]]
+[MUSA_KERNEL_DEBUG] END AddV2
 ```
 
 Notes:
 
+- The start log keeps `op_type`, `input_types`, and `input_shapes`
+- The end log is intentionally minimal: it prints `END <OpName>` on success and `FAIL <OpName>` on failure
 - `input_types` is highlighted in cyan by default
 - `input_shapes` is highlighted in yellow by default
+- `END` logs are highlighted in bright green by default, and `FAIL` logs are highlighted in bright red
 - When output is redirected to a file, plain text is emitted by default to avoid ANSI escape codes in logs
 - To force color even when using `tee` or redirection, set `MUSA_KERNEL_DEBUG_COLOR=1`
 - To explicitly disable colors, set `NO_COLOR=1`
@@ -155,7 +159,7 @@ Option 2: enter the `test/` directory directly. In this mode you do not need to 
 ```bash
 ./build.sh debug
 cd test
-python3 ops/add_op_test.py 2>&1 | tee /tmp/tme_add.log
+python3 -m ops.add_op_test 2>&1 | tee /tmp/tme_add.log
 grep 'MUSA_KERNEL_DEBUG' /tmp/tme_add.log
 ```
 
@@ -163,7 +167,7 @@ To force colored terminal output:
 
 ```bash
 cd test
-MUSA_KERNEL_DEBUG_COLOR=1 python3 ops/add_op_test.py
+MUSA_KERNEL_DEBUG_COLOR=1 python3 -m ops.add_op_test
 ```
 
 ## Testing

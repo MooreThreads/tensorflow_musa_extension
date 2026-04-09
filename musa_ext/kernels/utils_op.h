@@ -99,7 +99,22 @@ class MusaOpKernel : public OpKernel {
 
 std::string FormatKernelDebugInputTypes(OpKernelContext* context);
 std::string FormatKernelDebugInputShapes(OpKernelContext* context);
-void LogKernelDebugInfo(const OpKernel& op, OpKernelContext* context);
+void LogKernelDebugStart(const std::string& op_type,
+                         OpKernelContext* context);
+void LogKernelDebugEnd(const std::string& op_type, bool ok);
+
+class KernelDebugScope {
+ public:
+  KernelDebugScope(const OpKernel& op, OpKernelContext* context);
+  ~KernelDebugScope();
+
+  KernelDebugScope(const KernelDebugScope&) = delete;
+  KernelDebugScope& operator=(const KernelDebugScope&) = delete;
+
+ private:
+  std::string op_type_;
+  OpKernelContext* context_;
+};
 
 MusaDevice* GetDeviceByCtx(tensorflow::OpKernelContext* context);
 
@@ -146,8 +161,11 @@ inline musaStream_t GetMusaStreamByCtx(tensorflow::OpKernelContext* context) {
 }  // namespace tensorflow
 
 #ifdef MUSA_KERNEL_DEBUG
-#define MUSA_DEBUG_LOG_KERNEL(ctx) \
-  ::tensorflow::musa::LogKernelDebugInfo(*this, (ctx))
+#define MUSA_DEBUG_JOIN_IMPL(x, y) x##y
+#define MUSA_DEBUG_JOIN(x, y) MUSA_DEBUG_JOIN_IMPL(x, y)
+#define MUSA_DEBUG_LOG_KERNEL(ctx)                                    \
+  ::tensorflow::musa::KernelDebugScope MUSA_DEBUG_JOIN(               \
+      _musa_kernel_debug_scope_, __LINE__)(*this, (ctx))
 #else
 #define MUSA_DEBUG_LOG_KERNEL(ctx) ((void)0)
 #endif

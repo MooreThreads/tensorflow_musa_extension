@@ -75,6 +75,7 @@ class MusaResourceApplyFtrlOp : public MusaOpKernel {
       : MusaOpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     core::RefCountPtr<Var> var;
     core::RefCountPtr<Var> accum;
     core::RefCountPtr<Var> linear;
@@ -143,6 +144,7 @@ class MusaApplyFtrlOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     Tensor var;
     OP_REQUIRES_OK(ctx, ctx->mutable_input("var", &var, use_locking_));
     Tensor accum;
@@ -192,6 +194,7 @@ class MusaResourceSparseApplyFtrlOp : public MusaOpKernel {
       : MusaOpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     core::RefCountPtr<Var> var;
     core::RefCountPtr<Var> accum;
     core::RefCountPtr<Var> linear;

@@ -17,6 +17,8 @@ namespace {
 constexpr const char* kKernelDebugReset = "\033[0m";
 constexpr const char* kKernelDebugTypeColor = "\033[36m";
 constexpr const char* kKernelDebugShapeColor = "\033[33m";
+constexpr const char* kKernelDebugEndColor = "\033[1;32m";
+constexpr const char* kKernelDebugFailColor = "\033[1;31m";
 
 mType GetType(DataType t) {
   switch (t) {
@@ -113,6 +115,10 @@ std::string ColorizeKernelDebugValue(const std::string& value,
   oss << color_code << value << kKernelDebugReset;
   return oss.str();
 }
+
+std::string GetKernelDebugOpType(const OpKernel& op) {
+  return op.type_string().empty() ? op.def().op() : op.type_string();
+}
 }  // namespace
 
 // Helper function to convert musaError_t to mStatus (mudnn Status).
@@ -182,7 +188,11 @@ std::string FormatKernelDebugInputTypes(OpKernelContext* context) {
   std::vector<std::string> input_types;
   input_types.reserve(context->num_inputs());
   for (int i = 0; i < context->num_inputs(); ++i) {
-    input_types.push_back(DataTypeString(context->input(i).dtype()));
+    if (!context->has_input(i)) {
+      input_types.push_back("<dead>");
+      continue;
+    }
+    input_types.push_back(DataTypeString(context->input_dtype(i)));
   }
   return JoinStrings(input_types);
 }
@@ -191,15 +201,25 @@ std::string FormatKernelDebugInputShapes(OpKernelContext* context) {
   std::vector<std::string> input_shapes;
   input_shapes.reserve(context->num_inputs());
   for (int i = 0; i < context->num_inputs(); ++i) {
+    if (!context->has_input(i)) {
+      input_shapes.push_back("<dead>");
+      continue;
+    }
+    if (context->input_is_ref(i)) {
+      input_shapes.push_back("<ref>");
+      continue;
+    }
     input_shapes.push_back(context->input(i).shape().DebugString());
   }
   return JoinStrings(input_shapes);
 }
 
-void LogKernelDebugInfo(const OpKernel& op, OpKernelContext* context) {
+void LogKernelDebugStart(const std::string& op_type, OpKernelContext* context) {
 #ifdef MUSA_KERNEL_DEBUG
-  const std::string op_type =
-      op.type_string().empty() ? op.def().op() : op.type_string();
+  if (context == nullptr) {
+    return;
+  }
+
   const std::string input_types =
       ColorizeKernelDebugValue(FormatKernelDebugInputTypes(context),
                                kKernelDebugTypeColor);
@@ -212,8 +232,38 @@ void LogKernelDebugInfo(const OpKernel& op, OpKernelContext* context) {
                op_type.c_str(), input_types.c_str(), input_shapes.c_str());
   std::fflush(stderr);
 #else
-  (void)op;
+  (void)op_type;
   (void)context;
+#endif
+}
+
+void LogKernelDebugEnd(const std::string& op_type, bool ok) {
+#ifdef MUSA_KERNEL_DEBUG
+  const char* phase = ok ? "END" : "FAIL";
+  const char* color = ok ? kKernelDebugEndColor : kKernelDebugFailColor;
+  if (ShouldColorizeKernelDebugValues()) {
+    std::fprintf(stderr, "[MUSA_KERNEL_DEBUG] %s%s %s%s\n", color, phase,
+                 op_type.c_str(), kKernelDebugReset);
+  } else {
+    std::fprintf(stderr, "[MUSA_KERNEL_DEBUG] %s %s\n", phase, op_type.c_str());
+  }
+  std::fflush(stderr);
+#else
+  (void)op_type;
+  (void)ok;
+#endif
+}
+
+KernelDebugScope::KernelDebugScope(const OpKernel& op, OpKernelContext* context)
+    : op_type_(GetKernelDebugOpType(op)), context_(context) {
+#ifdef MUSA_KERNEL_DEBUG
+  LogKernelDebugStart(op_type_, context_);
+#endif
+}
+
+KernelDebugScope::~KernelDebugScope() {
+#ifdef MUSA_KERNEL_DEBUG
+  LogKernelDebugEnd(op_type_, context_ == nullptr || context_->status().ok());
 #endif
 }
 

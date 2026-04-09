@@ -120,21 +120,25 @@ python test_runner.py
 
 本次调试链路做了如下调整：
 
-- 新增统一调试宏 `MUSA_DEBUG_LOG_KERNEL(ctx)`，在算子 `Compute()` 入口打印轻量调试信息
+- 新增统一调试宏 `MUSA_DEBUG_LOG_KERNEL(ctx)`，在算子 `Compute()` 开始时打印详细调试信息，并在 `Compute()` 退出时自动打印极简结束提示
 - 公共格式化和输出逻辑集中在 `musa_ext/kernels/utils_op.h` 与 `musa_ext/kernels/utils_op.cc`
-- 当前保留的示例埋点位于 `Add`、`AddN`、`Conv2D`、`GELU` 四个算子
+- 当前 `musa_ext/kernels` 下所有已接入 `MUSA_DEBUG_LOG_KERNEL(ctx)` 的算子 `Compute()` 入口都会输出这套日志
 - 旧的 timing 宏已经删除，不再使用 `MUSA_KERNEL_TIMING_GUARD`、`MUSA_KERNEL_TRACE_START`、`MUSA_KERNEL_TRACE_END`、`MUSA_KERNEL_TRACE`、`MUSA_PROFILE_OP`
 
 新的日志格式如下：
 
 ```txt
 [MUSA_KERNEL_DEBUG] op_type=AddV2 input_types=[float, float] input_shapes=[[1024,1024], [1024,1024]]
+[MUSA_KERNEL_DEBUG] END AddV2
 ```
 
 其中：
 
+- 开始日志保留 `op_type`、`input_types`、`input_shapes`
+- 结束日志只保留极简提示，成功时打印 `END <OpName>`，失败时打印 `FAIL <OpName>`
 - `input_types` 默认使用青色高亮
 - `input_shapes` 默认使用黄色高亮
+- `END` 日志默认使用亮绿色高亮，`FAIL` 日志默认使用亮红色高亮
 - 当输出被重定向到文件时，默认保持纯文本，避免 ANSI 颜色码污染日志
 - 如需在 `tee` 或重定向场景中强制保留颜色，可设置 `MUSA_KERNEL_DEBUG_COLOR=1`
 - 如需显式关闭颜色，可设置 `NO_COLOR=1`
@@ -155,7 +159,7 @@ grep 'MUSA_KERNEL_DEBUG' /tmp/tme_add.log
 ```bash
 ./build.sh debug
 cd test
-python3 ops/add_op_test.py 2>&1 | tee /tmp/tme_add.log
+python3 -m ops.add_op_test 2>&1 | tee /tmp/tme_add.log
 grep 'MUSA_KERNEL_DEBUG' /tmp/tme_add.log
 ```
 
@@ -163,7 +167,7 @@ grep 'MUSA_KERNEL_DEBUG' /tmp/tme_add.log
 
 ```bash
 cd test
-MUSA_KERNEL_DEBUG_COLOR=1 python3 ops/add_op_test.py
+MUSA_KERNEL_DEBUG_COLOR=1 python3 -m ops.add_op_test
 ```
 
 ## 测试
