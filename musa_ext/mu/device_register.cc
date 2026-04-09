@@ -53,7 +53,16 @@ class MusaDeviceFactory : public DeviceFactory {
       string name = strings::StrCat(name_prefix, "/device:MUSA:", i);
       attr.set_name(name);
       attr.set_device_type("MUSA");
-      attr.set_memory_limit(16ULL * 1024 * 1024 * 1024);
+
+      // FIX: Dynamically get GPU memory and set correct memory_limit
+      // to match BFCAllocator configuration in musa_device.cc
+      musaSetDevice(i);
+      size_t total_memory = 0, free_memory = 0;
+      musaMemGetInfo(&free_memory, &total_memory);
+      size_t memory_limit =
+          static_cast<size_t>(free_memory * 0.9);  // 90% of free memory
+      attr.set_memory_limit(memory_limit);
+
       attr.mutable_locality()->set_bus_id(i);
       attr.set_physical_device_desc(strings::StrCat("device: MUSA device ", i));
 
@@ -82,7 +91,8 @@ void __attribute__((constructor)) OnMusaPluginLoad() {
   if (config.enabled) {
     ::tensorflow::musa::MusaTelemetry::Instance().Initialize(config);
     LOG(INFO) << "[MUSA] Telemetry system initialized. "
-              << "Log path: " << (config.log_path.empty() ? "stderr" : config.log_path)
+              << "Log path: "
+              << (config.log_path.empty() ? "stderr" : config.log_path)
               << ", Buffer size: " << config.buffer_size;
   }
   // fprintf(stderr, "\n>>>> [MUSA] SUCCESS: MUSA Factory Object Registered via

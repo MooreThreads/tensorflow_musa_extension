@@ -99,18 +99,17 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
       musaEvent_t copy_done_event;
       musaEventCreateWithFlags(&copy_done_event, musaEventDisableTiming);
       musaEventRecord(copy_done_event, h2d_stream_);
-      MUSA_TELEMETRY_ON_EVENT_RECORD(copy_done_event,
-                                     MUSA_TELEMETRY_STREAM_ID(h2d_stream_),
-                                     device_id);
+      MUSA_TELEMETRY_ON_EVENT_RECORD(
+          copy_done_event, MUSA_TELEMETRY_STREAM_ID(h2d_stream_), device_id);
       musaStreamWaitEvent(stream_handle_, copy_done_event, 0);
-      MUSA_TELEMETRY_ON_EVENT_WAIT(copy_done_event,
-                                   MUSA_TELEMETRY_STREAM_ID(stream_handle_),
-                                   MUSA_TELEMETRY_STREAM_ID(h2d_stream_),
-                                   device_id);
-      // CRITICAL FIX: Defer event destruction until the waiting stream completes.
-      // musaStreamWaitEvent() is asynchronous - the wait command is queued but may
-      // not have executed when this function returns. Destroying the event immediately
-      // can cause the wait to be ignored, leading to race conditions and dirty data.
+      MUSA_TELEMETRY_ON_EVENT_WAIT(
+          copy_done_event, MUSA_TELEMETRY_STREAM_ID(stream_handle_),
+          MUSA_TELEMETRY_STREAM_ID(h2d_stream_), device_id);
+      // CRITICAL FIX: Defer event destruction until the waiting stream
+      // completes. musaStreamWaitEvent() is asynchronous - the wait command is
+      // queued but may not have executed when this function returns. Destroying
+      // the event immediately can cause the wait to be ignored, leading to race
+      // conditions and dirty data.
       if (event_mgr_) {
         event_mgr_->ThenExecute(stream_handle_, [copy_done_event, device_id]() {
           musaSetDevice(device_id);
@@ -185,18 +184,17 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
       musaEvent_t copy_done_event;
       musaEventCreateWithFlags(&copy_done_event, musaEventDisableTiming);
       musaEventRecord(copy_done_event, h2d_stream_);
-      MUSA_TELEMETRY_ON_EVENT_RECORD(copy_done_event,
-                                     MUSA_TELEMETRY_STREAM_ID(h2d_stream_),
-                                     device_id);
+      MUSA_TELEMETRY_ON_EVENT_RECORD(
+          copy_done_event, MUSA_TELEMETRY_STREAM_ID(h2d_stream_), device_id);
       musaStreamWaitEvent(stream_handle_, copy_done_event, 0);
-      MUSA_TELEMETRY_ON_EVENT_WAIT(copy_done_event,
-                                   MUSA_TELEMETRY_STREAM_ID(stream_handle_),
-                                   MUSA_TELEMETRY_STREAM_ID(h2d_stream_),
-                                   device_id);
-      // CRITICAL FIX: Defer event destruction until the waiting stream completes.
-      // musaStreamWaitEvent() is asynchronous - the wait command is queued but may
-      // not have executed when this function returns. Destroying the event immediately
-      // can cause the wait to be ignored, leading to race conditions and dirty data.
+      MUSA_TELEMETRY_ON_EVENT_WAIT(
+          copy_done_event, MUSA_TELEMETRY_STREAM_ID(stream_handle_),
+          MUSA_TELEMETRY_STREAM_ID(h2d_stream_), device_id);
+      // CRITICAL FIX: Defer event destruction until the waiting stream
+      // completes. musaStreamWaitEvent() is asynchronous - the wait command is
+      // queued but may not have executed when this function returns. Destroying
+      // the event immediately can cause the wait to be ignored, leading to race
+      // conditions and dirty data.
       if (event_mgr_) {
         event_mgr_->ThenExecute(stream_handle_, [copy_done_event, device_id]() {
           musaSetDevice(device_id);
@@ -266,14 +264,14 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
                                    MUSA_TELEMETRY_STREAM_ID(stream_handle_),
                                    device_id);
     musaStreamWaitEvent(d2h_stream_, compute_done_event, 0);
-    MUSA_TELEMETRY_ON_EVENT_WAIT(compute_done_event,
-                                 MUSA_TELEMETRY_STREAM_ID(d2h_stream_),
-                                 MUSA_TELEMETRY_STREAM_ID(stream_handle_),
-                                 device_id);
+    MUSA_TELEMETRY_ON_EVENT_WAIT(
+        compute_done_event, MUSA_TELEMETRY_STREAM_ID(d2h_stream_),
+        MUSA_TELEMETRY_STREAM_ID(stream_handle_), device_id);
     // CRITICAL FIX: Defer event destruction until the waiting stream completes.
-    // musaStreamWaitEvent() is asynchronous - the wait command is queued but may
-    // not have executed when this function returns. Destroying the event immediately
-    // can cause the wait to be ignored, leading to race conditions and dirty data.
+    // musaStreamWaitEvent() is asynchronous - the wait command is queued but
+    // may not have executed when this function returns. Destroying the event
+    // immediately can cause the wait to be ignored, leading to race conditions
+    // and dirty data.
     if (event_mgr_) {
       event_mgr_->ThenExecute(d2h_stream_, [compute_done_event, device_id]() {
         musaSetDevice(device_id);
@@ -339,14 +337,14 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
                                    MUSA_TELEMETRY_STREAM_ID(stream_handle_),
                                    device_id);
     musaStreamWaitEvent(d2h_stream_, compute_done_event, 0);
-    MUSA_TELEMETRY_ON_EVENT_WAIT(compute_done_event,
-                                 MUSA_TELEMETRY_STREAM_ID(d2h_stream_),
-                                 MUSA_TELEMETRY_STREAM_ID(stream_handle_),
-                                 device_id);
+    MUSA_TELEMETRY_ON_EVENT_WAIT(
+        compute_done_event, MUSA_TELEMETRY_STREAM_ID(d2h_stream_),
+        MUSA_TELEMETRY_STREAM_ID(stream_handle_), device_id);
     // CRITICAL FIX: Defer event destruction until the waiting stream completes.
-    // musaStreamWaitEvent() is asynchronous - the wait command is queued but may
-    // not have executed when this function returns. Destroying the event immediately
-    // can cause the wait to be ignored, leading to race conditions and dirty data.
+    // musaStreamWaitEvent() is asynchronous - the wait command is queued but
+    // may not have executed when this function returns. Destroying the event
+    // immediately can cause the wait to be ignored, leading to race conditions
+    // and dirty data.
     if (event_mgr_) {
       event_mgr_->ThenExecute(d2h_stream_, [compute_done_event, device_id]() {
         musaSetDevice(device_id);
@@ -360,8 +358,7 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
 
     // Stage 1: Async copy from GPU to pinned
     MUSA_TELEMETRY_ON_MEMCPY(bounce_buffer, const_cast<void*>(src), bytes,
-                             device_id,
-                             MUSA_TELEMETRY_STREAM_ID(d2h_stream_),
+                             device_id, MUSA_TELEMETRY_STREAM_ID(d2h_stream_),
                              TelemetryEventType::kMemcpyD2H);
     musaError_t err = musaMemcpyAsync(bounce_buffer, src, bytes,
                                       musaMemcpyDeviceToHost, d2h_stream_);
@@ -400,6 +397,24 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
                        ::stream_executor::StreamExecutor* executor)
     : Device(env, attributes), device_id_(device_id) {
   musaSetDevice(device_id_);
+
+  // CRITICAL: Get memory info BEFORE any allocations (streams, handles, etc.)
+  // MUDNN and MUBLAS initialization can consume significant GPU memory,
+  // so we must capture free memory first to properly size the BFCAllocator.
+  size_t total_memory = 0, free_memory = 0;
+  musaMemGetInfo(&free_memory, &total_memory);
+
+  // Use the memory_limit from DeviceAttributes if set (by device_register.cc),
+  // otherwise calculate from current free memory.
+  // DeviceAttributes.memory_limit is set in device_register.cc using the
+  // same 90% of free_memory formula, but we check it here for consistency.
+  size_t bfc_memory_limit = attributes.memory_limit() > 0
+                                ? attributes.memory_limit()
+                                : static_cast<size_t>(free_memory * 0.9);
+
+  VLOG(1) << ">>> [MUSA] Device " << device_id_
+          << " total_memory=" << total_memory << " free_memory=" << free_memory
+          << " bfc_memory_limit=" << bfc_memory_limit;
 
   // Create main compute stream
   musaError_t stream_err = musaStreamCreate(&stream_);
@@ -466,16 +481,11 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
   device_context_ = new MusaDeviceContext(stream_, h2d_stream_, d2h_stream_,
                                           executor, event_mgr_);
 
-  // Get total device memory
-  size_t total_memory = 0, free_memory = 0;
-  musaMemGetInfo(&free_memory, &total_memory);
-
   // Use TensorFlow's official BFCAllocator with MusaSubAllocator
   // Note: allow_growth=false to pre-allocate a large chunk upfront
   // garbage_collection=true to reclaim unused memory
-  // Use 90% of free memory to leave headroom for driver
-  size_t bfc_memory_limit = static_cast<size_t>(free_memory * 0.9);
-
+  // bfc_memory_limit was calculated at the start of constructor BEFORE
+  // any streams/handles were created, to capture the true available memory.
   musa_allocator_ = new BFCAllocator(new MusaSubAllocator(device_id_, {}, {}),
                                      bfc_memory_limit,
                                      false,  // allow_growth
@@ -485,7 +495,7 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
 
   VLOG(1) << ">>> [MUSA] Device " << device_id_
           << " using official TF BFCAllocator with bfc_memory_limit="
-          << bfc_memory_limit << " bytes (free_memory=" << free_memory << ")";
+          << bfc_memory_limit << " bytes";
 
   // Initialize Host Pinned Memory Allocator (BFCAllocator - kept for
   // compatibility)
