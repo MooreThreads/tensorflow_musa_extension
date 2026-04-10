@@ -144,15 +144,8 @@ jobs:
             set -o pipefail
             cd "$GITHUB_WORKSPACE"
             FILE_LIST=$(mktemp)
-            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-              TARGET_BRANCH="${{ github.base_ref }}"
-              git fetch origin "$TARGET_BRANCH"
-              git diff -z --diff-filter=ACMRTUXB --name-only "origin/$TARGET_BRANCH...HEAD" -- \
-                "*.c" "*.cc" "*.cpp" "*.cu" "*.h" "*.hpp" > "$FILE_LIST"
-            else
-              find . \( -path ./build -o -path ./.git \) -prune -o \
-                -regex ".*\.\(cc\|cpp\|hpp\|c\|h\|cu\)" -print0 > "$FILE_LIST"
-            fi
+            find . \( -path ./build -o -path ./.git \) -prune -o \
+              -regex ".*\.\(cc\|cpp\|hpp\|c\|h\|cu\)" -print0 > "$FILE_LIST"
             if [[ ! -s "$FILE_LIST" ]]; then
               echo "No C/C++ files to format-check." > "$LOG_FILE"
             else
@@ -175,12 +168,14 @@ jobs:
 
           if [[ "${{ steps.run_check.outputs.format_exit }}" != "0" ]]; then
             STATUS="failure"
+            echo "::warning::Format check failed. This job is non-blocking."
           fi
 
           {
             echo "## Format Check"
             echo
             echo "- Status: $STATUS"
+            echo "- Non-blocking: yes"
             echo "- Log file: $LOG_FILE"
             echo
             echo '```text'
@@ -1308,6 +1303,7 @@ jobs:
           SUMMARY_FILE="$RUNNER_TEMP/final-summary.md"
           FORMAT_STATUS="${{ needs.format.outputs.status || 'skipped' }}"
           FORMAT_RESULT="${{ needs.format.result }}"
+          FORMAT_DISPLAY="$FORMAT_STATUS"
           BUILD_CURRENT_STATUS="${{ needs.build_current.outputs.status || 'skipped' }}"
           BUILD_CURRENT_RESULT="${{ needs.build_current.result }}"
           INTEGRATION_STATUS="${{ needs.integration.outputs.status || 'skipped' }}"
@@ -1328,6 +1324,10 @@ jobs:
           TRAINING_RESULT="${{ needs.training.result }}"
           BASELINE_SHA="${{ needs.build_baseline.outputs.baseline_sha || 'unavailable' }}"
 
+          if [[ "$FORMAT_STATUS" == "failure" ]]; then
+            FORMAT_DISPLAY="failure (non-blocking)"
+          fi
+
           {
             echo "# CI Report"
             echo
@@ -1339,7 +1339,7 @@ jobs:
             echo "## Job Status"
             echo "| Job | Result | Blocking |"
             echo "|-----|--------|----------|"
-            echo "| Format | $FORMAT_STATUS | no |"
+            echo "| Format | $FORMAT_DISPLAY | no |"
             echo "| Build Current | $BUILD_CURRENT_STATUS | yes |"
             echo "| Integration | $INTEGRATION_STATUS | yes |"
             echo "| Build Baseline | $BUILD_BASELINE_STATUS | yes |"
