@@ -14,6 +14,7 @@ limitations under the License.
 ==============================================================================*/
 
 #include <algorithm>
+#include <map>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -469,6 +470,76 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
     int fusion_applied_count = 0;
     int fusion_fallback_count = 0;
 
+    std::map<int, std::vector<const FusionPattern*>, std::greater<int>>
+        priority_groups;
+    for (const auto* pattern : patterns) {
+      if (!pattern->IsEnabled()) {
+        continue;
+      }
+      priority_groups[pattern->GetPriority()].push_back(pattern);
+    }
+
+    auto run_scan = [&](const std::vector<const FusionPattern*>& active_patterns,
+                        bool reverse) -> bool {
+      bool pass_modified = false;
+
+      while (true) {
+        bool applied_in_sweep = false;
+        const int node_count = graph->node_size();
+
+        for (int offset = 0; offset < node_count; ++offset) {
+          const int node_idx = reverse ? (node_count - 1 - offset) : offset;
+
+          for (const auto* pattern : active_patterns) {
+            auto match_result = pattern->Match(*graph, node_idx);
+            if (!match_result.matched) {
+              continue;
+            }
+
+            if (!pattern->IsKernelAvailable()) {
+              VLOG(1) << "MusaGraphOptimizer: Pattern '" << pattern->GetName()
+                      << "' matched at node " << node_idx
+                      << " but kernel not available - using fallback";
+
+              Status status = pattern->Apply(graph, match_result);
+              if (!status.ok()) {
+                LOG(WARNING) << "MusaGraphOptimizer: Fallback for pattern '"
+                             << pattern->GetName()
+                             << "' failed: " << status;
+              }
+              fusion_fallback_count++;
+              continue;
+            }
+
+            VLOG(1) << "MusaGraphOptimizer: Applying pattern '"
+                    << pattern->GetName() << "' at node " << node_idx;
+
+            Status status = pattern->Apply(graph, match_result);
+            if (status.ok()) {
+              pass_modified = true;
+              fusion_applied_count++;
+              applied_in_sweep = true;
+              VLOG(1) << "MusaGraphOptimizer: Pattern '"
+                      << pattern->GetName() << "' applied successfully";
+              break;
+            } else {
+              LOG(WARNING) << "MusaGraphOptimizer: Pattern '"
+                           << pattern->GetName()
+                           << "' apply failed: " << status;
+            }
+          }
+
+          if (applied_in_sweep) {
+            break;
+          }
+        }
+
+        if (!applied_in_sweep) {
+          return pass_modified;
+        }
+      }
+    };
+
     bool graph_modified = true;
     int iteration = 0;
     const int kMaxIterations = 50;  // Prevent infinite loops
@@ -477,80 +548,34 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
       graph_modified = false;
       iteration++;
 
-      auto run_scan = [&](bool reverse) -> bool {
-        bool pass_modified = false;
+      for (const auto& priority_group : priority_groups) {
+        const int priority = priority_group.first;
+        const auto& active_patterns = priority_group.second;
 
-        while (true) {
-          bool applied_in_sweep = false;
-          const int node_count = graph->node_size();
+        bool priority_modified = true;
+        int priority_iteration = 0;
+        while (priority_modified && priority_iteration < kMaxIterations) {
+          priority_modified = false;
+          priority_iteration++;
 
-          for (int offset = 0; offset < node_count; ++offset) {
-            const int node_idx = reverse ? (node_count - 1 - offset) : offset;
-
-            for (const auto* pattern : patterns) {
-              if (!pattern->IsEnabled()) {
-                continue;
-              }
-
-              auto match_result = pattern->Match(*graph, node_idx);
-              if (!match_result.matched) {
-                continue;
-              }
-
-              // Check kernel availability
-              if (!pattern->IsKernelAvailable()) {
-                VLOG(1) << "MusaGraphOptimizer: Pattern '" << pattern->GetName()
-                        << "' matched at node " << node_idx
-                        << " but kernel not available - using fallback";
-
-                // Call Apply anyway to allow pattern to handle fallback
-                Status status = pattern->Apply(graph, match_result);
-                if (!status.ok()) {
-                  LOG(WARNING) << "MusaGraphOptimizer: Fallback for pattern '"
-                               << pattern->GetName() << "' failed: " << status;
-                }
-                fusion_fallback_count++;
-                continue;
-              }
-
-              VLOG(1) << "MusaGraphOptimizer: Applying pattern '"
-                      << pattern->GetName() << "' at node " << node_idx;
-
-              Status status = pattern->Apply(graph, match_result);
-              if (status.ok()) {
-                pass_modified = true;
-                fusion_applied_count++;
-                applied_in_sweep = true;
-                VLOG(1) << "MusaGraphOptimizer: Pattern '" << pattern->GetName()
-                        << "' applied successfully";
-                break;  // Restart this direction since graph was modified
-              } else {
-                LOG(WARNING)
-                    << "MusaGraphOptimizer: Pattern '" << pattern->GetName()
-                    << "' apply failed: " << status;
-              }
-            }
-
-            if (applied_in_sweep) {
-              break;
-            }
+          if (run_scan(active_patterns, false)) {
+            priority_modified = true;
+            graph_modified = true;
           }
-
-          if (!applied_in_sweep) {
-            return pass_modified;
+          if (run_scan(active_patterns, true)) {
+            priority_modified = true;
+            graph_modified = true;
           }
         }
-      };
 
-      // Conservative improvement: keep the original "restart after each
-      // successful rewrite" behavior, but exhaust both forward and reverse
-      // traversals within one outer iteration so we can expose more patterns
-      // before consuming another iteration budget.
-      if (run_scan(false)) {
-        graph_modified = true;
-      }
-      if (run_scan(true)) {
-        graph_modified = true;
+        if (priority_modified && priority_iteration >= kMaxIterations) {
+          LOG(WARNING) << "MusaGraphOptimizer: Priority " << priority
+                       << " group hit iteration limit (" << kMaxIterations
+                       << ") before reaching a fixed point";
+        } else {
+          VLOG(2) << "MusaGraphOptimizer: Priority " << priority
+                  << " group reached fixed point";
+        }
       }
     }
 
