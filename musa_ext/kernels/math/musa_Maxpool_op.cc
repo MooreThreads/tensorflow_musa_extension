@@ -50,7 +50,7 @@ Status PermuteTensorOnMusa(OpKernelContext* ctx, const Tensor& input,
                             static_cast<int>(status));
   }
 
-  return Status::OK();
+  return ::tsl::OkStatus();
 }
 
 Status ComputeOutputAndPadding2D(int64_t in_h, int64_t in_w, int64_t window_h,
@@ -65,7 +65,7 @@ Status ComputeOutputAndPadding2D(int64_t in_h, int64_t in_w, int64_t window_h,
     *pad_bottom = 0;
     *pad_left = 0;
     *pad_right = 0;
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   if (padding == Padding::SAME) {
@@ -81,7 +81,7 @@ Status ComputeOutputAndPadding2D(int64_t in_h, int64_t in_w, int64_t window_h,
     *pad_bottom = static_cast<int>(pad_h - *pad_top);
     *pad_left = static_cast<int>(pad_w / 2);
     *pad_right = static_cast<int>(pad_w - *pad_left);
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   return errors::InvalidArgument(
@@ -119,7 +119,7 @@ Status RunMusaMaxPool(OpKernelContext* ctx, const Tensor& input, Tensor* output,
                             static_cast<int>(status));
   }
 
-  return Status::OK();
+  return ::tsl::OkStatus();
 }
 
 }  // namespace

@@ -29,7 +29,6 @@ limitations under the License.
 namespace tensorflow {
 namespace grappler {
 namespace musa_fusion {
-
 namespace {
 
 constexpr float kDefaultEpsilon = 0.001f;
@@ -508,17 +507,17 @@ FusionMatchResult MusaFuseLayerNormV2Fusion::MatchFromAddNode(
 Status MusaFuseLayerNormV2Fusion::Apply(
     GraphDef* graph, const FusionMatchResult& match_result) const {
   if (!match_result.IsValid()) {
-    return Status(error::INVALID_ARGUMENT,
+    return ::tsl::errors::InvalidArgument(
                   "Invalid FuseLayerNormV2 match result");
   }
 
   if (!IsKernelAvailable()) {
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   auto output_it = match_result.captured_nodes.find("output");
   if (output_it == match_result.captured_nodes.end() || !output_it->second) {
-    return Status(error::INVALID_ARGUMENT,
+    return ::tsl::errors::InvalidArgument(
                   "Missing output node in FuseLayerNormV2 pattern");
   }
 
@@ -528,7 +527,7 @@ Status MusaFuseLayerNormV2Fusion::Apply(
   if (input_tensor_it == match_result.captured_attrs.end() ||
       gamma_tensor_it == match_result.captured_attrs.end() ||
       beta_tensor_it == match_result.captured_attrs.end()) {
-    return Status(error::INVALID_ARGUMENT,
+    return ::tsl::errors::InvalidArgument(
                   "Missing tensors in FuseLayerNormV2 pattern");
   }
 
@@ -548,7 +547,7 @@ Status MusaFuseLayerNormV2Fusion::Apply(
     if (node.name() == original_name && node.op() == "MusaLayerNorm") {
       VLOG(1) << "FuseLayerNormV2: Output node " << original_name
               << " is already fused, skipping";
-      return Status::OK();
+      return ::tsl::OkStatus();
     }
   }
 
@@ -560,7 +559,7 @@ Status MusaFuseLayerNormV2Fusion::Apply(
     }
   }
   if (output_node_idx < 0) {
-    return Status(error::INVALID_ARGUMENT,
+    return ::tsl::errors::InvalidArgument(
                   "Failed to find output node in graph: " + original_name);
   }
 
@@ -626,7 +625,7 @@ Status MusaFuseLayerNormV2Fusion::Apply(
   VLOG(1) << "FuseLayerNormV2: Replaced '" << original_name
           << "' with MusaLayerNorm (removed_nodes=" << removed_count << ")";
 
-  return Status::OK();
+  return ::tsl::OkStatus();
 }
 
 REGISTER_FUSION_PATTERN(MusaFuseLayerNormV2Fusion);

@@ -19,7 +19,7 @@ inline Status ReadScalarBoolFromDevice(const Tensor& scalar_tensor,
   if (status != mStatus::SUCCESS) {
     return errors::Internal("MUSA D2H copy failed for logical scalar input.");
   }
-  return Status::OK();
+  return ::tsl::OkStatus();
 }
 
 template <::musa::dnn::Binary::Mode mode>
@@ -36,7 +36,7 @@ Status MaybeHandleScalarLogicalShortcut(OpKernelContext* ctx, const Tensor& in0,
     scalar_input = &in1;
     other_input = &in0;
   } else {
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   bool scalar_value = false;
@@ -50,14 +50,14 @@ Status MaybeHandleScalarLogicalShortcut(OpKernelContext* ctx, const Tensor& in0,
   if (passthrough_other) {
     ctx->set_output(0, *other_input);
     *handled = true;
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   Tensor* out = nullptr;
   TF_RETURN_IF_ERROR(ctx->allocate_output(0, other_input->shape(), &out));
   if (out->NumElements() == 0) {
     *handled = true;
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   const bool fill_value = mode == ::musa::dnn::Binary::Mode::LOGICAL_OR;
@@ -69,7 +69,7 @@ Status MaybeHandleScalarLogicalShortcut(OpKernelContext* ctx, const Tensor& in0,
                             "constant output.");
   }
   *handled = true;
-  return Status::OK();
+  return ::tsl::OkStatus();
 }
 
 }  // namespace

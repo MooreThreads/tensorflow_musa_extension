@@ -10,7 +10,7 @@ Status TensorShapeFromTensor(const Tensor& t, PartialTensorShape* out) {
     if ((t.dtype() == DT_INT32 && t.scalar<int32_t>()() == -1) ||
         (t.dtype() == DT_INT64 && t.scalar<int64_t>()() == -1)) {
       *out = PartialTensorShape();
-      return Status::OK();
+      return ::tsl::OkStatus();
     }
     return errors::InvalidArgument(
         "The only valid scalar shape tensor is the fully unknown shape "

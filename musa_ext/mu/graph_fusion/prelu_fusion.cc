@@ -32,7 +32,6 @@ limitations under the License.
 namespace tensorflow {
 namespace grappler {
 namespace musa_fusion {
-
 namespace {
 
 bool IsOp(const NodeDef& node, const std::string& op_type) {
@@ -352,11 +351,11 @@ FusionMatchResult MusaPReluFusion::MatchFromAddV2Node(
 Status MusaPReluFusion::Apply(
     GraphDef* graph, const FusionMatchResult& match_result) const {
   if (!match_result.IsValid()) {
-    return Status(error::INVALID_ARGUMENT, "Invalid PRelu match result");
+    return ::tsl::errors::InvalidArgument("Invalid PRelu match result");
   }
 
   if (!IsKernelAvailable()) {
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   // ---- Retrieve captured nodes ----
@@ -365,7 +364,7 @@ Status MusaPReluFusion::Apply(
   auto alpha_input_it = match_result.captured_nodes.find("alpha_input");
 
   if (output_it == match_result.captured_nodes.end()) {
-    return Status(error::INVALID_ARGUMENT,
+    return ::tsl::errors::InvalidArgument(
                   "Missing output node in PRelu pattern");
   }
 
@@ -381,7 +380,7 @@ Status MusaPReluFusion::Apply(
   for (const auto& node : graph->node()) {
     if (node.name() == base_name && node.op() == "MusaPRelu") {
       VLOG(1) << "MusaPRelu: " << base_name << " is already fused, skipping";
-      return Status::OK();
+      return ::tsl::OkStatus();
     }
   }
 
@@ -400,7 +399,7 @@ Status MusaPReluFusion::Apply(
     // Use Select node name as input (preserves the connection)
     fused_node->add_input(input_it->second->name());
   } else {
-    return Status(error::INVALID_ARGUMENT, "Cannot determine PRelu x input");
+    return ::tsl::errors::InvalidArgument("Cannot determine PRelu x input");
   }
 
   // Alpha input: Const node
@@ -408,7 +407,7 @@ Status MusaPReluFusion::Apply(
       alpha_input_it->second) {
     fused_node->add_input(alpha_input_it->second->name());
   } else {
-    return Status(error::INVALID_ARGUMENT, "Cannot determine PRelu alpha input");
+    return ::tsl::errors::InvalidArgument("Cannot determine PRelu alpha input");
   }
 
   // Attributes
@@ -480,7 +479,7 @@ Status MusaPReluFusion::Apply(
     FusionGraphUtils::RemoveNode(graph, idx);
   }
 
-  return Status::OK();
+  return ::tsl::OkStatus();
 }
 
 // Register the pattern

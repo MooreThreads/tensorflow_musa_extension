@@ -28,7 +28,6 @@ limitations under the License.
 namespace tensorflow {
 namespace grappler {
 namespace musa_fusion {
-
 namespace {
 
 constexpr float kSqrt2 = 1.41421356237f;
@@ -601,11 +600,11 @@ FusionMatchResult MusaGeluFusion::MatchApproximatePattern(
 Status MusaGeluFusion::Apply(GraphDef* graph,
                              const FusionMatchResult& match_result) const {
   if (!match_result.IsValid()) {
-    return Status(error::INVALID_ARGUMENT, "Invalid GELU match result");
+    return ::tsl::errors::InvalidArgument("Invalid GELU match result");
   }
 
   if (!IsKernelAvailable()) {
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   auto output_it = match_result.captured_nodes.find("output");
@@ -613,7 +612,7 @@ Status MusaGeluFusion::Apply(GraphDef* graph,
   if (output_it == match_result.captured_nodes.end() ||
       input_it == match_result.captured_nodes.end() || !output_it->second ||
       !input_it->second) {
-    return Status(error::INVALID_ARGUMENT,
+    return ::tsl::errors::InvalidArgument(
                   "Missing required nodes in GELU pattern");
   }
 
@@ -648,7 +647,7 @@ Status MusaGeluFusion::Apply(GraphDef* graph,
     if (node.name() == original_name && node.op() == "MusaGelu") {
       // VLOG(1) << "MusaGeluFusion: fused node already exists for "
       //         << original_name;
-      return Status::OK();
+      return ::tsl::OkStatus();
     }
   }
 
@@ -660,7 +659,7 @@ Status MusaGeluFusion::Apply(GraphDef* graph,
     }
   }
   if (output_node_idx < 0) {
-    return Status(error::INVALID_ARGUMENT,
+    return ::tsl::errors::InvalidArgument(
                   "Failed to find output node in graph: " + original_name);
   }
 
@@ -696,7 +695,7 @@ Status MusaGeluFusion::Apply(GraphDef* graph,
   //         << ", matched_nodes=" << match_result.matched_nodes.size()
   //         << ", removed_nodes=" << removed_count << ")";
 
-  return Status::OK();
+  return ::tsl::OkStatus();
 }
 
 REGISTER_FUSION_PATTERN(MusaGeluFusion);

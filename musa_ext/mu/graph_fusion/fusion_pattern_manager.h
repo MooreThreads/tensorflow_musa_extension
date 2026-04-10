@@ -26,6 +26,7 @@ limitations under the License.
 #include "tensorflow/core/framework/graph.pb.h"
 #include "tensorflow/core/framework/node_def.pb.h"
 #include "tensorflow/core/lib/core/status.h"
+#include "tsl/platform/errors.h"
 
 namespace tensorflow {
 namespace grappler {

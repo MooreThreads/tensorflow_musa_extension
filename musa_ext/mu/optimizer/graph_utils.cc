@@ -25,6 +25,7 @@ limitations under the License.
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/platform/logging.h"
+#include "tsl/platform/errors.h"
 
 namespace tensorflow {
 namespace grappler {
@@ -54,7 +55,7 @@ bool IsGraphDefDumpingEnabled() {
 Status DumpGraphDef(const GraphDef& graph_def, const std::string& prefix,
                     const std::string& stage_description) {
   if (!IsGraphDefDumpingEnabled()) {
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   std::string dump_dir = GetDumpDirectory();
@@ -78,15 +79,13 @@ Status DumpGraphDef(const GraphDef& graph_def, const std::string& prefix,
   // Serialize GraphDef to text format
   std::string graph_txt;
   if (!protobuf::TextFormat::PrintToString(graph_def, &graph_txt)) {
-    return Status(tensorflow::error::INTERNAL,
-                  "Failed to serialize GraphDef to text format");
+    return tsl::errors::Internal("Failed to serialize GraphDef to text format");
   }
 
   // Write to file
   std::ofstream file(filepath, std::ios::out | std::ios::trunc);
   if (!file.is_open()) {
-    return Status(tensorflow::error::INTERNAL,
-                  "Failed to open file for writing: " + filepath);
+    return tsl::errors::Internal("Failed to open file for writing: " + filepath);
   }
 
   file << graph_txt;
@@ -95,7 +94,7 @@ Status DumpGraphDef(const GraphDef& graph_def, const std::string& prefix,
   LOG(INFO) << "MusaGraphOptimizer: Dumped GraphDef to " << filepath
             << " (nodes: " << graph_def.node_size() << ")";
 
-  return Status::OK();
+  return ::tsl::OkStatus();
 }
 
 // Initialize static member

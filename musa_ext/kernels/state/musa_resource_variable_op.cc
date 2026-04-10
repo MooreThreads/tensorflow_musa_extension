@@ -15,7 +15,7 @@ using Var = ::tensorflow::Var;
 Status CopyTensorWithDeviceContext(OpKernelContext* ctx, const Tensor& src,
                                    Tensor* dst) {
   if (src.TotalBytes() == 0) {
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   auto* device_context = ctx->op_device_context();
@@ -24,7 +24,7 @@ Status CopyTensorWithDeviceContext(OpKernelContext* ctx, const Tensor& src,
     musaStream_t stream = GetMusaStreamByCtx(ctx);
     MusaMemcpyAsyncD2D(const_cast<char*>(dst->tensor_data().data()),
                        src.tensor_data().data(), src.TotalBytes(), stream);
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   Device* device = static_cast<Device*>(ctx->device());
@@ -123,7 +123,7 @@ class MusaAssignVariableOp : public OpKernel {
                               *ptr = new Var(dtype_);
                               *(*ptr)->tensor() = value;
                               (*ptr)->is_initialized = true;
-                              return Status::OK();
+                              return ::tsl::OkStatus();
                             }));
 
     mutex_lock lock(*var->mu());

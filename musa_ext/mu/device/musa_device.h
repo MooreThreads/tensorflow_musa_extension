@@ -20,7 +20,8 @@
 #include "pinned_memory_pool.h"
 #include "tensorflow/core/framework/device.h"
 #include "tensorflow/core/framework/device_base.h"
-#include "tensorflow/stream_executor/stream.h"
+#include "xla/stream_executor/stream.h"
+#include "xla/stream_executor/stream_executor_internal.h"
 
 namespace tensorflow {
 namespace musa {
@@ -75,7 +76,6 @@ class MusaDeviceContext : public DeviceContext {
   musaStream_t stream_handle_;
   musaStream_t h2d_stream_;
   musaStream_t d2h_stream_;
-  ::stream_executor::internal::StreamInterface* implementation_;
   ::stream_executor::Stream* official_stream_;
   MusaEventMgr* event_mgr_;
 };
@@ -86,8 +86,9 @@ class MusaDevice : public Device {
              ::stream_executor::StreamExecutor* executor);
   ~MusaDevice() override;
 
-  const GpuDeviceInfo* tensorflow_gpu_device_info() const override {
-    return &gpu_device_info_;
+  const AcceleratorDeviceInfo* tensorflow_accelerator_device_info()
+      const override {
+    return &accelerator_device_info_;
   }
   Status TryGetDeviceContext(DeviceContext** out_context) override;
   Allocator* GetAllocator(AllocatorAttributes attr) override;
@@ -119,7 +120,7 @@ class MusaDevice : public Device {
   Allocator* musa_allocator_;
   Allocator* musa_host_allocator_;
   GPUPinnedMemoryPool* pinned_memory_pool_;
-  GpuDeviceInfo gpu_device_info_;
+  AcceleratorDeviceInfo accelerator_device_info_;
   MusaEventMgr* event_mgr_;
 
   std::unique_ptr<::musa::dnn::Handle> mudnn_handle_;

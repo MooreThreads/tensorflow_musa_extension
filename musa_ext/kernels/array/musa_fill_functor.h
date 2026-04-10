@@ -41,7 +41,7 @@ inline Status MusaFillCall(mTensor* out_mt, T value, OpKernelContext* context) {
     return errors::Internal("mudnn run op error!");
   }
 
-  return Status::OK();
+  return ::tsl::OkStatus();
 }
 
 struct SetZeroFunctor {
