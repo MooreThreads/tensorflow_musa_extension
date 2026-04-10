@@ -44,6 +44,7 @@ jobs:
   prepare_metadata:
     name: Prepare Metadata
     runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 10
     outputs:
       commit_id: ${{ steps.collect.outputs.commit_id }}
       requested_commit_id: ${{ steps.collect.outputs.requested_commit_id }}
@@ -119,6 +120,7 @@ jobs:
     name: Format Check
     needs: prepare_metadata
     runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 20
     outputs:
       status: ${{ steps.collect.outputs.status }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
@@ -206,6 +208,7 @@ jobs:
     name: Build Current
     needs: prepare_metadata
     runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 120
     outputs:
       status: ${{ steps.collect.outputs.status }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
@@ -231,7 +234,7 @@ jobs:
             export CPLUS_INCLUDE_PATH="/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:${CPLUS_INCLUDE_PATH:-}"
             cd "$GITHUB_WORKSPACE"
             rm -rf ./build
-            ./build.sh > "$LOG_FILE" 2>&1
+            exec ./build.sh > "$LOG_FILE" 2>&1
           ' || build_exit=$?
 
           echo "build_exit=$build_exit" >> "$GITHUB_OUTPUT"
@@ -302,6 +305,7 @@ jobs:
     needs: [prepare_metadata, build_current]
     if: needs.build_current.result == 'success'
     runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 45
     outputs:
       status: ${{ steps.collect.outputs.status }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
@@ -331,7 +335,7 @@ jobs:
           export LOG_FILE
           bash -l -c '
             cd "$GITHUB_WORKSPACE/test"
-            timeout 30m python test_runner.py --fusion > "$LOG_FILE" 2>&1
+            exec timeout 30m python test_runner.py --fusion > "$LOG_FILE" 2>&1
           ' || test_exit=$?
 
           echo "test_exit=$test_exit" >> "$GITHUB_OUTPUT"
@@ -387,6 +391,7 @@ jobs:
     name: Build Baseline
     needs: prepare_metadata
     runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 120
     outputs:
       status: ${{ steps.collect.outputs.status }}
       baseline_sha: ${{ steps.collect.outputs.baseline_sha }}
@@ -431,11 +436,11 @@ jobs:
             baseline_sha="$(git -C "$BASELINE_WORKSPACE" rev-parse HEAD 2>/dev/null || true)"
             export LOG_FILE BASELINE_WORKSPACE
             bash -l -c '
-              export CPLUS_INCLUDE_PATH="/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:${CPLUS_INCLUDE_PATH:-}"
-              cd "$BASELINE_WORKSPACE"
-              rm -rf ./build
-              ./build.sh > "$LOG_FILE" 2>&1
-            ' || build_exit=$?
+            export CPLUS_INCLUDE_PATH="/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:${CPLUS_INCLUDE_PATH:-}"
+            cd "$BASELINE_WORKSPACE"
+            rm -rf ./build
+            exec ./build.sh > "$LOG_FILE" 2>&1
+          ' || build_exit=$?
           fi
 
           echo "sync_exit=$sync_exit" >> "$GITHUB_OUTPUT"
@@ -511,6 +516,7 @@ jobs:
     needs: [prepare_metadata, build_current, build_baseline]
     if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
     runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 60
     outputs:
       status: ${{ steps.collect.outputs.status }}
       baseline_ms: ${{ steps.collect.outputs.baseline_ms }}
@@ -548,16 +554,16 @@ jobs:
           export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG BASELINE_PLUGIN CURRENT_PLUGIN
 
           bash -l -c '
-            cd "$MODEL_ROOT/inference/prunedGraph" &&
-            timeout 20m python run_inference.py \
+            cd "$MODEL_ROOT/inference/prunedGraph"
+            exec timeout 20m python run_inference.py \
               --device musa \
               --musa-plugin "$BASELINE_PLUGIN" \
               --infer-iters 1000 > "$BASELINE_LOG" 2>&1
           ' || baseline_exit=$?
 
           bash -l -c '
-            cd "$MODEL_ROOT/inference/prunedGraph" &&
-            timeout 20m python run_inference.py \
+            cd "$MODEL_ROOT/inference/prunedGraph"
+            exec timeout 20m python run_inference.py \
               --device musa \
               --musa-plugin "$CURRENT_PLUGIN" \
               --infer-iters 1000 > "$CURRENT_LOG" 2>&1
@@ -650,6 +656,7 @@ jobs:
     needs: [prepare_metadata, build_current]
     if: needs.build_current.result == 'success'
     runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 30
     outputs:
       status: ${{ steps.collect.outputs.status }}
       current_acc: ${{ steps.collect.outputs.current_acc }}
@@ -676,8 +683,8 @@ jobs:
           export MODEL_ROOT JOB_LOG_DIR CURRENT_LOG CURRENT_PLUGIN
 
           bash -l -c '
-            cd "$MODEL_ROOT/inference/prunedGraph" &&
-            timeout 20m python run_inference.py \
+            cd "$MODEL_ROOT/inference/prunedGraph"
+            exec timeout 20m python run_inference.py \
               --device musa \
               --musa-plugin "$CURRENT_PLUGIN" \
               --check-acc \
@@ -745,6 +752,7 @@ jobs:
     needs: [prepare_metadata, build_current, build_baseline]
     if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
     runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 75
     outputs:
       status: ${{ steps.collect.outputs.status }}
       baseline_ms: ${{ steps.collect.outputs.baseline_ms }}
@@ -784,8 +792,8 @@ jobs:
 
           bash -l -c '
             [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
-            cd "$MODEL_ROOT/inference/metaGraph" &&
-            timeout 30m python musa_run_pb_graph.py \
+            cd "$MODEL_ROOT/inference/metaGraph"
+            exec timeout 30m python musa_run_pb_graph.py \
               --spec "$SPEC_PATH" \
               --bs 4096 \
               --out_root "$JOB_LOG_DIR/baseline-out" \
@@ -794,8 +802,8 @@ jobs:
 
           bash -l -c '
             [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
-            cd "$MODEL_ROOT/inference/metaGraph" &&
-            timeout 30m python musa_run_pb_graph.py \
+            cd "$MODEL_ROOT/inference/metaGraph"
+            exec timeout 30m python musa_run_pb_graph.py \
               --spec "$SPEC_PATH" \
               --bs 4096 \
               --out_root "$JOB_LOG_DIR/current-out" \
@@ -895,6 +903,7 @@ jobs:
     needs: [prepare_metadata, build_current, build_baseline]
     if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
     runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 75
     outputs:
       status: ${{ steps.collect.outputs.status }}
       baseline_ms: ${{ steps.collect.outputs.baseline_ms }}
@@ -934,8 +943,8 @@ jobs:
 
           bash -l -c '
             [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
-            cd "$MODEL_ROOT/inference/metaGraph" &&
-            timeout 30m python musa_run_pb_graph.py \
+            cd "$MODEL_ROOT/inference/metaGraph"
+            exec timeout 30m python musa_run_pb_graph.py \
               --spec "$SPEC_PATH" \
               --bs 4096 \
               --out_root "$JOB_LOG_DIR/baseline-out" \
@@ -944,8 +953,8 @@ jobs:
 
           bash -l -c '
             [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
-            cd "$MODEL_ROOT/inference/metaGraph" &&
-            timeout 30m python musa_run_pb_graph.py \
+            cd "$MODEL_ROOT/inference/metaGraph"
+            exec timeout 30m python musa_run_pb_graph.py \
               --spec "$SPEC_PATH" \
               --bs 4096 \
               --out_root "$JOB_LOG_DIR/current-out" \
@@ -1045,6 +1054,7 @@ jobs:
     needs: [prepare_metadata, build_current, build_baseline]
     if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
     runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 75
     outputs:
       status: ${{ steps.collect.outputs.status }}
       baseline_ms: ${{ steps.collect.outputs.baseline_ms }}
@@ -1084,8 +1094,8 @@ jobs:
 
           bash -l -c '
             [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
-            cd "$MODEL_ROOT/inference/metaGraph" &&
-            timeout 30m python musa_run_pb_graph.py \
+            cd "$MODEL_ROOT/inference/metaGraph"
+            exec timeout 30m python musa_run_pb_graph.py \
               --spec "$SPEC_PATH" \
               --bs 4096 \
               --out_root "$JOB_LOG_DIR/baseline-out" \
@@ -1094,8 +1104,8 @@ jobs:
 
           bash -l -c '
             [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
-            cd "$MODEL_ROOT/inference/metaGraph" &&
-            timeout 30m python musa_run_pb_graph.py \
+            cd "$MODEL_ROOT/inference/metaGraph"
+            exec timeout 30m python musa_run_pb_graph.py \
               --spec "$SPEC_PATH" \
               --bs 4096 \
               --out_root "$JOB_LOG_DIR/current-out" \
@@ -1195,6 +1205,7 @@ jobs:
     needs: [prepare_metadata, build_current]
     if: needs.build_current.result == 'success'
     runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 210
     outputs:
       status: ${{ steps.collect.outputs.status }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
@@ -1219,8 +1230,8 @@ jobs:
           training_exit=0
           export LOG_FILE ERROR_LOG_DIR CURRENT_PLUGIN
           bash -l -c '
-            cd "$MODEL_ROOT/training" &&
-            timeout 180m python run_all_training_tests.py \
+            cd "$MODEL_ROOT/training"
+            exec timeout 180m python run_all_training_tests.py \
               --epochs 100 \
               --log-dir "$ERROR_LOG_DIR" \
               --musa-plugin "$CURRENT_PLUGIN" > "$LOG_FILE" 2>&1
@@ -1288,8 +1299,9 @@ jobs:
       - bytedance_model2
       - bytedance_model3
       - training
-    if: always()
+    if: ${{ always() && !cancelled() }}
     runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 10
     steps:
       - name: Download summary artifacts
         uses: actions/download-artifact@v4
