@@ -22,6 +22,8 @@ namespace musa {
 // Fused op for MusaConcatMatMul, which computes:
 //   ConcatV2 + MatMul
 //   ConcatV2 + MatMul + BiasAdd
+//   ConcatV2 + MatMul + BiasAdd + Relu
+//   ConcatV2 + MatMul + BiasAdd + LeakyRelu
 template <typename T>
 class MusaConcatMatMulOp : public MusaOpKernel {
  public:
@@ -31,11 +33,18 @@ class MusaConcatMatMulOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("num_concat", &num_concat_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("concat_input_idx", &concat_input_idx_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("num_args", &num_args_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("activation_alpha", &activation_alpha_));
 
     std::vector<string> fused_ops;
     OP_REQUIRES_OK(ctx, ctx->GetAttr("fused_ops", &fused_ops));
     if (fused_ops.size() == 1 && fused_ops[0] == "BiasAdd" && num_args_ == 1) {
       fusion_type_ = FusionType::BIAS_ADD;
+    } else if (fused_ops.size() == 2 && fused_ops[0] == "BiasAdd" &&
+               fused_ops[1] == "Relu" && num_args_ == 1) {
+      fusion_type_ = FusionType::BIAS_ADD_RELU;
+    } else if (fused_ops.size() == 2 && fused_ops[0] == "BiasAdd" &&
+               fused_ops[1] == "LeakyRelu" && num_args_ == 1) {
+      fusion_type_ = FusionType::BIAS_ADD_LEAKY_RELU;
     } else {
       fusion_type_ = FusionType::NONE;
     }
@@ -121,7 +130,7 @@ class MusaConcatMatMulOp : public MusaOpKernel {
         trans_b_ ? in1.dim_size(in1.dims() - 2) : in1.dim_size(in1.dims() - 1);
 
     const Tensor* bias = nullptr;
-    if (fusion_type_ == FusionType::BIAS_ADD) {
+    if (HasBiasFusion()) {
       OP_REQUIRES(ctx, num_args_ == 1,
                   errors::InvalidArgument(
                       "MusaConcatMatMul BiasAdd expects exactly 1 fused arg"));
@@ -146,19 +155,31 @@ class MusaConcatMatMulOp : public MusaOpKernel {
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, mm_out_shape, &output));
 
-    if (fusion_type_ == FusionType::BIAS_ADD && in0.dims() == 2 &&
+    if (HasBiasFusion() && in0.dims() == 2 &&
         in1.dims() == 2) {
       OP_REQUIRES_OK(ctx,
                      Run2DMatMulWithBias(ctx, in0, in1, *bias, output));
     } else {
       OP_REQUIRES_OK(ctx, RunMatMul(ctx, in0, in1, output));
-      if (fusion_type_ == FusionType::BIAS_ADD) {
-        OP_REQUIRES_OK(ctx, ApplyBiasAddInPlace(ctx, *bias, mm_out_shape, output));
+      if (HasBiasFusion()) {
+        OP_REQUIRES_OK(ctx,
+                       ApplyBiasAddInPlace(ctx, *bias, mm_out_shape, output));
       }
+    }
+
+    if (HasActivationFusion()) {
+      OP_REQUIRES_OK(ctx, ApplyActivationInPlace(ctx, output));
     }
   }
 
  private:
+  bool HasBiasFusion() const { return fusion_type_ != FusionType::NONE; }
+
+  bool HasActivationFusion() const {
+    return fusion_type_ == FusionType::BIAS_ADD_RELU ||
+           fusion_type_ == FusionType::BIAS_ADD_LEAKY_RELU;
+  }
+
   Status RunMatMul(OpKernelContext* ctx, const Tensor& in0, const Tensor& in1,
                    Tensor* output) {
     auto& handle = GetHandleByCtx(ctx);
@@ -251,13 +272,42 @@ class MusaConcatMatMulOp : public MusaOpKernel {
     return Status::OK();
   }
 
-  enum class FusionType { NONE, BIAS_ADD };
+  Status ApplyActivationInPlace(OpKernelContext* ctx, Tensor* output) {
+    auto& handle = GetHandleByCtx(ctx);
+    mTensor mt_out = CreateMTensor(*output);
+    mUnary activation_op;
+
+    if (fusion_type_ == FusionType::BIAS_ADD_RELU) {
+      activation_op.SetMode(::musa::dnn::Unary::Mode::RELU);
+    } else if (fusion_type_ == FusionType::BIAS_ADD_LEAKY_RELU) {
+      activation_op.SetMode(::musa::dnn::Unary::Mode::LEAKY_RELU);
+      activation_op.SetAlpha(static_cast<double>(activation_alpha_));
+    } else {
+      return Status::OK();
+    }
+
+    auto status = activation_op.Run(handle, mt_out, mt_out);
+    if (status != ::musa::dnn::Status::SUCCESS) {
+      return errors::Internal(
+          "MUSA activation failed in MusaConcatMatMul. Status: ",
+          static_cast<int>(status));
+    }
+    return Status::OK();
+  }
+
+  enum class FusionType {
+    NONE,
+    BIAS_ADD,
+    BIAS_ADD_RELU,
+    BIAS_ADD_LEAKY_RELU
+  };
 
   bool trans_a_ = false;
   bool trans_b_ = false;
   int num_concat_ = 0;
   int concat_input_idx_ = 0;
   int num_args_ = 0;
+  float activation_alpha_ = 0.2f;
   bool tf32_enabled_ = false;
   FusionType fusion_type_ = FusionType::NONE;
 };
@@ -289,6 +339,7 @@ REGISTER_OP("MusaConcatMatMul")
     .Attr("concat_input_idx: int")
     .Attr("fused_ops: list(string) = []")
     .Attr("num_args: int >= 0 = 0")
+    .Attr("activation_alpha: float = 0.2")
     .SetShapeFn(shape_inference::MatMulShape);
 
 }  // namespace tensorflow

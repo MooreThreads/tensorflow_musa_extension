@@ -51,6 +51,12 @@ struct BiasAddConsumerMatch {
   std::string bias_input;
 };
 
+struct ActivationConsumerMatch {
+  const NodeDef* activation = nullptr;
+  std::string activation_type;
+  float activation_alpha = 0.2f;
+};
+
 BiasAddConsumerMatch FindUniqueBiasAddConsumer(const GraphDef& graph,
                                                const NodeDef& matmul_node) {
   BiasAddConsumerMatch match;
@@ -96,6 +102,57 @@ BiasAddConsumerMatch FindUniqueBiasAddConsumer(const GraphDef& graph,
     } else {
       return {};
     }
+  }
+
+  return match;
+}
+
+ActivationConsumerMatch FindUniqueActivationConsumer(const GraphDef& graph,
+                                                     const NodeDef& bias_add) {
+  ActivationConsumerMatch match;
+  int consumer_count = 0;
+
+  for (int i = 0; i < graph.node_size(); ++i) {
+    const NodeDef& consumer = graph.node(i);
+    if (consumer.name() == bias_add.name() || HasOriginalSuffix(consumer.name())) {
+      continue;
+    }
+
+    bool consumes_bias_add = false;
+    for (int j = 0; j < consumer.input_size(); ++j) {
+      if (FusionGraphUtils::GetProducerNodeName(consumer.input(j)) ==
+          bias_add.name()) {
+        consumes_bias_add = true;
+        break;
+      }
+    }
+
+    if (!consumes_bias_add) {
+      continue;
+    }
+
+    consumer_count++;
+    if (consumer_count > 1) {
+      return {};
+    }
+
+    if (IsOp(consumer, "Relu")) {
+      match.activation = &consumer;
+      match.activation_type = "Relu";
+      return match;
+    }
+
+    if (IsOp(consumer, "LeakyRelu")) {
+      match.activation = &consumer;
+      match.activation_type = "LeakyRelu";
+      auto alpha_it = consumer.attr().find("alpha");
+      if (alpha_it != consumer.attr().end()) {
+        match.activation_alpha = alpha_it->second.f();
+      }
+      return match;
+    }
+
+    return {};
   }
 
   return match;
@@ -160,6 +217,19 @@ FusionMatchResult ConcatMatMulFusion::Match(const GraphDef& graph,
     result.matched_nodes.push_back(bias_match.bias_add);
     result.captured_nodes["bias_add"] = bias_match.bias_add;
     result.captured_attrs["bias_input"] = bias_match.bias_input;
+
+    ActivationConsumerMatch activation_match =
+        FindUniqueActivationConsumer(graph, *bias_match.bias_add);
+    if (activation_match.activation != nullptr) {
+      result.matched_nodes.push_back(activation_match.activation);
+      result.captured_nodes["activation"] = activation_match.activation;
+      result.captured_attrs["activation_type"] =
+          activation_match.activation_type;
+      if (activation_match.activation_type == "LeakyRelu") {
+        result.captured_attrs["activation_alpha"] =
+            std::to_string(activation_match.activation_alpha);
+      }
+    }
   }
 
   return result;
@@ -179,8 +249,13 @@ Status ConcatMatMulFusion::Apply(GraphDef* graph,
   auto matmul_it = match_result.captured_nodes.find("matmul");
   auto concat_it = match_result.captured_nodes.find("concat");
   auto bias_add_it = match_result.captured_nodes.find("bias_add");
+  auto activation_it = match_result.captured_nodes.find("activation");
   auto with_bias_it = match_result.captured_attrs.find("with_bias");
   auto bias_input_it = match_result.captured_attrs.find("bias_input");
+  auto activation_type_it =
+      match_result.captured_attrs.find("activation_type");
+  auto activation_alpha_it =
+      match_result.captured_attrs.find("activation_alpha");
 
   if (matmul_it == match_result.captured_nodes.end() ||
       concat_it == match_result.captured_nodes.end() ||
@@ -200,9 +275,22 @@ Status ConcatMatMulFusion::Apply(GraphDef* graph,
   const NodeDef* bias_add_node =
       (bias_add_it != match_result.captured_nodes.end()) ? bias_add_it->second
                                                          : nullptr;
+  const NodeDef* activation_node =
+      (activation_it != match_result.captured_nodes.end()) ? activation_it->second
+                                                           : nullptr;
+  const std::string activation_type =
+      (activation_type_it != match_result.captured_attrs.end())
+          ? activation_type_it->second
+          : std::string();
+  const float activation_alpha =
+      (activation_alpha_it != match_result.captured_attrs.end())
+          ? std::stof(activation_alpha_it->second)
+          : 0.2f;
 
+  const bool with_activation = activation_node != nullptr;
   const std::string fused_output_name =
-      with_bias ? bias_add_node->name() : matmul_node->name();
+      with_activation ? activation_node->name()
+                      : (with_bias ? bias_add_node->name() : matmul_node->name());
   const std::string concat_node_name = concat_node->name();
   const std::string original_matmul_name = matmul_node->name() + "_original";
   const std::string original_output_name = fused_output_name + "_original";
@@ -274,11 +362,12 @@ Status ConcatMatMulFusion::Apply(GraphDef* graph,
   }
 
   int output_node_idx = matmul_node_idx;
-  if (with_bias) {
+  if (with_bias || with_activation) {
     output_node_idx = FusionGraphUtils::FindNodeIndex(*graph, fused_output_name);
     if (output_node_idx < 0) {
       return Status(error::INVALID_ARGUMENT,
-                    "Failed to find BiasAdd node in graph: " + fused_output_name);
+                    "Failed to find fused output node in graph: " +
+                        fused_output_name);
     }
   }
 
@@ -324,6 +413,13 @@ Status ConcatMatMulFusion::Apply(GraphDef* graph,
   if (with_bias) {
     AttrValue fused_ops_attr;
     fused_ops_attr.mutable_list()->add_s("BiasAdd");
+    if (with_activation) {
+      fused_ops_attr.mutable_list()->add_s(activation_type);
+      if (activation_type == "LeakyRelu") {
+        (*fused_node->mutable_attr())["activation_alpha"].set_f(
+            activation_alpha);
+      }
+    }
     (*fused_node->mutable_attr())["fused_ops"] = fused_ops_attr;
     (*fused_node->mutable_attr())["num_args"].set_i(1);
   } else {
@@ -333,6 +429,11 @@ Status ConcatMatMulFusion::Apply(GraphDef* graph,
   std::vector<std::string> removable_nodes = {original_matmul_name,
                                               concat_node_name};
   if (with_bias) {
+    removable_nodes.push_back(bias_add_node->name());
+  }
+  if (with_activation) {
+    removable_nodes.push_back(original_output_name);
+  } else if (with_bias) {
     removable_nodes.push_back(original_output_name);
   }
 
