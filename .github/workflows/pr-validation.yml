@@ -522,6 +522,7 @@ jobs:
       baseline_ms: ${{ steps.collect.outputs.baseline_ms }}
       current_ms: ${{ steps.collect.outputs.current_ms }}
       threshold_ms: ${{ steps.collect.outputs.threshold_ms }}
+      metrics_summary: ${{ steps.collect.outputs.metrics_summary }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
       - name: Download current plugin
@@ -795,7 +796,7 @@ jobs:
             cd "$MODEL_ROOT/inference/metaGraph"
             exec timeout 30m python musa_run_pb_graph.py \
               --spec "$SPEC_PATH" \
-              --bs 4096 \
+              --bs 32,128,256,1024 \
               --out_root "$JOB_LOG_DIR/baseline-out" \
               --musa-plugin "$BASELINE_PLUGIN" > "$BASELINE_LOG" 2>&1
           ' || baseline_exit=$?
@@ -805,7 +806,7 @@ jobs:
             cd "$MODEL_ROOT/inference/metaGraph"
             exec timeout 30m python musa_run_pb_graph.py \
               --spec "$SPEC_PATH" \
-              --bs 4096 \
+              --bs 32,128,256,1024 \
               --out_root "$JOB_LOG_DIR/current-out" \
               --musa-plugin "$CURRENT_PLUGIN" > "$CURRENT_LOG" 2>&1
           ' || current_exit=$?
@@ -823,41 +824,196 @@ jobs:
           BASELINE_LOG="$JOB_LOG_DIR/bytedance_model1_baseline.log"
           CURRENT_LOG="$JOB_LOG_DIR/bytedance_model1_current.log"
           SUMMARY_FILE="$RUNNER_TEMP/bytedance-model1.md"
+          COMPARE_JSON="$RUNNER_TEMP/bytedance-model1-compare.json"
+          DETAIL_FILE="$RUNNER_TEMP/bytedance-model1-details.md"
           STATUS="success"
           BASELINE_MS=""
           CURRENT_MS=""
           THRESHOLD_MS=""
+          METRICS_SUMMARY=""
+          BASELINE_REPORT=""
+          CURRENT_REPORT=""
 
-          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" == "0" && -f "$BASELINE_LOG" ]]; then
+          if [[ -f "$BASELINE_LOG" ]]; then
             REPORT_PATH="$(grep '^\[OK\] report=' "$BASELINE_LOG" | tail -1 | sed 's/^\[OK\] report=//' || true)"
             if [[ -n "$REPORT_PATH" && -f "$REPORT_PATH" ]]; then
-              BASELINE_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); vals=[x.get("average_time_ms") for x in data.get("average_time_summary", []) if x.get("status")=="ok" and x.get("average_time_ms") is not None]; print(vals[0] if vals else "")' "$REPORT_PATH" || true)"
+              BASELINE_REPORT="$REPORT_PATH"
             fi
           fi
 
-          if [[ "${{ steps.run_perf.outputs.current_exit }}" == "0" && -f "$CURRENT_LOG" ]]; then
+          if [[ -f "$CURRENT_LOG" ]]; then
             REPORT_PATH="$(grep '^\[OK\] report=' "$CURRENT_LOG" | tail -1 | sed 's/^\[OK\] report=//' || true)"
             if [[ -n "$REPORT_PATH" && -f "$REPORT_PATH" ]]; then
-              CURRENT_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); vals=[x.get("average_time_ms") for x in data.get("average_time_summary", []) if x.get("status")=="ok" and x.get("average_time_ms") is not None]; print(vals[0] if vals else "")' "$REPORT_PATH" || true)"
+              CURRENT_REPORT="$REPORT_PATH"
             fi
           fi
 
-          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" != "0" || "${{ steps.run_perf.outputs.current_exit }}" != "0" || -z "$BASELINE_MS" || -z "$CURRENT_MS" ]]; then
+          python3 - "$BASELINE_REPORT" "$CURRENT_REPORT" "$COMPARE_JSON" "$DETAIL_FILE" <<'PY'
+          import json
+          import os
+          import sys
+
+          baseline_report, current_report, compare_json, detail_file = sys.argv[1:5]
+          THRESHOLD_RATIO = 1.05
+
+          def load_report(path, label):
+              if not path:
+                  return None, [f"{label} report path missing"]
+              if not os.path.isfile(path):
+                  return None, [f"{label} report not found: {path}"]
+              try:
+                  with open(path, "r", encoding="utf-8") as f:
+                      return json.load(f), []
+              except Exception as exc:
+                  return None, [f"failed to load {label} report {path}: {exc}"]
+
+          def collect_rows(report, label):
+              rows = {}
+              errors = []
+              if report is None:
+                  return rows, errors
+              for item in report.get("average_time_summary", []):
+                  bs = str(item.get("batch_size"))
+                  if not bs or bs == "None":
+                      errors.append(f"{label} report contains empty batch_size entry")
+                      continue
+                  if bs in rows:
+                      errors.append(f"{label} report contains duplicate batch_size={bs}")
+                      continue
+                  rows[bs] = {
+                      "status": item.get("status"),
+                      "average_time_ms": item.get("average_time_ms"),
+                      "error_core": item.get("error_core"),
+                  }
+              if not rows:
+                  errors.append(f"{label} report has no average_time_summary entries")
+              return rows, errors
+
+          baseline_data, errors = load_report(baseline_report, "baseline")
+          current_data, cur_errors = load_report(current_report, "current")
+          errors.extend(cur_errors)
+
+          baseline_rows, cur_errors = collect_rows(baseline_data, "baseline")
+          errors.extend(cur_errors)
+          current_rows, cur_errors = collect_rows(current_data, "current")
+          errors.extend(cur_errors)
+
+          def sort_key(bs):
+              try:
+                  return (0, int(bs))
+              except Exception:
+                  return (1, str(bs))
+
+          all_bs = sorted(set(baseline_rows) | set(current_rows), key=sort_key)
+          result_rows = []
+          baseline_parts = []
+          current_parts = []
+          threshold_parts = []
+          metrics_parts = []
+          overall_status = "success"
+
+          for bs in all_bs:
+              base = baseline_rows.get(bs)
+              cur = current_rows.get(bs)
+              row = {
+                  "batch_size": bs,
+                  "baseline_ms": None,
+                  "current_ms": None,
+                  "threshold_ms": None,
+                  "result": "ok",
+                  "detail": "",
+              }
+
+              if base is None:
+                  row["result"] = "missing-baseline"
+                  row["detail"] = "baseline report missing this batch size"
+              elif cur is None:
+                  row["result"] = "missing-current"
+                  row["detail"] = "current report missing this batch size"
+              elif base.get("status") != "ok" or base.get("average_time_ms") is None:
+                  row["result"] = "baseline-failed"
+                  row["detail"] = base.get("error_core") or f"baseline status={base.get('status')}"
+              elif cur.get("status") != "ok" or cur.get("average_time_ms") is None:
+                  row["result"] = "current-failed"
+                  row["detail"] = cur.get("error_core") or f"current status={cur.get('status')}"
+              else:
+                  row["baseline_ms"] = float(base["average_time_ms"])
+                  row["current_ms"] = float(cur["average_time_ms"])
+                  row["threshold_ms"] = float(base["average_time_ms"]) * THRESHOLD_RATIO
+                  if row["current_ms"] > row["threshold_ms"]:
+                      row["result"] = "regressed"
+                      row["detail"] = "current > baseline * 1.05"
+
+              if row["result"] != "ok":
+                  overall_status = "failure"
+
+              result_rows.append(row)
+              baseline_parts.append(f"bs{bs}={'%.4f' % row['baseline_ms'] if row['baseline_ms'] is not None else 'n/a'}")
+              current_parts.append(f"bs{bs}={'%.4f' % row['current_ms'] if row['current_ms'] is not None else 'n/a'}")
+              threshold_parts.append(f"bs{bs}={'%.4f' % row['threshold_ms'] if row['threshold_ms'] is not None else 'n/a'}")
+              metrics_parts.append(
+                  "bs{bs}: baseline={base}, current={cur}, threshold={thr}, result={result}".format(
+                      bs=bs,
+                      base="%.4f" % row["baseline_ms"] if row["baseline_ms"] is not None else "n/a",
+                      cur="%.4f" % row["current_ms"] if row["current_ms"] is not None else "n/a",
+                      thr="%.4f" % row["threshold_ms"] if row["threshold_ms"] is not None else "n/a",
+                      result=row["result"],
+                  )
+              )
+
+          if errors:
+              overall_status = "failure"
+
+          with open(detail_file, "w", encoding="utf-8") as f:
+              f.write("| BS | Baseline (ms) | Current (ms) | Threshold (ms) | Result | Detail |\n")
+              f.write("|----|---------------|--------------|----------------|--------|--------|\n")
+              for row in result_rows:
+                  f.write(
+                      "| {bs} | {base} | {cur} | {thr} | {result} | {detail} |\n".format(
+                          bs=row["batch_size"],
+                          base="%.4f" % row["baseline_ms"] if row["baseline_ms"] is not None else "n/a",
+                          cur="%.4f" % row["current_ms"] if row["current_ms"] is not None else "n/a",
+                          thr="%.4f" % row["threshold_ms"] if row["threshold_ms"] is not None else "n/a",
+                          result=row["result"],
+                          detail=(row["detail"] or "").replace("|", "/"),
+                      )
+                  )
+              if errors:
+                  f.write("\nAdditional errors:\n")
+                  for err in errors:
+                      f.write(f"- {err}\n")
+
+          payload = {
+              "status": overall_status,
+              "baseline_ms": ", ".join(baseline_parts) if baseline_parts else "",
+              "current_ms": ", ".join(current_parts) if current_parts else "",
+              "threshold_ms": ", ".join(threshold_parts) if threshold_parts else "",
+              "metrics_summary": " ; ".join(metrics_parts) if metrics_parts else "",
+          }
+          with open(compare_json, "w", encoding="utf-8") as f:
+              json.dump(payload, f, ensure_ascii=False, indent=2)
+          PY
+
+          STATUS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("status","failure"))' "$COMPARE_JSON")"
+          BASELINE_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("baseline_ms",""))' "$COMPARE_JSON")"
+          CURRENT_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("current_ms",""))' "$COMPARE_JSON")"
+          THRESHOLD_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("threshold_ms",""))' "$COMPARE_JSON")"
+          METRICS_SUMMARY="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("metrics_summary",""))' "$COMPARE_JSON")"
+
+          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" != "0" || "${{ steps.run_perf.outputs.current_exit }}" != "0" ]]; then
             STATUS="failure"
-          else
-            THRESHOLD_MS="$(awk -v base="$BASELINE_MS" 'BEGIN {printf "%.4f", base * 1.05}')"
-            if awk -v cur="$CURRENT_MS" -v thr="$THRESHOLD_MS" 'BEGIN {exit !(cur > thr)}'; then
-              STATUS="failure"
-            fi
           fi
 
           {
             echo "## ByteDance Model 1"
             echo
             echo "- Status: $STATUS"
-            echo "- Baseline: ${BASELINE_MS:-n/a} ms"
-            echo "- Current: ${CURRENT_MS:-n/a} ms"
-            echo "- Threshold: ${THRESHOLD_MS:-n/a} ms"
+            echo "- Baseline: ${BASELINE_MS:-n/a}"
+            echo "- Current: ${CURRENT_MS:-n/a}"
+            echo "- Threshold: ${THRESHOLD_MS:-n/a}"
+            echo
+            echo "### Batch Size Comparison"
+            cat "$DETAIL_FILE"
             echo
             echo "### Baseline log tail"
             echo '```text'
@@ -883,6 +1039,7 @@ jobs:
           echo "baseline_ms=$BASELINE_MS" >> "$GITHUB_OUTPUT"
           echo "current_ms=$CURRENT_MS" >> "$GITHUB_OUTPUT"
           echo "threshold_ms=$THRESHOLD_MS" >> "$GITHUB_OUTPUT"
+          echo "metrics_summary=$METRICS_SUMMARY" >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Upload model 1 summary artifact
@@ -909,6 +1066,7 @@ jobs:
       baseline_ms: ${{ steps.collect.outputs.baseline_ms }}
       current_ms: ${{ steps.collect.outputs.current_ms }}
       threshold_ms: ${{ steps.collect.outputs.threshold_ms }}
+      metrics_summary: ${{ steps.collect.outputs.metrics_summary }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
       - name: Download current plugin
@@ -946,7 +1104,7 @@ jobs:
             cd "$MODEL_ROOT/inference/metaGraph"
             exec timeout 30m python musa_run_pb_graph.py \
               --spec "$SPEC_PATH" \
-              --bs 4096 \
+              --bs 32,128,256,1024 \
               --out_root "$JOB_LOG_DIR/baseline-out" \
               --musa-plugin "$BASELINE_PLUGIN" > "$BASELINE_LOG" 2>&1
           ' || baseline_exit=$?
@@ -956,7 +1114,7 @@ jobs:
             cd "$MODEL_ROOT/inference/metaGraph"
             exec timeout 30m python musa_run_pb_graph.py \
               --spec "$SPEC_PATH" \
-              --bs 4096 \
+              --bs 32,128,256,1024 \
               --out_root "$JOB_LOG_DIR/current-out" \
               --musa-plugin "$CURRENT_PLUGIN" > "$CURRENT_LOG" 2>&1
           ' || current_exit=$?
@@ -974,41 +1132,196 @@ jobs:
           BASELINE_LOG="$JOB_LOG_DIR/bytedance_model2_baseline.log"
           CURRENT_LOG="$JOB_LOG_DIR/bytedance_model2_current.log"
           SUMMARY_FILE="$RUNNER_TEMP/bytedance-model2.md"
+          COMPARE_JSON="$RUNNER_TEMP/bytedance-model2-compare.json"
+          DETAIL_FILE="$RUNNER_TEMP/bytedance-model2-details.md"
           STATUS="success"
           BASELINE_MS=""
           CURRENT_MS=""
           THRESHOLD_MS=""
+          METRICS_SUMMARY=""
+          BASELINE_REPORT=""
+          CURRENT_REPORT=""
 
-          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" == "0" && -f "$BASELINE_LOG" ]]; then
+          if [[ -f "$BASELINE_LOG" ]]; then
             REPORT_PATH="$(grep '^\[OK\] report=' "$BASELINE_LOG" | tail -1 | sed 's/^\[OK\] report=//' || true)"
             if [[ -n "$REPORT_PATH" && -f "$REPORT_PATH" ]]; then
-              BASELINE_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); vals=[x.get("average_time_ms") for x in data.get("average_time_summary", []) if x.get("status")=="ok" and x.get("average_time_ms") is not None]; print(vals[0] if vals else "")' "$REPORT_PATH" || true)"
+              BASELINE_REPORT="$REPORT_PATH"
             fi
           fi
 
-          if [[ "${{ steps.run_perf.outputs.current_exit }}" == "0" && -f "$CURRENT_LOG" ]]; then
+          if [[ -f "$CURRENT_LOG" ]]; then
             REPORT_PATH="$(grep '^\[OK\] report=' "$CURRENT_LOG" | tail -1 | sed 's/^\[OK\] report=//' || true)"
             if [[ -n "$REPORT_PATH" && -f "$REPORT_PATH" ]]; then
-              CURRENT_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); vals=[x.get("average_time_ms") for x in data.get("average_time_summary", []) if x.get("status")=="ok" and x.get("average_time_ms") is not None]; print(vals[0] if vals else "")' "$REPORT_PATH" || true)"
+              CURRENT_REPORT="$REPORT_PATH"
             fi
           fi
 
-          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" != "0" || "${{ steps.run_perf.outputs.current_exit }}" != "0" || -z "$BASELINE_MS" || -z "$CURRENT_MS" ]]; then
+          python3 - "$BASELINE_REPORT" "$CURRENT_REPORT" "$COMPARE_JSON" "$DETAIL_FILE" <<'PY'
+          import json
+          import os
+          import sys
+
+          baseline_report, current_report, compare_json, detail_file = sys.argv[1:5]
+          THRESHOLD_RATIO = 1.05
+
+          def load_report(path, label):
+              if not path:
+                  return None, [f"{label} report path missing"]
+              if not os.path.isfile(path):
+                  return None, [f"{label} report not found: {path}"]
+              try:
+                  with open(path, "r", encoding="utf-8") as f:
+                      return json.load(f), []
+              except Exception as exc:
+                  return None, [f"failed to load {label} report {path}: {exc}"]
+
+          def collect_rows(report, label):
+              rows = {}
+              errors = []
+              if report is None:
+                  return rows, errors
+              for item in report.get("average_time_summary", []):
+                  bs = str(item.get("batch_size"))
+                  if not bs or bs == "None":
+                      errors.append(f"{label} report contains empty batch_size entry")
+                      continue
+                  if bs in rows:
+                      errors.append(f"{label} report contains duplicate batch_size={bs}")
+                      continue
+                  rows[bs] = {
+                      "status": item.get("status"),
+                      "average_time_ms": item.get("average_time_ms"),
+                      "error_core": item.get("error_core"),
+                  }
+              if not rows:
+                  errors.append(f"{label} report has no average_time_summary entries")
+              return rows, errors
+
+          baseline_data, errors = load_report(baseline_report, "baseline")
+          current_data, cur_errors = load_report(current_report, "current")
+          errors.extend(cur_errors)
+
+          baseline_rows, cur_errors = collect_rows(baseline_data, "baseline")
+          errors.extend(cur_errors)
+          current_rows, cur_errors = collect_rows(current_data, "current")
+          errors.extend(cur_errors)
+
+          def sort_key(bs):
+              try:
+                  return (0, int(bs))
+              except Exception:
+                  return (1, str(bs))
+
+          all_bs = sorted(set(baseline_rows) | set(current_rows), key=sort_key)
+          result_rows = []
+          baseline_parts = []
+          current_parts = []
+          threshold_parts = []
+          metrics_parts = []
+          overall_status = "success"
+
+          for bs in all_bs:
+              base = baseline_rows.get(bs)
+              cur = current_rows.get(bs)
+              row = {
+                  "batch_size": bs,
+                  "baseline_ms": None,
+                  "current_ms": None,
+                  "threshold_ms": None,
+                  "result": "ok",
+                  "detail": "",
+              }
+
+              if base is None:
+                  row["result"] = "missing-baseline"
+                  row["detail"] = "baseline report missing this batch size"
+              elif cur is None:
+                  row["result"] = "missing-current"
+                  row["detail"] = "current report missing this batch size"
+              elif base.get("status") != "ok" or base.get("average_time_ms") is None:
+                  row["result"] = "baseline-failed"
+                  row["detail"] = base.get("error_core") or f"baseline status={base.get('status')}"
+              elif cur.get("status") != "ok" or cur.get("average_time_ms") is None:
+                  row["result"] = "current-failed"
+                  row["detail"] = cur.get("error_core") or f"current status={cur.get('status')}"
+              else:
+                  row["baseline_ms"] = float(base["average_time_ms"])
+                  row["current_ms"] = float(cur["average_time_ms"])
+                  row["threshold_ms"] = float(base["average_time_ms"]) * THRESHOLD_RATIO
+                  if row["current_ms"] > row["threshold_ms"]:
+                      row["result"] = "regressed"
+                      row["detail"] = "current > baseline * 1.05"
+
+              if row["result"] != "ok":
+                  overall_status = "failure"
+
+              result_rows.append(row)
+              baseline_parts.append(f"bs{bs}={'%.4f' % row['baseline_ms'] if row['baseline_ms'] is not None else 'n/a'}")
+              current_parts.append(f"bs{bs}={'%.4f' % row['current_ms'] if row['current_ms'] is not None else 'n/a'}")
+              threshold_parts.append(f"bs{bs}={'%.4f' % row['threshold_ms'] if row['threshold_ms'] is not None else 'n/a'}")
+              metrics_parts.append(
+                  "bs{bs}: baseline={base}, current={cur}, threshold={thr}, result={result}".format(
+                      bs=bs,
+                      base="%.4f" % row["baseline_ms"] if row["baseline_ms"] is not None else "n/a",
+                      cur="%.4f" % row["current_ms"] if row["current_ms"] is not None else "n/a",
+                      thr="%.4f" % row["threshold_ms"] if row["threshold_ms"] is not None else "n/a",
+                      result=row["result"],
+                  )
+              )
+
+          if errors:
+              overall_status = "failure"
+
+          with open(detail_file, "w", encoding="utf-8") as f:
+              f.write("| BS | Baseline (ms) | Current (ms) | Threshold (ms) | Result | Detail |\n")
+              f.write("|----|---------------|--------------|----------------|--------|--------|\n")
+              for row in result_rows:
+                  f.write(
+                      "| {bs} | {base} | {cur} | {thr} | {result} | {detail} |\n".format(
+                          bs=row["batch_size"],
+                          base="%.4f" % row["baseline_ms"] if row["baseline_ms"] is not None else "n/a",
+                          cur="%.4f" % row["current_ms"] if row["current_ms"] is not None else "n/a",
+                          thr="%.4f" % row["threshold_ms"] if row["threshold_ms"] is not None else "n/a",
+                          result=row["result"],
+                          detail=(row["detail"] or "").replace("|", "/"),
+                      )
+                  )
+              if errors:
+                  f.write("\nAdditional errors:\n")
+                  for err in errors:
+                      f.write(f"- {err}\n")
+
+          payload = {
+              "status": overall_status,
+              "baseline_ms": ", ".join(baseline_parts) if baseline_parts else "",
+              "current_ms": ", ".join(current_parts) if current_parts else "",
+              "threshold_ms": ", ".join(threshold_parts) if threshold_parts else "",
+              "metrics_summary": " ; ".join(metrics_parts) if metrics_parts else "",
+          }
+          with open(compare_json, "w", encoding="utf-8") as f:
+              json.dump(payload, f, ensure_ascii=False, indent=2)
+          PY
+
+          STATUS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("status","failure"))' "$COMPARE_JSON")"
+          BASELINE_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("baseline_ms",""))' "$COMPARE_JSON")"
+          CURRENT_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("current_ms",""))' "$COMPARE_JSON")"
+          THRESHOLD_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("threshold_ms",""))' "$COMPARE_JSON")"
+          METRICS_SUMMARY="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("metrics_summary",""))' "$COMPARE_JSON")"
+
+          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" != "0" || "${{ steps.run_perf.outputs.current_exit }}" != "0" ]]; then
             STATUS="failure"
-          else
-            THRESHOLD_MS="$(awk -v base="$BASELINE_MS" 'BEGIN {printf "%.4f", base * 1.05}')"
-            if awk -v cur="$CURRENT_MS" -v thr="$THRESHOLD_MS" 'BEGIN {exit !(cur > thr)}'; then
-              STATUS="failure"
-            fi
           fi
 
           {
             echo "## ByteDance Model 2"
             echo
             echo "- Status: $STATUS"
-            echo "- Baseline: ${BASELINE_MS:-n/a} ms"
-            echo "- Current: ${CURRENT_MS:-n/a} ms"
-            echo "- Threshold: ${THRESHOLD_MS:-n/a} ms"
+            echo "- Baseline: ${BASELINE_MS:-n/a}"
+            echo "- Current: ${CURRENT_MS:-n/a}"
+            echo "- Threshold: ${THRESHOLD_MS:-n/a}"
+            echo
+            echo "### Batch Size Comparison"
+            cat "$DETAIL_FILE"
             echo
             echo "### Baseline log tail"
             echo '```text'
@@ -1034,6 +1347,7 @@ jobs:
           echo "baseline_ms=$BASELINE_MS" >> "$GITHUB_OUTPUT"
           echo "current_ms=$CURRENT_MS" >> "$GITHUB_OUTPUT"
           echo "threshold_ms=$THRESHOLD_MS" >> "$GITHUB_OUTPUT"
+          echo "metrics_summary=$METRICS_SUMMARY" >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Upload model 2 summary artifact
@@ -1060,6 +1374,7 @@ jobs:
       baseline_ms: ${{ steps.collect.outputs.baseline_ms }}
       current_ms: ${{ steps.collect.outputs.current_ms }}
       threshold_ms: ${{ steps.collect.outputs.threshold_ms }}
+      metrics_summary: ${{ steps.collect.outputs.metrics_summary }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
       - name: Download current plugin
@@ -1097,7 +1412,7 @@ jobs:
             cd "$MODEL_ROOT/inference/metaGraph"
             exec timeout 30m python musa_run_pb_graph.py \
               --spec "$SPEC_PATH" \
-              --bs 4096 \
+              --bs 32,128,256,1024 \
               --out_root "$JOB_LOG_DIR/baseline-out" \
               --musa-plugin "$BASELINE_PLUGIN" > "$BASELINE_LOG" 2>&1
           ' || baseline_exit=$?
@@ -1107,7 +1422,7 @@ jobs:
             cd "$MODEL_ROOT/inference/metaGraph"
             exec timeout 30m python musa_run_pb_graph.py \
               --spec "$SPEC_PATH" \
-              --bs 4096 \
+              --bs 32,128,256,1024 \
               --out_root "$JOB_LOG_DIR/current-out" \
               --musa-plugin "$CURRENT_PLUGIN" > "$CURRENT_LOG" 2>&1
           ' || current_exit=$?
@@ -1125,41 +1440,196 @@ jobs:
           BASELINE_LOG="$JOB_LOG_DIR/bytedance_model3_baseline.log"
           CURRENT_LOG="$JOB_LOG_DIR/bytedance_model3_current.log"
           SUMMARY_FILE="$RUNNER_TEMP/bytedance-model3.md"
+          COMPARE_JSON="$RUNNER_TEMP/bytedance-model3-compare.json"
+          DETAIL_FILE="$RUNNER_TEMP/bytedance-model3-details.md"
           STATUS="success"
           BASELINE_MS=""
           CURRENT_MS=""
           THRESHOLD_MS=""
+          METRICS_SUMMARY=""
+          BASELINE_REPORT=""
+          CURRENT_REPORT=""
 
-          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" == "0" && -f "$BASELINE_LOG" ]]; then
+          if [[ -f "$BASELINE_LOG" ]]; then
             REPORT_PATH="$(grep '^\[OK\] report=' "$BASELINE_LOG" | tail -1 | sed 's/^\[OK\] report=//' || true)"
             if [[ -n "$REPORT_PATH" && -f "$REPORT_PATH" ]]; then
-              BASELINE_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); vals=[x.get("average_time_ms") for x in data.get("average_time_summary", []) if x.get("status")=="ok" and x.get("average_time_ms") is not None]; print(vals[0] if vals else "")' "$REPORT_PATH" || true)"
+              BASELINE_REPORT="$REPORT_PATH"
             fi
           fi
 
-          if [[ "${{ steps.run_perf.outputs.current_exit }}" == "0" && -f "$CURRENT_LOG" ]]; then
+          if [[ -f "$CURRENT_LOG" ]]; then
             REPORT_PATH="$(grep '^\[OK\] report=' "$CURRENT_LOG" | tail -1 | sed 's/^\[OK\] report=//' || true)"
             if [[ -n "$REPORT_PATH" && -f "$REPORT_PATH" ]]; then
-              CURRENT_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); vals=[x.get("average_time_ms") for x in data.get("average_time_summary", []) if x.get("status")=="ok" and x.get("average_time_ms") is not None]; print(vals[0] if vals else "")' "$REPORT_PATH" || true)"
+              CURRENT_REPORT="$REPORT_PATH"
             fi
           fi
 
-          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" != "0" || "${{ steps.run_perf.outputs.current_exit }}" != "0" || -z "$BASELINE_MS" || -z "$CURRENT_MS" ]]; then
+          python3 - "$BASELINE_REPORT" "$CURRENT_REPORT" "$COMPARE_JSON" "$DETAIL_FILE" <<'PY'
+          import json
+          import os
+          import sys
+
+          baseline_report, current_report, compare_json, detail_file = sys.argv[1:5]
+          THRESHOLD_RATIO = 1.05
+
+          def load_report(path, label):
+              if not path:
+                  return None, [f"{label} report path missing"]
+              if not os.path.isfile(path):
+                  return None, [f"{label} report not found: {path}"]
+              try:
+                  with open(path, "r", encoding="utf-8") as f:
+                      return json.load(f), []
+              except Exception as exc:
+                  return None, [f"failed to load {label} report {path}: {exc}"]
+
+          def collect_rows(report, label):
+              rows = {}
+              errors = []
+              if report is None:
+                  return rows, errors
+              for item in report.get("average_time_summary", []):
+                  bs = str(item.get("batch_size"))
+                  if not bs or bs == "None":
+                      errors.append(f"{label} report contains empty batch_size entry")
+                      continue
+                  if bs in rows:
+                      errors.append(f"{label} report contains duplicate batch_size={bs}")
+                      continue
+                  rows[bs] = {
+                      "status": item.get("status"),
+                      "average_time_ms": item.get("average_time_ms"),
+                      "error_core": item.get("error_core"),
+                  }
+              if not rows:
+                  errors.append(f"{label} report has no average_time_summary entries")
+              return rows, errors
+
+          baseline_data, errors = load_report(baseline_report, "baseline")
+          current_data, cur_errors = load_report(current_report, "current")
+          errors.extend(cur_errors)
+
+          baseline_rows, cur_errors = collect_rows(baseline_data, "baseline")
+          errors.extend(cur_errors)
+          current_rows, cur_errors = collect_rows(current_data, "current")
+          errors.extend(cur_errors)
+
+          def sort_key(bs):
+              try:
+                  return (0, int(bs))
+              except Exception:
+                  return (1, str(bs))
+
+          all_bs = sorted(set(baseline_rows) | set(current_rows), key=sort_key)
+          result_rows = []
+          baseline_parts = []
+          current_parts = []
+          threshold_parts = []
+          metrics_parts = []
+          overall_status = "success"
+
+          for bs in all_bs:
+              base = baseline_rows.get(bs)
+              cur = current_rows.get(bs)
+              row = {
+                  "batch_size": bs,
+                  "baseline_ms": None,
+                  "current_ms": None,
+                  "threshold_ms": None,
+                  "result": "ok",
+                  "detail": "",
+              }
+
+              if base is None:
+                  row["result"] = "missing-baseline"
+                  row["detail"] = "baseline report missing this batch size"
+              elif cur is None:
+                  row["result"] = "missing-current"
+                  row["detail"] = "current report missing this batch size"
+              elif base.get("status") != "ok" or base.get("average_time_ms") is None:
+                  row["result"] = "baseline-failed"
+                  row["detail"] = base.get("error_core") or f"baseline status={base.get('status')}"
+              elif cur.get("status") != "ok" or cur.get("average_time_ms") is None:
+                  row["result"] = "current-failed"
+                  row["detail"] = cur.get("error_core") or f"current status={cur.get('status')}"
+              else:
+                  row["baseline_ms"] = float(base["average_time_ms"])
+                  row["current_ms"] = float(cur["average_time_ms"])
+                  row["threshold_ms"] = float(base["average_time_ms"]) * THRESHOLD_RATIO
+                  if row["current_ms"] > row["threshold_ms"]:
+                      row["result"] = "regressed"
+                      row["detail"] = "current > baseline * 1.05"
+
+              if row["result"] != "ok":
+                  overall_status = "failure"
+
+              result_rows.append(row)
+              baseline_parts.append(f"bs{bs}={'%.4f' % row['baseline_ms'] if row['baseline_ms'] is not None else 'n/a'}")
+              current_parts.append(f"bs{bs}={'%.4f' % row['current_ms'] if row['current_ms'] is not None else 'n/a'}")
+              threshold_parts.append(f"bs{bs}={'%.4f' % row['threshold_ms'] if row['threshold_ms'] is not None else 'n/a'}")
+              metrics_parts.append(
+                  "bs{bs}: baseline={base}, current={cur}, threshold={thr}, result={result}".format(
+                      bs=bs,
+                      base="%.4f" % row["baseline_ms"] if row["baseline_ms"] is not None else "n/a",
+                      cur="%.4f" % row["current_ms"] if row["current_ms"] is not None else "n/a",
+                      thr="%.4f" % row["threshold_ms"] if row["threshold_ms"] is not None else "n/a",
+                      result=row["result"],
+                  )
+              )
+
+          if errors:
+              overall_status = "failure"
+
+          with open(detail_file, "w", encoding="utf-8") as f:
+              f.write("| BS | Baseline (ms) | Current (ms) | Threshold (ms) | Result | Detail |\n")
+              f.write("|----|---------------|--------------|----------------|--------|--------|\n")
+              for row in result_rows:
+                  f.write(
+                      "| {bs} | {base} | {cur} | {thr} | {result} | {detail} |\n".format(
+                          bs=row["batch_size"],
+                          base="%.4f" % row["baseline_ms"] if row["baseline_ms"] is not None else "n/a",
+                          cur="%.4f" % row["current_ms"] if row["current_ms"] is not None else "n/a",
+                          thr="%.4f" % row["threshold_ms"] if row["threshold_ms"] is not None else "n/a",
+                          result=row["result"],
+                          detail=(row["detail"] or "").replace("|", "/"),
+                      )
+                  )
+              if errors:
+                  f.write("\nAdditional errors:\n")
+                  for err in errors:
+                      f.write(f"- {err}\n")
+
+          payload = {
+              "status": overall_status,
+              "baseline_ms": ", ".join(baseline_parts) if baseline_parts else "",
+              "current_ms": ", ".join(current_parts) if current_parts else "",
+              "threshold_ms": ", ".join(threshold_parts) if threshold_parts else "",
+              "metrics_summary": " ; ".join(metrics_parts) if metrics_parts else "",
+          }
+          with open(compare_json, "w", encoding="utf-8") as f:
+              json.dump(payload, f, ensure_ascii=False, indent=2)
+          PY
+
+          STATUS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("status","failure"))' "$COMPARE_JSON")"
+          BASELINE_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("baseline_ms",""))' "$COMPARE_JSON")"
+          CURRENT_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("current_ms",""))' "$COMPARE_JSON")"
+          THRESHOLD_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("threshold_ms",""))' "$COMPARE_JSON")"
+          METRICS_SUMMARY="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("metrics_summary",""))' "$COMPARE_JSON")"
+
+          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" != "0" || "${{ steps.run_perf.outputs.current_exit }}" != "0" ]]; then
             STATUS="failure"
-          else
-            THRESHOLD_MS="$(awk -v base="$BASELINE_MS" 'BEGIN {printf "%.4f", base * 1.05}')"
-            if awk -v cur="$CURRENT_MS" -v thr="$THRESHOLD_MS" 'BEGIN {exit !(cur > thr)}'; then
-              STATUS="failure"
-            fi
           fi
 
           {
             echo "## ByteDance Model 3"
             echo
             echo "- Status: $STATUS"
-            echo "- Baseline: ${BASELINE_MS:-n/a} ms"
-            echo "- Current: ${CURRENT_MS:-n/a} ms"
-            echo "- Threshold: ${THRESHOLD_MS:-n/a} ms"
+            echo "- Baseline: ${BASELINE_MS:-n/a}"
+            echo "- Current: ${CURRENT_MS:-n/a}"
+            echo "- Threshold: ${THRESHOLD_MS:-n/a}"
+            echo
+            echo "### Batch Size Comparison"
+            cat "$DETAIL_FILE"
             echo
             echo "### Baseline log tail"
             echo '```text'
@@ -1185,6 +1655,7 @@ jobs:
           echo "baseline_ms=$BASELINE_MS" >> "$GITHUB_OUTPUT"
           echo "current_ms=$CURRENT_MS" >> "$GITHUB_OUTPUT"
           echo "threshold_ms=$THRESHOLD_MS" >> "$GITHUB_OUTPUT"
+          echo "metrics_summary=$METRICS_SUMMARY" >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Upload model 3 summary artifact
@@ -1369,9 +1840,9 @@ jobs:
             echo
             echo "## Performance Metrics"
             echo "- Tencent Performance: baseline=${{ needs.tencent_perf.outputs.baseline_ms || 'n/a' }} ms, current=${{ needs.tencent_perf.outputs.current_ms || 'n/a' }} ms, threshold=${{ needs.tencent_perf.outputs.threshold_ms || 'n/a' }} ms"
-            echo "- ByteDance Model 1: baseline=${{ needs.bytedance_model1.outputs.baseline_ms || 'n/a' }} ms, current=${{ needs.bytedance_model1.outputs.current_ms || 'n/a' }} ms, threshold=${{ needs.bytedance_model1.outputs.threshold_ms || 'n/a' }} ms"
-            echo "- ByteDance Model 2: baseline=${{ needs.bytedance_model2.outputs.baseline_ms || 'n/a' }} ms, current=${{ needs.bytedance_model2.outputs.current_ms || 'n/a' }} ms, threshold=${{ needs.bytedance_model2.outputs.threshold_ms || 'n/a' }} ms"
-            echo "- ByteDance Model 3: baseline=${{ needs.bytedance_model3.outputs.baseline_ms || 'n/a' }} ms, current=${{ needs.bytedance_model3.outputs.current_ms || 'n/a' }} ms, threshold=${{ needs.bytedance_model3.outputs.threshold_ms || 'n/a' }} ms"
+            echo "- ByteDance Model 1: ${{ needs.bytedance_model1.outputs.metrics_summary || 'n/a' }}"
+            echo "- ByteDance Model 2: ${{ needs.bytedance_model2.outputs.metrics_summary || 'n/a' }}"
+            echo "- ByteDance Model 3: ${{ needs.bytedance_model3.outputs.metrics_summary || 'n/a' }}"
             echo
             echo "## Accuracy Highlights"
             echo "- Tencent Accuracy current: ${{ needs.tencent_accuracy.outputs.current_acc || 'n/a' }}"
