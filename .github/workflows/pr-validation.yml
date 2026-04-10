@@ -2,849 +2,1397 @@ name: CI Validation (MUSA GPU)
 
 on:
   pull_request:
-    branches: [ main, develop ]
-    types: [ opened, synchronize, reopened ]
+    branches: [main, develop]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
     inputs:
       target_branch:
-        description: 'Target branch to check rebase against (for manual run)'
+        description: "Target branch to check rebase against (for manual run)"
         required: false
-        default: 'main'
+        default: "main"
+        type: string
+      commit_sha:
+        description: "Optional commit SHA to test instead of the workflow SHA"
+        required: false
+        default: ""
+        type: string
+      baseline_sha:
+        description: "Optional baseline commit SHA; leave empty to use latest upstream/main"
+        required: false
+        default: ""
         type: string
   schedule:
-    - cron: '0 0 * * *'
+    - cron: "0 0 * * *"
 
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
+env:
+  COMMIT_ID: ${{ github.event.pull_request.head.sha || github.sha }}
+  LOG_BASE: /home/runner/ci_logs
+  MODEL_ROOT: /home/runner/tf_test_model-master
+  BASELINE_WORKSPACE: /home/runner/baseline/tensorflow_musa_extension
+  BASELINE_REPO_URL: https://github.com/MooreThreads/tensorflow_musa_extension.git
+  CURRENT_PLUGIN_ARTIFACT: current-plugin
+  BASELINE_PLUGIN_ARTIFACT: baseline-plugin
+
 jobs:
-  validate:
+  prepare_metadata:
+    name: Prepare Metadata
     runs-on: [self-hosted, musa-gpu]
-
-    env:
-      COMMIT_ID: ${{ github.event.pull_request.head.sha || github.sha }}
-      LOG_BASE: /home/runner/ci_logs
-      WORKSPACE: /home/runner/action-runner/_work/${{ github.event.repository.name }}/${{ github.event.repository.name }}
-      MODEL_ROOT: /home/runner/tf_test_model-master
-      BASELINE_WORKSPACE: /home/runner/baseline/tensorflow_musa_extension
-      BASELINE_REPO_URL: https://github.com/MooreThreads/tensorflow_musa_extension.git
-
+    outputs:
+      commit_id: ${{ steps.collect.outputs.commit_id }}
+      requested_commit_id: ${{ steps.collect.outputs.requested_commit_id }}
+      requested_baseline_id: ${{ steps.collect.outputs.requested_baseline_id }}
+      run_kind: ${{ steps.collect.outputs.run_kind }}
+      run_id: ${{ steps.collect.outputs.run_id }}
+      log_root: ${{ steps.collect.outputs.log_root }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
-      - name: Check who am I
+      - name: Prepare metadata
+        id: collect
         run: |
-          echo "我是用户: $(whoami)"
-          echo "我当前所在的家目录是: $HOME"
+          set -euo pipefail
 
-      # ==============================
-      # Checkout
-      # ==============================
+          REQUESTED_COMMIT_ID="${{ github.event.inputs.commit_sha || '' }}"
+          REQUESTED_BASELINE_ID="${{ github.event.inputs.baseline_sha || '' }}"
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            RUN_KIND="pr"
+            RUN_ID="${{ github.event.pull_request.head.sha }}"
+            EFFECTIVE_COMMIT_ID="${{ github.event.pull_request.head.sha }}"
+          elif [[ "${{ github.event_name }}" == "schedule" ]]; then
+            RUN_KIND="daily"
+            RUN_ID="$(date +%F)"
+            EFFECTIVE_COMMIT_ID="${{ github.sha }}"
+          else
+            RUN_KIND="manual"
+            EFFECTIVE_COMMIT_ID="${REQUESTED_COMMIT_ID:-${{ github.sha }}}"
+            if [[ -n "$REQUESTED_COMMIT_ID" ]]; then
+              RUN_ID="$REQUESTED_COMMIT_ID"
+            else
+              RUN_ID="${{ github.run_id }}"
+            fi
+          fi
+
+          LOG_ROOT="$LOG_BASE/$RUN_KIND/$RUN_ID"
+          JOB_LOG_DIR="$LOG_ROOT/prepare-metadata"
+          SUMMARY_FILE="$RUNNER_TEMP/prepare-metadata.md"
+
+          mkdir -p "$JOB_LOG_DIR"
+
+          {
+            echo "## Prepare Metadata"
+            echo
+            echo "- Commit: $EFFECTIVE_COMMIT_ID"
+            echo "- Requested commit override: ${REQUESTED_COMMIT_ID:-none}"
+            echo "- Requested baseline override: ${REQUESTED_BASELINE_ID:-none}"
+            echo "- Run kind: $RUN_KIND"
+            echo "- Run id: $RUN_ID"
+            echo "- Log root: $LOG_ROOT"
+            echo "- Runner: $(hostname)"
+          } | tee "$SUMMARY_FILE"
+
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "commit_id=$EFFECTIVE_COMMIT_ID" >> "$GITHUB_OUTPUT"
+          echo "requested_commit_id=$REQUESTED_COMMIT_ID" >> "$GITHUB_OUTPUT"
+          echo "requested_baseline_id=$REQUESTED_BASELINE_ID" >> "$GITHUB_OUTPUT"
+          echo "run_kind=$RUN_KIND" >> "$GITHUB_OUTPUT"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "log_root=$LOG_ROOT" >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload summary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-prepare-metadata
+          path: ${{ steps.collect.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+  format:
+    name: Format Check
+    needs: prepare_metadata
+    runs-on: [self-hosted, musa-gpu]
+    outputs:
+      status: ${{ steps.collect.outputs.status }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
+    steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ env.COMMIT_ID }}
+          ref: ${{ needs.prepare_metadata.outputs.commit_id }}
 
-      # ==============================
-      # 创建日志目录
-      # ==============================
-      - name: Prepare log directory
-        run: |
-          if [ "${{ github.event_name }}" == "pull_request" ]; then
-            TYPE="pr"
-            ID="${{ github.event.pull_request.head.sha }}"
-          elif [ "${{ github.event_name }}" == "schedule" ]; then
-            TYPE="daily"
-            ID=$(date +%F)
-          else
-            TYPE="manual"
-            ID="${{ github.run_id }}"
-          fi
-
-          LOG_DIR="$LOG_BASE/$TYPE/$ID"
-
-          mkdir -p "$LOG_DIR"
-
-          echo "LOG_DIR=$LOG_DIR" >> $GITHUB_ENV
-          echo "TYPE=$TYPE" >> $GITHUB_ENV
-
-          echo "✅ Log dir: $LOG_DIR"
-
-      # ==============================
-      # Baseline 仓库同步
-      # ==============================
-      - name: Sync baseline repository
-        id: prepare-baseline-repo
-        run: |
-          set -euo pipefail
-
-          exit_code=0
-
-          bash -l -c "
-            BASELINE_PARENT=\$(dirname '$BASELINE_WORKSPACE') &&
-            mkdir -p \$BASELINE_PARENT &&
-            if [ ! -d '$BASELINE_WORKSPACE/.git' ]; then
-              git clone '$BASELINE_REPO_URL' '$BASELINE_WORKSPACE'
-            fi &&
-            cd '$BASELINE_WORKSPACE' &&
-            if git remote get-url upstream >/dev/null 2>&1; then
-              git remote set-url upstream '$BASELINE_REPO_URL'
-            else
-              git remote add upstream '$BASELINE_REPO_URL'
-            fi &&
-            git fetch upstream main &&
-            git reset --hard upstream/main &&
-            git clean -fdx
-          " || exit_code=$?
-
-          if [ $exit_code -eq 0 ]; then
-            BASELINE_COMMIT=$(git -C "$BASELINE_WORKSPACE" rev-parse HEAD)
-            echo "baseline_commit=$BASELINE_COMMIT" >> $GITHUB_OUTPUT
-            echo "status=success" >> $GITHUB_OUTPUT
-          else
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-        continue-on-error: true
-
-      # ==============================
-      # Baseline Build
-      # ==============================
-      - name: Build baseline
-        id: run-baseline-build
-        if: steps.prepare-baseline-repo.outputs.status == 'success'
-        run: |
-          set -euo pipefail
-
-          exit_code=0
-
-          bash -l -c "
-            export CPLUS_INCLUDE_PATH=/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:\$CPLUS_INCLUDE_PATH &&
-            cd '$BASELINE_WORKSPACE' &&
-            LOG_FILE='$LOG_DIR/baseline-build.log' &&
-            rm -rf ./build &&
-            ./build.sh > \$LOG_FILE 2>&1
-          " || exit_code=$?
-
-          if [ $exit_code -eq 0 ]; then
-            echo "status=success" >> $GITHUB_OUTPUT
-          else
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-        continue-on-error: true
-
-      # ==============================
-      # Baseline prunedGraph 性能
-      # ==============================
-      - name: Measure baseline prunedGraph performance
-        id: run-baseline-pruned-graph-performance
-        if: steps.run-baseline-build.outputs.status == 'success'
-        run: |
-          set -euo pipefail
-
-          exit_code=0
-
-          bash -l -c "
-            cd '$MODEL_ROOT/inference/prunedGraph' &&
-            LOG_FILE='$LOG_DIR/baseline-prunedGraph-performance.log' &&
-            timeout 20m python run_inference.py \
-              --device musa \
-              --musa-plugin '$BASELINE_WORKSPACE/build/libmusa_plugin.so' \
-              --infer-iters 1000 > \$LOG_FILE 2>&1
-          " || exit_code=$?
-
-          if [ $exit_code -ne 0 ]; then
-            echo "❌ baseline prunedGraph 性能测试执行失败"
-            tail -50 "$LOG_DIR/baseline-prunedGraph-performance.log" || true
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          BASELINE_MS=$(python3 -c 'import pathlib,re,sys; text=pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="ignore"); matches=re.findall(r"平均:\s*([0-9]+(?:\.[0-9]+)?)\s*ms", text); print(matches[-1] if matches else "")' "$LOG_DIR/baseline-prunedGraph-performance.log" || true)
-
-          if [ -z "$BASELINE_MS" ]; then
-            echo "❌ 无法解析 baseline prunedGraph 性能结果"
-            tail -50 "$LOG_DIR/baseline-prunedGraph-performance.log" || true
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          echo "Baseline prunedGraph Average: ${BASELINE_MS} ms"
-          echo "baseline_ms=$BASELINE_MS" >> $GITHUB_OUTPUT
-          echo "status=success" >> $GITHUB_OUTPUT
-        continue-on-error: true
-
-      # ==============================
-      # Baseline metaGraph_1 性能
-      # ==============================
-      - name: Measure baseline metaGraph_1 performance
-        id: run-baseline-meta-graph-1-performance
-        if: steps.run-baseline-build.outputs.status == 'success'
-        run: |
-          set -euo pipefail
-
-          exit_code=0
-
-          bash -l -c "
-            [ -e /home/runner/tf_test_model ] || ln -s '$MODEL_ROOT' /home/runner/tf_test_model &&
-            cd '$MODEL_ROOT/inference/metaGraph' &&
-            LOG_FILE='$LOG_DIR/baseline-metaGraph-1-performance.log' &&
-            OUT_ROOT='$LOG_DIR/baseline-metaGraph-1-runner-out' &&
-            timeout 30m python musa_run_pb_graph.py \
-              --spec '$MODEL_ROOT/inference/metaGraph/meta_graph/meta_graph_1.spec' \
-              --bs 4096 \
-              --out_root \$OUT_ROOT \
-              --musa-plugin '$BASELINE_WORKSPACE/build/libmusa_plugin.so' > \$LOG_FILE 2>&1
-          " || exit_code=$?
-
-          if [ $exit_code -ne 0 ]; then
-            echo "❌ baseline metaGraph_1 性能测试执行失败"
-            tail -50 "$LOG_DIR/baseline-metaGraph-1-performance.log" || true
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          REPORT_PATH=$(grep '^\[OK\] report=' "$LOG_DIR/baseline-metaGraph-1-performance.log" | tail -1 | sed 's/^\[OK\] report=//' || true)
-
-          if [ -z "$REPORT_PATH" ] || [ ! -f "$REPORT_PATH" ]; then
-            echo "❌ 无法定位 baseline metaGraph_1 性能报告"
-            tail -50 "$LOG_DIR/baseline-metaGraph-1-performance.log" || true
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          BASELINE_MS=$(python -c 'import json,sys; data=json.load(open(sys.argv[1])); vals=[x.get("average_time_ms") for x in data.get("average_time_summary", []) if x.get("status")=="ok" and x.get("average_time_ms") is not None]; print(vals[0] if vals else "")' "$REPORT_PATH" || true)
-
-          if [ -z "$BASELINE_MS" ]; then
-            echo "❌ 无法解析 baseline metaGraph_1 性能结果"
-            tail -50 "$LOG_DIR/baseline-metaGraph-1-performance.log" || true
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          echo "Baseline metaGraph_1 Average: ${BASELINE_MS} ms"
-          echo "baseline_ms=$BASELINE_MS" >> $GITHUB_OUTPUT
-          echo "status=success" >> $GITHUB_OUTPUT
-        continue-on-error: true
-
-      # ==============================
-      # Baseline metaGraph_3 性能
-      # ==============================
-      - name: Measure baseline metaGraph_3 performance
-        id: run-baseline-meta-graph-3-performance
-        if: steps.run-baseline-build.outputs.status == 'success'
-        run: |
-          set -euo pipefail
-
-          exit_code=0
-
-          bash -l -c "
-            [ -e /home/runner/tf_test_model ] || ln -s '$MODEL_ROOT' /home/runner/tf_test_model &&
-            cd '$MODEL_ROOT/inference/metaGraph' &&
-            LOG_FILE='$LOG_DIR/baseline-metaGraph-3-performance.log' &&
-            OUT_ROOT='$LOG_DIR/baseline-metaGraph-3-runner-out' &&
-            timeout 30m python musa_run_pb_graph.py \
-              --spec '$MODEL_ROOT/inference/metaGraph/meta_graph/meta_graph_3.spec' \
-              --bs 4096 \
-              --out_root \$OUT_ROOT \
-              --musa-plugin '$BASELINE_WORKSPACE/build/libmusa_plugin.so' > \$LOG_FILE 2>&1
-          " || exit_code=$?
-
-          if [ $exit_code -ne 0 ]; then
-            echo "❌ baseline metaGraph_3 性能测试执行失败"
-            tail -50 "$LOG_DIR/baseline-metaGraph-3-performance.log" || true
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          REPORT_PATH=$(grep '^\[OK\] report=' "$LOG_DIR/baseline-metaGraph-3-performance.log" | tail -1 | sed 's/^\[OK\] report=//' || true)
-
-          if [ -z "$REPORT_PATH" ] || [ ! -f "$REPORT_PATH" ]; then
-            echo "❌ 无法定位 baseline metaGraph_3 性能报告"
-            tail -50 "$LOG_DIR/baseline-metaGraph-3-performance.log" || true
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          BASELINE_MS=$(python -c 'import json,sys; data=json.load(open(sys.argv[1])); vals=[x.get("average_time_ms") for x in data.get("average_time_summary", []) if x.get("status")=="ok" and x.get("average_time_ms") is not None]; print(vals[0] if vals else "")' "$REPORT_PATH" || true)
-
-          if [ -z "$BASELINE_MS" ]; then
-            echo "❌ 无法解析 baseline metaGraph_3 性能结果"
-            tail -50 "$LOG_DIR/baseline-metaGraph-3-performance.log" || true
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          echo "Baseline metaGraph_3 Average: ${BASELINE_MS} ms"
-          echo "baseline_ms=$BASELINE_MS" >> $GITHUB_OUTPUT
-          echo "status=success" >> $GITHUB_OUTPUT
-        continue-on-error: true
-
-      # ==============================
-      # Rebase 检查（仅 PR）
-      # ==============================
-      # - name: Check Rebase Status
-      #   if: github.event_name == 'pull_request'
-      #   run: |
-      #     TARGET_BRANCH="${{ github.base_ref }}"
-      #     git fetch origin $TARGET_BRANCH
-      #     if ! git merge-base --is-ancestor origin/$TARGET_BRANCH HEAD; then
-      #       echo "❌ NOT rebased"
-      #       exit 1
-      #     fi
-
-      # ==============================
-      # Format
-      # ==============================
-      - name: Check code formatting
-        id: run-format
+      - name: Run format check
+        id: run_check
         run: |
           set +e
 
-          exit_code=0
-          # 使用 bash -l -c 模拟登录，自动激活 Conda 环境
-          bash -l -c "
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/format"
+          LOG_FILE="$JOB_LOG_DIR/format_check.log"
+          mkdir -p "$JOB_LOG_DIR"
+
+          format_exit=0
+          export JOB_LOG_DIR LOG_FILE
+          bash -l -c '
             set -o pipefail
-            cd $WORKSPACE &&
-            LOG_FILE='$LOG_DIR/format.log' &&
-            FILE_LIST=\$(mktemp) &&
-            if [ '${{ github.event_name }}' = 'pull_request' ]; then
-              TARGET_BRANCH='${{ github.base_ref }}' &&
-              git fetch origin \$TARGET_BRANCH &&
-              git diff -z --diff-filter=ACMRTUXB --name-only origin/\$TARGET_BRANCH...HEAD -- \
-                '*.c' '*.cc' '*.cpp' '*.cu' '*.h' '*.hpp' > \$FILE_LIST
+            cd "$GITHUB_WORKSPACE"
+            FILE_LIST=$(mktemp)
+            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+              TARGET_BRANCH="${{ github.base_ref }}"
+              git fetch origin "$TARGET_BRANCH"
+              git diff -z --diff-filter=ACMRTUXB --name-only "origin/$TARGET_BRANCH...HEAD" -- \
+                "*.c" "*.cc" "*.cpp" "*.cu" "*.h" "*.hpp" > "$FILE_LIST"
             else
               find . \( -path ./build -o -path ./.git \) -prune -o \
-                -regex '.*\.\(cc\|cpp\|hpp\|c\|h\|cu\)' -print0 > \$FILE_LIST
-            fi &&
-            if [ ! -s \$FILE_LIST ]; then
-              echo 'No C/C++ files to format-check.' > \$LOG_FILE
+                -regex ".*\.\(cc\|cpp\|hpp\|c\|h\|cu\)" -print0 > "$FILE_LIST"
+            fi
+            if [[ ! -s "$FILE_LIST" ]]; then
+              echo "No C/C++ files to format-check." > "$LOG_FILE"
             else
-              xargs -0 clang-format --Werror --dry-run < \$FILE_LIST > \$LOG_FILE 2>&1
+              xargs -0 clang-format --Werror --dry-run < "$FILE_LIST" > "$LOG_FILE" 2>&1
             fi
-          " || exit_code=$?
+          ' || format_exit=$?
 
-          if [ $exit_code -eq 0 ]; then
-            echo "status=success" >> $GITHUB_OUTPUT
-          else
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-        continue-on-error: true
+          echo "format_exit=$format_exit" >> "$GITHUB_OUTPUT"
 
-      # ==============================
-      # Build
-      # ==============================
-      - name: Build
-        id: run-build
-        run: |
-          set +e
-
-          exit_code=0
-          bash -l -c "
-            export CPLUS_INCLUDE_PATH=/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:\$CPLUS_INCLUDE_PATH &&
-            cd $WORKSPACE &&
-            LOG_FILE='$LOG_DIR/build.log' &&
-            rm -rf ./build &&
-            ./build.sh > \$LOG_FILE 2>&1
-          " || exit_code=$?
-
-          if [ $exit_code -eq 0 ]; then
-            echo "status=success" >> $GITHUB_OUTPUT
-          else
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-        continue-on-error: true
-
-      # ==============================
-      # Test
-      # ==============================
-      - name: Integration Test
-        id: run-integration
-        run: |
-          set +e
-
-          exit_code=0
-          bash -l -c "
-            cd $WORKSPACE/test &&
-            LOG_FILE='$LOG_DIR/test.log' &&
-            timeout 30m python test_runner.py --fusion > \$LOG_FILE 2>&1
-          " || exit_code=$?
-
-          if [ $exit_code -eq 0 ]; then
-            echo "status=success" >> $GITHUB_OUTPUT
-          else
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-        continue-on-error: true
-
-      # ==============================
-      # Training
-      # ==============================
-      - name: Training Test
-        id: run-training
-        run: |
-          set -euo pipefail
-
-          exit_code=0
-
-          bash -l -c "
-            cd /home/runner/tf_test_model-master/training &&
-            LOG_FILE='$LOG_DIR/training.log' &&
-            ERROR_LOG_DIR='$LOG_DIR/training_error_logs' &&
-            timeout 120m python run_all_training_tests.py \
-              --epochs 100 \
-              --log-dir \$ERROR_LOG_DIR \
-              --musa-plugin '$WORKSPACE/build/libmusa_plugin.so' > \$LOG_FILE 2>&1
-          " || exit_code=$?
-
-          if [ $exit_code -eq 0 ]; then
-            if grep -q '^\[FAIL\]' "$LOG_DIR/training.log" || \
-               grep -Eq '^失败:[[:space:]]*[1-9][0-9]*' "$LOG_DIR/training.log"; then
-              echo "❌ Training 摘要显示存在失败模型"
-              exit_code=1
-            fi
-          fi
-
-          echo "===== Training 摘要 ====="
-          grep -E '^\[OK\]|^\[FAIL\]|^总计:|^成功:|^失败:|^  - ' "$LOG_DIR/training.log" || true
-
-          if [ $exit_code -ne 0 ]; then
-            echo "❌ Training 测试执行失败"
-            tail -50 "$LOG_DIR/training.log" || true
-            if [ -d "$LOG_DIR/training_error_logs" ]; then
-              echo "===== Training 错误日志 ====="
-              find "$LOG_DIR/training_error_logs" -maxdepth 1 -type f | sort || true
-            fi
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          echo "✅ Training 测试通过"
-          echo "status=success" >> $GITHUB_OUTPUT
-        continue-on-error: true
-
-      # ==============================
-      # 测试 prunedGraph 性能
-      # ==============================
-      - name: Check prunedGraph performance
-        id: run-pruned-graph-performance
-        if: steps.run-build.outputs.status == 'success' && steps.run-baseline-pruned-graph-performance.outputs.status == 'success'
-        run: |
-          set -euo pipefail
-
-          exit_code=0
-
-          bash -l -c "
-            cd '$MODEL_ROOT/inference/prunedGraph' &&
-            LOG_FILE='$LOG_DIR/prunedGraph-performance.log' &&
-            timeout 20m python run_inference.py \
-              --device musa \
-              --musa-plugin '$WORKSPACE/build/libmusa_plugin.so' \
-              --infer-iters 1000 > \$LOG_FILE 2>&1
-          " || exit_code=$?
-
-          if [ $exit_code -ne 0 ]; then
-            echo "❌ prunedGraph 性能测试执行失败"
-            tail -50 "$LOG_DIR/prunedGraph-performance.log" || true
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          CURRENT_TIME_MS=$(python3 -c 'import pathlib,re,sys; text=pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="ignore"); matches=re.findall(r"平均:\s*([0-9]+(?:\.[0-9]+)?)\s*ms", text); print(matches[-1] if matches else "")' "$LOG_DIR/prunedGraph-performance.log" || true)
-
-          if [ -z "$CURRENT_TIME_MS" ]; then
-            echo "❌ 无法解析 prunedGraph 性能结果"
-            tail -50 "$LOG_DIR/prunedGraph-performance.log" || true
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          BASELINE_MS="${{ steps.run-baseline-pruned-graph-performance.outputs.baseline_ms }}"
-          if [ -z "$BASELINE_MS" ]; then
-            echo "❌ baseline prunedGraph 数值缺失"
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          THRESHOLD_MS=$(awk -v base="$BASELINE_MS" 'BEGIN {printf "%.4f", base * 1.05}')
-
-          echo "Baseline : ${BASELINE_MS} ms"
-          echo "Threshold: ${THRESHOLD_MS} ms"
-          echo "Current  : ${CURRENT_TIME_MS} ms"
-          echo "current_ms=$CURRENT_TIME_MS" >> $GITHUB_OUTPUT
-          echo "threshold_ms=$THRESHOLD_MS" >> $GITHUB_OUTPUT
-
-          if awk -v cur="$CURRENT_TIME_MS" -v thr="$THRESHOLD_MS" 'BEGIN {exit !(cur > thr)}'; then
-            echo "❌ prunedGraph 性能退化"
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          else
-            echo "✅ prunedGraph 性能正常"
-            echo "status=success" >> $GITHUB_OUTPUT
-          fi
-        continue-on-error: true
-
-      # ==============================
-      # 测试 prunedGraph 精度
-      # ==============================
-      - name: Check prunedGraph accuracy
-        id: run-pruned-graph-accuracy
-        if: steps.run-build.outputs.status == 'success'
-        run: |
-          set -euo pipefail
-
-          exit_code=0
-
-          bash -l -c "
-            cd '$MODEL_ROOT/inference/prunedGraph' &&
-            LOG_FILE='$LOG_DIR/prunedGraph-accuracy.log' &&
-            timeout 20m python run_inference.py \
-              --device musa \
-              --musa-plugin '$WORKSPACE/build/libmusa_plugin.so' \
-              --check-acc \
-              --rtol 1e-2 \
-              --atol 1e-2 > \$LOG_FILE 2>&1
-          " || exit_code=$?
-
-          if [ $exit_code -ne 0 ]; then
-            echo "❌ prunedGraph 精度测试脚本执行失败"
-            tail -50 "$LOG_DIR/prunedGraph-accuracy.log" || true
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          echo "===== prunedGraph 精度摘要 ====="
-          grep -E '整体状态:|PASSED|FAILED|rtol|atol|误差|差异' "$LOG_DIR/prunedGraph-accuracy.log" | tail -20 || true
-
-          if grep -q "整体状态:.*PASSED" "$LOG_DIR/prunedGraph-accuracy.log"; then
-            echo "✅ prunedGraph 精度对比通过"
-            echo "status=success" >> $GITHUB_OUTPUT
-          else
-            echo "❌ prunedGraph 精度对比失败"
-            echo "status=failure" >> $GITHUB_OUTPUT
-            echo "===== 日志最后50行 ====="
-            tail -50 "$LOG_DIR/prunedGraph-accuracy.log" || true
-            exit 1
-          fi
-        continue-on-error: true
-
-      # ==============================
-      # 测试 metaGraph_1 性能
-      # ==============================
-      - name: Check metaGraph_1 performance
-        id: run-meta-graph-1-performance
-        if: steps.run-build.outputs.status == 'success' && steps.run-baseline-meta-graph-1-performance.outputs.status == 'success'
-        run: |
-          set -euo pipefail
-
-          exit_code=0
-
-          bash -l -c "
-            [ -e /home/runner/tf_test_model ] || ln -s '$MODEL_ROOT' /home/runner/tf_test_model &&
-            cd '$MODEL_ROOT/inference/metaGraph' &&
-            LOG_FILE='$LOG_DIR/metaGraph-1-performance.log' &&
-            OUT_ROOT='$LOG_DIR/metaGraph-1-runner-out' &&
-            timeout 30m python musa_run_pb_graph.py \
-              --spec '$MODEL_ROOT/inference/metaGraph/meta_graph/meta_graph_1.spec' \
-              --bs 4096 \
-              --out_root \$OUT_ROOT \
-              --musa-plugin '$WORKSPACE/build/libmusa_plugin.so' > \$LOG_FILE 2>&1
-          " || exit_code=$?
-
-          if [ $exit_code -ne 0 ]; then
-            echo "❌ metaGraph_1 性能测试执行失败"
-            tail -50 "$LOG_DIR/metaGraph-1-performance.log" || true
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          REPORT_PATH=$(grep '^\[OK\] report=' "$LOG_DIR/metaGraph-1-performance.log" | tail -1 | sed 's/^\[OK\] report=//' || true)
-
-          if [ -z "$REPORT_PATH" ] || [ ! -f "$REPORT_PATH" ]; then
-            echo "❌ 无法定位 metaGraph_1 性能报告"
-            tail -50 "$LOG_DIR/metaGraph-1-performance.log" || true
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          CURRENT_TIME_MS=$(python -c 'import json,sys; data=json.load(open(sys.argv[1])); vals=[x.get("average_time_ms") for x in data.get("average_time_summary", []) if x.get("status")=="ok" and x.get("average_time_ms") is not None]; print(vals[0] if vals else "")' "$REPORT_PATH" || true)
-
-          if [ -z "$CURRENT_TIME_MS" ]; then
-            echo "❌ 无法解析 metaGraph_1 性能结果"
-            tail -50 "$LOG_DIR/metaGraph-1-performance.log" || true
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          echo "metaGraph_1 Average: ${CURRENT_TIME_MS} ms"
-          BASELINE_MS="${{ steps.run-baseline-meta-graph-1-performance.outputs.baseline_ms }}"
-          if [ -z "$BASELINE_MS" ]; then
-            echo "❌ baseline metaGraph_1 数值缺失"
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          THRESHOLD_MS=$(awk -v base="$BASELINE_MS" 'BEGIN {printf "%.4f", base * 1.05}')
-
-          echo "Baseline : ${BASELINE_MS} ms"
-          echo "Threshold: ${THRESHOLD_MS} ms"
-          echo "current_ms=$CURRENT_TIME_MS" >> $GITHUB_OUTPUT
-          echo "threshold_ms=$THRESHOLD_MS" >> $GITHUB_OUTPUT
-
-          if awk -v cur="$CURRENT_TIME_MS" -v thr="$THRESHOLD_MS" 'BEGIN {exit !(cur > thr)}'; then
-            echo "❌ metaGraph_1 性能退化"
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          else
-            echo "✅ metaGraph_1 性能正常"
-            echo "status=success" >> $GITHUB_OUTPUT
-          fi
-        continue-on-error: true
-
-      # ==============================
-      # 测试 metaGraph_2 性能
-      # 暂时关闭：当前脚本仍有待修复的问题，先不纳入 CI 执行。
-      # ==============================
-      - name: Check metaGraph_2 performance
-        id: run-meta-graph-2-performance
-        if: ${{ false }}
-        run: |
-          set -euo pipefail
-
-          exit_code=0
-
-          bash -l -c "
-            [ -e /home/runner/tf_test_model ] || ln -s /home/runner/tf_test_model-master /home/runner/tf_test_model &&
-            cd /home/runner/tf_test_model-master/inference/metaGraph &&
-            LOG_FILE='$LOG_DIR/metaGraph-2-performance.log' &&
-            OUT_ROOT='$LOG_DIR/metaGraph-2-runner-out' &&
-            timeout 30m python musa_run_pb_graph.py \
-              --spec /home/runner/tf_test_model-master/inference/metaGraph/meta_graph/meta_graph_2.spec \
-              --bs 4096 \
-              --out_root \$OUT_ROOT \
-              --musa-plugin '$WORKSPACE/build/libmusa_plugin.so' > \$LOG_FILE 2>&1
-          " || exit_code=$?
-
-          if [ $exit_code -ne 0 ]; then
-            echo "❌ metaGraph_2 性能测试执行失败"
-            tail -50 "$LOG_DIR/metaGraph-2-performance.log" || true
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          REPORT_PATH=$(grep '^\[OK\] report=' "$LOG_DIR/metaGraph-2-performance.log" | tail -1 | sed 's/^\[OK\] report=//' || true)
-
-          if [ -z "$REPORT_PATH" ] || [ ! -f "$REPORT_PATH" ]; then
-            echo "❌ 无法定位 metaGraph_2 性能报告"
-            tail -50 "$LOG_DIR/metaGraph-2-performance.log" || true
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          CURRENT_TIME_MS=$(python -c 'import json,sys; data=json.load(open(sys.argv[1])); vals=[x.get("average_time_ms") for x in data.get("average_time_summary", []) if x.get("status")=="ok" and x.get("average_time_ms") is not None]; print(vals[0] if vals else "")' "$REPORT_PATH" || true)
-
-          if [ -z "$CURRENT_TIME_MS" ]; then
-            echo "❌ 无法解析 metaGraph_2 性能结果"
-            tail -50 "$LOG_DIR/metaGraph-2-performance.log" || true
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          echo "metaGraph_2 Average: ${CURRENT_TIME_MS} ms"
-          echo "status=success" >> $GITHUB_OUTPUT
-        continue-on-error: true
-
-      # ==============================
-      # 测试 metaGraph_3 性能
-      # ==============================
-      - name: Check metaGraph_3 performance
-        id: run-meta-graph-3-performance
-        if: steps.run-build.outputs.status == 'success' && steps.run-baseline-meta-graph-3-performance.outputs.status == 'success'
-        run: |
-          set -euo pipefail
-
-          exit_code=0
-
-          bash -l -c "
-            [ -e /home/runner/tf_test_model ] || ln -s '$MODEL_ROOT' /home/runner/tf_test_model &&
-            cd '$MODEL_ROOT/inference/metaGraph' &&
-            LOG_FILE='$LOG_DIR/metaGraph-3-performance.log' &&
-            OUT_ROOT='$LOG_DIR/metaGraph-3-runner-out' &&
-            timeout 30m python musa_run_pb_graph.py \
-              --spec '$MODEL_ROOT/inference/metaGraph/meta_graph/meta_graph_3.spec' \
-              --bs 4096 \
-              --out_root \$OUT_ROOT \
-              --musa-plugin '$WORKSPACE/build/libmusa_plugin.so' > \$LOG_FILE 2>&1
-          " || exit_code=$?
-
-          if [ $exit_code -ne 0 ]; then
-            echo "❌ metaGraph_3 性能测试执行失败"
-            tail -50 "$LOG_DIR/metaGraph-3-performance.log" || true
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          REPORT_PATH=$(grep '^\[OK\] report=' "$LOG_DIR/metaGraph-3-performance.log" | tail -1 | sed 's/^\[OK\] report=//' || true)
-
-          if [ -z "$REPORT_PATH" ] || [ ! -f "$REPORT_PATH" ]; then
-            echo "❌ 无法定位 metaGraph_3 性能报告"
-            tail -50 "$LOG_DIR/metaGraph-3-performance.log" || true
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          CURRENT_TIME_MS=$(python -c 'import json,sys; data=json.load(open(sys.argv[1])); vals=[x.get("average_time_ms") for x in data.get("average_time_summary", []) if x.get("status")=="ok" and x.get("average_time_ms") is not None]; print(vals[0] if vals else "")' "$REPORT_PATH" || true)
-
-          if [ -z "$CURRENT_TIME_MS" ]; then
-            echo "❌ 无法解析 metaGraph_3 性能结果"
-            tail -50 "$LOG_DIR/metaGraph-3-performance.log" || true
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          echo "metaGraph_3 Average: ${CURRENT_TIME_MS} ms"
-          BASELINE_MS="${{ steps.run-baseline-meta-graph-3-performance.outputs.baseline_ms }}"
-          if [ -z "$BASELINE_MS" ]; then
-            echo "❌ baseline metaGraph_3 数值缺失"
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          THRESHOLD_MS=$(awk -v base="$BASELINE_MS" 'BEGIN {printf "%.4f", base * 1.05}')
-
-          echo "Baseline : ${BASELINE_MS} ms"
-          echo "Threshold: ${THRESHOLD_MS} ms"
-          echo "current_ms=$CURRENT_TIME_MS" >> $GITHUB_OUTPUT
-          echo "threshold_ms=$THRESHOLD_MS" >> $GITHUB_OUTPUT
-
-          if awk -v cur="$CURRENT_TIME_MS" -v thr="$THRESHOLD_MS" 'BEGIN {exit !(cur > thr)}'; then
-            echo "❌ metaGraph_3 性能退化"
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          else
-            echo "✅ metaGraph_3 性能正常"
-            echo "status=success" >> $GITHUB_OUTPUT
-          fi
-        continue-on-error: true
-
-
-      # ==============================
-      # Summary（写入日志目录）
-      # ==============================
-      - name: Save Summary
+      - name: Collect format summary
+        id: collect
         if: always()
         run: |
-          SUMMARY="$LOG_DIR/summary.md"
-          BASELINE_COMMIT="${{ steps.prepare-baseline-repo.outputs.baseline_commit || 'unavailable' }}"
-          BASELINE_SYNC_STATUS="${{ steps.prepare-baseline-repo.outputs.status || 'skipped' }}"
-          BASELINE_BUILD_STATUS="${{ steps.run-baseline-build.outputs.status || 'skipped' }}"
-          BASELINE_PRUNED_STATUS="${{ steps.run-baseline-pruned-graph-performance.outputs.status || 'skipped' }}"
-          BASELINE_META1_STATUS="${{ steps.run-baseline-meta-graph-1-performance.outputs.status || 'skipped' }}"
-          BASELINE_META3_STATUS="${{ steps.run-baseline-meta-graph-3-performance.outputs.status || 'skipped' }}"
-          FORMAT_STATUS="${{ steps.run-format.outputs.status || 'skipped' }}"
-          BUILD_STATUS="${{ steps.run-build.outputs.status || 'skipped' }}"
-          TEST_STATUS="${{ steps.run-integration.outputs.status || 'skipped' }}"
-          TRAINING_STATUS="${{ steps.run-training.outputs.status || 'skipped' }}"
-          PRUNED_PERF_STATUS="${{ steps.run-pruned-graph-performance.outputs.status || 'skipped' }}"
-          PRUNED_ACC_STATUS="${{ steps.run-pruned-graph-accuracy.outputs.status || 'skipped' }}"
-          META1_STATUS="${{ steps.run-meta-graph-1-performance.outputs.status || 'skipped' }}"
-          META2_STATUS="${{ steps.run-meta-graph-2-performance.outputs.status || 'skipped' }}"
-          META3_STATUS="${{ steps.run-meta-graph-3-performance.outputs.status || 'skipped' }}"
+          set -euo pipefail
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/format"
+          LOG_FILE="$JOB_LOG_DIR/format_check.log"
+          SUMMARY_FILE="$RUNNER_TEMP/format.md"
+          STATUS="success"
+
+          if [[ "${{ steps.run_check.outputs.format_exit }}" != "0" ]]; then
+            STATUS="failure"
+          fi
 
           {
-            echo "# CI Report - $COMMIT_ID"
+            echo "## Format Check"
             echo
-            echo "- Log Dir: $LOG_DIR"
-            echo "- Baseline Commit: $BASELINE_COMMIT"
+            echo "- Status: $STATUS"
+            echo "- Log file: $LOG_FILE"
             echo
-            echo "## Step Status"
-            echo "| Step | Result |"
-            echo "|------|--------|"
-            echo "| Baseline Sync | $BASELINE_SYNC_STATUS |"
-            echo "| Baseline Build | $BASELINE_BUILD_STATUS |"
-            echo "| Baseline PrunedGraph Performance | $BASELINE_PRUNED_STATUS |"
-            echo "| Baseline MetaGraph 1 Performance | $BASELINE_META1_STATUS |"
-            echo "| Baseline MetaGraph 3 Performance | $BASELINE_META3_STATUS |"
-            echo "| Format | $FORMAT_STATUS |"
-            echo "| Build | $BUILD_STATUS |"
-            echo "| Test | $TEST_STATUS |"
-            echo "| Training (non-blocking) | $TRAINING_STATUS |"
-            echo "| PrunedGraph Performance | $PRUNED_PERF_STATUS |"
-            echo "| PrunedGraph Accuracy | $PRUNED_ACC_STATUS |"
-            echo "| MetaGraph 1 Performance | $META1_STATUS |"
-            echo "| MetaGraph 2 Performance | $META2_STATUS |"
-            echo "| MetaGraph 3 Performance | $META3_STATUS |"
-            echo
-            echo "## Performance Metrics"
-            echo "- prunedGraph: baseline=${{ steps.run-baseline-pruned-graph-performance.outputs.baseline_ms || 'n/a' }} ms, current=${{ steps.run-pruned-graph-performance.outputs.current_ms || 'n/a' }} ms, threshold=${{ steps.run-pruned-graph-performance.outputs.threshold_ms || 'n/a' }} ms"
-            echo "- metaGraph_1: baseline=${{ steps.run-baseline-meta-graph-1-performance.outputs.baseline_ms || 'n/a' }} ms, current=${{ steps.run-meta-graph-1-performance.outputs.current_ms || 'n/a' }} ms, threshold=${{ steps.run-meta-graph-1-performance.outputs.threshold_ms || 'n/a' }} ms"
-            echo "- metaGraph_3: baseline=${{ steps.run-baseline-meta-graph-3-performance.outputs.baseline_ms || 'n/a' }} ms, current=${{ steps.run-meta-graph-3-performance.outputs.current_ms || 'n/a' }} ms, threshold=${{ steps.run-meta-graph-3-performance.outputs.threshold_ms || 'n/a' }} ms"
-            echo
-            echo "## prunedGraph Accuracy Highlights"
             echo '```text'
-            if [ -f "$LOG_DIR/prunedGraph-accuracy.log" ]; then
-              grep -E '整体状态:|PASSED|FAILED|rtol|atol|误差|差异' "$LOG_DIR/prunedGraph-accuracy.log" | tail -20 || true
+            if [[ -f "$LOG_FILE" ]]; then
+              tail -50 "$LOG_FILE" || true
             else
-              echo "log not found"
+              echo "format log not found"
             fi
             echo '```'
-            echo
-            echo "## Training Highlights"
-            echo '```text'
-            if [ -f "$LOG_DIR/training.log" ]; then
-              grep -E '^\[OK\]|^\[FAIL\]|^总计:|^成功:|^失败:|^  - ' "$LOG_DIR/training.log" || true
-            else
-              echo "log not found"
-            fi
-            echo '```'
-          } > "$SUMMARY"
+          } | tee "$SUMMARY_FILE"
 
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
-      # ==============================
-      # CI Summary（GitHub UI）
-      # ==============================
-      - name: CI Summary
+      - name: Upload format artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-format
+          path: ${{ steps.collect.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+  build_current:
+    name: Build Current
+    needs: prepare_metadata
+    runs-on: [self-hosted, musa-gpu]
+    outputs:
+      status: ${{ steps.collect.outputs.status }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare_metadata.outputs.commit_id }}
+
+      - name: Build current plugin
+        id: run_build
+        run: |
+          set +e
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/build-current"
+          LOG_FILE="$JOB_LOG_DIR/build_current.log"
+          mkdir -p "$JOB_LOG_DIR"
+
+          build_exit=0
+          export LOG_FILE
+          bash -l -c '
+            export CPLUS_INCLUDE_PATH="/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:${CPLUS_INCLUDE_PATH:-}"
+            cd "$GITHUB_WORKSPACE"
+            rm -rf ./build
+            ./build.sh > "$LOG_FILE" 2>&1
+          ' || build_exit=$?
+
+          echo "build_exit=$build_exit" >> "$GITHUB_OUTPUT"
+
+      - name: Collect build summary
+        id: collect
         if: always()
         run: |
-          SUMMARY="$LOG_DIR/summary.md"
-          BASELINE_SYNC_STATUS="${{ steps.prepare-baseline-repo.outputs.status || 'skipped' }}"
-          BASELINE_BUILD_STATUS="${{ steps.run-baseline-build.outputs.status || 'skipped' }}"
-          BASELINE_PRUNED_STATUS="${{ steps.run-baseline-pruned-graph-performance.outputs.status || 'skipped' }}"
-          BASELINE_META1_STATUS="${{ steps.run-baseline-meta-graph-1-performance.outputs.status || 'skipped' }}"
-          BASELINE_META3_STATUS="${{ steps.run-baseline-meta-graph-3-performance.outputs.status || 'skipped' }}"
-          BUILD_STATUS="${{ steps.run-build.outputs.status || 'skipped' }}"
-          TEST_STATUS="${{ steps.run-integration.outputs.status || 'skipped' }}"
-          PRUNED_PERF_STATUS="${{ steps.run-pruned-graph-performance.outputs.status || 'skipped' }}"
-          PRUNED_ACC_STATUS="${{ steps.run-pruned-graph-accuracy.outputs.status || 'skipped' }}"
-          META1_STATUS="${{ steps.run-meta-graph-1-performance.outputs.status || 'skipped' }}"
-          META2_STATUS="${{ steps.run-meta-graph-2-performance.outputs.status || 'skipped' }}"
-          META3_STATUS="${{ steps.run-meta-graph-3-performance.outputs.status || 'skipped' }}"
+          set -euo pipefail
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/build-current"
+          LOG_FILE="$JOB_LOG_DIR/build_current.log"
+          SUMMARY_FILE="$RUNNER_TEMP/build-current.md"
+          PLUGIN_PATH="$GITHUB_WORKSPACE/build/libmusa_plugin.so"
+          STATUS="success"
+
+          if [[ "${{ steps.run_build.outputs.build_exit }}" != "0" || ! -f "$PLUGIN_PATH" ]]; then
+            STATUS="failure"
+          fi
+
+          PLUGIN_SIZE="$(stat -c%s "$PLUGIN_PATH" 2>/dev/null || echo "n/a")"
+
+          {
+            echo "## Build Current"
+            echo
+            echo "- Status: $STATUS"
+            echo "- Plugin path: $PLUGIN_PATH"
+            echo "- Plugin size: $PLUGIN_SIZE"
+            echo "- Log file: $LOG_FILE"
+            echo
+            echo '```text'
+            if [[ -f "$LOG_FILE" ]]; then
+              tail -50 "$LOG_FILE" || true
+            else
+              echo "build log not found"
+            fi
+            echo '```'
+          } | tee "$SUMMARY_FILE"
+
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload current plugin artifact
+        if: steps.collect.outputs.status == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
+          path: ${{ github.workspace }}/build/libmusa_plugin.so
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload build summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-build-current
+          path: ${{ steps.collect.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Fail job if build failed
+        if: always() && steps.collect.outputs.status == 'failure'
+        run: exit 1
+
+  integration:
+    name: Integration Test
+    needs: [prepare_metadata, build_current]
+    if: needs.build_current.result == 'success'
+    runs-on: [self-hosted, musa-gpu]
+    outputs:
+      status: ${{ steps.collect.outputs.status }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare_metadata.outputs.commit_id }}
+
+      - name: Download current plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
+          path: ${{ github.workspace }}/build
+
+      - name: Run integration tests
+        id: run_test
+        run: |
+          set +e
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/integration"
+          LOG_FILE="$JOB_LOG_DIR/integration_fusion_tests.log"
+          mkdir -p "$JOB_LOG_DIR"
+
+          test_exit=0
+          export LOG_FILE
+          bash -l -c '
+            cd "$GITHUB_WORKSPACE/test"
+            timeout 30m python test_runner.py --fusion > "$LOG_FILE" 2>&1
+          ' || test_exit=$?
+
+          echo "test_exit=$test_exit" >> "$GITHUB_OUTPUT"
+
+      - name: Collect integration summary
+        id: collect
+        if: always()
+        run: |
+          set -euo pipefail
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/integration"
+          LOG_FILE="$JOB_LOG_DIR/integration_fusion_tests.log"
+          SUMMARY_FILE="$RUNNER_TEMP/integration.md"
+          STATUS="success"
+
+          if [[ "${{ steps.run_test.outputs.test_exit }}" != "0" ]]; then
+            STATUS="failure"
+          fi
+
+          {
+            echo "## Integration Test"
+            echo
+            echo "- Status: $STATUS"
+            echo "- Log file: $LOG_FILE"
+            echo
+            echo '```text'
+            if [[ -f "$LOG_FILE" ]]; then
+              grep -E "Total Tests|Passed|Failed|Errors|Skipped|Pass Rate|Execution Time" "$LOG_FILE" || tail -80 "$LOG_FILE" || true
+            else
+              echo "integration log not found"
+            fi
+            echo '```'
+          } | tee "$SUMMARY_FILE"
+
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload integration summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-integration
+          path: ${{ steps.collect.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Fail job if integration failed
+        if: always() && steps.collect.outputs.status == 'failure'
+        run: exit 1
+
+  build_baseline:
+    name: Build Baseline
+    needs: prepare_metadata
+    runs-on: [self-hosted, musa-gpu]
+    outputs:
+      status: ${{ steps.collect.outputs.status }}
+      baseline_sha: ${{ steps.collect.outputs.baseline_sha }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
+    steps:
+      - name: Sync and build baseline
+        id: run_build
+        run: |
+          set +e
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/build-baseline"
+          LOG_FILE="$JOB_LOG_DIR/build_baseline.log"
+          mkdir -p "$JOB_LOG_DIR"
+
+          sync_exit=0
+          build_exit=0
+          baseline_sha=""
+
+          export LOG_FILE BASELINE_WORKSPACE BASELINE_REPO_URL
+          bash -l -c '
+            BASELINE_PARENT=$(dirname "$BASELINE_WORKSPACE")
+            mkdir -p "$BASELINE_PARENT"
+            if [[ ! -d "$BASELINE_WORKSPACE/.git" ]]; then
+              git clone "$BASELINE_REPO_URL" "$BASELINE_WORKSPACE"
+            fi
+            cd "$BASELINE_WORKSPACE"
+            if git remote get-url upstream >/dev/null 2>&1; then
+              git remote set-url upstream "$BASELINE_REPO_URL"
+            else
+              git remote add upstream "$BASELINE_REPO_URL"
+            fi
+            git fetch upstream
+            if [[ -n "${{ needs.prepare_metadata.outputs.requested_baseline_id }}" ]]; then
+              git reset --hard "${{ needs.prepare_metadata.outputs.requested_baseline_id }}"
+            else
+              git reset --hard upstream/main
+            fi
+            git clean -fdx
+          ' || sync_exit=$?
+
+          if [[ "$sync_exit" == "0" ]]; then
+            baseline_sha="$(git -C "$BASELINE_WORKSPACE" rev-parse HEAD 2>/dev/null || true)"
+            export LOG_FILE BASELINE_WORKSPACE
+            bash -l -c '
+              export CPLUS_INCLUDE_PATH="/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:${CPLUS_INCLUDE_PATH:-}"
+              cd "$BASELINE_WORKSPACE"
+              rm -rf ./build
+              ./build.sh > "$LOG_FILE" 2>&1
+            ' || build_exit=$?
+          fi
+
+          echo "sync_exit=$sync_exit" >> "$GITHUB_OUTPUT"
+          echo "build_exit=$build_exit" >> "$GITHUB_OUTPUT"
+          echo "baseline_sha=$baseline_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Collect baseline summary
+        id: collect
+        if: always()
+        run: |
+          set -euo pipefail
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/build-baseline"
+          LOG_FILE="$JOB_LOG_DIR/build_baseline.log"
+          SUMMARY_FILE="$RUNNER_TEMP/build-baseline.md"
+          PLUGIN_PATH="$BASELINE_WORKSPACE/build/libmusa_plugin.so"
+          STATUS="success"
+
+          if [[ "${{ steps.run_build.outputs.sync_exit }}" != "0" || "${{ steps.run_build.outputs.build_exit }}" != "0" || ! -f "$PLUGIN_PATH" ]]; then
+            STATUS="failure"
+          fi
+
+          PLUGIN_SIZE="$(stat -c%s "$PLUGIN_PATH" 2>/dev/null || echo "n/a")"
+          BASELINE_SHA="${{ steps.run_build.outputs.baseline_sha }}"
+
+          {
+            echo "## Build Baseline"
+            echo
+            echo "- Status: $STATUS"
+            echo "- Baseline commit: ${BASELINE_SHA:-unavailable}"
+            echo "- Plugin path: $PLUGIN_PATH"
+            echo "- Plugin size: $PLUGIN_SIZE"
+            echo "- Log file: $LOG_FILE"
+            echo
+            echo '```text'
+            if [[ -f "$LOG_FILE" ]]; then
+              tail -50 "$LOG_FILE" || true
+            else
+              echo "baseline build log not found"
+            fi
+            echo '```'
+          } | tee "$SUMMARY_FILE"
+
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "baseline_sha=${BASELINE_SHA}" >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload baseline plugin artifact
+        if: steps.collect.outputs.status == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BASELINE_PLUGIN_ARTIFACT }}
+          path: ${{ env.BASELINE_WORKSPACE }}/build/libmusa_plugin.so
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload baseline summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-build-baseline
+          path: ${{ steps.collect.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Fail job if baseline build failed
+        if: always() && steps.collect.outputs.status == 'failure'
+        run: exit 1
+
+  tencent_perf:
+    name: Tencent Performance
+    needs: [prepare_metadata, build_current, build_baseline]
+    if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
+    runs-on: [self-hosted, musa-gpu]
+    outputs:
+      status: ${{ steps.collect.outputs.status }}
+      baseline_ms: ${{ steps.collect.outputs.baseline_ms }}
+      current_ms: ${{ steps.collect.outputs.current_ms }}
+      threshold_ms: ${{ steps.collect.outputs.threshold_ms }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
+    steps:
+      - name: Download current plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
+          path: ${{ runner.temp }}/current-plugin
+
+      - name: Download baseline plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.BASELINE_PLUGIN_ARTIFACT }}
+          path: ${{ runner.temp }}/baseline-plugin
+
+      - name: Run Tencent performance baseline/current
+        id: run_perf
+        run: |
+          set +e
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/tencent-perf"
+          BASELINE_LOG="$JOB_LOG_DIR/tencent_perf_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/tencent_perf_current.log"
+          BASELINE_PLUGIN="$RUNNER_TEMP/baseline-plugin/libmusa_plugin.so"
+          CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
+          mkdir -p "$JOB_LOG_DIR"
+
+          baseline_exit=0
+          current_exit=0
+
+          export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG BASELINE_PLUGIN CURRENT_PLUGIN
+
+          bash -l -c '
+            cd "$MODEL_ROOT/inference/prunedGraph" &&
+            timeout 20m python run_inference.py \
+              --device musa \
+              --musa-plugin "$BASELINE_PLUGIN" \
+              --infer-iters 1000 > "$BASELINE_LOG" 2>&1
+          ' || baseline_exit=$?
+
+          bash -l -c '
+            cd "$MODEL_ROOT/inference/prunedGraph" &&
+            timeout 20m python run_inference.py \
+              --device musa \
+              --musa-plugin "$CURRENT_PLUGIN" \
+              --infer-iters 1000 > "$CURRENT_LOG" 2>&1
+          ' || current_exit=$?
+
+          echo "baseline_exit=$baseline_exit" >> "$GITHUB_OUTPUT"
+          echo "current_exit=$current_exit" >> "$GITHUB_OUTPUT"
+
+      - name: Collect Tencent performance summary
+        id: collect
+        if: always()
+        run: |
+          set -euo pipefail
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/tencent-perf"
+          BASELINE_LOG="$JOB_LOG_DIR/tencent_perf_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/tencent_perf_current.log"
+          SUMMARY_FILE="$RUNNER_TEMP/tencent-perf.md"
+          STATUS="success"
+          BASELINE_MS=""
+          CURRENT_MS=""
+          THRESHOLD_MS=""
+
+          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" == "0" && -f "$BASELINE_LOG" ]]; then
+            BASELINE_MS="$(python3 -c 'import pathlib,re,sys; text=pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="ignore"); matches=re.findall(r"平均:\s*([0-9]+(?:\.[0-9]+)?)\s*ms", text); print(matches[-1] if matches else "")' "$BASELINE_LOG" || true)"
+          fi
+          if [[ "${{ steps.run_perf.outputs.current_exit }}" == "0" && -f "$CURRENT_LOG" ]]; then
+            CURRENT_MS="$(python3 -c 'import pathlib,re,sys; text=pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="ignore"); matches=re.findall(r"平均:\s*([0-9]+(?:\.[0-9]+)?)\s*ms", text); print(matches[-1] if matches else "")' "$CURRENT_LOG" || true)"
+          fi
+
+          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" != "0" || "${{ steps.run_perf.outputs.current_exit }}" != "0" || -z "$BASELINE_MS" || -z "$CURRENT_MS" ]]; then
+            STATUS="failure"
+          else
+            THRESHOLD_MS="$(awk -v base="$BASELINE_MS" 'BEGIN {printf "%.4f", base * 1.05}')"
+            if awk -v cur="$CURRENT_MS" -v thr="$THRESHOLD_MS" 'BEGIN {exit !(cur > thr)}'; then
+              STATUS="failure"
+            fi
+          fi
+
+          {
+            echo "## Tencent Performance"
+            echo
+            echo "- Status: $STATUS"
+            echo "- Baseline commit: ${{ needs.build_baseline.outputs.baseline_sha }}"
+            echo "- Baseline: ${BASELINE_MS:-n/a} ms"
+            echo "- Current: ${CURRENT_MS:-n/a} ms"
+            echo "- Threshold: ${THRESHOLD_MS:-n/a} ms"
+            echo
+            echo "### Baseline log tail"
+            echo '```text'
+            if [[ -f "$BASELINE_LOG" ]]; then
+              tail -20 "$BASELINE_LOG" || true
+            else
+              echo "baseline log not found"
+            fi
+            echo '```'
+            echo
+            echo "### Current log tail"
+            echo '```text'
+            if [[ -f "$CURRENT_LOG" ]]; then
+              tail -20 "$CURRENT_LOG" || true
+            else
+              echo "current log not found"
+            fi
+            echo '```'
+          } | tee "$SUMMARY_FILE"
+
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "baseline_ms=$BASELINE_MS" >> "$GITHUB_OUTPUT"
+          echo "current_ms=$CURRENT_MS" >> "$GITHUB_OUTPUT"
+          echo "threshold_ms=$THRESHOLD_MS" >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Tencent performance summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-tencent-perf
+          path: ${{ steps.collect.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Fail job if Tencent performance regressed
+        if: always() && steps.collect.outputs.status == 'failure'
+        run: exit 1
+
+  tencent_accuracy:
+    name: Tencent Accuracy
+    needs: [prepare_metadata, build_current]
+    if: needs.build_current.result == 'success'
+    runs-on: [self-hosted, musa-gpu]
+    outputs:
+      status: ${{ steps.collect.outputs.status }}
+      current_acc: ${{ steps.collect.outputs.current_acc }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
+    steps:
+      - name: Download current plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
+          path: ${{ runner.temp }}/current-plugin
+
+      - name: Run Tencent accuracy current only
+        id: run_acc
+        run: |
+          set +e
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/tencent-accuracy"
+          CURRENT_LOG="$JOB_LOG_DIR/tencent_accuracy_current.log"
+          CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
+          mkdir -p "$JOB_LOG_DIR"
+
+          current_exit=0
+
+          export MODEL_ROOT JOB_LOG_DIR CURRENT_LOG CURRENT_PLUGIN
+
+          bash -l -c '
+            cd "$MODEL_ROOT/inference/prunedGraph" &&
+            timeout 20m python run_inference.py \
+              --device musa \
+              --musa-plugin "$CURRENT_PLUGIN" \
+              --check-acc \
+              --rtol 1e-2 \
+              --atol 1e-2 > "$CURRENT_LOG" 2>&1
+          ' || current_exit=$?
+
+          echo "current_exit=$current_exit" >> "$GITHUB_OUTPUT"
+
+      - name: Collect Tencent accuracy summary
+        id: collect
+        if: always()
+        run: |
+          set -euo pipefail
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/tencent-accuracy"
+          CURRENT_LOG="$JOB_LOG_DIR/tencent_accuracy_current.log"
+          SUMMARY_FILE="$RUNNER_TEMP/tencent-accuracy.md"
+          STATUS="success"
+          CURRENT_ACC="$(grep -E "整体状态:.*(PASSED|FAILED)" "$CURRENT_LOG" | tail -1 | sed 's/^[[:space:]]*//' || true)"
+
+          if [[ "${{ steps.run_acc.outputs.current_exit }}" != "0" ]]; then
+            STATUS="failure"
+          fi
+          if [[ "$CURRENT_ACC" != *"PASSED"* ]]; then
+            STATUS="failure"
+          fi
+
+          {
+            echo "## Tencent Accuracy"
+            echo
+            echo "- Status: $STATUS"
+            echo "- Current: ${CURRENT_ACC:-unavailable}"
+            echo
+            echo "### Current highlights"
+            echo '```text'
+            if [[ -f "$CURRENT_LOG" ]]; then
+              grep -E '整体状态:|PASSED|FAILED|rtol|atol|误差|差异' "$CURRENT_LOG" | tail -20 || true
+            else
+              echo "current log not found"
+            fi
+            echo '```'
+          } | tee "$SUMMARY_FILE"
+
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "current_acc=$CURRENT_ACC" >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Tencent accuracy summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-tencent-accuracy
+          path: ${{ steps.collect.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Fail job if Tencent accuracy failed
+        if: always() && steps.collect.outputs.status == 'failure'
+        run: exit 1
+
+  bytedance_model1:
+    name: ByteDance Model 1
+    needs: [prepare_metadata, build_current, build_baseline]
+    if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
+    runs-on: [self-hosted, musa-gpu]
+    outputs:
+      status: ${{ steps.collect.outputs.status }}
+      baseline_ms: ${{ steps.collect.outputs.baseline_ms }}
+      current_ms: ${{ steps.collect.outputs.current_ms }}
+      threshold_ms: ${{ steps.collect.outputs.threshold_ms }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
+    steps:
+      - name: Download current plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
+          path: ${{ runner.temp }}/current-plugin
+
+      - name: Download baseline plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.BASELINE_PLUGIN_ARTIFACT }}
+          path: ${{ runner.temp }}/baseline-plugin
+
+      - name: Run model 1 baseline/current
+        id: run_perf
+        run: |
+          set +e
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model1"
+          BASELINE_LOG="$JOB_LOG_DIR/bytedance_model1_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bytedance_model1_current.log"
+          BASELINE_PLUGIN="$RUNNER_TEMP/baseline-plugin/libmusa_plugin.so"
+          CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
+          SPEC_PATH="$MODEL_ROOT/inference/metaGraph/meta_graph/meta_graph_1.spec"
+          mkdir -p "$JOB_LOG_DIR"
+
+          baseline_exit=0
+          current_exit=0
+
+          export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG BASELINE_PLUGIN CURRENT_PLUGIN SPEC_PATH
+
+          bash -l -c '
+            [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
+            cd "$MODEL_ROOT/inference/metaGraph" &&
+            timeout 30m python musa_run_pb_graph.py \
+              --spec "$SPEC_PATH" \
+              --bs 4096 \
+              --out_root "$JOB_LOG_DIR/baseline-out" \
+              --musa-plugin "$BASELINE_PLUGIN" > "$BASELINE_LOG" 2>&1
+          ' || baseline_exit=$?
+
+          bash -l -c '
+            [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
+            cd "$MODEL_ROOT/inference/metaGraph" &&
+            timeout 30m python musa_run_pb_graph.py \
+              --spec "$SPEC_PATH" \
+              --bs 4096 \
+              --out_root "$JOB_LOG_DIR/current-out" \
+              --musa-plugin "$CURRENT_PLUGIN" > "$CURRENT_LOG" 2>&1
+          ' || current_exit=$?
+
+          echo "baseline_exit=$baseline_exit" >> "$GITHUB_OUTPUT"
+          echo "current_exit=$current_exit" >> "$GITHUB_OUTPUT"
+
+      - name: Collect model 1 summary
+        id: collect
+        if: always()
+        run: |
+          set -euo pipefail
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model1"
+          BASELINE_LOG="$JOB_LOG_DIR/bytedance_model1_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bytedance_model1_current.log"
+          SUMMARY_FILE="$RUNNER_TEMP/bytedance-model1.md"
+          STATUS="success"
+          BASELINE_MS=""
+          CURRENT_MS=""
+          THRESHOLD_MS=""
+
+          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" == "0" && -f "$BASELINE_LOG" ]]; then
+            REPORT_PATH="$(grep '^\[OK\] report=' "$BASELINE_LOG" | tail -1 | sed 's/^\[OK\] report=//' || true)"
+            if [[ -n "$REPORT_PATH" && -f "$REPORT_PATH" ]]; then
+              BASELINE_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); vals=[x.get("average_time_ms") for x in data.get("average_time_summary", []) if x.get("status")=="ok" and x.get("average_time_ms") is not None]; print(vals[0] if vals else "")' "$REPORT_PATH" || true)"
+            fi
+          fi
+
+          if [[ "${{ steps.run_perf.outputs.current_exit }}" == "0" && -f "$CURRENT_LOG" ]]; then
+            REPORT_PATH="$(grep '^\[OK\] report=' "$CURRENT_LOG" | tail -1 | sed 's/^\[OK\] report=//' || true)"
+            if [[ -n "$REPORT_PATH" && -f "$REPORT_PATH" ]]; then
+              CURRENT_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); vals=[x.get("average_time_ms") for x in data.get("average_time_summary", []) if x.get("status")=="ok" and x.get("average_time_ms") is not None]; print(vals[0] if vals else "")' "$REPORT_PATH" || true)"
+            fi
+          fi
+
+          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" != "0" || "${{ steps.run_perf.outputs.current_exit }}" != "0" || -z "$BASELINE_MS" || -z "$CURRENT_MS" ]]; then
+            STATUS="failure"
+          else
+            THRESHOLD_MS="$(awk -v base="$BASELINE_MS" 'BEGIN {printf "%.4f", base * 1.05}')"
+            if awk -v cur="$CURRENT_MS" -v thr="$THRESHOLD_MS" 'BEGIN {exit !(cur > thr)}'; then
+              STATUS="failure"
+            fi
+          fi
+
+          {
+            echo "## ByteDance Model 1"
+            echo
+            echo "- Status: $STATUS"
+            echo "- Baseline: ${BASELINE_MS:-n/a} ms"
+            echo "- Current: ${CURRENT_MS:-n/a} ms"
+            echo "- Threshold: ${THRESHOLD_MS:-n/a} ms"
+            echo
+            echo "### Baseline log tail"
+            echo '```text'
+            if [[ -f "$BASELINE_LOG" ]]; then
+              tail -20 "$BASELINE_LOG" || true
+            else
+              echo "baseline log not found"
+            fi
+            echo '```'
+            echo
+            echo "### Current log tail"
+            echo '```text'
+            if [[ -f "$CURRENT_LOG" ]]; then
+              tail -20 "$CURRENT_LOG" || true
+            else
+              echo "current log not found"
+            fi
+            echo '```'
+          } | tee "$SUMMARY_FILE"
+
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "baseline_ms=$BASELINE_MS" >> "$GITHUB_OUTPUT"
+          echo "current_ms=$CURRENT_MS" >> "$GITHUB_OUTPUT"
+          echo "threshold_ms=$THRESHOLD_MS" >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload model 1 summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-bytedance-model1
+          path: ${{ steps.collect.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Fail job if model 1 regressed
+        if: always() && steps.collect.outputs.status == 'failure'
+        run: exit 1
+
+  bytedance_model2:
+    name: ByteDance Model 2
+    needs: [prepare_metadata, build_current, build_baseline]
+    if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
+    runs-on: [self-hosted, musa-gpu]
+    outputs:
+      status: ${{ steps.collect.outputs.status }}
+      baseline_ms: ${{ steps.collect.outputs.baseline_ms }}
+      current_ms: ${{ steps.collect.outputs.current_ms }}
+      threshold_ms: ${{ steps.collect.outputs.threshold_ms }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
+    steps:
+      - name: Download current plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
+          path: ${{ runner.temp }}/current-plugin
+
+      - name: Download baseline plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.BASELINE_PLUGIN_ARTIFACT }}
+          path: ${{ runner.temp }}/baseline-plugin
+
+      - name: Run model 2 baseline/current
+        id: run_perf
+        run: |
+          set +e
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model2"
+          BASELINE_LOG="$JOB_LOG_DIR/bytedance_model2_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bytedance_model2_current.log"
+          BASELINE_PLUGIN="$RUNNER_TEMP/baseline-plugin/libmusa_plugin.so"
+          CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
+          SPEC_PATH="$MODEL_ROOT/inference/metaGraph/meta_graph/meta_graph_2.spec"
+          mkdir -p "$JOB_LOG_DIR"
+
+          baseline_exit=0
+          current_exit=0
+
+          export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG BASELINE_PLUGIN CURRENT_PLUGIN SPEC_PATH
+
+          bash -l -c '
+            [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
+            cd "$MODEL_ROOT/inference/metaGraph" &&
+            timeout 30m python musa_run_pb_graph.py \
+              --spec "$SPEC_PATH" \
+              --bs 4096 \
+              --out_root "$JOB_LOG_DIR/baseline-out" \
+              --musa-plugin "$BASELINE_PLUGIN" > "$BASELINE_LOG" 2>&1
+          ' || baseline_exit=$?
+
+          bash -l -c '
+            [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
+            cd "$MODEL_ROOT/inference/metaGraph" &&
+            timeout 30m python musa_run_pb_graph.py \
+              --spec "$SPEC_PATH" \
+              --bs 4096 \
+              --out_root "$JOB_LOG_DIR/current-out" \
+              --musa-plugin "$CURRENT_PLUGIN" > "$CURRENT_LOG" 2>&1
+          ' || current_exit=$?
+
+          echo "baseline_exit=$baseline_exit" >> "$GITHUB_OUTPUT"
+          echo "current_exit=$current_exit" >> "$GITHUB_OUTPUT"
+
+      - name: Collect model 2 summary
+        id: collect
+        if: always()
+        run: |
+          set -euo pipefail
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model2"
+          BASELINE_LOG="$JOB_LOG_DIR/bytedance_model2_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bytedance_model2_current.log"
+          SUMMARY_FILE="$RUNNER_TEMP/bytedance-model2.md"
+          STATUS="success"
+          BASELINE_MS=""
+          CURRENT_MS=""
+          THRESHOLD_MS=""
+
+          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" == "0" && -f "$BASELINE_LOG" ]]; then
+            REPORT_PATH="$(grep '^\[OK\] report=' "$BASELINE_LOG" | tail -1 | sed 's/^\[OK\] report=//' || true)"
+            if [[ -n "$REPORT_PATH" && -f "$REPORT_PATH" ]]; then
+              BASELINE_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); vals=[x.get("average_time_ms") for x in data.get("average_time_summary", []) if x.get("status")=="ok" and x.get("average_time_ms") is not None]; print(vals[0] if vals else "")' "$REPORT_PATH" || true)"
+            fi
+          fi
+
+          if [[ "${{ steps.run_perf.outputs.current_exit }}" == "0" && -f "$CURRENT_LOG" ]]; then
+            REPORT_PATH="$(grep '^\[OK\] report=' "$CURRENT_LOG" | tail -1 | sed 's/^\[OK\] report=//' || true)"
+            if [[ -n "$REPORT_PATH" && -f "$REPORT_PATH" ]]; then
+              CURRENT_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); vals=[x.get("average_time_ms") for x in data.get("average_time_summary", []) if x.get("status")=="ok" and x.get("average_time_ms") is not None]; print(vals[0] if vals else "")' "$REPORT_PATH" || true)"
+            fi
+          fi
+
+          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" != "0" || "${{ steps.run_perf.outputs.current_exit }}" != "0" || -z "$BASELINE_MS" || -z "$CURRENT_MS" ]]; then
+            STATUS="failure"
+          else
+            THRESHOLD_MS="$(awk -v base="$BASELINE_MS" 'BEGIN {printf "%.4f", base * 1.05}')"
+            if awk -v cur="$CURRENT_MS" -v thr="$THRESHOLD_MS" 'BEGIN {exit !(cur > thr)}'; then
+              STATUS="failure"
+            fi
+          fi
+
+          {
+            echo "## ByteDance Model 2"
+            echo
+            echo "- Status: $STATUS"
+            echo "- Baseline: ${BASELINE_MS:-n/a} ms"
+            echo "- Current: ${CURRENT_MS:-n/a} ms"
+            echo "- Threshold: ${THRESHOLD_MS:-n/a} ms"
+            echo
+            echo "### Baseline log tail"
+            echo '```text'
+            if [[ -f "$BASELINE_LOG" ]]; then
+              tail -20 "$BASELINE_LOG" || true
+            else
+              echo "baseline log not found"
+            fi
+            echo '```'
+            echo
+            echo "### Current log tail"
+            echo '```text'
+            if [[ -f "$CURRENT_LOG" ]]; then
+              tail -20 "$CURRENT_LOG" || true
+            else
+              echo "current log not found"
+            fi
+            echo '```'
+          } | tee "$SUMMARY_FILE"
+
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "baseline_ms=$BASELINE_MS" >> "$GITHUB_OUTPUT"
+          echo "current_ms=$CURRENT_MS" >> "$GITHUB_OUTPUT"
+          echo "threshold_ms=$THRESHOLD_MS" >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload model 2 summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-bytedance-model2
+          path: ${{ steps.collect.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Fail job if model 2 regressed
+        if: always() && steps.collect.outputs.status == 'failure'
+        run: exit 1
+
+  bytedance_model3:
+    name: ByteDance Model 3
+    needs: [prepare_metadata, build_current, build_baseline]
+    if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
+    runs-on: [self-hosted, musa-gpu]
+    outputs:
+      status: ${{ steps.collect.outputs.status }}
+      baseline_ms: ${{ steps.collect.outputs.baseline_ms }}
+      current_ms: ${{ steps.collect.outputs.current_ms }}
+      threshold_ms: ${{ steps.collect.outputs.threshold_ms }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
+    steps:
+      - name: Download current plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
+          path: ${{ runner.temp }}/current-plugin
+
+      - name: Download baseline plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.BASELINE_PLUGIN_ARTIFACT }}
+          path: ${{ runner.temp }}/baseline-plugin
+
+      - name: Run model 3 baseline/current
+        id: run_perf
+        run: |
+          set +e
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model3"
+          BASELINE_LOG="$JOB_LOG_DIR/bytedance_model3_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bytedance_model3_current.log"
+          BASELINE_PLUGIN="$RUNNER_TEMP/baseline-plugin/libmusa_plugin.so"
+          CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
+          SPEC_PATH="$MODEL_ROOT/inference/metaGraph/meta_graph/meta_graph_3.spec"
+          mkdir -p "$JOB_LOG_DIR"
+
+          baseline_exit=0
+          current_exit=0
+
+          export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG BASELINE_PLUGIN CURRENT_PLUGIN SPEC_PATH
+
+          bash -l -c '
+            [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
+            cd "$MODEL_ROOT/inference/metaGraph" &&
+            timeout 30m python musa_run_pb_graph.py \
+              --spec "$SPEC_PATH" \
+              --bs 4096 \
+              --out_root "$JOB_LOG_DIR/baseline-out" \
+              --musa-plugin "$BASELINE_PLUGIN" > "$BASELINE_LOG" 2>&1
+          ' || baseline_exit=$?
+
+          bash -l -c '
+            [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
+            cd "$MODEL_ROOT/inference/metaGraph" &&
+            timeout 30m python musa_run_pb_graph.py \
+              --spec "$SPEC_PATH" \
+              --bs 4096 \
+              --out_root "$JOB_LOG_DIR/current-out" \
+              --musa-plugin "$CURRENT_PLUGIN" > "$CURRENT_LOG" 2>&1
+          ' || current_exit=$?
+
+          echo "baseline_exit=$baseline_exit" >> "$GITHUB_OUTPUT"
+          echo "current_exit=$current_exit" >> "$GITHUB_OUTPUT"
+
+      - name: Collect model 3 summary
+        id: collect
+        if: always()
+        run: |
+          set -euo pipefail
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model3"
+          BASELINE_LOG="$JOB_LOG_DIR/bytedance_model3_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bytedance_model3_current.log"
+          SUMMARY_FILE="$RUNNER_TEMP/bytedance-model3.md"
+          STATUS="success"
+          BASELINE_MS=""
+          CURRENT_MS=""
+          THRESHOLD_MS=""
+
+          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" == "0" && -f "$BASELINE_LOG" ]]; then
+            REPORT_PATH="$(grep '^\[OK\] report=' "$BASELINE_LOG" | tail -1 | sed 's/^\[OK\] report=//' || true)"
+            if [[ -n "$REPORT_PATH" && -f "$REPORT_PATH" ]]; then
+              BASELINE_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); vals=[x.get("average_time_ms") for x in data.get("average_time_summary", []) if x.get("status")=="ok" and x.get("average_time_ms") is not None]; print(vals[0] if vals else "")' "$REPORT_PATH" || true)"
+            fi
+          fi
+
+          if [[ "${{ steps.run_perf.outputs.current_exit }}" == "0" && -f "$CURRENT_LOG" ]]; then
+            REPORT_PATH="$(grep '^\[OK\] report=' "$CURRENT_LOG" | tail -1 | sed 's/^\[OK\] report=//' || true)"
+            if [[ -n "$REPORT_PATH" && -f "$REPORT_PATH" ]]; then
+              CURRENT_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); vals=[x.get("average_time_ms") for x in data.get("average_time_summary", []) if x.get("status")=="ok" and x.get("average_time_ms") is not None]; print(vals[0] if vals else "")' "$REPORT_PATH" || true)"
+            fi
+          fi
+
+          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" != "0" || "${{ steps.run_perf.outputs.current_exit }}" != "0" || -z "$BASELINE_MS" || -z "$CURRENT_MS" ]]; then
+            STATUS="failure"
+          else
+            THRESHOLD_MS="$(awk -v base="$BASELINE_MS" 'BEGIN {printf "%.4f", base * 1.05}')"
+            if awk -v cur="$CURRENT_MS" -v thr="$THRESHOLD_MS" 'BEGIN {exit !(cur > thr)}'; then
+              STATUS="failure"
+            fi
+          fi
+
+          {
+            echo "## ByteDance Model 3"
+            echo
+            echo "- Status: $STATUS"
+            echo "- Baseline: ${BASELINE_MS:-n/a} ms"
+            echo "- Current: ${CURRENT_MS:-n/a} ms"
+            echo "- Threshold: ${THRESHOLD_MS:-n/a} ms"
+            echo
+            echo "### Baseline log tail"
+            echo '```text'
+            if [[ -f "$BASELINE_LOG" ]]; then
+              tail -20 "$BASELINE_LOG" || true
+            else
+              echo "baseline log not found"
+            fi
+            echo '```'
+            echo
+            echo "### Current log tail"
+            echo '```text'
+            if [[ -f "$CURRENT_LOG" ]]; then
+              tail -20 "$CURRENT_LOG" || true
+            else
+              echo "current log not found"
+            fi
+            echo '```'
+          } | tee "$SUMMARY_FILE"
+
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "baseline_ms=$BASELINE_MS" >> "$GITHUB_OUTPUT"
+          echo "current_ms=$CURRENT_MS" >> "$GITHUB_OUTPUT"
+          echo "threshold_ms=$THRESHOLD_MS" >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload model 3 summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-bytedance-model3
+          path: ${{ steps.collect.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Fail job if model 3 regressed
+        if: always() && steps.collect.outputs.status == 'failure'
+        run: exit 1
+
+  training:
+    name: Training
+    needs: [prepare_metadata, build_current]
+    if: needs.build_current.result == 'success'
+    runs-on: [self-hosted, musa-gpu]
+    outputs:
+      status: ${{ steps.collect.outputs.status }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
+    steps:
+      - name: Download current plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
+          path: ${{ runner.temp }}/current-plugin
+
+      - name: Run training tests
+        id: run_training
+        run: |
+          set +e
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/training"
+          LOG_FILE="$JOB_LOG_DIR/training_tests.log"
+          ERROR_LOG_DIR="$JOB_LOG_DIR/error_logs"
+          CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
+          mkdir -p "$JOB_LOG_DIR"
+
+          training_exit=0
+          export LOG_FILE ERROR_LOG_DIR CURRENT_PLUGIN
+          bash -l -c '
+            cd "$MODEL_ROOT/training" &&
+            timeout 180m python run_all_training_tests.py \
+              --epochs 100 \
+              --log-dir "$ERROR_LOG_DIR" \
+              --musa-plugin "$CURRENT_PLUGIN" > "$LOG_FILE" 2>&1
+          ' || training_exit=$?
+
+          echo "training_exit=$training_exit" >> "$GITHUB_OUTPUT"
+
+      - name: Collect training summary
+        id: collect
+        if: always()
+        run: |
+          set -euo pipefail
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/training"
+          LOG_FILE="$JOB_LOG_DIR/training_tests.log"
+          SUMMARY_FILE="$RUNNER_TEMP/training.md"
+          STATUS="success"
+
+          if [[ "${{ steps.run_training.outputs.training_exit }}" != "0" ]]; then
+            STATUS="failure"
+          fi
+          if [[ -f "$LOG_FILE" ]] && { grep -q '^\[FAIL\]' "$LOG_FILE" || grep -Eq '^失败:[[:space:]]*[1-9][0-9]*' "$LOG_FILE"; }; then
+            STATUS="failure"
+          fi
+
+          {
+            echo "## Training (Non-blocking)"
+            echo
+            echo "- Status: $STATUS"
+            echo "- Log file: $LOG_FILE"
+            echo
+            echo '```text'
+            if [[ -f "$LOG_FILE" ]]; then
+              grep -E '^\[OK\]|^\[FAIL\]|^总计:|^成功:|^失败:|^  - ' "$LOG_FILE" || tail -80 "$LOG_FILE" || true
+            else
+              echo "training log not found"
+            fi
+            echo '```'
+          } | tee "$SUMMARY_FILE"
+
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload training summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-training
+          path: ${{ steps.collect.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+  summary:
+    name: Final Summary
+    needs:
+      - prepare_metadata
+      - format
+      - build_current
+      - integration
+      - build_baseline
+      - tencent_perf
+      - tencent_accuracy
+      - bytedance_model1
+      - bytedance_model2
+      - bytedance_model3
+      - training
+    if: always()
+    runs-on: [self-hosted, musa-gpu]
+    steps:
+      - name: Download summary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: summary-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/ci-summary
+
+      - name: Generate final summary
+        run: |
+          set -euo pipefail
+
+          SUMMARY_FILE="$RUNNER_TEMP/final-summary.md"
+          FORMAT_STATUS="${{ needs.format.outputs.status || 'skipped' }}"
+          FORMAT_RESULT="${{ needs.format.result }}"
+          BUILD_CURRENT_STATUS="${{ needs.build_current.outputs.status || 'skipped' }}"
+          BUILD_CURRENT_RESULT="${{ needs.build_current.result }}"
+          INTEGRATION_STATUS="${{ needs.integration.outputs.status || 'skipped' }}"
+          INTEGRATION_RESULT="${{ needs.integration.result }}"
+          BUILD_BASELINE_STATUS="${{ needs.build_baseline.outputs.status || 'skipped' }}"
+          BUILD_BASELINE_RESULT="${{ needs.build_baseline.result }}"
+          TENCENT_PERF_STATUS="${{ needs.tencent_perf.outputs.status || 'skipped' }}"
+          TENCENT_PERF_RESULT="${{ needs.tencent_perf.result }}"
+          TENCENT_ACC_STATUS="${{ needs.tencent_accuracy.outputs.status || 'skipped' }}"
+          TENCENT_ACC_RESULT="${{ needs.tencent_accuracy.result }}"
+          BYTE1_STATUS="${{ needs.bytedance_model1.outputs.status || 'skipped' }}"
+          BYTE1_RESULT="${{ needs.bytedance_model1.result }}"
+          BYTE2_STATUS="${{ needs.bytedance_model2.outputs.status || 'skipped' }}"
+          BYTE2_RESULT="${{ needs.bytedance_model2.result }}"
+          BYTE3_STATUS="${{ needs.bytedance_model3.outputs.status || 'skipped' }}"
+          BYTE3_RESULT="${{ needs.bytedance_model3.result }}"
+          TRAINING_STATUS="${{ needs.training.outputs.status || 'skipped' }}"
+          TRAINING_RESULT="${{ needs.training.result }}"
+          BASELINE_SHA="${{ needs.build_baseline.outputs.baseline_sha || 'unavailable' }}"
+
+          {
+            echo "# CI Report"
+            echo
+            echo "- Commit: ${{ needs.prepare_metadata.outputs.commit_id }}"
+            echo "- Run kind: ${{ needs.prepare_metadata.outputs.run_kind }}"
+            echo "- Run id: ${{ needs.prepare_metadata.outputs.run_id }}"
+            echo "- Baseline commit: $BASELINE_SHA"
+            echo
+            echo "## Job Status"
+            echo "| Job | Result | Blocking |"
+            echo "|-----|--------|----------|"
+            echo "| Format | $FORMAT_STATUS | no |"
+            echo "| Build Current | $BUILD_CURRENT_STATUS | yes |"
+            echo "| Integration | $INTEGRATION_STATUS | yes |"
+            echo "| Build Baseline | $BUILD_BASELINE_STATUS | yes |"
+            echo "| Tencent Performance | $TENCENT_PERF_STATUS | yes |"
+            echo "| Tencent Accuracy | $TENCENT_ACC_STATUS | yes |"
+            echo "| ByteDance Model 1 | $BYTE1_STATUS | yes |"
+            echo "| ByteDance Model 2 | $BYTE2_STATUS | yes |"
+            echo "| ByteDance Model 3 | $BYTE3_STATUS | yes |"
+            echo "| Training | $TRAINING_STATUS | no |"
+            echo
+            echo "## Performance Metrics"
+            echo "- Tencent Performance: baseline=${{ needs.tencent_perf.outputs.baseline_ms || 'n/a' }} ms, current=${{ needs.tencent_perf.outputs.current_ms || 'n/a' }} ms, threshold=${{ needs.tencent_perf.outputs.threshold_ms || 'n/a' }} ms"
+            echo "- ByteDance Model 1: baseline=${{ needs.bytedance_model1.outputs.baseline_ms || 'n/a' }} ms, current=${{ needs.bytedance_model1.outputs.current_ms || 'n/a' }} ms, threshold=${{ needs.bytedance_model1.outputs.threshold_ms || 'n/a' }} ms"
+            echo "- ByteDance Model 2: baseline=${{ needs.bytedance_model2.outputs.baseline_ms || 'n/a' }} ms, current=${{ needs.bytedance_model2.outputs.current_ms || 'n/a' }} ms, threshold=${{ needs.bytedance_model2.outputs.threshold_ms || 'n/a' }} ms"
+            echo "- ByteDance Model 3: baseline=${{ needs.bytedance_model3.outputs.baseline_ms || 'n/a' }} ms, current=${{ needs.bytedance_model3.outputs.current_ms || 'n/a' }} ms, threshold=${{ needs.bytedance_model3.outputs.threshold_ms || 'n/a' }} ms"
+            echo
+            echo "## Accuracy Highlights"
+            echo "- Tencent Accuracy current: ${{ needs.tencent_accuracy.outputs.current_acc || 'n/a' }}"
+            echo
+          } > "$SUMMARY_FILE"
+
+          for file in \
+            "$RUNNER_TEMP/ci-summary/prepare-metadata.md" \
+            "$RUNNER_TEMP/ci-summary/format.md" \
+            "$RUNNER_TEMP/ci-summary/build-current.md" \
+            "$RUNNER_TEMP/ci-summary/integration.md" \
+            "$RUNNER_TEMP/ci-summary/build-baseline.md" \
+            "$RUNNER_TEMP/ci-summary/tencent-perf.md" \
+            "$RUNNER_TEMP/ci-summary/tencent-accuracy.md" \
+            "$RUNNER_TEMP/ci-summary/bytedance-model1.md" \
+            "$RUNNER_TEMP/ci-summary/bytedance-model2.md" \
+            "$RUNNER_TEMP/ci-summary/bytedance-model3.md" \
+            "$RUNNER_TEMP/ci-summary/training.md"; do
+            if [[ -f "$file" ]]; then
+              echo >> "$SUMMARY_FILE"
+              cat "$file" >> "$SUMMARY_FILE"
+            fi
+          done
+
+          echo "===== Final CI Summary ====="
+          cat "$SUMMARY_FILE"
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+
           BLOCKING_FAILURE=0
+          if [[ "$BUILD_CURRENT_STATUS" == "failure" || "$BUILD_CURRENT_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$INTEGRATION_STATUS" == "failure" || "$INTEGRATION_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BUILD_BASELINE_STATUS" == "failure" || "$BUILD_BASELINE_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$TENCENT_PERF_STATUS" == "failure" || "$TENCENT_PERF_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$TENCENT_ACC_STATUS" == "failure" || "$TENCENT_ACC_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BYTE1_STATUS" == "failure" || "$BYTE1_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BYTE2_STATUS" == "failure" || "$BYTE2_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BYTE3_STATUS" == "failure" || "$BYTE3_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
 
-          if [ -f "$SUMMARY" ]; then
-            echo "===== CI Summary ====="
-            cat "$SUMMARY"
-            cat "$SUMMARY" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          if [ "$BASELINE_SYNC_STATUS" = "failure" ] || \
-             [ "$BASELINE_BUILD_STATUS" = "failure" ] || \
-             [ "$BASELINE_PRUNED_STATUS" = "failure" ] || \
-             [ "$BASELINE_META1_STATUS" = "failure" ] || \
-             [ "$BASELINE_META3_STATUS" = "failure" ] || \
-             [ "$BUILD_STATUS" = "failure" ] || \
-             [ "$TEST_STATUS" = "failure" ] || \
-             [ "$PRUNED_PERF_STATUS" = "failure" ] || \
-             [ "$PRUNED_ACC_STATUS" = "failure" ] || \
-             [ "$META1_STATUS" = "failure" ] || \
-             [ "$META2_STATUS" = "failure" ] || \
-             [ "$META3_STATUS" = "failure" ]; then
-            BLOCKING_FAILURE=1
-          fi
-
-          if [ "$BLOCKING_FAILURE" -ne 0 ]; then
+          if [[ "$BLOCKING_FAILURE" -ne 0 ]]; then
             exit 1
           fi
