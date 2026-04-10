@@ -71,7 +71,7 @@ inline Status ValidateEinsumEquation(
         "Expecting 1 or 2 input subscripts in equation '", equation,
         "' but got: ", input_subscripts->size());
   }
-  return Status::OK();
+  return ::tsl::OkStatus();
 }
 
 // Maps the character labels to consecutive integers.
@@ -146,7 +146,7 @@ inline Status ParseEinsumEquation(
                   (*input_label_counts)[1][label] == 0;
     (*label_types)[label] = GetDimensionType(removed, unique);
   }
-  return Status::OK();
+  return ::tsl::OkStatus();
 }
 
 }  // namespace musa

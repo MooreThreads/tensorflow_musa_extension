@@ -3,8 +3,8 @@
 
 #include <musa_runtime.h>
 
-#include "tensorflow/stream_executor/event.h"
-#include "tensorflow/stream_executor/stream_executor_internal.h"
+#include "xla/stream_executor/event.h"
+#include "xla/stream_executor/stream_executor_internal.h"
 
 namespace stream_executor {
 namespace musa {

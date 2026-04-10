@@ -9,7 +9,6 @@
 namespace tensorflow {
 namespace grappler {
 namespace musa_fusion {
-
 namespace {
 
 // Helper to check if node has specific op type
@@ -120,11 +119,11 @@ FusionMatchResult LinearReluFusion::Match(const GraphDef& graph,
 Status LinearReluFusion::Apply(GraphDef* graph,
                                const FusionMatchResult& match_result) const {
   if (!match_result.IsValid()) {
-    return Status(error::INVALID_ARGUMENT, "Invalid LinearRelu match result");
+    return ::tsl::errors::InvalidArgument("Invalid LinearRelu match result");
   }
 
   if (!IsKernelAvailable()) {
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   // Get captured nodes
@@ -135,7 +134,7 @@ Status LinearReluFusion::Apply(GraphDef* graph,
   if (output_it == match_result.captured_nodes.end() ||
       matmul_it == match_result.captured_nodes.end() ||
       bias_it == match_result.captured_nodes.end()) {
-    return Status(error::INVALID_ARGUMENT,
+    return ::tsl::errors::InvalidArgument(
                   "Missing required nodes in LinearRelu pattern");
   }
 
@@ -151,7 +150,7 @@ Status LinearReluFusion::Apply(GraphDef* graph,
     if (node.name() == original_name && node.op() == "MusaLinearRelu") {
       VLOG(1) << "MusaLinearRelu: Output node " << original_name
               << " is already a fused node, skipping";
-      return Status::OK();
+      return ::tsl::OkStatus();
     }
   }
 
@@ -164,7 +163,7 @@ Status LinearReluFusion::Apply(GraphDef* graph,
   }
 
   if (output_node_idx < 0) {
-    return Status(error::INVALID_ARGUMENT,
+    return ::tsl::errors::InvalidArgument(
                   "Failed to find output node in graph: " + original_name);
   }
 
@@ -233,7 +232,7 @@ Status LinearReluFusion::Apply(GraphDef* graph,
   VLOG(1) << "LinearReluFusion: Successfully replaced '" << original_name
           << "' with MusaLinearRelu";
 
-  return Status::OK();
+  return ::tsl::OkStatus();
 }
 
 // Register the pattern

@@ -28,7 +28,6 @@ limitations under the License.
 namespace tensorflow {
 namespace grappler {
 namespace musa_fusion {
-
 namespace {
 
 // Helper to check if node has specific op type
@@ -649,13 +648,13 @@ Status MusaNormalizeFusion::Apply(GraphDef* graph,
 
   if (!match_result.IsValid()) {
     VLOG(2) << "[Normalize::Apply] RETURN: invalid match result";
-    return Status(error::INVALID_ARGUMENT, "Invalid Normalize match result");
+    return ::tsl::errors::InvalidArgument("Invalid Normalize match result");
   }
 
   if (!IsKernelAvailable()) {
     VLOG(2)
         << "[Normalize::Apply] RETURN: kernel not available, skipping fusion";
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   // 获取关键节点
@@ -664,7 +663,7 @@ Status MusaNormalizeFusion::Apply(GraphDef* graph,
   if (output_it == match_result.captured_nodes.end()) {
     VLOG(2)
         << "[Normalize::Apply] RETURN: missing output node in captured_nodes";
-    return Status(error::INVALID_ARGUMENT,
+    return ::tsl::errors::InvalidArgument(
                   "Missing output node in Normalize pattern");
   }
 
@@ -678,7 +677,7 @@ Status MusaNormalizeFusion::Apply(GraphDef* graph,
     if (node.name() == output_name && node.op() == "MusaNormalize") {
       VLOG(2) << "[Normalize::Apply] RETURN: already fused, node="
               << output_name;
-      return Status(error::ALREADY_EXISTS, "Already fused");
+      return ::tsl::errors::AlreadyExists("Already fused");
     }
   }
 
@@ -691,7 +690,7 @@ Status MusaNormalizeFusion::Apply(GraphDef* graph,
     input_name = original_input_it->second;
   } else {
     VLOG(2) << "[Normalize::Apply] RETURN: cannot determine input";
-    return Status(error::INVALID_ARGUMENT, "Cannot determine Normalize input");
+    return ::tsl::errors::InvalidArgument("Cannot determine Normalize input");
   }
 
   // 获取数据类型
@@ -955,7 +954,7 @@ Status MusaNormalizeFusion::Apply(GraphDef* graph,
           << ", removed=" << removed_count
           << ", graph_nodes=" << graph->node_size();
 
-  return Status::OK();
+  return ::tsl::OkStatus();
 }
 
 // 注册融合模式

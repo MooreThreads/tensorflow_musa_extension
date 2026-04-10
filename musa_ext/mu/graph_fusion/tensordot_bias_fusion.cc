@@ -24,7 +24,6 @@ limitations under the License.
 namespace tensorflow {
 namespace grappler {
 namespace musa_fusion {
-
 namespace {
 
 // Weight node valid types
@@ -261,13 +260,13 @@ Status MusaTensorDotBiasFusion::Apply(GraphDef* graph,
 
   if (!match_result.IsValid()) {
     VLOG(2) << "[TensorDotBias::Apply] RETURN: invalid match result";
-    return Status(error::INVALID_ARGUMENT, "Invalid TensorDotBias match result");
+    return ::tsl::errors::InvalidArgument("Invalid TensorDotBias match result");
   }
 
   if (!IsKernelAvailable()) {
     VLOG(2)
         << "[TensorDotBias::Apply] RETURN: kernel not available, skipping fusion";
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   // Get critical nodes
@@ -278,7 +277,7 @@ Status MusaTensorDotBiasFusion::Apply(GraphDef* graph,
   if (bias_add_it == match_result.captured_nodes.end()) {
     VLOG(2)
         << "[TensorDotBias::Apply] RETURN: missing bias_add node in captured_nodes";
-    return Status(error::INVALID_ARGUMENT,
+    return ::tsl::errors::InvalidArgument(
                   "Missing bias_add node in TensorDotBias pattern");
   }
 
@@ -292,7 +291,7 @@ Status MusaTensorDotBiasFusion::Apply(GraphDef* graph,
     if (node.name() == output_name && node.op() == "MusaTensorDotBias") {
       VLOG(2) << "[TensorDotBias::Apply] RETURN: already fused, node="
               << output_name;
-      return Status(error::ALREADY_EXISTS, "Already fused");
+      return ::tsl::errors::AlreadyExists("Already fused");
     }
   }
 
@@ -307,7 +306,7 @@ Status MusaTensorDotBiasFusion::Apply(GraphDef* graph,
     input_a_name = original_input_it->second;
   } else {
     VLOG(2) << "[TensorDotBias::Apply] RETURN: cannot determine input A";
-    return Status(error::INVALID_ARGUMENT,
+    return ::tsl::errors::InvalidArgument(
                   "Cannot determine TensorDotBias input A");
   }
 
@@ -317,7 +316,7 @@ Status MusaTensorDotBiasFusion::Apply(GraphDef* graph,
     tensordot_weight_name = tensordot_weight_input_it->second;
   } else {
     VLOG(2) << "[TensorDotBias::Apply] RETURN: cannot determine tensordot weight";
-    return Status(error::INVALID_ARGUMENT,
+    return ::tsl::errors::InvalidArgument(
                   "Cannot determine TensorDotBias tensordot weight");
   }
 
@@ -330,7 +329,7 @@ Status MusaTensorDotBiasFusion::Apply(GraphDef* graph,
     bias_weights_name = bias_weights_it->second->name();
   } else {
     VLOG(2) << "[TensorDotBias::Apply] RETURN: cannot determine bias weights";
-    return Status(error::INVALID_ARGUMENT,
+    return ::tsl::errors::InvalidArgument(
                   "Cannot determine TensorDotBias bias weights");
   }
 
@@ -466,7 +465,7 @@ Status MusaTensorDotBiasFusion::Apply(GraphDef* graph,
           << ", removed=" << removed_count
           << ", graph_nodes=" << graph->node_size();
 
-  return Status::OK();
+  return ::tsl::OkStatus();
 }
 
 // Register fusion pattern

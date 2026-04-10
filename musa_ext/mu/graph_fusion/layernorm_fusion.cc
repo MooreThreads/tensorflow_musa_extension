@@ -28,7 +28,6 @@ limitations under the License.
 namespace tensorflow {
 namespace grappler {
 namespace musa_fusion {
-
 namespace {
 
 // Helper to check if node has specific op type
@@ -444,13 +443,13 @@ Status MusaLayerNormFusion::Apply(GraphDef* graph,
 
   if (!match_result.IsValid()) {
     VLOG(2) << "[LayerNorm::Apply] RETURN: invalid match result";
-    return Status(error::INVALID_ARGUMENT, "Invalid LayerNorm match result");
+    return ::tsl::errors::InvalidArgument("Invalid LayerNorm match result");
   }
 
   if (!IsKernelAvailable()) {
     VLOG(2)
         << "[LayerNorm::Apply] RETURN: kernel not available, skipping fusion";
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   // Get the output node (AddV2)
@@ -458,7 +457,7 @@ Status MusaLayerNormFusion::Apply(GraphDef* graph,
   if (output_it == match_result.captured_nodes.end()) {
     VLOG(2)
         << "[LayerNorm::Apply] RETURN: missing output node in captured_nodes";
-    return Status(error::INVALID_ARGUMENT,
+    return ::tsl::errors::InvalidArgument(
                   "Missing output node in LayerNorm pattern");
   }
 
@@ -472,7 +471,7 @@ Status MusaLayerNormFusion::Apply(GraphDef* graph,
     if (node.name() == output_name && node.op() == "MusaLayerNorm") {
       VLOG(2) << "[LayerNorm::Apply] RETURN: already fused, node="
               << output_name;
-      return Status(error::ALREADY_EXISTS, "Already fused");
+      return ::tsl::errors::AlreadyExists("Already fused");
     }
   }
 
@@ -484,7 +483,7 @@ Status MusaLayerNormFusion::Apply(GraphDef* graph,
     input_name = original_input_it->second;
   } else {
     VLOG(2) << "[LayerNorm::Apply] RETURN: cannot determine input";
-    return Status(error::INVALID_ARGUMENT, "Cannot determine LayerNorm input");
+    return ::tsl::errors::InvalidArgument("Cannot determine LayerNorm input");
   }
 
   // Get data type
@@ -612,7 +611,7 @@ Status MusaLayerNormFusion::Apply(GraphDef* graph,
           << ", removed=" << removed_count
           << ", graph_nodes=" << graph->node_size();
 
-  return Status::OK();
+  return ::tsl::OkStatus();
 }
 
 // Register fusion pattern

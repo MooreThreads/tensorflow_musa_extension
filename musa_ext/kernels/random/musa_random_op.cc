@@ -57,7 +57,7 @@ Status InternalGenerateKey(const Tensor& seed, PhiloxRandom::Key* out_key,
   (*out_counter)[2] = mix[2];
   (*out_counter)[3] = mix[3];
 
-  return Status::OK();
+  return ::tsl::OkStatus();
 }
 
 template <typename T>

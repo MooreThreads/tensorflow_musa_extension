@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <iostream>
+#include <vector>
 
 #include "mu/device/musa_event.h"
 #include "mu/device/musa_telemetry.h"
@@ -12,7 +13,7 @@
 #include "tensorflow/core/common_runtime/bfc_allocator.h"
 #include "tensorflow/core/framework/device_base.h"
 #include "tensorflow/core/lib/core/errors.h"
-#include "tensorflow/stream_executor/multi_platform_manager.h"
+#include "xla/stream_executor/multi_platform_manager.h"
 
 namespace tensorflow {
 namespace musa {
@@ -24,9 +25,23 @@ MusaDeviceContext::MusaDeviceContext(
       h2d_stream_(h2d_stream),
       d2h_stream_(d2h_stream),
       event_mgr_(event_mgr) {
-  implementation_ = new ::stream_executor::musa::MusaStream(stream);
-  official_stream_ = new ::stream_executor::Stream(executor, implementation_);
+  official_stream_ = new ::stream_executor::Stream(executor);
   official_stream_->Init();
+  // Keep the same semantics as fb8c3ab0: official_stream_ and stream_handle_
+  // must refer to the same underlying compute stream.
+  auto* official_impl = static_cast<::stream_executor::musa::MusaStream*>(
+      official_stream_->implementation());
+  if (official_impl != nullptr) {
+    musaStream_t bootstrap_stream = official_impl->GetStream();
+    if (bootstrap_stream != nullptr && bootstrap_stream != stream) {
+      musaStreamDestroy(bootstrap_stream);
+    }
+    void** stream_member = official_impl->GpuStreamMemberHack();
+    if (stream_member != nullptr) {
+      *stream_member = reinterpret_cast<void*>(stream);
+      stream_handle_ = stream;
+    }
+  }
 }
 
 void MusaDeviceContext::ThenExecute(musaStream_t stream,
@@ -59,7 +74,7 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
   size_t bytes = cpu_tensor->TotalBytes();
 
   if (bytes == 0) {
-    done(Status::OK());
+    done(::tsl::OkStatus());
     return;
   }
 
@@ -125,10 +140,10 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
     if (event_mgr_) {
       event_mgr_->ThenExecute(h2d_stream_, [device_id, done]() {
         musaSetDevice(device_id);
-        done(Status::OK());
+        done(::tsl::OkStatus());
       });
     } else {
-      done(Status::OK());
+      done(::tsl::OkStatus());
     }
   } else {
     // Use bounce buffer for pageable memory
@@ -141,7 +156,7 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
         done(errors::Internal("MUSA H2D small sync copy failed"));
         return;
       }
-      done(Status::OK());
+      done(::tsl::OkStatus());
       return;
     }
 
@@ -157,7 +172,7 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
         done(errors::Internal("MUSA H2D sync copy failed"));
         return;
       }
-      done(Status::OK());
+      done(::tsl::OkStatus());
       return;
     }
 
@@ -214,11 +229,11 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
     if (event_mgr_) {
       event_mgr_->ThenExecute(h2d_stream_, [device_id, done]() {
         musaSetDevice(device_id);
-        done(Status::OK());
+        done(::tsl::OkStatus());
       });
     } else {
       musaStreamSynchronize(h2d_stream_);
-      done(Status::OK());
+      done(::tsl::OkStatus());
     }
   }
 }
@@ -240,7 +255,7 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
     bytes = cpu_tensor->TotalBytes();
   }
   if (bytes == 0) {
-    done(Status::OK());
+    done(::tsl::OkStatus());
     return;
   }
 
@@ -296,10 +311,10 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
     if (event_mgr_) {
       event_mgr_->ThenExecute(d2h_stream_, [device_id, done]() {
         musaSetDevice(device_id);
-        done(Status::OK());
+        done(::tsl::OkStatus());
       });
     } else {
-      done(Status::OK());
+      done(::tsl::OkStatus());
     }
   } else {
     // Use bounce buffer for pageable memory
@@ -311,7 +326,7 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
         done(errors::Internal("MUSA D2H small sync copy failed"));
         return;
       }
-      done(Status::OK());
+      done(::tsl::OkStatus());
       return;
     }
 
@@ -325,7 +340,7 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
         done(errors::Internal("MUSA D2H sync copy failed"));
         return;
       }
-      done(Status::OK());
+      done(::tsl::OkStatus());
       return;
     }
 
@@ -381,13 +396,13 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
         std::memcpy(dst, bounce_buffer, bytes);
         musa_dev->pinned_memory_pool()->FreeAsync(bounce_buffer, bytes,
                                                   nullptr);
-        done(Status::OK());
+        done(::tsl::OkStatus());
       });
     } else {
       musaStreamSynchronize(d2h_stream_);
       std::memcpy(dst, bounce_buffer, bytes);
       musa_dev->pinned_memory_pool()->FreeAsync(bounce_buffer, bytes, nullptr);
-      done(Status::OK());
+      done(::tsl::OkStatus());
     }
   }
 }
@@ -395,7 +410,17 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
 MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
                        int device_id,
                        ::stream_executor::StreamExecutor* executor)
-    : Device(env, attributes), device_id_(device_id) {
+    : Device(env, attributes),
+      device_id_(device_id),
+      stream_(nullptr),
+      h2d_stream_(nullptr),
+      d2h_stream_(nullptr),
+      device_context_(nullptr),
+      musa_allocator_(nullptr),
+      musa_host_allocator_(nullptr),
+      pinned_memory_pool_(nullptr),
+      event_mgr_(nullptr),
+      mublas_handle_(nullptr) {
   musaSetDevice(device_id_);
 
   // CRITICAL: Get memory info BEFORE any allocations (streams, handles, etc.)
@@ -430,6 +455,7 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
     LOG(ERROR) << ">>> [MUSA] ERROR: Device " << device_id_
                << " failed to create h2d_stream";
     musaStreamDestroy(stream_);
+    stream_ = nullptr;
     return;
   }
 
@@ -439,7 +465,9 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
     LOG(ERROR) << ">>> [MUSA] ERROR: Device " << device_id_
                << " failed to create d2h_stream";
     musaStreamDestroy(stream_);
+    stream_ = nullptr;
     musaStreamDestroy(h2d_stream_);
+    h2d_stream_ = nullptr;
     return;
   }
 
@@ -448,8 +476,11 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
   if (s != ::musa::dnn::Status::SUCCESS) {
     mudnn_handle_.reset();
     musaStreamDestroy(stream_);
+    stream_ = nullptr;
     musaStreamDestroy(h2d_stream_);
+    h2d_stream_ = nullptr;
     musaStreamDestroy(d2h_stream_);
+    d2h_stream_ = nullptr;
     return;
   }
 
@@ -457,8 +488,11 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
   if (blas_err != MUBLAS_STATUS_SUCCESS) {
     mublas_handle_ = nullptr;
     musaStreamDestroy(stream_);
+    stream_ = nullptr;
     musaStreamDestroy(h2d_stream_);
+    h2d_stream_ = nullptr;
     musaStreamDestroy(d2h_stream_);
+    d2h_stream_ = nullptr;
     mudnn_handle_.reset();
     return;
   }
@@ -468,8 +502,11 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
     mublasDestroy(mublas_handle_);
     mublas_handle_ = nullptr;
     musaStreamDestroy(stream_);
+    stream_ = nullptr;
     musaStreamDestroy(h2d_stream_);
+    h2d_stream_ = nullptr;
     musaStreamDestroy(d2h_stream_);
+    d2h_stream_ = nullptr;
     mudnn_handle_.reset();
     return;
   }
@@ -486,12 +523,14 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
   // garbage_collection=true to reclaim unused memory
   // bfc_memory_limit was calculated at the start of constructor BEFORE
   // any streams/handles were created, to capture the true available memory.
-  musa_allocator_ = new BFCAllocator(new MusaSubAllocator(device_id_, {}, {}),
-                                     bfc_memory_limit,
-                                     false,  // allow_growth
-                                     "Musa_BFC_Allocator",
-                                     true  // garbage_collection
-  );
+  BFCAllocator::Options musa_bfc_opts;
+  musa_bfc_opts.allow_growth = false;
+  musa_bfc_opts.garbage_collection = true;
+  musa_allocator_ = new BFCAllocator(
+      std::make_unique<MusaSubAllocator>(
+          device_id_, std::vector<SubAllocator::Visitor>{},
+          std::vector<SubAllocator::Visitor>{}),
+      bfc_memory_limit, "Musa_BFC_Allocator", musa_bfc_opts);
 
   VLOG(1) << ">>> [MUSA] Device " << device_id_
           << " using official TF BFCAllocator with bfc_memory_limit="
@@ -499,10 +538,14 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
 
   // Initialize Host Pinned Memory Allocator (BFCAllocator - kept for
   // compatibility)
-  musa_host_allocator_ =
-      new BFCAllocator(new MusaHostSubAllocator({}, {}),
-                       256ULL * 1024 * 1024,  // 256 MB
-                       true, "Musa_Host_BFC_Allocator", true);
+  BFCAllocator::Options host_bfc_opts;
+  host_bfc_opts.allow_growth = true;
+  host_bfc_opts.garbage_collection = true;
+  musa_host_allocator_ = new BFCAllocator(
+      std::make_unique<MusaHostSubAllocator>(
+          std::vector<SubAllocator::Visitor>{},
+          std::vector<SubAllocator::Visitor>{}),
+      256ULL * 1024 * 1024, "Musa_Host_BFC_Allocator", host_bfc_opts);
 
   // Initialize GPUPinnedMemoryPool for bounce buffer management
   // This pool ensures memory addresses are not reused until GPU async copies
@@ -511,11 +554,11 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
 
   VLOG(1) << ">>> [MUSA] Initialized GPUPinnedMemoryPool for Bounce Buffers";
 
-  gpu_device_info_.stream = device_context_->stream();
-  gpu_device_info_.default_context = device_context_;
-  gpu_device_info_.gpu_id = device_id_;
+  accelerator_device_info_.stream = device_context_->stream();
+  accelerator_device_info_.default_context = device_context_;
+  accelerator_device_info_.gpu_id = device_id_;
 
-  set_tensorflow_gpu_device_info(&gpu_device_info_);
+  set_tensorflow_accelerator_device_info(&accelerator_device_info_);
 }
 
 MusaDevice::~MusaDevice() {
@@ -570,18 +613,15 @@ MusaDevice::~MusaDevice() {
 
   // Step 7: Destroy streams (should already be idle after device_context_
   // Unref)
-  if (d2h_stream_) {
-    musaStreamDestroy(d2h_stream_);
-    d2h_stream_ = nullptr;
-  }
-  if (h2d_stream_) {
-    musaStreamDestroy(h2d_stream_);
-    h2d_stream_ = nullptr;
-  }
-  if (stream_) {
-    musaStreamDestroy(stream_);
-    stream_ = nullptr;
-  }
+  auto destroy_stream_if_valid = [](musaStream_t& s) {
+    if (s) {
+      musaStreamDestroy(s);
+      s = nullptr;
+    }
+  };
+  destroy_stream_if_valid(d2h_stream_);
+  if (h2d_stream_ != d2h_stream_) destroy_stream_if_valid(h2d_stream_);
+  if (stream_ != h2d_stream_ && stream_ != d2h_stream_) destroy_stream_if_valid(stream_);
 }
 
 Allocator* MusaDevice::GetAllocator(AllocatorAttributes attr) {
@@ -591,7 +631,7 @@ Allocator* MusaDevice::GetAllocator(AllocatorAttributes attr) {
 Status MusaDevice::Sync() {
   musaSetDevice(device_id_);
   musaError_t err = musaDeviceSynchronize();
-  return (err == musaSuccess) ? Status::OK()
+  return (err == musaSuccess) ? ::tsl::OkStatus()
                               : errors::Internal("MUSA Device Sync Failed");
 }
 
@@ -599,7 +639,7 @@ Status MusaDevice::TryGetDeviceContext(DeviceContext** out_context) {
   if (device_context_) {
     *out_context = device_context_;
     device_context_->Ref();
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
   return errors::Internal("MusaDeviceContext is null");
 }
