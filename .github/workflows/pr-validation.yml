@@ -165,16 +165,18 @@ jobs:
           LOG_FILE="$JOB_LOG_DIR/format_check.log"
           SUMMARY_FILE="$RUNNER_TEMP/format.md"
           STATUS="success"
+          JOB_RESULT="success (non-blocking)"
 
           if [[ "${{ steps.run_check.outputs.format_exit }}" != "0" ]]; then
             STATUS="failure"
-            echo "::warning::Format check failed. This job is non-blocking."
+            echo "::warning::Format check failed. This job remains non-blocking."
           fi
 
           {
             echo "## Format Check"
             echo
-            echo "- Status: $STATUS"
+            echo "- Job result: $JOB_RESULT"
+            echo "- Format check result: $STATUS"
             echo "- Non-blocking: yes"
             echo "- Log file: $LOG_FILE"
             echo
