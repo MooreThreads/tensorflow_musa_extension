@@ -18,7 +18,7 @@ def create_config_with_musa_optimizer():
 
 
 class TwoLayerFusedMatMulFusionTest(MUSATestCase):
-    def test_two_layer_fused_matmul_fusion_applied(self):
+    def _run_two_layer_test(self, activation="relu", alpha=0.2):
         np.random.seed(42)
         tf.random.set_seed(42)
 
@@ -40,7 +40,10 @@ class TwoLayerFusedMatMulFusionTest(MUSATestCase):
 
                 hidden = tf.matmul(x, w0)
                 hidden = tf.nn.bias_add(hidden, b0)
-                hidden = tf.nn.relu(hidden)
+                if activation == "relu":
+                    hidden = tf.nn.relu(hidden, name="relu")
+                else:
+                    hidden = tf.nn.leaky_relu(hidden, alpha=alpha, name="leaky_relu")
                 out = tf.matmul(hidden, w1)
                 out = tf.nn.bias_add(out, b1)
                 output = out * 1.0
@@ -60,7 +63,20 @@ class TwoLayerFusedMatMulFusionTest(MUSATestCase):
         self.assertIsNotNone(
             fused_node, "MusaTwoLayerFusedMatMul fusion was NOT applied"
         )
+        self.assertEqual(
+            fused_node.attr["activation_type"].s.decode("utf-8"),
+            "Relu" if activation == "relu" else "LeakyRelu",
+        )
+        if activation == "leakyrelu":
+            self.assertAlmostEqual(
+                fused_node.attr["activation_alpha"].f, alpha, places=6
+            )
 
+    def test_two_layer_fused_matmul_relu_fusion_applied(self):
+        self._run_two_layer_test(activation="relu")
+
+    def test_two_layer_fused_matmul_leakyrelu_fusion_applied(self):
+        self._run_two_layer_test(activation="leakyrelu", alpha=0.15)
 
 if __name__ == "__main__":
     tf.test.main()

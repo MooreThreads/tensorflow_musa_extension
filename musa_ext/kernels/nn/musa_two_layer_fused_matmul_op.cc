@@ -66,6 +66,7 @@ Status InferMatMulOutputShape(const TensorShape& lhs_shape,
 
 // Fused block op for:
 //   MatMul + BiasAdd + Relu + MatMul + BiasAdd
+//   MatMul + BiasAdd + LeakyRelu + MatMul + BiasAdd
 //
 // This op is intentionally narrow: it only serves the two-layer linear block
 // emitted by MusaMatMulBiasFusion. Internally it still runs two MatMul stages,
@@ -84,6 +85,8 @@ REGISTER_OP("MusaTwoLayerFusedMatMul")
     .Attr("transpose_a1: bool = false")
     .Attr("transpose_b1: bool = false")
     .Attr("hidden_input_idx1: int = 0")
+    .Attr("activation_type: string = 'Relu'")
+    .Attr("activation_alpha: float = 0.2")
     .SetShapeFn([](shape_inference::InferenceContext* c) {
       c->set_output(0, c->UnknownShape());
       return Status::OK();
@@ -99,10 +102,16 @@ class MusaTwoLayerFusedMatMulOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("transpose_a1", &transpose_a1_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("transpose_b1", &transpose_b1_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("hidden_input_idx1", &hidden_input_idx1_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("activation_type", &activation_type_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("activation_alpha", &activation_alpha_));
     OP_REQUIRES(ctx, hidden_input_idx1_ == 0 || hidden_input_idx1_ == 1,
                 errors::InvalidArgument(
                     "hidden_input_idx1 must be 0 or 1, got ",
                     hidden_input_idx1_));
+    OP_REQUIRES(
+        ctx, activation_type_ == "Relu" || activation_type_ == "LeakyRelu",
+        errors::InvalidArgument("activation_type must be Relu or LeakyRelu, got ",
+                                activation_type_));
   }
 
   bool IsExpensive() override { return true; }
@@ -292,11 +301,16 @@ class MusaTwoLayerFusedMatMulOp : public MusaOpKernel {
     mTensor mt_out = CreateMTensor(*out, format_);
 
     mUnary unary_op;
-    unary_op.SetMode(::musa::dnn::Unary::Mode::RELU);
+    if (activation_type_ == "Relu") {
+      unary_op.SetMode(::musa::dnn::Unary::Mode::RELU);
+    } else {
+      unary_op.SetMode(::musa::dnn::Unary::Mode::LEAKY_RELU);
+      unary_op.SetAlpha(static_cast<double>(activation_alpha_));
+    }
 
     auto status = unary_op.Run(handle, mt_out, mt_out);
     if (status != ::musa::dnn::Status::SUCCESS) {
-      return errors::Internal("Relu failed. Status: ",
+      return errors::Internal("Activation failed. Status: ",
                               static_cast<int>(status));
     }
     return Status::OK();
@@ -307,6 +321,8 @@ class MusaTwoLayerFusedMatMulOp : public MusaOpKernel {
   bool transpose_a1_ = false;
   bool transpose_b1_ = false;
   int hidden_input_idx1_ = 0;
+  std::string activation_type_ = "Relu";
+  float activation_alpha_ = 0.2f;
 };
 
 #define REGISTER_MUSA_TWO_LAYER_FUSED_MATMUL(TYPE)                       \
