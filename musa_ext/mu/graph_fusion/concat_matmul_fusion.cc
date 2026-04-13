@@ -9,7 +9,6 @@
 namespace tensorflow {
 namespace grappler {
 namespace musa_fusion {
-
 namespace {
 
 // Helper to check if node has specific op type
@@ -105,11 +104,11 @@ FusionMatchResult ConcatMatMulFusion::Match(const GraphDef& graph,
 Status ConcatMatMulFusion::Apply(GraphDef* graph,
                                  const FusionMatchResult& match_result) const {
   if (!match_result.IsValid()) {
-    return Status(error::INVALID_ARGUMENT, "Invalid ConcatMatMul match result");
+    return ::tsl::errors::InvalidArgument("Invalid ConcatMatMul match result");
   }
 
   if (!IsKernelAvailable()) {
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   // Get captured nodes
@@ -118,7 +117,7 @@ Status ConcatMatMulFusion::Apply(GraphDef* graph,
 
   if (matmul_it == match_result.captured_nodes.end() ||
       concat_it == match_result.captured_nodes.end()) {
-    return Status(error::INVALID_ARGUMENT,
+    return ::tsl::errors::InvalidArgument(
                   "Missing required nodes in ConcatMatMul pattern");
   }
 
@@ -131,7 +130,7 @@ Status ConcatMatMulFusion::Apply(GraphDef* graph,
   // Check if this node has already been fused
   for (const auto& node : graph->node()) {
     if (node.name() == original_name && node.op() == "MusaConcatMatMul") {
-      return Status::OK();
+      return ::tsl::OkStatus();
     }
   }
 
@@ -144,7 +143,7 @@ Status ConcatMatMulFusion::Apply(GraphDef* graph,
   }
 
   if (matmul_node_idx < 0) {
-    return Status(error::INVALID_ARGUMENT,
+    return ::tsl::errors::InvalidArgument(
                   "Failed to find MatMul node in graph: " + original_name);
   }
 
@@ -192,7 +191,7 @@ Status ConcatMatMulFusion::Apply(GraphDef* graph,
       ->at("concat_input_idx")
       .set_i(concat_in_matmul_idx);
 
-  return Status::OK();
+  return ::tsl::OkStatus();
 }
 
 REGISTER_FUSION_PATTERN(ConcatMatMulFusion);

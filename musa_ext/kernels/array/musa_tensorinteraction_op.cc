@@ -97,6 +97,6 @@ REGISTER_OP("MusaInteract")
       ::tensorflow::shape_inference::DimensionHandle n = c->Dim(input_shape, 1);
 
       c->set_output(0, c->MakeShape({batch, n, n}));
-      return Status::OK();
+      return ::tsl::OkStatus();
     });
 }

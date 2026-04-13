@@ -23,7 +23,6 @@ limitations under the License.
 namespace tensorflow {
 namespace grappler {
 namespace musa_fusion {
-
 namespace {
 
 bool IsOp(const NodeDef& node, const std::string& op_type) {
@@ -116,11 +115,11 @@ FusionMatchResult MusaClipFusion::MatchFromMaximumNode(
 Status MusaClipFusion::Apply(GraphDef* graph,
                              const FusionMatchResult& match_result) const {
   if (!match_result.IsValid()) {
-    return Status(error::INVALID_ARGUMENT, "Invalid Clip match result");
+    return ::tsl::errors::InvalidArgument("Invalid Clip match result");
   }
 
   if (!IsKernelAvailable()) {
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   auto output_it = match_result.captured_nodes.find("output");
@@ -133,14 +132,14 @@ Status MusaClipFusion::Apply(GraphDef* graph,
       x_input_it == match_result.captured_attrs.end() ||
       lo_input_it == match_result.captured_attrs.end() ||
       hi_input_it == match_result.captured_attrs.end()) {
-    return Status(error::INVALID_ARGUMENT,
+    return ::tsl::errors::InvalidArgument(
                   "Missing captured nodes for MusaClip fusion");
   }
 
   const NodeDef* output_node = output_it->second;
   const NodeDef* inner_node = inner_it->second;
   if (!output_node || !inner_node) {
-    return Status(error::INVALID_ARGUMENT,
+    return ::tsl::errors::InvalidArgument(
                   "Missing output/inner nodes for MusaClip fusion");
   }
 
@@ -195,7 +194,7 @@ Status MusaClipFusion::Apply(GraphDef* graph,
     FusionGraphUtils::RemoveNode(graph, idx);
   }
 
-  return Status::OK();
+  return ::tsl::OkStatus();
 }
 
 REGISTER_FUSION_PATTERN(MusaClipFusion);

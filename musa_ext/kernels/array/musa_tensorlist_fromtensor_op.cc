@@ -18,11 +18,11 @@ Status TensorShapeFromTensorMusa(const Tensor& t, PartialTensorShape* out) {
     if (t.dtype() == DT_INT32) {
       out->Clear();
       out->AddDim(static_cast<int64_t>(t.scalar<int32>()()));
-      return Status::OK();
+      return ::tsl::OkStatus();
     } else if (t.dtype() == DT_INT64) {
       out->Clear();
       out->AddDim(static_cast<int64_t>(t.scalar<int64>()()));
-      return Status::OK();
+      return ::tsl::OkStatus();
     } else {
       return errors::InvalidArgument(
           "element_shape must be int32 or int64, got ",
@@ -43,7 +43,7 @@ Status TensorShapeFromTensorMusa(const Tensor& t, PartialTensorShape* out) {
     for (int i = 0; i < vec.size(); ++i) {
       out->AddDim(static_cast<int64_t>(vec(i)));
     }
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   if (t.dtype() == DT_INT64) {
@@ -51,7 +51,7 @@ Status TensorShapeFromTensorMusa(const Tensor& t, PartialTensorShape* out) {
     for (int i = 0; i < vec.size(); ++i) {
       out->AddDim(static_cast<int64_t>(vec(i)));
     }
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   return errors::InvalidArgument("element_shape must be int32 or int64, got ",

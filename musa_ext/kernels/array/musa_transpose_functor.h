@@ -22,7 +22,7 @@ struct TransposeFunctor {
     if (::musa::dnn::Status::SUCCESS != pop.Run(h, out_mt, in_mt)) {
       return errors::Internal("muDNN Permute Run failed!");
     }
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 };
 

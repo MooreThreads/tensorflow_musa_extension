@@ -91,7 +91,7 @@ REGISTER_OP("MusaClip")
       if (!c->RankKnown(x_shape) || !c->RankKnown(lo_shape) ||
           !c->RankKnown(hi_shape)) {
         c->set_output(0, c->UnknownShape());
-        return Status::OK();
+        return ::tsl::OkStatus();
       }
 
       auto BroadcastTwoShapes =
@@ -136,14 +136,14 @@ REGISTER_OP("MusaClip")
 
         std::reverse(dims.begin(), dims.end());
         *out = c->MakeShape(dims);
-        return Status::OK();
+        return ::tsl::OkStatus();
       };
 
       TF_RETURN_IF_ERROR(BroadcastTwoShapes(x_shape, lo_shape, &x_lo_shape));
       TF_RETURN_IF_ERROR(BroadcastTwoShapes(x_lo_shape, hi_shape, &out_shape));
 
       c->set_output(0, out_shape);
-      return Status::OK();
+      return ::tsl::OkStatus();
     });
 
 }  // namespace tensorflow

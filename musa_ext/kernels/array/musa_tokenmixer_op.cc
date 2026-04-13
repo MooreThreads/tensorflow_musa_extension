@@ -113,7 +113,7 @@ REGISTER_OP("MusaTokenMixer")
       auto batch_dim = c->Dim(c->input(0), 0);
       c->set_output(0, c->MakeShape({batch_dim, c->MakeDim(num_H),
                                      c->MakeDim(num_T * d_k)}));
-      return Status::OK();
+      return ::tsl::OkStatus();
     });
 
 }  // namespace tensorflow

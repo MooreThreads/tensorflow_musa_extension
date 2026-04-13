@@ -9,7 +9,7 @@
 #include "tensorflow/core/framework/device_attributes.pb.h"
 #include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/public/session_options.h"
-#include "tensorflow/stream_executor/multi_platform_manager.h"
+#include "xla/stream_executor/multi_platform_manager.h"
 
 namespace tensorflow {
 void ForceMusaOptimizationPassRegistration();
@@ -24,13 +24,13 @@ class MusaDeviceFactory : public DeviceFactory {
     int count = 0;
     musaError_t err = musaGetDeviceCount(&count);
     if (err != musaSuccess) {
-      return Status::OK();
+      return ::tsl::OkStatus();
     }
 
     for (int i = 0; i < count; ++i) {
       devices->push_back(strings::StrCat("/physical_device:MUSA:", i));
     }
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   Status CreateDevices(const SessionOptions& options, const string& name_prefix,
@@ -46,7 +46,7 @@ class MusaDeviceFactory : public DeviceFactory {
     if (!platform_status.ok()) {
       return platform_status.status();
     }
-    auto* platform = platform_status.ValueOrDie();
+    auto* platform = platform_status.value();
 
     for (int i = 0; i < count; ++i) {
       DeviceAttributes attr;
@@ -70,12 +70,12 @@ class MusaDeviceFactory : public DeviceFactory {
       if (!executor_status.ok()) {
         return executor_status.status();
       }
-      auto* executor = executor_status.ValueOrDie();
+      auto* executor = executor_status.value();
 
       devices->push_back(std::unique_ptr<Device>(
           new MusaDevice(Env::Default(), attr, i, executor)));
     }
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 };
 

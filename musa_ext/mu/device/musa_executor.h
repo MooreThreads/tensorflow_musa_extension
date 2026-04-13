@@ -3,33 +3,34 @@
 
 #include <memory>
 
+#include "absl/functional/any_invocable.h"
 #include "musa_device.h"
 #include "musa_event.h"
 #include "musa_memcpy.h"
 #include "musa_memset.h"
 #include "musa_stream.h"
-#include "tensorflow/stream_executor/lib/status.h"
-#include "tensorflow/stream_executor/lib/statusor.h"
-#include "tensorflow/stream_executor/stream_executor_internal.h"
+#include "xla/stream_executor/stream_executor_internal.h"
+#include "tsl/platform/errors.h"
+#include "tsl/platform/status.h"
+#include "tsl/platform/statusor.h"
 namespace stream_executor {
 namespace musa {
 
-inline port::Status FromMusaStatus(mStatus s) {
+inline tsl::Status FromMusaStatus(mStatus s) {
   if (s == mStatus::SUCCESS) {
-    return port::Status::OK();
+    return tsl::OkStatus();
   }
-  return port::Status(port::error::INTERNAL, "MUSA Operation Failed");
+  return tsl::errors::Internal("MUSA Operation Failed");
 }
 
 class MusaExecutor : public internal::StreamExecutorInterface {
  public:
-  explicit MusaExecutor(const PluginConfig& plugin_config)
-      : plugin_config_(plugin_config) {}
+  MusaExecutor() = default;
   ~MusaExecutor() override {}
 
-  port::Status Init(int device_ordinal, DeviceOptions device_options) override {
+  tsl::Status Init(int device_ordinal, DeviceOptions device_options) override {
     device_ordinal_ = device_ordinal;
-    return port::Status::OK();
+    return tsl::OkStatus();
   }
 
   std::unique_ptr<internal::StreamInterface> GetStreamImplementation()
@@ -53,11 +54,7 @@ class MusaExecutor : public internal::StreamExecutorInterface {
     return nullptr;
   }
 
-  std::unique_ptr<internal::TimerInterface> GetTimerImplementation() override {
-    return nullptr;
-  }
-
-  DeviceMemoryBase Allocate(uint64 size, int64 memory_space) override {
+  DeviceMemoryBase Allocate(uint64_t size, int64_t memory_space) override {
     if (size == 0) {
       return DeviceMemoryBase(nullptr, 0);
     }
@@ -72,8 +69,8 @@ class MusaExecutor : public internal::StreamExecutorInterface {
     return DeviceMemoryBase(ptr, size);
   }
 
-  void* GetSubBuffer(DeviceMemoryBase* parent, uint64 offset,
-                     uint64 size) override {
+  void* GetSubBuffer(DeviceMemoryBase* parent, uint64_t offset,
+                     uint64_t size) override {
     return reinterpret_cast<char*>(parent->opaque()) + offset;
   }
 
@@ -87,45 +84,45 @@ class MusaExecutor : public internal::StreamExecutorInterface {
     }
   }
 
-  bool HostMemoryRegister(void* mem, uint64 size) override { return true; }
+  bool HostMemoryRegister(void* mem, uint64_t size) override { return true; }
   bool HostMemoryUnregister(void* mem) override { return true; }
 
-  void* HostMemoryAllocate(uint64 size) override { return nullptr; }
+  void* HostMemoryAllocate(uint64_t size) override { return nullptr; }
   void HostMemoryDeallocate(void* mem) override {}
 
-  port::Status SynchronousMemZero(DeviceMemoryBase* location,
-                                  uint64 size) override {
+  tsl::Status SynchronousMemZero(DeviceMemoryBase* location,
+                                 uint64_t size) override {
     mHandle h;
 
     return FromMusaStatus(
         tensorflow::musa::Memset(h, location->opaque(), size, 0));
   }
 
-  port::Status SynchronousMemSet(DeviceMemoryBase* location, int value,
-                                 uint64 size) override {
+  tsl::Status SynchronousMemSet(DeviceMemoryBase* location, int value,
+                                uint64_t size) override {
     mHandle h;
     return FromMusaStatus(tensorflow::musa::Memset(
         h, location->opaque(), size, static_cast<uint8_t>(value)));
   }
 
-  port::Status SynchronousMemcpy(DeviceMemoryBase* gpu_dst,
-                                 const void* host_src, uint64 size) override {
+  tsl::Status SynchronousMemcpy(DeviceMemoryBase* gpu_dst,
+                                const void* host_src, uint64_t size) override {
     // H2D
     return FromMusaStatus(
         tensorflow::musa::MusaMemcpyH2D(gpu_dst->opaque(), host_src, size));
   }
 
-  port::Status SynchronousMemcpy(void* host_dst,
-                                 const DeviceMemoryBase& gpu_src,
-                                 uint64 size) override {
+  tsl::Status SynchronousMemcpy(void* host_dst,
+                                const DeviceMemoryBase& gpu_src,
+                                uint64_t size) override {
     // D2H
     return FromMusaStatus(
         tensorflow::musa::MusaMemcpyD2H(host_dst, gpu_src.opaque(), size));
   }
 
-  port::Status SynchronousMemcpyDeviceToDevice(DeviceMemoryBase* gpu_dst,
+  tsl::Status SynchronousMemcpyDeviceToDevice(DeviceMemoryBase* gpu_dst,
                                                const DeviceMemoryBase& gpu_src,
-                                               uint64 size) override {
+                                              uint64_t size) override {
     // D2D
     return FromMusaStatus(tensorflow::musa::MusaMemcpyD2D(
         gpu_dst->opaque(), gpu_src.opaque(), size));
@@ -140,7 +137,7 @@ class MusaExecutor : public internal::StreamExecutorInterface {
   // D2D Async
   bool MemcpyDeviceToDevice(Stream* stream, DeviceMemoryBase* gpu_dst,
                             const DeviceMemoryBase& gpu_src,
-                            uint64 size) override {
+                            uint64_t size) override {
     auto status = tensorflow::musa::MusaMemcpyAsyncD2D(
         gpu_dst->opaque(), gpu_src.opaque(), size, GetMusaStream(stream));
     return status == mStatus::SUCCESS;
@@ -148,7 +145,7 @@ class MusaExecutor : public internal::StreamExecutorInterface {
 
   // H2D Async
   bool Memcpy(Stream* stream, DeviceMemoryBase* gpu_dst, const void* host_src,
-              uint64 size) override {
+              uint64_t size) override {
     auto status = tensorflow::musa::MusaMemcpyAsyncH2D(
         gpu_dst->opaque(), host_src, size, GetMusaStream(stream));
     return status == mStatus::SUCCESS;
@@ -156,15 +153,15 @@ class MusaExecutor : public internal::StreamExecutorInterface {
 
   // D2H Async
   bool Memcpy(Stream* stream, void* host_dst, const DeviceMemoryBase& gpu_src,
-              uint64 size) override {
+              uint64_t size) override {
     auto status = tensorflow::musa::MusaMemcpyAsyncD2H(
         host_dst, gpu_src.opaque(), size, GetMusaStream(stream));
     return status == mStatus::SUCCESS;
   }
 
   // MemZero Async
-  port::Status MemZero(Stream* stream, DeviceMemoryBase* location,
-                       uint64 size) override {
+  tsl::Status MemZero(Stream* stream, DeviceMemoryBase* location,
+                      uint64_t size) override {
     mHandle h;
     h.SetStream(GetMusaStream(stream));
     return FromMusaStatus(
@@ -172,32 +169,32 @@ class MusaExecutor : public internal::StreamExecutorInterface {
   }
 
   // Memset32 Async
-  port::Status Memset32(Stream* stream, DeviceMemoryBase* location,
-                        uint32 pattern, uint64 size) override {
+  tsl::Status Memset32(Stream* stream, DeviceMemoryBase* location,
+                       uint32 pattern, uint64_t size) override {
     mHandle h;
     h.SetStream(GetMusaStream(stream));
     return FromMusaStatus(
         tensorflow::musa::Memset32(h, location->opaque(), size, pattern));
   }
 
-  port::Status BlockHostUntilDone(Stream* stream) override {
+  tsl::Status BlockHostUntilDone(Stream* stream) override {
     internal::StreamInterface* implementation = stream->implementation();
     auto* musa_stream = static_cast<MusaStream*>(implementation);
     return musa_stream->BlockHostUntilDone_DEBUG(stream);
   }
 
   bool HostCallback(Stream* stream,
-                    std::function<port::Status()> callback) override {
+                    absl::AnyInvocable<tsl::Status() &&> callback) override {
     // Execute callback asynchronously via a host function
     // This ensures the callback runs after all preceding stream operations
     musaStream_t musa_stream = GetMusaStream(stream);
     musaError_t err = musaLaunchHostFunc(musa_stream,
         [](void* user_data) {
-          auto* cb = static_cast<std::function<port::Status()>*>(user_data);
-          (*cb)();
+          auto* cb = static_cast<absl::AnyInvocable<tsl::Status() &&>*>(user_data);
+          std::move(*cb)();
           delete cb;
         },
-        new std::function<port::Status()>(std::move(callback)));
+        new absl::AnyInvocable<tsl::Status() &&>(std::move(callback)));
     if (err != musaSuccess) {
       LOG(WARNING) << "MusaExecutor::HostCallback failed: "
                    << musaGetErrorString(err);
@@ -206,20 +203,14 @@ class MusaExecutor : public internal::StreamExecutorInterface {
     return true;
   }
 
-  bool AllocateTimer(Timer* timer) override { return true; }
-  void DeallocateTimer(Timer* timer) override {}
-  bool StartTimer(Stream* stream, Timer* timer) override { return true; }
-  bool StopTimer(Stream* stream, Timer* timer) override { return true; }
-
-  int PlatformDeviceCount() override { return 1; }
-  port::Status EnablePeerAccessTo(StreamExecutorInterface* other) override {
-    return port::Status::OK();
+  tsl::Status EnablePeerAccessTo(StreamExecutorInterface* other) override {
+    return tsl::OkStatus();
   }
   bool CanEnablePeerAccessTo(StreamExecutorInterface* other) override {
     return false;
   }
 
-  port::StatusOr<std::unique_ptr<DeviceDescription>> CreateDeviceDescription()
+  tsl::StatusOr<std::unique_ptr<DeviceDescription>> CreateDeviceDescription()
       const override {
     internal::DeviceDescriptionBuilder builder;
     builder.set_name("MUSA Device");
@@ -227,7 +218,7 @@ class MusaExecutor : public internal::StreamExecutorInterface {
   }
 
   bool SynchronizeAllActivity() override { return true; }
-  bool DeviceMemoryUsage(int64* free, int64* total) const override {
+  bool DeviceMemoryUsage(int64_t* free, int64_t* total) const override {
     return false;
   }
   bool AllocateStream(Stream* stream) override { return true; }
@@ -270,51 +261,49 @@ class MusaExecutor : public internal::StreamExecutorInterface {
     return true;
   }
 
-  port::Status AllocateEvent(Event* event) override {
+  tsl::Status AllocateEvent(Event* event) override {
     auto* musa_event = static_cast<MusaEvent*>(event->implementation());
     if (!musa_event) {
-      return port::Status(port::error::INTERNAL,
-                          "Invalid event implementation");
+      return tsl::errors::Internal("Invalid event implementation");
     }
     if (!musa_event->Init()) {
-      return port::Status(port::error::INTERNAL,
-                          "Failed to initialize MUSA event");
+      return tsl::errors::Internal("Failed to initialize MUSA event");
     }
-    return port::Status::OK();
+    return tsl::OkStatus();
   }
 
-  port::Status DeallocateEvent(Event* event) override {
+  tsl::Status DeallocateEvent(Event* event) override {
     auto* musa_event = static_cast<MusaEvent*>(event->implementation());
     if (musa_event && musa_event->handle()) {
       musaEventDestroy(musa_event->handle());
     }
-    return port::Status::OK();
+    return tsl::OkStatus();
   }
 
-  port::Status RecordEvent(Stream* stream, Event* event) override {
+  tsl::Status RecordEvent(Stream* stream, Event* event) override {
     auto* musa_event = static_cast<MusaEvent*>(event->implementation());
     if (!musa_event || !musa_event->handle()) {
-      return port::Status(port::error::INTERNAL, "Invalid event");
+      return tsl::errors::Internal("Invalid event");
     }
     musaStream_t mstream = GetMusaStream(stream);
     musaError_t err = musaEventRecord(musa_event->handle(), mstream);
     if (err != musaSuccess) {
-      return port::Status(port::error::INTERNAL, "musaEventRecord failed");
+      return tsl::errors::Internal("musaEventRecord failed");
     }
-    return port::Status::OK();
+    return tsl::OkStatus();
   }
 
-  port::Status WaitForEvent(Stream* stream, Event* event) override {
+  tsl::Status WaitForEvent(Stream* stream, Event* event) override {
     auto* musa_event = static_cast<MusaEvent*>(event->implementation());
     if (!musa_event || !musa_event->handle()) {
-      return port::Status(port::error::INTERNAL, "Invalid event");
+      return tsl::errors::Internal("Invalid event");
     }
     musaStream_t mstream = GetMusaStream(stream);
     musaError_t err = musaStreamWaitEvent(mstream, musa_event->handle(), 0);
     if (err != musaSuccess) {
-      return port::Status(port::error::INTERNAL, "musaStreamWaitEvent failed");
+      return tsl::errors::Internal("musaStreamWaitEvent failed");
     }
-    return port::Status::OK();
+    return tsl::OkStatus();
   }
 
   Event::Status PollForEventStatus(Event* event) override {
@@ -329,7 +318,6 @@ class MusaExecutor : public internal::StreamExecutorInterface {
   }
 
  private:
-  PluginConfig plugin_config_;
   int device_ordinal_;
 };
 

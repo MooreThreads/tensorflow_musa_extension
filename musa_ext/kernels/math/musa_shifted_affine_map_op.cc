@@ -50,7 +50,7 @@ Status BroadcastShapes(const TensorShape& lhs, const TensorShape& rhs,
                                    " vs ", rhs.DebugString());
   }
   *output = BCast::ToShape(bcast.output_shape());
-  return Status::OK();
+  return ::tsl::OkStatus();
 }
 
 ShiftedAffineMapShape BuildKernelShape(const TensorShape& output_shape) {
@@ -148,20 +148,20 @@ REGISTER_OP("MusaShiftedAffineMap")
 
         std::reverse(dims.begin(), dims.end());
         *out = c->MakeShape(dims);
-        return Status::OK();
+        return ::tsl::OkStatus();
       };
 
       ShapeHandle out = c->input(0);
       if (!c->RankKnown(out) || !c->RankKnown(c->input(1)) ||
           !c->RankKnown(c->input(2))) {
         c->set_output(0, c->UnknownShape());
-        return Status::OK();
+        return ::tsl::OkStatus();
       }
 
       TF_RETURN_IF_ERROR(BroadcastTwoShapes(out, c->input(1), &out));
       TF_RETURN_IF_ERROR(BroadcastTwoShapes(out, c->input(2), &out));
       c->set_output(0, out);
-      return Status::OK();
+      return ::tsl::OkStatus();
     });
 
 // =============================================================================

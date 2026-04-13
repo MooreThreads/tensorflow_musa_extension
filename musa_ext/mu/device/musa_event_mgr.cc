@@ -64,7 +64,7 @@ MusaEventMgr::~MusaEventMgr() {
       iu.func();
     } else if (iu.has_status_func) {
       musaSetDevice(device_id_);
-      iu.status_func(Status::OK());
+      iu.status_func(::tsl::OkStatus());
     }
   }
 
@@ -212,7 +212,7 @@ void MusaEventMgr::FreeMemory(const ToFreeVector& to_free) {
         });
       }
     } else if (iu.has_status_func) {
-      Status status = Status::OK();
+      Status status = ::tsl::OkStatus();
       auto status_func = iu.status_func;
       int device_id = device_id_;
 
@@ -278,7 +278,7 @@ void MusaEventMgr::PollLoop() {
         iu.func();
       } else if (iu.has_status_func) {
         musaSetDevice(device_id_);
-        iu.status_func(Status::OK());
+        iu.status_func(::tsl::OkStatus());
       }
     }
   } else {

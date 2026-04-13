@@ -29,7 +29,7 @@ Status CopyTensorForUpdate(OpKernelContext* ctx, const Tensor& src,
   TF_RETURN_IF_ERROR(ctx->allocate_temp(src.dtype(), src.shape(), dst, attr));
 
   if (src.TotalBytes() == 0) {
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   // Use musaMemcpyAsync for same-device memory copy
@@ -41,18 +41,18 @@ Status CopyTensorForUpdate(OpKernelContext* ctx, const Tensor& src,
                             musaGetErrorString(err));
   }
 
-  return Status::OK();
+  return ::tsl::OkStatus();
 }
 
 Status PrepareTensorForMusaUpdate(OpKernelContext* ctx, Var* var) {
   if (!var->copy_on_read_mode.load() && var->tensor()->RefCountIsOne()) {
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   Tensor copied;
   TF_RETURN_IF_ERROR(CopyTensorForUpdate(ctx, *var->tensor(), &copied));
   *var->tensor() = copied;
-  return Status::OK();
+  return ::tsl::OkStatus();
 }
 
 class MutexUnlocker {
@@ -155,7 +155,7 @@ class MusaResourceApplyAdamOp : public MusaOpKernel {
         return errors::Internal("ResourceApplyAdam ", op_name,
                                 " failed. Status: ", static_cast<int>(status));
       }
-      return Status::OK();
+      return ::tsl::OkStatus();
     };
 
     auto fill_scalar = [&](T val, const TensorShape& shape,

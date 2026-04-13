@@ -375,7 +375,7 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
         }
       }
     }
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   Status Optimize(Cluster* cluster, const GrapplerItem& item,
@@ -391,7 +391,7 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
       VLOG(2)
           << "MusaGraphOptimizer: No MUSA nodes found, skipping optimization";
       dumper.DumpFinal(*optimized_graph);
-      return Status::OK();
+      return ::tsl::OkStatus();
     }
 
     VLOG(1) << "MusaGraphOptimizer: Optimizing graph with "
@@ -439,7 +439,7 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
         VLOG(2) << "  - " << node.name() << " (" << node.op() << ")";
       }
     }
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   // Feedback method removed - not available in TF 2.6.1 CustomGraphOptimizer
@@ -460,7 +460,7 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
 
     if (patterns.empty()) {
       VLOG(1) << "MusaGraphOptimizer: No fusion patterns registered";
-      return Status::OK();
+      return ::tsl::OkStatus();
     }
 
     VLOG(1) << "MusaGraphOptimizer: Applying " << patterns.size()
@@ -566,7 +566,7 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
             << "Applied: " << fusion_applied_count
             << ", Fallbacks: " << fusion_fallback_count;
 
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
  private:

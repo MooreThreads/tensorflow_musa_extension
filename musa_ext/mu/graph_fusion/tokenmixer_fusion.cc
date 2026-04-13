@@ -25,7 +25,6 @@ limitations under the License.
 namespace tensorflow {
 namespace grappler {
 namespace musa_fusion {
-
 namespace {
 
 bool IsOp(const NodeDef& node, const std::string& op_type) {
@@ -392,11 +391,11 @@ FusionMatchResult MusaTokenMixerFusion::MatchFromReshapeNode(
 Status MusaTokenMixerFusion::Apply(
     GraphDef* graph, const FusionMatchResult& match_result) const {
   if (!match_result.IsValid()) {
-    return Status(error::INVALID_ARGUMENT, "Invalid TokenMixer match result");
+    return ::tsl::errors::InvalidArgument("Invalid TokenMixer match result");
   }
 
   if (!IsKernelAvailable()) {
-    return Status::OK();
+    return ::tsl::OkStatus();
   }
 
   // ---- Retrieve captured nodes ----
@@ -405,7 +404,7 @@ Status MusaTokenMixerFusion::Apply(
   auto reshape1_it = match_result.captured_nodes.find("reshape1");
 
   if (output_it == match_result.captured_nodes.end()) {
-    return Status(error::INVALID_ARGUMENT,
+    return ::tsl::errors::InvalidArgument(
                   "Missing output node in TokenMixer pattern");
   }
 
@@ -419,7 +418,7 @@ Status MusaTokenMixerFusion::Apply(
   if (num_T_it == match_result.captured_attrs.end() ||
       num_H_it == match_result.captured_attrs.end() ||
       d_k_it == match_result.captured_attrs.end()) {
-    return Status(error::INVALID_ARGUMENT,
+    return ::tsl::errors::InvalidArgument(
                   "Missing shape attributes in TokenMixer pattern");
   }
 
@@ -438,7 +437,7 @@ Status MusaTokenMixerFusion::Apply(
     if (node.name() == base_name && node.op() == "MusaTokenMixer") {
       VLOG(1) << "MusaTokenMixer: " << base_name
               << " is already fused, skipping";
-      return Status::OK();
+      return ::tsl::OkStatus();
     }
   }
 
@@ -456,7 +455,7 @@ Status MusaTokenMixerFusion::Apply(
       reshape1_it->second->input_size() > 0) {
     fused_node->add_input(reshape1_it->second->input(0));
   } else {
-    return Status(error::INVALID_ARGUMENT, "Cannot determine TokenMixer input");
+    return ::tsl::errors::InvalidArgument("Cannot determine TokenMixer input");
   }
 
   // Attributes
@@ -539,7 +538,7 @@ Status MusaTokenMixerFusion::Apply(
     FusionGraphUtils::RemoveNode(graph, idx);
   }
 
-  return Status::OK();
+  return ::tsl::OkStatus();
 }
 
 // Register the pattern
