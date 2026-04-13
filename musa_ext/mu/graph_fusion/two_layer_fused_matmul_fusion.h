@@ -9,7 +9,9 @@ namespace tensorflow {
 namespace grappler {
 namespace musa_fusion {
 
-// Computes: MatMul + BiasAdd/Add/AddV2 + Relu + MatMul + BiasAdd/Add/AddV2
+// Computes:
+//   MatMul + BiasAdd/Add/AddV2 + Relu + MatMul + BiasAdd/Add/AddV2
+//   MatMul + BiasAdd/Add/AddV2 + LeakyRelu + MatMul + BiasAdd/Add/AddV2
 class TwoLayerFusedMatMulFusion : public FusionPattern {
  public:
   TwoLayerFusedMatMulFusion() = default;

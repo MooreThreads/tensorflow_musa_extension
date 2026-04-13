@@ -156,6 +156,12 @@ struct UniqueBiasLikeConsumerMatch {
   int bias_input_idx = -1;
 };
 
+struct ActivationNodeMatch {
+  const NodeDef* activation = nullptr;
+  std::string activation_type;
+  float activation_alpha = 0.2f;
+};
+
 UniqueBiasLikeConsumerMatch FindUniqueBiasLikeConsumer(const GraphDef& graph,
                                                        const NodeDef& producer) {
   UniqueBiasLikeConsumerMatch match;
@@ -193,6 +199,24 @@ UniqueBiasLikeConsumerMatch FindUniqueBiasLikeConsumer(const GraphDef& graph,
   return match;
 }
 
+ActivationNodeMatch ExtractActivationNode(const NodeDef& node) {
+  ActivationNodeMatch match;
+  if (IsOp(node, "Relu")) {
+    match.activation = &node;
+    match.activation_type = "Relu";
+    return match;
+  }
+  if (IsOp(node, "LeakyRelu")) {
+    match.activation = &node;
+    match.activation_type = "LeakyRelu";
+    auto alpha_it = node.attr().find("alpha");
+    if (alpha_it != node.attr().end()) {
+      match.activation_alpha = alpha_it->second.f();
+    }
+  }
+  return match;
+}
+
 }  // namespace
 
 bool TwoLayerFusedMatMulFusion::IsKernelAvailable() const {
@@ -210,13 +234,16 @@ FusionMatchResult TwoLayerFusedMatMulFusion::Match(const GraphDef& graph,
     return result;
   }
 
-  const NodeDef& relu_node = graph.node(start_node_idx);
-  if (!IsOp(relu_node, "Relu") || HasOriginalSuffix(relu_node.name()) ||
-      relu_node.input_size() != 1) {
+  const NodeDef& activation_node = graph.node(start_node_idx);
+  const ActivationNodeMatch activation_match =
+      ExtractActivationNode(activation_node);
+  if (activation_match.activation == nullptr ||
+      HasOriginalSuffix(activation_node.name()) ||
+      activation_node.input_size() != 1) {
     return result;
   }
 
-  const NodeDef* bias_add0 = FindProducer(graph, relu_node.input(0));
+  const NodeDef* bias_add0 = FindProducer(graph, activation_node.input(0));
   if (!bias_add0 || !IsBiasLike(*bias_add0) ||
       !IsSupportedFusionType(ResolveNodeType(*bias_add0))) {
     return result;
@@ -228,7 +255,7 @@ FusionMatchResult TwoLayerFusedMatMulFusion::Match(const GraphDef& graph,
   }
 
   const UniqueMatMulConsumerMatch matmul1_match =
-      FindUniqueMatMulConsumer(graph, relu_node);
+      FindUniqueMatMulConsumer(graph, activation_node);
   if (matmul1_match.matmul == nullptr) {
     return result;
   }
@@ -241,13 +268,18 @@ FusionMatchResult TwoLayerFusedMatMulFusion::Match(const GraphDef& graph,
   }
 
   result.matched = true;
-  result.matched_nodes = {&relu_node, bias_add0, matmul_bias0.matmul,
+  result.matched_nodes = {&activation_node, bias_add0, matmul_bias0.matmul,
                           matmul1_match.matmul, bias_add1_match.bias_add};
-  result.captured_nodes["relu0"] = &relu_node;
+  result.captured_nodes["activation0"] = &activation_node;
   result.captured_nodes["bias_add0"] = bias_add0;
   result.captured_nodes["matmul0"] = matmul_bias0.matmul;
   result.captured_nodes["matmul1"] = matmul1_match.matmul;
   result.captured_nodes["bias_add1"] = bias_add1_match.bias_add;
+  result.captured_attrs["activation_type"] = activation_match.activation_type;
+  if (activation_match.activation_type == "LeakyRelu") {
+    result.captured_attrs["activation_alpha"] =
+        std::to_string(activation_match.activation_alpha);
+  }
   result.captured_attrs["input_a0"] = matmul_bias0.matmul->input(0);
   result.captured_attrs["input_b0"] = matmul_bias0.matmul->input(1);
   result.captured_attrs["bias0_input"] =
@@ -274,7 +306,7 @@ Status TwoLayerFusedMatMulFusion::Apply(
 
   const auto bias_add0_it = match_result.captured_nodes.find("bias_add0");
   const auto matmul0_it = match_result.captured_nodes.find("matmul0");
-  const auto relu0_it = match_result.captured_nodes.find("relu0");
+  const auto activation0_it = match_result.captured_nodes.find("activation0");
   const auto matmul1_it = match_result.captured_nodes.find("matmul1");
   const auto bias_add1_it = match_result.captured_nodes.find("bias_add1");
   const auto input_a0_it = match_result.captured_attrs.find("input_a0");
@@ -284,10 +316,14 @@ Status TwoLayerFusedMatMulFusion::Apply(
   const auto bias1_input_it = match_result.captured_attrs.find("bias1_input");
   const auto hidden_input_idx1_it =
       match_result.captured_attrs.find("hidden_input_idx1");
+  const auto activation_type_it =
+      match_result.captured_attrs.find("activation_type");
+  const auto activation_alpha_it =
+      match_result.captured_attrs.find("activation_alpha");
 
   if (bias_add0_it == match_result.captured_nodes.end() ||
       matmul0_it == match_result.captured_nodes.end() ||
-      relu0_it == match_result.captured_nodes.end() ||
+      activation0_it == match_result.captured_nodes.end() ||
       matmul1_it == match_result.captured_nodes.end() ||
       bias_add1_it == match_result.captured_nodes.end() ||
       input_a0_it == match_result.captured_attrs.end() ||
@@ -302,9 +338,17 @@ Status TwoLayerFusedMatMulFusion::Apply(
 
   const NodeDef* bias_add0 = bias_add0_it->second;
   const NodeDef* matmul0 = matmul0_it->second;
-  const NodeDef* relu0 = relu0_it->second;
+  const NodeDef* activation0 = activation0_it->second;
   const NodeDef* matmul1 = matmul1_it->second;
   const NodeDef* bias_add1 = bias_add1_it->second;
+  const std::string activation_type =
+      activation_type_it != match_result.captured_attrs.end()
+          ? activation_type_it->second
+          : std::string("Relu");
+  const float activation_alpha =
+      activation_alpha_it != match_result.captured_attrs.end()
+          ? std::stof(activation_alpha_it->second)
+          : 0.2f;
 
   const std::string fused_output_name = bias_add1->name();
   const std::string original_output_name = fused_output_name + "_original";
@@ -351,6 +395,10 @@ Status TwoLayerFusedMatMulFusion::Apply(
   (*attr)["transpose_a1"].set_b(transpose_a1);
   (*attr)["transpose_b1"].set_b(transpose_b1);
   (*attr)["hidden_input_idx1"].set_i(hidden_input_idx1);
+  (*attr)["activation_type"].set_s(activation_type);
+  if (activation_type == "LeakyRelu") {
+    (*attr)["activation_alpha"].set_f(activation_alpha);
+  }
 
   std::unordered_set<std::string> protected_node_names = {fused_output_name};
   ProtectInputProducer(&protected_node_names, input_a0_it->second);
@@ -360,7 +408,7 @@ Status TwoLayerFusedMatMulFusion::Apply(
   ProtectInputProducer(&protected_node_names, bias1_input_it->second);
 
   const std::vector<std::string> removable_nodes = {
-      matmul0->name(), bias_add0->name(), relu0->name(), matmul1->name(),
+      matmul0->name(), bias_add0->name(), activation0->name(), matmul1->name(),
       original_output_name};
   FusionGraphUtils::RemoveNodesIfUnused(graph, removable_nodes,
                                         protected_node_names);
