@@ -1,0 +1,306 @@
+name: CI Notify
+
+on:
+  workflow_run:
+    workflows: ["CI Validation (MUSA GPU)"]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  notify:
+    name: Send DingTalk Notification
+    if: ${{ github.event.workflow_run.conclusion != 'cancelled' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide notification policy
+        id: policy
+        env:
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: |
+          set -euo pipefail
+
+          NOTIFY="no"
+          STYLE="skip"
+          REASON="notification skipped by policy"
+
+          if [[ "$RUN_EVENT" == "schedule" ]]; then
+            NOTIFY="yes"
+            STYLE="daily"
+            REASON="daily run should always notify"
+          elif [[ "$RUN_EVENT" == "pull_request" ]]; then
+            NOTIFY="yes"
+            STYLE="pr"
+            REASON="pull request should always notify"
+          elif [[ "$RUN_EVENT" == "workflow_dispatch" ]]; then
+            NOTIFY="yes"
+            STYLE="manual"
+            REASON="manual run should always notify"
+          fi
+
+          echo "notify=$NOTIFY" >> "$GITHUB_OUTPUT"
+          echo "style=$STYLE" >> "$GITHUB_OUTPUT"
+          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+
+      - name: Print notification policy
+        run: |
+          echo "notify=${{ steps.policy.outputs.notify }}"
+          echo "style=${{ steps.policy.outputs.style }}"
+          echo "reason=${{ steps.policy.outputs.reason }}"
+
+      - name: Download final summary artifact
+        id: summary
+        if: steps.policy.outputs.notify == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+
+          ARTIFACT_ID="$(gh api "repos/$REPO/actions/runs/$RUN_ID/artifacts" --jq '.artifacts[] | select(.name=="summary-final") | .id' | head -n1 || true)"
+          if [[ -z "$ARTIFACT_ID" ]]; then
+            echo "found=no" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          ZIP_FILE="$RUNNER_TEMP/summary-final.zip"
+          OUT_DIR="$RUNNER_TEMP/summary-final"
+          mkdir -p "$OUT_DIR"
+          gh api "repos/$REPO/actions/artifacts/$ARTIFACT_ID/zip" > "$ZIP_FILE"
+          unzip -q "$ZIP_FILE" -d "$OUT_DIR"
+
+          SUMMARY_FILE="$(find "$OUT_DIR" -type f | head -n1)"
+          echo "found=yes" >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch workflow jobs
+        id: jobs
+        if: steps.policy.outputs.notify == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+
+          JOBS_FILE="$RUNNER_TEMP/workflow-run-jobs.json"
+          gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" > "$JOBS_FILE"
+          echo "jobs_file=$JOBS_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Send DingTalk notification
+        if: steps.policy.outputs.notify == 'yes'
+        env:
+          DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+          RUN_STYLE: ${{ steps.policy.outputs.style }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_NUMBER: ${{ github.event.workflow_run.run_number }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          SUMMARY_FILE: ${{ steps.summary.outputs.summary_file }}
+          JOBS_FILE: ${{ steps.jobs.outputs.jobs_file }}
+          PULL_REQUESTS_JSON: ${{ toJson(github.event.workflow_run.pull_requests) }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${DINGTALK_WEBHOOK:-}" ]]; then
+            echo "::warning::DINGTALK_WEBHOOK is not configured; skip notification."
+            exit 0
+          fi
+
+          PAYLOAD="$(python3 - <<'PY'
+          import json
+          import os
+          from datetime import datetime
+          from pathlib import Path
+
+
+          def parse_timestamp(value):
+              if not value:
+                  return None
+              try:
+                  return datetime.fromisoformat(value.replace("Z", "+00:00"))
+              except ValueError:
+                  return None
+
+
+          def format_duration(seconds):
+              if seconds is None:
+                  return "N/A"
+              seconds = max(0, int(seconds))
+              hours, rem = divmod(seconds, 3600)
+              minutes, secs = divmod(rem, 60)
+              parts = []
+              if hours:
+                  parts.append(f"{hours}小时")
+              if minutes:
+                  parts.append(f"{minutes}分钟")
+              if secs or not parts:
+                  parts.append(f"{secs}秒")
+              return "".join(parts)
+
+
+          def find_value(lines, prefix, default="n/a"):
+              for line in lines:
+                  if line.startswith(prefix):
+                      value = line[len(prefix):].strip()
+                      return value or default
+              return default
+
+
+          repo = os.environ["REPOSITORY"]
+          run_style = os.environ["RUN_STYLE"]
+          run_url = os.environ["RUN_URL"]
+          run_event = os.environ["RUN_EVENT"]
+          run_conclusion = os.environ["RUN_CONCLUSION"]
+          head_branch = os.environ["HEAD_BRANCH"] or "unknown"
+          head_sha = os.environ["HEAD_SHA"] or ""
+          short_sha = head_sha[:8] if head_sha else "unknown"
+
+          pull_requests = json.loads(os.environ.get("PULL_REQUESTS_JSON", "[]") or "[]")
+          pr_number = pull_requests[0]["number"] if pull_requests else None
+          pr_url = f"https://github.com/{repo}/pull/{pr_number}" if pr_number else "n/a"
+
+          summary_file = os.environ.get("SUMMARY_FILE", "")
+          summary_lines = []
+          if summary_file and Path(summary_file).is_file():
+              summary_lines = Path(summary_file).read_text(encoding="utf-8", errors="ignore").splitlines()
+
+          host_name = find_value(summary_lines, "- Host name: ", "unavailable")
+          host_ip = find_value(summary_lines, "- Host IP: ", "unavailable")
+          host_sn = find_value(summary_lines, "- Host SN: ", "unavailable")
+          baseline_commit = find_value(summary_lines, "- Baseline commit: ", "unavailable")
+          tencent_perf = find_value(summary_lines, "- Tencent Performance: ", "n/a")
+          byte1 = find_value(summary_lines, "- ByteDance Model 1: ", "n/a")
+          byte2 = find_value(summary_lines, "- ByteDance Model 2: ", "n/a")
+          byte3 = find_value(summary_lines, "- ByteDance Model 3: ", "n/a")
+          accuracy = find_value(summary_lines, "- Tencent Accuracy current: ", "n/a")
+
+          jobs_payload = {}
+          jobs_file = os.environ.get("JOBS_FILE", "")
+          if jobs_file and Path(jobs_file).is_file():
+              jobs_payload = json.loads(Path(jobs_file).read_text(encoding="utf-8"))
+
+          jobs = jobs_payload.get("jobs", [])
+          display_jobs = []
+          failed_jobs = []
+
+          for job in jobs:
+              name = job.get("name", "unknown")
+              if name == "Final Summary":
+                  continue
+              conclusion = (job.get("conclusion") or job.get("status") or "unknown").lower()
+              started = parse_timestamp(job.get("started_at"))
+              completed = parse_timestamp(job.get("completed_at"))
+              duration = None
+              if started and completed:
+                  duration = (completed - started).total_seconds()
+              conclusion_text = conclusion.upper()
+              duration_text = format_duration(duration)
+              display_jobs.append(f"- {name}: {conclusion_text} ({duration_text})")
+              if conclusion not in {"success", "skipped"}:
+                  failed_jobs.append(name)
+
+          if run_conclusion == "success":
+              status_text = "成功"
+              status_icon = "SUCCESS"
+          else:
+              status_text = "失败"
+              status_icon = "FAILURE"
+
+          if run_style == "daily":
+              title = f"Daily CI {status_icon}: {repo}@{head_branch}"
+              lines = [
+                  "### CI通知: Daily 回归",
+                  f"- 总体状态: {status_text}",
+                  f"- 仓库: {repo}",
+                  f"- 分支: {head_branch}",
+                  f"- Commit: `{short_sha}`",
+                  f"- 主机名: {host_name}",
+                  f"- 主机IP: {host_ip}",
+                  f"- 主机SN: {host_sn}",
+                  f"- Baseline commit: `{baseline_commit}`",
+                  f"- 运行详情: [GitHub Actions]({run_url})",
+                  "",
+                  "#### Job 状态",
+              ]
+              lines.extend(display_jobs or ["- 暂无 job 信息"])
+              lines.extend(
+                  [
+                      "",
+                      "#### 性能与精度摘要",
+                      f"- Tencent Performance: {tencent_perf}",
+                      f"- ByteDance Model 1: {byte1}",
+                      f"- ByteDance Model 2: {byte2}",
+                      f"- ByteDance Model 3: {byte3}",
+                      f"- Tencent Accuracy: {accuracy}",
+                  ]
+              )
+              if failed_jobs:
+                  lines.extend(["", "#### 失败任务"])
+                  lines.extend([f"- {name}" for name in failed_jobs])
+          elif run_style == "pr":
+              title = f"PR CI {status_icon}: {repo}#{pr_number or 'n/a'}"
+              lines = [
+                  f"### CI通知: PR {status_text}",
+                  f"- 仓库: {repo}",
+                  f"- PR: #{pr_number} {pr_url}" if pr_number else "- PR: n/a",
+                  f"- 分支: {head_branch}",
+                  f"- Commit: `{short_sha}`",
+                  f"- 触发方式: {run_event}",
+                  f"- 运行详情: [GitHub Actions]({run_url})",
+              ]
+              lines.extend(["", "#### Job 状态"])
+              lines.extend(display_jobs or ["- 暂无 job 信息"])
+              if failed_jobs:
+                  lines.extend(["", "#### 失败任务"])
+                  lines.extend([f"- {name}" for name in failed_jobs])
+              lines.extend(
+                  [
+                      "",
+                      "#### 关键摘要",
+                      f"- Tencent Performance: {tencent_perf}",
+                      f"- ByteDance Model 1: {byte1}",
+                      f"- ByteDance Model 2: {byte2}",
+                      f"- ByteDance Model 3: {byte3}",
+                      f"- Tencent Accuracy: {accuracy}",
+                  ]
+              )
+          else:
+              title = f"Manual CI {status_icon}: {repo}@{head_branch}"
+              lines = [
+                  f"### CI通知: 手动执行{status_text}",
+                  f"- 仓库: {repo}",
+                  f"- 分支: {head_branch}",
+                  f"- Commit: `{short_sha}`",
+                  f"- 触发方式: {run_event}",
+                  f"- 运行详情: [GitHub Actions]({run_url})",
+              ]
+              lines.extend(["", "#### Job 状态"])
+              lines.extend(display_jobs or ["- 暂无 job 信息"])
+              if failed_jobs:
+                  lines.extend(["", "#### 失败任务"])
+                  lines.extend([f"- {name}" for name in failed_jobs])
+
+          payload = {
+              "msgtype": "markdown",
+              "markdown": {
+                  "title": title,
+                  "text": "\n".join(lines),
+              },
+          }
+          print(json.dumps(payload, ensure_ascii=False))
+          PY
+          )"
+
+          curl -fsSL \
+            -H 'Content-Type: application/json' \
+            -d "$PAYLOAD" \
+            "$DINGTALK_WEBHOOK"

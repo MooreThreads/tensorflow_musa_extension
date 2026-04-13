@@ -27,6 +27,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-global
+  cancel-in-progress: false
+
 defaults:
   run:
     shell: bash
@@ -52,6 +56,9 @@ jobs:
       run_kind: ${{ steps.collect.outputs.run_kind }}
       run_id: ${{ steps.collect.outputs.run_id }}
       log_root: ${{ steps.collect.outputs.log_root }}
+      host_name: ${{ steps.collect.outputs.host_name }}
+      host_ip: ${{ steps.collect.outputs.host_ip }}
+      host_sn: ${{ steps.collect.outputs.host_sn }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
       - name: Prepare metadata
@@ -83,6 +90,14 @@ jobs:
           LOG_ROOT="$LOG_BASE/$RUN_KIND/$RUN_ID"
           JOB_LOG_DIR="$LOG_ROOT/prepare-metadata"
           SUMMARY_FILE="$RUNNER_TEMP/prepare-metadata.md"
+          HOST_NAME="$(hostname)"
+          HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+          if [[ -z "$HOST_IP" ]]; then
+            HOST_IP="$(hostname -i 2>/dev/null || true)"
+          fi
+          HOST_IP="${HOST_IP:-unavailable}"
+          HOST_SN="$(cat /sys/class/dmi/id/product_serial 2>/dev/null || true)"
+          HOST_SN="${HOST_SN:-unavailable}"
 
           mkdir -p "$JOB_LOG_DIR"
 
@@ -95,7 +110,9 @@ jobs:
             echo "- Run kind: $RUN_KIND"
             echo "- Run id: $RUN_ID"
             echo "- Log root: $LOG_ROOT"
-            echo "- Runner: $(hostname)"
+            echo "- Runner: $HOST_NAME"
+            echo "- Host IP: $HOST_IP"
+            echo "- Host SN: $HOST_SN"
           } | tee "$SUMMARY_FILE"
 
           cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
@@ -106,6 +123,9 @@ jobs:
           echo "run_kind=$RUN_KIND" >> "$GITHUB_OUTPUT"
           echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
           echo "log_root=$LOG_ROOT" >> "$GITHUB_OUTPUT"
+          echo "host_name=$HOST_NAME" >> "$GITHUB_OUTPUT"
+          echo "host_ip=$HOST_IP" >> "$GITHUB_OUTPUT"
+          echo "host_sn=$HOST_SN" >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Upload summary artifact
@@ -1773,8 +1793,6 @@ jobs:
     if: ${{ always() && !cancelled() }}
     runs-on: [self-hosted, musa-gpu]
     timeout-minutes: 10
-    env:
-      DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
     steps:
       - name: Download summary artifacts
         uses: actions/download-artifact@v4
@@ -1822,6 +1840,9 @@ jobs:
             echo "- Commit: ${{ needs.prepare_metadata.outputs.commit_id }}"
             echo "- Run kind: ${{ needs.prepare_metadata.outputs.run_kind }}"
             echo "- Run id: ${{ needs.prepare_metadata.outputs.run_id }}"
+            echo "- Host name: ${{ needs.prepare_metadata.outputs.host_name || 'unavailable' }}"
+            echo "- Host IP: ${{ needs.prepare_metadata.outputs.host_ip || 'unavailable' }}"
+            echo "- Host SN: ${{ needs.prepare_metadata.outputs.host_sn || 'unavailable' }}"
             echo "- Baseline commit: $BASELINE_SHA"
             echo
             echo "## Job Status"
@@ -1890,125 +1911,14 @@ jobs:
           echo "final_status=$FINAL_STATUS" >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: Send DingTalk notification
+      - name: Upload final summary artifact
         if: always()
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-
-          if [[ -z "${DINGTALK_WEBHOOK:-}" ]]; then
-            echo "DINGTALK_WEBHOOK is not configured, skip notification."
-            exit 0
-          fi
-
-          FINAL_STATUS="${{ steps.final_summary.outputs.final_status }}"
-          COMMIT_ID="${{ needs.prepare_metadata.outputs.commit_id }}"
-          SHORT_COMMIT="${COMMIT_ID:0:8}"
-          RUN_KIND="${{ needs.prepare_metadata.outputs.run_kind }}"
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          REF_NAME="${{ github.ref_name }}"
-          REPOSITORY="${{ github.repository }}"
-          BASELINE_SHA="${{ needs.build_baseline.outputs.baseline_sha || 'unavailable' }}"
-          PR_NUMBER="${{ github.event_name == 'pull_request' && github.event.pull_request.number || '' }}"
-          PR_URL="${{ github.event_name == 'pull_request' && github.event.pull_request.html_url || '' }}"
-          FORMAT_STATUS="${{ needs.format.outputs.status || 'skipped' }}"
-          BUILD_CURRENT_STATUS="${{ needs.build_current.outputs.status || 'skipped' }}"
-          INTEGRATION_STATUS="${{ needs.integration.outputs.status || 'skipped' }}"
-          BUILD_BASELINE_STATUS="${{ needs.build_baseline.outputs.status || 'skipped' }}"
-          TENCENT_PERF_STATUS="${{ needs.tencent_perf.outputs.status || 'skipped' }}"
-          TENCENT_ACC_STATUS="${{ needs.tencent_accuracy.outputs.status || 'skipped' }}"
-          BYTE1_STATUS="${{ needs.bytedance_model1.outputs.status || 'skipped' }}"
-          BYTE2_STATUS="${{ needs.bytedance_model2.outputs.status || 'skipped' }}"
-          BYTE3_STATUS="${{ needs.bytedance_model3.outputs.status || 'skipped' }}"
-          TRAINING_STATUS="${{ needs.training.outputs.status || 'skipped' }}"
-
-          if [[ "$FINAL_STATUS" == "success" ]]; then
-            STATUS_ICON="SUCCESS"
-            STATUS_TEXT="成功"
-          else
-            STATUS_ICON="FAILURE"
-            STATUS_TEXT="失败"
-          fi
-
-          if [[ -n "$PR_NUMBER" ]]; then
-            PR_LINE="- PR: #${PR_NUMBER} ${PR_URL}"
-          else
-            PR_LINE="- PR: n/a"
-          fi
-
-          export STATUS_ICON STATUS_TEXT REPOSITORY REF_NAME RUN_KIND SHORT_COMMIT RUN_URL PR_LINE
-          export BASELINE_SHA FORMAT_STATUS BUILD_CURRENT_STATUS INTEGRATION_STATUS BUILD_BASELINE_STATUS
-          export TENCENT_PERF_STATUS TENCENT_ACC_STATUS BYTE1_STATUS BYTE2_STATUS BYTE3_STATUS TRAINING_STATUS
-
-          PAYLOAD="$(python3 - <<'PY'
-          import json
-          import os
-
-          status_icon = os.environ["STATUS_ICON"]
-          status_text = os.environ["STATUS_TEXT"]
-          repo = os.environ["REPOSITORY"]
-          ref_name = os.environ["REF_NAME"]
-          run_kind = os.environ["RUN_KIND"]
-          short_commit = os.environ["SHORT_COMMIT"]
-          run_url = os.environ["RUN_URL"]
-          pr_line = os.environ["PR_LINE"]
-          baseline_sha = os.environ["BASELINE_SHA"]
-          format_status = os.environ["FORMAT_STATUS"]
-          build_current_status = os.environ["BUILD_CURRENT_STATUS"]
-          integration_status = os.environ["INTEGRATION_STATUS"]
-          build_baseline_status = os.environ["BUILD_BASELINE_STATUS"]
-          tencent_perf_status = os.environ["TENCENT_PERF_STATUS"]
-          tencent_acc_status = os.environ["TENCENT_ACC_STATUS"]
-          byte1_status = os.environ["BYTE1_STATUS"]
-          byte2_status = os.environ["BYTE2_STATUS"]
-          byte3_status = os.environ["BYTE3_STATUS"]
-          training_status = os.environ["TRAINING_STATUS"]
-
-          title = f"CI {status_icon}: {repo}@{ref_name}"
-          text = "\n".join(
-              [
-                  f"### CI通知: {status_text}",
-                  f"- 仓库: {repo}",
-                  f"- 分支: {ref_name}",
-                  f"- Commit: `{short_commit}`",
-                  f"- 触发方式: {run_kind}",
-                  pr_line,
-                  f"- Baseline commit: `{baseline_sha}`",
-                  f"- 运行详情: [GitHub Actions]({run_url})",
-                  "",
-                  "#### Job 状态",
-                  f"- Format: {format_status}",
-                  f"- Build Current: {build_current_status}",
-                  f"- Integration: {integration_status}",
-                  f"- Build Baseline: {build_baseline_status}",
-                  f"- Tencent Performance: {tencent_perf_status}",
-                  f"- Tencent Accuracy: {tencent_acc_status}",
-                  f"- ByteDance Model 1: {byte1_status}",
-                  f"- ByteDance Model 2: {byte2_status}",
-                  f"- ByteDance Model 3: {byte3_status}",
-                  f"- Training: {training_status}",
-              ]
-          )
-
-          print(
-              json.dumps(
-                  {
-                      "msgtype": "markdown",
-                      "markdown": {
-                          "title": title,
-                          "text": text,
-                      },
-                  },
-                  ensure_ascii=False,
-              )
-          )
-          PY
-          )"
-
-          curl -fsSL \
-            -H 'Content-Type: application/json' \
-            -d "$PAYLOAD" \
-            "$DINGTALK_WEBHOOK"
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-final
+          path: ${{ steps.final_summary.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Fail job if blocking checks failed
         if: always() && steps.final_summary.outputs.final_status == 'failure'
