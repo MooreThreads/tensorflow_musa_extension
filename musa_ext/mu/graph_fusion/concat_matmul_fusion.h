@@ -15,6 +15,8 @@ namespace musa_fusion {
 //   ConcatV2 + MatMul + BiasAdd
 //   ConcatV2 + MatMul + BiasAdd + Relu
 //   ConcatV2 + MatMul + BiasAdd + LeakyRelu
+//   ConcatV2 + MatMul + BiasAdd + Relu + MatMul + BiasAdd
+//   ConcatV2 + MatMul + BiasAdd + LeakyRelu + MatMul + BiasAdd
 
 class ConcatMatMulFusion : public FusionPattern {
  public:

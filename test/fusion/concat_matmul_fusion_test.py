@@ -168,6 +168,13 @@ class ConcatMatMulFusionTest(MUSATestCase):
                     return node
         return None
 
+    def _find_two_layer_concat_fused_node(self, partition_graphs):
+        for partition_graph in partition_graphs:
+            for node in partition_graph.node:
+                if node.op == "MusaTwoLayerConcatMatMul":
+                    return node
+        return None
+
     def _assert_concat_fused_node(
         self, partition_graphs, expected_fused_ops=None, expected_alpha=None
     ):
@@ -250,6 +257,76 @@ class ConcatMatMulFusionTest(MUSATestCase):
             f"Verified concat fusion for activation={activation or 'none'} with node '{fused_node.name}'"
         )
 
+    def _test_two_layer_concat_matmul_fusion(
+        self, activation="relu", alpha=0.2, dtype=tf.float32, rtol=1e-5, atol=1e-5
+    ):
+        np.random.seed(123)
+        tf.compat.v1.set_random_seed(123)
+
+        shape1 = [3, 8]
+        shape2 = [3, 8]
+        w0_shape = [16, 10]
+        b0_shape = [10]
+        w1_shape = [10, 6]
+        b1_shape = [6]
+
+        np_a = np.random.randn(*shape1).astype(dtype.as_numpy_dtype)
+        np_b = np.random.randn(*shape2).astype(dtype.as_numpy_dtype)
+        np_w0 = np.random.randn(*w0_shape).astype(dtype.as_numpy_dtype)
+        np_b0 = np.random.randn(*b0_shape).astype(dtype.as_numpy_dtype)
+        np_w1 = np.random.randn(*w1_shape).astype(dtype.as_numpy_dtype)
+        np_b1 = np.random.randn(*b1_shape).astype(dtype.as_numpy_dtype)
+
+        hidden = np.matmul(np.concatenate([np_a, np_b], axis=1), np_w0) + np_b0
+        if activation == "relu":
+            hidden = np.maximum(hidden, 0)
+        else:
+            hidden = np.where(hidden >= 0, hidden, hidden * alpha)
+        expected = np.matmul(hidden, np_w1) + np_b1
+
+        graph = tf.Graph()
+        with graph.as_default():
+            with tf.device("/device:MUSA:0"):
+                a = tf.compat.v1.placeholder(dtype, shape=shape1, name="input_a")
+                b = tf.compat.v1.placeholder(dtype, shape=shape2, name="input_b")
+                w0 = tf.constant(np_w0, dtype=dtype, name="w0")
+                b0 = tf.constant(np_b0, dtype=dtype, name="b0")
+                w1 = tf.constant(np_w1, dtype=dtype, name="w1")
+                b1 = tf.constant(np_b1, dtype=dtype, name="b1")
+
+                hidden = tf.concat([a, b], axis=1, name="concat")
+                hidden = tf.matmul(hidden, w0, name="matmul0")
+                hidden = tf.nn.bias_add(hidden, b0, name="bias_add0")
+                if activation == "relu":
+                    hidden = tf.nn.relu(hidden, name="relu")
+                else:
+                    hidden = tf.nn.leaky_relu(hidden, alpha=alpha, name="leaky_relu")
+                out = tf.matmul(hidden, w1, name="matmul1")
+                out = tf.nn.bias_add(out, b1, name="bias_add1")
+                output = out * 1.0
+
+        actual, partition_graphs = self._run_partitioned_graph(
+            graph, output, {a: np_a, b: np_b}
+        )
+        self.assertAllClose(actual, expected, rtol=rtol, atol=atol)
+
+        fused_node = self._find_two_layer_concat_fused_node(partition_graphs)
+        self.assertIsNotNone(
+            fused_node,
+            "MusaTwoLayerConcatMatMul fusion was NOT applied to the graph",
+        )
+        self.assertEqual(
+            fused_node.attr["activation_type"].s.decode("utf-8"),
+            "Relu" if activation == "relu" else "LeakyRelu",
+        )
+        if activation == "leakyrelu":
+            self.assertAlmostEqual(
+                fused_node.attr["activation_alpha"].f, alpha, places=6
+            )
+        print(
+            f"Verified two-layer concat fusion for activation={activation} with node '{fused_node.name}'"
+        )
+
     def test_concat_matmul_bias_fusion_float32(self):
         self._test_concat_matmul_bias_activation_fusion(
             activation=None, dtype=tf.float32, rtol=1e-5, atol=1e-5
@@ -262,6 +339,20 @@ class ConcatMatMulFusionTest(MUSATestCase):
 
     def test_concat_matmul_bias_leakyrelu_fusion_float32(self):
         self._test_concat_matmul_bias_activation_fusion(
+            activation="leakyrelu",
+            alpha=0.15,
+            dtype=tf.float32,
+            rtol=1e-5,
+            atol=1e-5,
+        )
+
+    def test_two_layer_concat_matmul_relu_fusion_float32(self):
+        self._test_two_layer_concat_matmul_fusion(
+            activation="relu", dtype=tf.float32, rtol=1e-5, atol=1e-5
+        )
+
+    def test_two_layer_concat_matmul_leakyrelu_fusion_float32(self):
+        self._test_two_layer_concat_matmul_fusion(
             activation="leakyrelu",
             alpha=0.15,
             dtype=tf.float32,
