@@ -12,6 +12,7 @@ class MusaSliceOp : public MusaOpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& input = ctx->input(0);
     const Tensor& begin_tensor = ctx->input(1);
     const Tensor& size_tensor = ctx->input(2);

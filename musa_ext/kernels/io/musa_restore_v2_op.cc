@@ -9,6 +9,7 @@
 #include "tensorflow/core/platform/stream_executor.h"
 #include "tensorflow/core/util/saved_tensor_slice_util.h"
 #include "tensorflow/core/util/tensor_bundle/tensor_bundle.h"
+#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -20,6 +21,7 @@ class MusaRestoreV2Op : public OpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& prefix = ctx->input(0);
     const Tensor& tensor_names = ctx->input(1);
     const Tensor& shape_and_slices = ctx->input(2);

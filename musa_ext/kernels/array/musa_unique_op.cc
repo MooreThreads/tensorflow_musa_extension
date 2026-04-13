@@ -15,6 +15,7 @@ class MusaUniqueOp : public MusaOpKernel {
   explicit MusaUniqueOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& input = ctx->input(0);
     OP_REQUIRES(ctx, input.dims() <= 1,
                 errors::InvalidArgument("Unique expects a 1D vector."));

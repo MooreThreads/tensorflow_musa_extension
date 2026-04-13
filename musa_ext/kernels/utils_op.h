@@ -3,14 +3,16 @@
 
 #include <mudnn.h>
 
+#include <string>
 #include <vector>
 
 #include "mu/device/musa_device.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/tensor.h"
+
 #define DEVICE_MTGPU "MUSA"
 
-// 统一的错误处理宏
+// Unified error handling macros.
 #define MTOP_CHECK_MTDNN_STATUS_RET(status)         \
   do {                                              \
     if ((status) != ::musa::dnn::Status::SUCCESS) { \
@@ -32,7 +34,7 @@
     auto _status = (status);                                                 \
     if (_status != ::musa::dnn::Status::SUCCESS) {                           \
       (ctx)->CtxFailure(                                                     \
-          errors::Internal("MUSA ", (op_name),                               \
+          errors::Internal("MUSA ", (op_name),                             \
                            " failed. Status: ", static_cast<int>(_status))); \
       return;                                                                \
     }                                                                        \
@@ -95,6 +97,25 @@ class MusaOpKernel : public OpKernel {
   mFormat format_;
 };
 
+std::string FormatKernelDebugInputTypes(OpKernelContext* context);
+std::string FormatKernelDebugInputShapes(OpKernelContext* context);
+void LogKernelDebugStart(const std::string& op_type,
+                         OpKernelContext* context);
+void LogKernelDebugEnd(const std::string& op_type, bool ok);
+
+class KernelDebugScope {
+ public:
+  KernelDebugScope(const OpKernel& op, OpKernelContext* context);
+  ~KernelDebugScope();
+
+  KernelDebugScope(const KernelDebugScope&) = delete;
+  KernelDebugScope& operator=(const KernelDebugScope&) = delete;
+
+ private:
+  std::string op_type_;
+  OpKernelContext* context_;
+};
+
 MusaDevice* GetDeviceByCtx(tensorflow::OpKernelContext* context);
 
 inline int GetMusaDeviceIdByCtx(tensorflow::OpKernelContext* context) {
@@ -104,7 +125,7 @@ inline int GetMusaDeviceIdByCtx(tensorflow::OpKernelContext* context) {
   return musa_device->get_device_id();
 }
 
-// Thread-local cache for current device to avoid redundant musaSetDevice calls
+// Thread-local cache for current device to avoid redundant musaSetDevice calls.
 inline musaError_t CachedMusaSetDevice(int device_id) {
   static thread_local int cached_device_id = -1;
   if (device_id != cached_device_id) {
@@ -138,5 +159,15 @@ inline musaStream_t GetMusaStreamByCtx(tensorflow::OpKernelContext* context) {
 
 }  // namespace musa
 }  // namespace tensorflow
+
+#ifdef MUSA_KERNEL_DEBUG
+#define MUSA_DEBUG_JOIN_IMPL(x, y) x##y
+#define MUSA_DEBUG_JOIN(x, y) MUSA_DEBUG_JOIN_IMPL(x, y)
+#define MUSA_DEBUG_LOG_KERNEL(ctx)                                    \
+  ::tensorflow::musa::KernelDebugScope MUSA_DEBUG_JOIN(               \
+      _musa_kernel_debug_scope_, __LINE__)(*this, (ctx))
+#else
+#define MUSA_DEBUG_LOG_KERNEL(ctx) ((void)0)
+#endif
 
 #endif  // MUSA_PLUGIN_SRC_KERNELS_UTILS_H_

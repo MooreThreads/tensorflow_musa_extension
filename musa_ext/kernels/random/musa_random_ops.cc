@@ -100,6 +100,7 @@ class MusaRandomUniformOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& shape_tensor = ctx->input(0);
     TensorShape shape;
     OP_REQUIRES_OK(ctx, tensor::MakeShape(shape_tensor, &shape));
@@ -143,6 +144,7 @@ class MusaRandomUniformIntOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& shape_tensor = ctx->input(0);
     const Tensor& minval_tensor = ctx->input(1);
     const Tensor& maxval_tensor = ctx->input(2);
@@ -197,6 +199,7 @@ class MusaNormalOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& shape_tensor = ctx->input(0);
     TensorShape shape;
     OP_REQUIRES_OK(ctx, tensor::MakeShape(shape_tensor, &shape));

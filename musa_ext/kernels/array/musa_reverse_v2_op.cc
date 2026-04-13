@@ -19,6 +19,7 @@ class MusaReverseV2Op : public MusaOpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& input = ctx->input(0);
     const Tensor& axis_tensor = ctx->input(1);
     const int dims = input.dims();

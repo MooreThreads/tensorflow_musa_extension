@@ -18,6 +18,7 @@ class MusaInvertPermutationOp : public MusaOpKernel {
       : MusaOpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& input = ctx->input(0);
     OP_REQUIRES(ctx, TensorShapeUtils::IsVector(input.shape()),
                 errors::InvalidArgument("input must be a vector"));

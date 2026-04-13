@@ -7,6 +7,7 @@ class MusaIdentityNOp : public OpKernel {
   explicit MusaIdentityNOp(OpKernelConstruction* context) : OpKernel(context) {}
 
   void Compute(OpKernelContext* context) override {
+    MUSA_DEBUG_LOG_KERNEL(context);
     OpInputList input;
     OpOutputList output;
 

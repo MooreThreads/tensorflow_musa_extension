@@ -83,6 +83,7 @@ class MusaResourceApplyRMSPropOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     core::RefCountPtr<Var> var;
     core::RefCountPtr<Var> ms;
     core::RefCountPtr<Var> mom;
@@ -279,6 +280,7 @@ class MusaApplyRMSPropKernelOp : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     Var* var = nullptr;
     Var* ms = nullptr;
     Var* mom = nullptr;
@@ -460,6 +462,7 @@ class MusaResourceApplyCenteredRMSPropOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     core::RefCountPtr<Var> var;
     core::RefCountPtr<Var> mg;
     core::RefCountPtr<Var> ms;
@@ -692,6 +695,7 @@ class MusaApplyCenteredRMSPropKernelOp : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     Var* var = nullptr;
     Var* mg = nullptr;
     Var* ms = nullptr;

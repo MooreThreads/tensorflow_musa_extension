@@ -12,6 +12,7 @@ class MusaRealDivOp : public MusaOpKernel {
   explicit MusaRealDivOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& dividend = ctx->input(0);
     const Tensor& divisor = ctx->input(1);
 

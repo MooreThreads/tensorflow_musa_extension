@@ -1,6 +1,12 @@
 #include "utils_op.h"
 
-#include "mu/kernel_register.h"
+#include <cstdlib>
+#include <cstdio>
+#include <sstream>
+#include <string>
+#include <unistd.h>
+#include <vector>
+
 #include "tensorflow/core/common_runtime/device_mgr.h"
 #include "tensorflow/core/framework/device_attributes.pb.h"
 
@@ -8,6 +14,12 @@ namespace tensorflow {
 namespace musa {
 
 namespace {
+constexpr const char* kKernelDebugReset = "\033[0m";
+constexpr const char* kKernelDebugTypeColor = "\033[36m";
+constexpr const char* kKernelDebugShapeColor = "\033[33m";
+constexpr const char* kKernelDebugEndColor = "\033[1;32m";
+constexpr const char* kKernelDebugFailColor = "\033[1;31m";
+
 mType GetType(DataType t) {
   switch (t) {
     case DataType::DT_FLOAT:
@@ -41,12 +53,77 @@ mType GetType(DataType t) {
       throw;
   }
 }
+
+std::string JoinStrings(const std::vector<std::string>& items) {
+  std::ostringstream oss;
+  oss << "[";
+  for (size_t i = 0; i < items.size(); ++i) {
+    if (i != 0) {
+      oss << ", ";
+    }
+    oss << items[i];
+  }
+  oss << "]";
+  return oss.str();
+}
+
+bool ParseBoolEnv(const char* value, bool* enabled) {
+  if (value == nullptr || enabled == nullptr) {
+    return false;
+  }
+
+  const std::string env_value(value);
+  if (env_value == "1" || env_value == "true" || env_value == "TRUE" ||
+      env_value == "on" || env_value == "ON" || env_value == "yes" ||
+      env_value == "YES") {
+    *enabled = true;
+    return true;
+  }
+  if (env_value == "0" || env_value == "false" || env_value == "FALSE" ||
+      env_value == "off" || env_value == "OFF" || env_value == "no" ||
+      env_value == "NO") {
+    *enabled = false;
+    return true;
+  }
+  return false;
+}
+
+bool ShouldColorizeKernelDebugValues() {
+  bool enabled = false;
+  if (ParseBoolEnv(std::getenv("MUSA_KERNEL_DEBUG_COLOR"), &enabled)) {
+    return enabled;
+  }
+  if (std::getenv("NO_COLOR")) {
+    return false;
+  }
+
+  const char* term = std::getenv("TERM");
+  if (term == nullptr || std::string(term) == "dumb") {
+    return false;
+  }
+
+  return isatty(fileno(stderr)) != 0;
+}
+
+std::string ColorizeKernelDebugValue(const std::string& value,
+                                     const char* color_code) {
+  if (!ShouldColorizeKernelDebugValues()) {
+    return value;
+  }
+
+  std::ostringstream oss;
+  oss << color_code << value << kKernelDebugReset;
+  return oss.str();
+}
+
+std::string GetKernelDebugOpType(const OpKernel& op) {
+  return op.type_string().empty() ? op.def().op() : op.type_string();
+}
 }  // namespace
 
-// Helper function to convert musaError_t to mStatus (mudnn Status)
+// Helper function to convert musaError_t to mStatus (mudnn Status).
 static inline mStatus FromMusaError(musaError_t err) {
   if (err == musaSuccess) return mStatus::SUCCESS;
-  // mudnn Status doesn't have OUT_OF_MEMORY, use INTERNAL_ERROR for all errors
   return mStatus::INTERNAL_ERROR;
 }
 
@@ -71,11 +148,7 @@ mTensor CreateMTensor(const Tensor& t, mFormat format) {
 
   auto dims_raw = t.shape().dim_sizes();
   const int rank = static_cast<int>(dims_raw.size());
-  // Reuse TensorFlow's shape storage directly instead of copying dims into a
-  // temporary vector. For small elementwise ops this shaves a bit of host-side
-  // wrapper overhead.
-  const int64_t* dims =
-      reinterpret_cast<const int64_t*>(dims_raw.data());
+  const int64_t* dims = reinterpret_cast<const int64_t*>(dims_raw.data());
 
   if (rank >= 4) {
     rst.SetFormat(format);
@@ -111,6 +184,89 @@ mFormat GetMusaFormat(OpKernelConstruction* ctx) {
   return mFormat::NHWC;
 }
 
+std::string FormatKernelDebugInputTypes(OpKernelContext* context) {
+  std::vector<std::string> input_types;
+  input_types.reserve(context->num_inputs());
+  for (int i = 0; i < context->num_inputs(); ++i) {
+    if (!context->has_input(i)) {
+      input_types.push_back("<dead>");
+      continue;
+    }
+    input_types.push_back(DataTypeString(context->input_dtype(i)));
+  }
+  return JoinStrings(input_types);
+}
+
+std::string FormatKernelDebugInputShapes(OpKernelContext* context) {
+  std::vector<std::string> input_shapes;
+  input_shapes.reserve(context->num_inputs());
+  for (int i = 0; i < context->num_inputs(); ++i) {
+    if (!context->has_input(i)) {
+      input_shapes.push_back("<dead>");
+      continue;
+    }
+    if (context->input_is_ref(i)) {
+      input_shapes.push_back("<ref>");
+      continue;
+    }
+    input_shapes.push_back(context->input(i).shape().DebugString());
+  }
+  return JoinStrings(input_shapes);
+}
+
+void LogKernelDebugStart(const std::string& op_type, OpKernelContext* context) {
+#ifdef MUSA_KERNEL_DEBUG
+  if (context == nullptr) {
+    return;
+  }
+
+  const std::string input_types =
+      ColorizeKernelDebugValue(FormatKernelDebugInputTypes(context),
+                               kKernelDebugTypeColor);
+  const std::string input_shapes =
+      ColorizeKernelDebugValue(FormatKernelDebugInputShapes(context),
+                               kKernelDebugShapeColor);
+
+  std::fprintf(stderr,
+               "[MUSA_KERNEL_DEBUG] op_type=%s input_types=%s input_shapes=%s\n",
+               op_type.c_str(), input_types.c_str(), input_shapes.c_str());
+  std::fflush(stderr);
+#else
+  (void)op_type;
+  (void)context;
+#endif
+}
+
+void LogKernelDebugEnd(const std::string& op_type, bool ok) {
+#ifdef MUSA_KERNEL_DEBUG
+  const char* phase = ok ? "END" : "FAIL";
+  const char* color = ok ? kKernelDebugEndColor : kKernelDebugFailColor;
+  if (ShouldColorizeKernelDebugValues()) {
+    std::fprintf(stderr, "[MUSA_KERNEL_DEBUG] %s%s %s%s\n", color, phase,
+                 op_type.c_str(), kKernelDebugReset);
+  } else {
+    std::fprintf(stderr, "[MUSA_KERNEL_DEBUG] %s %s\n", phase, op_type.c_str());
+  }
+  std::fflush(stderr);
+#else
+  (void)op_type;
+  (void)ok;
+#endif
+}
+
+KernelDebugScope::KernelDebugScope(const OpKernel& op, OpKernelContext* context)
+    : op_type_(GetKernelDebugOpType(op)), context_(context) {
+#ifdef MUSA_KERNEL_DEBUG
+  LogKernelDebugStart(op_type_, context_);
+#endif
+}
+
+KernelDebugScope::~KernelDebugScope() {
+#ifdef MUSA_KERNEL_DEBUG
+  LogKernelDebugEnd(op_type_, context_ == nullptr || context_->status().ok());
+#endif
+}
+
 MusaDevice* GetDeviceByCtx(tensorflow::OpKernelContext* context) {
   DeviceBase* device_base = context->device();
   if (!device_base) {
@@ -122,8 +278,6 @@ MusaDevice* GetDeviceByCtx(tensorflow::OpKernelContext* context) {
     LOG(ERROR) << "GetDeviceByCtx: musa_device is null";
     return nullptr;
   }
-  // Note: musaSetDevice is called in GetHandleByCtx with caching
-  // We skip it here to avoid redundant calls
   return musa_device;
 }
 

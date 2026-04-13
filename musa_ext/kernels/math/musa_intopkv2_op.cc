@@ -45,6 +45,7 @@ class MusaInTopKV2Int32Op : public MusaOpKernel {
   explicit MusaInTopKV2Int32Op(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& predictions_t = ctx->input(0);
     const Tensor& targets_t = ctx->input(1);
     const Tensor& k_t = ctx->input(2);
@@ -107,6 +108,7 @@ class MusaInTopKV2Int64Op : public MusaOpKernel {
   explicit MusaInTopKV2Int64Op(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& predictions_t = ctx->input(0);
     const Tensor& targets_t = ctx->input(1);
     const Tensor& k_t = ctx->input(2);

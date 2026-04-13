@@ -24,6 +24,7 @@ class MusaLayerNormOp : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& x = ctx->input(0);
     const Tensor& gamma = ctx->input(1);
     const Tensor& beta = ctx->input(2);

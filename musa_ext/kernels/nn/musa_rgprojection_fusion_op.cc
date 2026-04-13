@@ -4,7 +4,6 @@
 
 #include "../utils_op.h"
 #include "tensorflow/core/util/matmul_bcast.h"
-#include "utils/logging.h"
 
 namespace tensorflow {
 namespace musa {
@@ -34,7 +33,7 @@ class MusaBiasAddReluMatMulOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
-    MUSA_KERNEL_TIMING_GUARD(ctx);
+    MUSA_DEBUG_LOG_KERNEL(ctx);
 
     const Tensor& input = ctx->input(0);
     const Tensor& bias_input = ctx->input(1);
@@ -72,9 +71,7 @@ class MusaBiasAddReluMatMulOp : public MusaOpKernel {
       return;
     }
 
-    MUSA_KERNEL_TRACE_START("BiasAddRelu");
     RunBiasAddRelu(ctx, input, bias_input, bias_relu_tensor);
-    MUSA_KERNEL_TRACE_END("BiasAddRelu");
 
     // 2. MatMul
     const Tensor* lhs = nullptr;
@@ -98,9 +95,7 @@ class MusaBiasAddReluMatMulOp : public MusaOpKernel {
       return;
     }
 
-    MUSA_KERNEL_TRACE_START("MatMul");
     RunMatMul(ctx, *lhs, *rhs, *output);
-    MUSA_KERNEL_TRACE_END("MatMul");
   }
 
   bool IsExpensive() override { return true; }

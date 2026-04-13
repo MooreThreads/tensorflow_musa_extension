@@ -25,6 +25,7 @@ class MusaConstOp : public OpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     if (cpu_tensor_.NumElements() == 0) {
       Tensor* output = nullptr;
       OP_REQUIRES_OK(ctx,

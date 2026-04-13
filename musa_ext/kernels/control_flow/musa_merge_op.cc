@@ -10,6 +10,7 @@ class MusaMergeOp : public MusaOpKernel {
   explicit MusaMergeOp(OpKernelConstruction* context) : MusaOpKernel(context) {}
 
   void Compute(OpKernelContext* context) override {
+    MUSA_DEBUG_LOG_KERNEL(context);
     bool input_seen = false;
     for (int i = 0; i < context->num_inputs(); ++i) {
       if (context->has_input(i)) {
