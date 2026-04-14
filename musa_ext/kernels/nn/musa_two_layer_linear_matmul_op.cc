@@ -72,7 +72,7 @@ Status InferMatMulOutputShape(const TensorShape& lhs_shape,
 // emitted by MusaMatMulBiasFusion. Internally it still runs two MatMul stages,
 // but keeps the intermediate hidden activation inside a single fused op
 // boundary and reuses the existing MatMul+BiasAdd epilogue path when possible.
-REGISTER_OP("MusaTwoLayerFusedMatMul")
+REGISTER_OP("MusaTwoLayerLinearMatMul")
     .Input("a: T")
     .Input("b0: T")
     .Input("bias0: T")
@@ -93,9 +93,9 @@ REGISTER_OP("MusaTwoLayerFusedMatMul")
     });
 
 template <typename T>
-class MusaTwoLayerFusedMatMulOp : public MusaOpKernel {
+class MusaTwoLayerLinearMatMulOp : public MusaOpKernel {
  public:
-  explicit MusaTwoLayerFusedMatMulOp(OpKernelConstruction* ctx)
+  explicit MusaTwoLayerLinearMatMulOp(OpKernelConstruction* ctx)
       : MusaOpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("transpose_a0", &transpose_a0_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("transpose_b0", &transpose_b0_));
@@ -325,19 +325,19 @@ class MusaTwoLayerFusedMatMulOp : public MusaOpKernel {
   float activation_alpha_ = 0.2f;
 };
 
-#define REGISTER_MUSA_TWO_LAYER_FUSED_MATMUL(TYPE)                       \
+#define REGISTER_MUSA_TWO_LAYER_LINEAR_MATMUL(TYPE)                      \
   REGISTER_KERNEL_BUILDER(                                               \
-      Name("MusaTwoLayerFusedMatMul")                                    \
+      Name("MusaTwoLayerLinearMatMul")                                   \
           .Device("MUSA")                                                \
           .TypeConstraint<TYPE>("T"),                                    \
-      MusaTwoLayerFusedMatMulOp<TYPE>);
+      MusaTwoLayerLinearMatMulOp<TYPE>);
 
-REGISTER_MUSA_TWO_LAYER_FUSED_MATMUL(float);
-REGISTER_MUSA_TWO_LAYER_FUSED_MATMUL(double);
-REGISTER_MUSA_TWO_LAYER_FUSED_MATMUL(Eigen::half);
-REGISTER_MUSA_TWO_LAYER_FUSED_MATMUL(bfloat16);
+REGISTER_MUSA_TWO_LAYER_LINEAR_MATMUL(float);
+REGISTER_MUSA_TWO_LAYER_LINEAR_MATMUL(double);
+REGISTER_MUSA_TWO_LAYER_LINEAR_MATMUL(Eigen::half);
+REGISTER_MUSA_TWO_LAYER_LINEAR_MATMUL(bfloat16);
 
-#undef REGISTER_MUSA_TWO_LAYER_FUSED_MATMUL
+#undef REGISTER_MUSA_TWO_LAYER_LINEAR_MATMUL
 
 }  // namespace musa
 }  // namespace tensorflow

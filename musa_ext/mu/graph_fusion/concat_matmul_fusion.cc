@@ -1,6 +1,6 @@
 #include "mu/graph_fusion/concat_matmul_fusion.h"
 
-#include <unordered_set>
+#include <algorithm>
 #include <vector>
 
 #include "tensorflow/core/framework/attr_value.pb.h"
@@ -43,164 +43,6 @@ bool HasOriginalSuffix(const std::string& node_name) {
                            kOriginalSuffix.size(), kOriginalSuffix) == 0;
 }
 
-struct BiasAddConsumerMatch {
-  const NodeDef* bias_add = nullptr;
-  std::string bias_input;
-};
-
-struct ActivationConsumerMatch {
-  const NodeDef* activation = nullptr;
-  std::string activation_type;
-  float activation_alpha = 0.2f;
-};
-
-struct UniqueMatMulConsumerMatch {
-  const NodeDef* matmul = nullptr;
-  int producer_input_idx = -1;
-};
-
-BiasAddConsumerMatch FindUniqueBiasAddConsumer(const GraphDef& graph,
-                                               const NodeDef& producer) {
-  BiasAddConsumerMatch match;
-  int consumer_count = 0;
-
-  for (int i = 0; i < graph.node_size(); ++i) {
-    const NodeDef& consumer = graph.node(i);
-    if (consumer.name() == producer.name() || HasOriginalSuffix(consumer.name())) {
-      continue;
-    }
-
-    bool consumes_producer = false;
-    for (int j = 0; j < consumer.input_size(); ++j) {
-      if (FusionGraphUtils::GetProducerNodeName(consumer.input(j)) ==
-          producer.name()) {
-        consumes_producer = true;
-        break;
-      }
-    }
-    if (!consumes_producer) {
-      continue;
-    }
-
-    consumer_count++;
-    if (consumer_count > 1) {
-      return {};
-    }
-
-    if (!IsOp(consumer, "BiasAdd") || consumer.input_size() != 2) {
-      return {};
-    }
-
-    if (FusionGraphUtils::GetProducerNodeName(consumer.input(0)) ==
-        producer.name()) {
-      match.bias_add = &consumer;
-      match.bias_input = consumer.input(1);
-    } else if (FusionGraphUtils::GetProducerNodeName(consumer.input(1)) ==
-               producer.name()) {
-      match.bias_add = &consumer;
-      match.bias_input = consumer.input(0);
-    } else {
-      return {};
-    }
-  }
-
-  return match;
-}
-
-ActivationConsumerMatch FindUniqueActivationConsumer(const GraphDef& graph,
-                                                     const NodeDef& bias_add) {
-  ActivationConsumerMatch match;
-  int consumer_count = 0;
-
-  for (int i = 0; i < graph.node_size(); ++i) {
-    const NodeDef& consumer = graph.node(i);
-    if (consumer.name() == bias_add.name() || HasOriginalSuffix(consumer.name())) {
-      continue;
-    }
-
-    bool consumes_bias_add = false;
-    for (int j = 0; j < consumer.input_size(); ++j) {
-      if (FusionGraphUtils::GetProducerNodeName(consumer.input(j)) ==
-          bias_add.name()) {
-        consumes_bias_add = true;
-        break;
-      }
-    }
-    if (!consumes_bias_add) {
-      continue;
-    }
-
-    consumer_count++;
-    if (consumer_count > 1) {
-      return {};
-    }
-
-    if (IsOp(consumer, "Relu")) {
-      match.activation = &consumer;
-      match.activation_type = "Relu";
-      return match;
-    }
-    if (IsOp(consumer, "LeakyRelu")) {
-      match.activation = &consumer;
-      match.activation_type = "LeakyRelu";
-      auto alpha_it = consumer.attr().find("alpha");
-      if (alpha_it != consumer.attr().end()) {
-        match.activation_alpha = alpha_it->second.f();
-      }
-      return match;
-    }
-    return {};
-  }
-
-  return match;
-}
-
-UniqueMatMulConsumerMatch FindUniqueMatMulConsumer(const GraphDef& graph,
-                                                   const NodeDef& producer) {
-  UniqueMatMulConsumerMatch match;
-  int consumer_count = 0;
-
-  for (int i = 0; i < graph.node_size(); ++i) {
-    const NodeDef& consumer = graph.node(i);
-    if (consumer.name() == producer.name() || HasOriginalSuffix(consumer.name())) {
-      continue;
-    }
-
-    int producer_input_idx = -1;
-    for (int j = 0; j < consumer.input_size(); ++j) {
-      if (FusionGraphUtils::GetProducerNodeName(consumer.input(j)) ==
-          producer.name()) {
-        producer_input_idx = j;
-        break;
-      }
-    }
-    if (producer_input_idx < 0) {
-      continue;
-    }
-
-    consumer_count++;
-    if (consumer_count > 1) {
-      return {};
-    }
-
-    if (!IsOp(consumer, "MatMul") || consumer.input_size() != 2) {
-      return {};
-    }
-
-    match.matmul = &consumer;
-    match.producer_input_idx = producer_input_idx;
-  }
-
-  return match;
-}
-
-void ProtectInputProducer(std::unordered_set<std::string>* protected_names,
-                          const std::string& input_name) {
-  if (!input_name.empty()) {
-    protected_names->insert(FusionGraphUtils::GetProducerNodeName(input_name));
-  }
-}
-
 }  // namespace
 
 bool ConcatMatMulFusion::IsKernelAvailable() const {
@@ -225,13 +67,12 @@ FusionMatchResult ConcatMatMulFusion::Match(const GraphDef& graph,
   const NodeDef* concat_node = nullptr;
   int concat_input_idx = -1;
   for (int i = 0; i < 2; ++i) {
-    if (matmul_node.input_size() > i) {
-      const NodeDef* input_node = FindProducer(graph, matmul_node.input(i));
-      if (input_node && IsOp(*input_node, "ConcatV2")) {
-        concat_node = input_node;
-        concat_input_idx = i;
-        break;
-      }
+    if (matmul_node.input_size() <= i) continue;
+    const NodeDef* input_node = FindProducer(graph, matmul_node.input(i));
+    if (input_node && IsOp(*input_node, "ConcatV2")) {
+      concat_node = input_node;
+      concat_input_idx = i;
+      break;
     }
   }
   if (!concat_node) {
@@ -246,53 +87,6 @@ FusionMatchResult ConcatMatMulFusion::Match(const GraphDef& graph,
   result.captured_nodes["other_input"] =
       (concat_input_idx == 0) ? FindProducer(graph, matmul_node.input(1))
                               : FindProducer(graph, matmul_node.input(0));
-
-  BiasAddConsumerMatch bias_match = FindUniqueBiasAddConsumer(graph, matmul_node);
-  result.captured_attrs["with_bias"] = bias_match.bias_add ? "true" : "false";
-  if (bias_match.bias_add == nullptr) {
-    return result;
-  }
-
-  result.matched_nodes.push_back(bias_match.bias_add);
-  result.captured_nodes["bias_add"] = bias_match.bias_add;
-  result.captured_attrs["bias_input"] = bias_match.bias_input;
-
-  ActivationConsumerMatch activation_match =
-      FindUniqueActivationConsumer(graph, *bias_match.bias_add);
-  if (activation_match.activation == nullptr) {
-    return result;
-  }
-
-  result.matched_nodes.push_back(activation_match.activation);
-  result.captured_nodes["activation"] = activation_match.activation;
-  result.captured_attrs["activation_type"] = activation_match.activation_type;
-  if (activation_match.activation_type == "LeakyRelu") {
-    result.captured_attrs["activation_alpha"] =
-        std::to_string(activation_match.activation_alpha);
-  }
-
-  const UniqueMatMulConsumerMatch second_matmul_match =
-      FindUniqueMatMulConsumer(graph, *activation_match.activation);
-  if (second_matmul_match.matmul == nullptr) {
-    return result;
-  }
-
-  BiasAddConsumerMatch second_bias_match =
-      FindUniqueBiasAddConsumer(graph, *second_matmul_match.matmul);
-  if (second_bias_match.bias_add == nullptr) {
-    return result;
-  }
-
-  result.matched_nodes.push_back(second_matmul_match.matmul);
-  result.matched_nodes.push_back(second_bias_match.bias_add);
-  result.captured_nodes["matmul1"] = second_matmul_match.matmul;
-  result.captured_nodes["bias_add1"] = second_bias_match.bias_add;
-  result.captured_attrs["other1_input"] =
-      second_matmul_match.matmul->input(1 - second_matmul_match.producer_input_idx);
-  result.captured_attrs["bias1_input"] = second_bias_match.bias_input;
-  result.captured_attrs["hidden_input_idx1"] =
-      std::to_string(second_matmul_match.producer_input_idx);
-
   return result;
 }
 
@@ -305,235 +99,93 @@ Status ConcatMatMulFusion::Apply(GraphDef* graph,
     return Status::OK();
   }
 
-  auto matmul_it = match_result.captured_nodes.find("matmul");
-  auto concat_it = match_result.captured_nodes.find("concat");
-  auto bias_add_it = match_result.captured_nodes.find("bias_add");
-  auto activation_it = match_result.captured_nodes.find("activation");
-  auto matmul1_it = match_result.captured_nodes.find("matmul1");
-  auto bias_add1_it = match_result.captured_nodes.find("bias_add1");
-  auto with_bias_it = match_result.captured_attrs.find("with_bias");
-  auto bias_input_it = match_result.captured_attrs.find("bias_input");
-  auto activation_type_it = match_result.captured_attrs.find("activation_type");
-  auto activation_alpha_it =
-      match_result.captured_attrs.find("activation_alpha");
-  auto other1_input_it = match_result.captured_attrs.find("other1_input");
-  auto bias1_input_it = match_result.captured_attrs.find("bias1_input");
-  auto hidden_input_idx1_it =
-      match_result.captured_attrs.find("hidden_input_idx1");
-
+  const auto matmul_it = match_result.captured_nodes.find("matmul");
+  const auto concat_it = match_result.captured_nodes.find("concat");
   if (matmul_it == match_result.captured_nodes.end() ||
-      concat_it == match_result.captured_nodes.end() ||
-      with_bias_it == match_result.captured_attrs.end()) {
+      concat_it == match_result.captured_nodes.end()) {
     return Status(error::INVALID_ARGUMENT,
                   "Missing required nodes in ConcatMatMul pattern");
   }
 
-  const NodeDef* matmul0 = matmul_it->second;
+  const NodeDef* matmul_node = matmul_it->second;
   const NodeDef* concat_node = concat_it->second;
-  const bool with_bias = with_bias_it->second == "true";
-  const NodeDef* bias_add0 =
-      bias_add_it != match_result.captured_nodes.end() ? bias_add_it->second
-                                                       : nullptr;
-  const NodeDef* activation =
-      activation_it != match_result.captured_nodes.end() ? activation_it->second
-                                                         : nullptr;
-  const NodeDef* matmul1 =
-      matmul1_it != match_result.captured_nodes.end() ? matmul1_it->second
-                                                      : nullptr;
-  const NodeDef* bias_add1 =
-      bias_add1_it != match_result.captured_nodes.end() ? bias_add1_it->second
-                                                        : nullptr;
-  const std::string activation_type =
-      activation_type_it != match_result.captured_attrs.end()
-          ? activation_type_it->second
-          : std::string();
-  const float activation_alpha =
-      activation_alpha_it != match_result.captured_attrs.end()
-          ? std::stof(activation_alpha_it->second)
-          : 0.2f;
-  const bool with_activation = activation != nullptr;
-  const bool with_two_layer =
-      matmul1 != nullptr && bias_add1 != nullptr &&
-      other1_input_it != match_result.captured_attrs.end() &&
-      bias1_input_it != match_result.captured_attrs.end() &&
-      hidden_input_idx1_it != match_result.captured_attrs.end();
 
-  if (with_bias && (bias_add0 == nullptr ||
-                    bias_input_it == match_result.captured_attrs.end())) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Missing BiasAdd capture in ConcatMatMul bias pattern");
+  const std::string original_name = matmul_node->name();
+  const std::string original_matmul_name = original_name + "_original";
+  const std::string concat_name = concat_node->name();
+
+  for (const auto& node : graph->node()) {
+    if (node.name() == original_name && node.op() == "MusaConcatMatMul") {
+      return Status::OK();
+    }
   }
 
-  const std::string fused_output_name =
-      with_two_layer
-          ? bias_add1->name()
-          : (with_activation ? activation->name()
-                             : (with_bias ? bias_add0->name() : matmul0->name()));
-  const std::string original_matmul_name = matmul0->name() + "_original";
-  const std::string original_output_name = fused_output_name + "_original";
-  const auto dtype_it = matmul0->attr().find("T");
-  if (dtype_it == matmul0->attr().end()) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Missing T attr in MatMul node: " + matmul0->name());
+  int matmul_node_idx = -1;
+  for (int i = 0; i < graph->node_size(); ++i) {
+    if (graph->node(i).name() == original_name) {
+      matmul_node_idx = i;
+      break;
+    }
   }
-  const AttrValue dtype_attr = dtype_it->second;
-  const bool transpose_a0 = matmul0->attr().count("transpose_a")
-                                ? matmul0->attr().at("transpose_a").b()
-                                : false;
-  const bool transpose_b0 = matmul0->attr().count("transpose_b")
-                                ? matmul0->attr().at("transpose_b").b()
-                                : false;
-  const bool transpose_a1 =
-      with_two_layer && matmul1->attr().count("transpose_a")
-          ? matmul1->attr().at("transpose_a").b()
-          : false;
-  const bool transpose_b1 =
-      with_two_layer && matmul1->attr().count("transpose_b")
-          ? matmul1->attr().at("transpose_b").b()
-          : false;
+  if (matmul_node_idx < 0) {
+    return Status(error::INVALID_ARGUMENT,
+                  "Failed to find MatMul node in graph: " + original_name);
+  }
 
-  const int num_concat_inputs = concat_node->input_size() - 1;
-  std::vector<std::string> concat_inputs;
-  concat_inputs.reserve(num_concat_inputs);
+  VLOG(1) << "ConcatMatMulFusion: Replacing " << original_name
+          << " with MusaConcatMatMul";
+
+  NodeDef* matmul_node_mutable = graph->mutable_node(matmul_node_idx);
+  const std::string device = matmul_node_mutable->device();
+  const std::vector<std::string> matmul_inputs(matmul_node->input().begin(),
+                                               matmul_node->input().end());
+  const std::vector<std::string> concat_inputs(concat_node->input().begin(),
+                                               concat_node->input().end());
+  const AttrValue attr_t = matmul_node->attr().at("T");
+  const AttrValue attr_transpose_a = matmul_node->attr().at("transpose_a");
+  const AttrValue attr_transpose_b = matmul_node->attr().at("transpose_b");
+
+  matmul_node_mutable->set_name(original_matmul_name);
+
+  NodeDef* fused_node = graph->add_node();
+  fused_node->set_name(original_name);
+  fused_node->set_op("MusaConcatMatMul");
+  fused_node->set_device(device);
+
+  const int num_concat_inputs = concat_inputs.size() - 1;
   for (int i = 0; i < num_concat_inputs; ++i) {
-    concat_inputs.push_back(concat_node->input(i));
+    fused_node->add_input(concat_inputs[i]);
   }
-  const std::string axis_input = concat_node->input(num_concat_inputs);
+  fused_node->add_input(concat_inputs[num_concat_inputs]);
 
   int concat_in_matmul_idx = -1;
   for (int i = 0; i < 2; ++i) {
-    if (FindProducer(*graph, matmul0->input(i)) == concat_node) {
+    if (FusionGraphUtils::GetProducerNodeName(matmul_inputs[i]) == concat_name) {
       concat_in_matmul_idx = i;
       break;
     }
   }
   if (concat_in_matmul_idx < 0) {
     return Status(error::INVALID_ARGUMENT,
-                  "Failed to locate Concat input in MatMul: " + matmul0->name());
+                  "Failed to determine ConcatV2 input position for MatMul: " +
+                      original_name);
   }
+  fused_node->add_input(matmul_inputs[1 - concat_in_matmul_idx]);
 
-  const std::string other0_input = matmul0->input(1 - concat_in_matmul_idx);
-  const std::string bias0_input =
-      with_bias ? bias_input_it->second : std::string();
-  const std::string other1_input =
-      with_two_layer ? other1_input_it->second : std::string();
-  const std::string bias1_input =
-      with_two_layer ? bias1_input_it->second : std::string();
+  (*fused_node->mutable_attr())["T"] = attr_t;
+  (*fused_node->mutable_attr())["transpose_a"] = attr_transpose_a;
+  (*fused_node->mutable_attr())["transpose_b"] = attr_transpose_b;
+  (*fused_node->mutable_attr())["num_concat"].set_i(num_concat_inputs);
+  (*fused_node->mutable_attr())["concat_input_idx"].set_i(concat_in_matmul_idx);
+  (*fused_node->mutable_attr())["num_args"].set_i(0);
 
-  for (const auto& node : graph->node()) {
-    if (node.name() == fused_output_name &&
-        (node.op() == "MusaConcatMatMul" ||
-         node.op() == "MusaTwoLayerConcatMatMul")) {
-      return Status::OK();
-    }
-  }
+  const int removed_count = FusionGraphUtils::RemoveNodesIfUnused(
+      graph, {original_matmul_name, concat_name}, {original_name});
 
-  int matmul0_node_idx = FusionGraphUtils::FindNodeIndex(*graph, matmul0->name());
-  if (matmul0_node_idx < 0) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Failed to find MatMul node in graph: " + matmul0->name());
-  }
+  VLOG(1) << "ConcatMatMulFusion: Successfully replaced '" << original_name
+          << "' with MusaConcatMatMul and removed " << removed_count
+          << " obsolete node(s)";
 
-  int output_node_idx = matmul0_node_idx;
-  if (with_bias || with_activation || with_two_layer) {
-    output_node_idx = FusionGraphUtils::FindNodeIndex(*graph, fused_output_name);
-    if (output_node_idx < 0) {
-      return Status(error::INVALID_ARGUMENT,
-                    "Failed to find fused output node in graph: " +
-                        fused_output_name);
-    }
-  }
-
-  VLOG(1) << "ConcatMatMulFusion: Replacing " << fused_output_name << " with "
-          << (with_two_layer ? "MusaTwoLayerConcatMatMul"
-                             : "MusaConcatMatMul");
-
-  graph->mutable_node(matmul0_node_idx)->set_name(original_matmul_name);
-  NodeDef* output_node = graph->mutable_node(output_node_idx);
-  const std::string device = output_node->device();
-  output_node->set_name(original_output_name);
-
-  NodeDef* fused_node = graph->add_node();
-  fused_node->set_name(fused_output_name);
-  fused_node->set_op(with_two_layer ? "MusaTwoLayerConcatMatMul"
-                                    : "MusaConcatMatMul");
-  fused_node->set_device(device);
-  for (const auto& concat_input : concat_inputs) {
-    fused_node->add_input(concat_input);
-  }
-  fused_node->add_input(axis_input);
-  fused_node->add_input(other0_input);
-  if (with_two_layer) {
-    fused_node->add_input(bias0_input);
-    fused_node->add_input(other1_input);
-    fused_node->add_input(bias1_input);
-  } else if (with_bias) {
-    fused_node->add_input(bias0_input);
-  }
-
-  auto* attr = fused_node->mutable_attr();
-  (*attr)["T"] = dtype_attr;
-  (*attr)["num_concat"].set_i(num_concat_inputs);
-  (*attr)["concat_input_idx"].set_i(concat_in_matmul_idx);
-
-  if (with_two_layer) {
-    (*attr)["transpose_a0"].set_b(transpose_a0);
-    (*attr)["transpose_b0"].set_b(transpose_b0);
-    (*attr)["transpose_a1"].set_b(transpose_a1);
-    (*attr)["transpose_b1"].set_b(transpose_b1);
-    (*attr)["hidden_input_idx1"].set_i(std::stoi(hidden_input_idx1_it->second));
-    (*attr)["activation_type"].set_s(activation_type);
-    if (activation_type == "LeakyRelu") {
-      (*attr)["activation_alpha"].set_f(activation_alpha);
-    }
-  } else {
-    (*attr)["transpose_a"].set_b(transpose_a0);
-    (*attr)["transpose_b"].set_b(transpose_b0);
-    if (with_bias) {
-      AttrValue fused_ops_attr;
-      fused_ops_attr.mutable_list()->add_s("BiasAdd");
-      if (with_activation) {
-        fused_ops_attr.mutable_list()->add_s(activation_type);
-        if (activation_type == "LeakyRelu") {
-          (*attr)["activation_alpha"].set_f(activation_alpha);
-        }
-      }
-      (*attr)["fused_ops"] = fused_ops_attr;
-      (*attr)["num_args"].set_i(1);
-    } else {
-      (*attr)["num_args"].set_i(0);
-    }
-  }
-
-  std::unordered_set<std::string> protected_node_names = {fused_output_name};
-  for (const auto& concat_input : concat_inputs) {
-    ProtectInputProducer(&protected_node_names, concat_input);
-  }
-  ProtectInputProducer(&protected_node_names, axis_input);
-  ProtectInputProducer(&protected_node_names, other0_input);
-  if (with_bias) {
-    ProtectInputProducer(&protected_node_names, bias0_input);
-  }
-  if (with_two_layer) {
-    ProtectInputProducer(&protected_node_names, other1_input);
-    ProtectInputProducer(&protected_node_names, bias1_input);
-  }
-
-  std::vector<std::string> removable_nodes = {original_matmul_name,
-                                              concat_node->name()};
-  if (with_bias) {
-    removable_nodes.push_back(bias_add0->name());
-  }
-  if (with_two_layer) {
-    removable_nodes.push_back(activation->name());
-    removable_nodes.push_back(matmul1->name());
-    removable_nodes.push_back(original_output_name);
-  } else if (with_activation || with_bias) {
-    removable_nodes.push_back(original_output_name);
-  }
-
-  FusionGraphUtils::RemoveNodesIfUnused(graph, removable_nodes,
-                                        protected_node_names);
   return Status::OK();
 }
 

@@ -10,13 +10,7 @@ namespace tensorflow {
 namespace grappler {
 namespace musa_fusion {
 
-// Computes:
-//   ConcatV2 + MatMul
-//   ConcatV2 + MatMul + BiasAdd
-//   ConcatV2 + MatMul + BiasAdd + Relu
-//   ConcatV2 + MatMul + BiasAdd + LeakyRelu
-//   ConcatV2 + MatMul + BiasAdd + Relu + MatMul + BiasAdd
-//   ConcatV2 + MatMul + BiasAdd + LeakyRelu + MatMul + BiasAdd
+// Computes: ConcatV2 + MatMul
 
 class ConcatMatMulFusion : public FusionPattern {
  public:
