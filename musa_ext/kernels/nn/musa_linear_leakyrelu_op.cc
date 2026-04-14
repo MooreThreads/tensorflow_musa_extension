@@ -2,7 +2,11 @@
 #include <mudnn_xmma.h>
 #include <musa_runtime.h>
 
+#include <functional>
+#include <memory>
+
 #include "../utils_op.h"
+#include "tensorflow/core/framework/allocator.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/util/matmul_bcast.h"
@@ -53,13 +57,9 @@ class MusaLinearLeakyReluOp : public MusaOpKernel {
     mm_out_shape.AddDim(m);
     mm_out_shape.AddDim(n);
 
-    Tensor mm_out_tensor;
-    OP_REQUIRES_OK(
-        ctx, ctx->allocate_temp(in0.dtype(), mm_out_shape, &mm_out_tensor));
-
-    if (mm_out_tensor.NumElements() == 0) {
-      Tensor* final_output = nullptr;
-      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, mm_out_shape, &final_output));
+    Tensor* output = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, mm_out_shape, &output));
+    if (output->NumElements() == 0) {
       return;
     }
 
@@ -67,7 +67,7 @@ class MusaLinearLeakyReluOp : public MusaOpKernel {
     handle.SetAllowTF32(tf32_enabled_);
     mTensor mt_a = CreateMTensor(in0);
     mTensor mt_b = CreateMTensor(in1);
-    mTensor mt_mm_out = CreateMTensor(mm_out_tensor);
+    mTensor mt_out = CreateMTensor(*output);
 
     ::musa::dnn::Status status;
 
@@ -76,7 +76,24 @@ class MusaLinearLeakyReluOp : public MusaOpKernel {
       op.SetTranspose(trans_a_, trans_b_);
       op.SetAlpha(1.0);
       op.SetBeta(0.0);
-      status = op.Run(handle, mt_mm_out, mt_a, mt_b);
+      mTensor mt_bias = CreateMTensor(bias_input);
+
+      tensorflow::Allocator* tf_allocator =
+          ctx->device()->GetAllocator(tensorflow::AllocatorAttributes());
+      auto alloc_func =
+          [tf_allocator](
+              size_t size)
+              -> std::unique_ptr<void, std::function<void(void*)>> {
+        void* ptr = tf_allocator->AllocateRaw(256, size);
+        auto deleter = [tf_allocator](void* p) {
+          if (p) {
+            tf_allocator->DeallocateRaw(p);
+          }
+        };
+        return std::unique_ptr<void, std::function<void(void*)>>(ptr, deleter);
+      };
+      ::musa::dnn::MemoryMaintainer mm(alloc_func);
+      status = op.RunWithBiasAdd(handle, mt_out, mt_a, mt_b, mt_bias, mm);
     } else {
       mBatchMatMul op;
       op.SetTranspose(trans_a_, trans_b_);
@@ -97,19 +114,13 @@ class MusaLinearLeakyReluOp : public MusaOpKernel {
       };
       ReshapeTo3D(mt_a, in0);
       ReshapeTo3D(mt_b, in1);
-      mt_mm_out.SetNdInfo({out_batch, m, n}, {m * n, n, 1});
-      status = op.Run(handle, mt_mm_out, mt_a, mt_b);
+      mt_out.SetNdInfo({out_batch, m, n}, {m * n, n, 1});
+      status = op.Run(handle, mt_out, mt_a, mt_b);
     }
 
     OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
                 errors::Internal("MUSA MatMul/BatchMatMul execution failed in "
                                  "LinearLeakyRelu."));
-
-    Tensor* output = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, mm_out_shape, &output));
-
-    mTensor mt_bias = CreateMTensor(bias_input);
-    mTensor mt_out = CreateMTensor(*output);
 
     int channel_dim = mm_out_shape.dims() - 1;
     OP_REQUIRES(ctx,
@@ -122,13 +133,16 @@ class MusaLinearLeakyReluOp : public MusaOpKernel {
     std::vector<int64_t> b_strides(dims_cnt, 0);
     b_dims[channel_dim] = bias_input.dim_size(0);
     b_strides[channel_dim] = 1;
-    mt_bias.SetNdInfo(dims_cnt, b_dims.data(), b_strides.data());
+    if (!(in0.dims() == 2 && in1.dims() == 2)) {
+      mTensor mt_bias = CreateMTensor(bias_input);
+      mt_bias.SetNdInfo(dims_cnt, b_dims.data(), b_strides.data());
 
-    mBinary bias_op;
-    bias_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    status = bias_op.Run(handle, mt_out, mt_mm_out, mt_bias);
-    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
-                errors::Internal("MUSA BiasAdd failed in LinearLeakyRelu."));
+      mBinary bias_op;
+      bias_op.SetMode(::musa::dnn::Binary::Mode::ADD);
+      status = bias_op.Run(handle, mt_out, mt_out, mt_bias);
+      OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
+                  errors::Internal("MUSA BiasAdd failed in LinearLeakyRelu."));
+    }
 
     mUnary leaky_relu_op;
     leaky_relu_op.SetMode(::musa::dnn::Unary::Mode::LEAKY_RELU);

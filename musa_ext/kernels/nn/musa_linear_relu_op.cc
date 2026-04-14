@@ -2,22 +2,21 @@
 #include <mudnn_xmma.h>
 #include <musa_runtime.h>
 
+#include <functional>
+#include <memory>
+
 #include "../utils_op.h"
+#include "tensorflow/core/framework/allocator.h"
 #include "tensorflow/core/util/matmul_bcast.h"
 #include "utils/logging.h"
 
 namespace tensorflow {
 namespace musa {
 
-// The fused op for MusaLinearRelu, which computes MatMul + BiasAdd + Relu
-// Provides two types of implementations:
-// 1) A pure MUSA implementation using mudnn for MatMul and a custom kernel for
-// BiasAdd+Relu
-// 2) A fallback implementation that uses mudnn for MatMul and then a separate
-// kernel for BiasAdd+Relu (for better performance on smaller sizes)
-
-template <typename T>
-void LaunchBiasAddReluKernel(const T*, const T*, T*, int, int, musaStream_t);
+// The fused op for MusaLinearRelu, which computes MatMul + BiasAdd + Relu.
+// The 2D path uses the MatMul+BiasAdd epilogue directly, then applies Relu
+// in-place. The batch path writes MatMul output directly to the final tensor,
+// then applies BiasAdd and Relu in-place.
 
 template <typename T>
 class MusaLinearReluOp : public MusaOpKernel {
@@ -58,13 +57,9 @@ class MusaLinearReluOp : public MusaOpKernel {
     mm_out_shape.AddDim(m);
     mm_out_shape.AddDim(n);
 
-    Tensor mm_out_tensor;
-    OP_REQUIRES_OK(
-        ctx, ctx->allocate_temp(in0.dtype(), mm_out_shape, &mm_out_tensor));
-
-    if (mm_out_tensor.NumElements() == 0) {
-      Tensor* final_output = nullptr;
-      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, mm_out_shape, &final_output));
+    Tensor* output = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, mm_out_shape, &output));
+    if (output->NumElements() == 0) {
       return;
     }
 
@@ -72,7 +67,7 @@ class MusaLinearReluOp : public MusaOpKernel {
     handle.SetAllowTF32(tf32_enabled_);
     mTensor mt_a = CreateMTensor(in0);
     mTensor mt_b = CreateMTensor(in1);
-    mTensor mt_mm_out = CreateMTensor(mm_out_tensor);
+    mTensor mt_out = CreateMTensor(*output);
 
     ::musa::dnn::Status status;
 
@@ -81,7 +76,24 @@ class MusaLinearReluOp : public MusaOpKernel {
       op.SetTranspose(trans_a_, trans_b_);
       op.SetAlpha(1.0);
       op.SetBeta(0.0);
-      status = op.Run(handle, mt_mm_out, mt_a, mt_b);
+      mTensor mt_bias = CreateMTensor(bias_input);
+
+      tensorflow::Allocator* tf_allocator =
+          ctx->device()->GetAllocator(tensorflow::AllocatorAttributes());
+      auto alloc_func =
+          [tf_allocator](
+              size_t size)
+              -> std::unique_ptr<void, std::function<void(void*)>> {
+        void* ptr = tf_allocator->AllocateRaw(256, size);
+        auto deleter = [tf_allocator](void* p) {
+          if (p) {
+            tf_allocator->DeallocateRaw(p);
+          }
+        };
+        return std::unique_ptr<void, std::function<void(void*)>>(ptr, deleter);
+      };
+      ::musa::dnn::MemoryMaintainer mm(alloc_func);
+      status = op.RunWithBiasAdd(handle, mt_out, mt_a, mt_b, mt_bias, mm);
     } else {
       mBatchMatMul op;
       op.SetTranspose(trans_a_, trans_b_);
@@ -102,21 +114,18 @@ class MusaLinearReluOp : public MusaOpKernel {
       };
       ReshapeTo3D(mt_a, in0);
       ReshapeTo3D(mt_b, in1);
-      mt_mm_out.SetNdInfo({out_batch, m, n}, {m * n, n, 1});
-      status = op.Run(handle, mt_mm_out, mt_a, mt_b);
+      mt_out.SetNdInfo({out_batch, m, n}, {m * n, n, 1});
+      status = op.Run(handle, mt_out, mt_a, mt_b);
     }
 
     OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
                 errors::Internal(
                     "MUSA MatMul/BatchMatMul execution failed in LinearRelu."));
 
-    // 2. BiasAdd + Relu
-    MUSA_KERNEL_TRACE_START("UseMudnn");
-    UseMudnn(ctx, bias_input, mm_out_shape, mt_mm_out);
-    MUSA_KERNEL_TRACE_END("UseMudnn");
-    // MUSA_KERNEL_TRACE_START("UseKernel");
-    // UseKernel(ctx, bias_input, mm_out_shape, mm_out_tensor);
-    // MUSA_KERNEL_TRACE_END("UseKernel");
+    MUSA_KERNEL_TRACE_START("ApplyBiasAddRelu");
+    ApplyBiasAddRelu(ctx, bias_input, mm_out_shape, mt_out,
+                     in0.dims() == 2 && in1.dims() == 2);
+    MUSA_KERNEL_TRACE_END("ApplyBiasAddRelu");
   }
 
   bool IsExpensive() override { return true; }
@@ -126,15 +135,11 @@ class MusaLinearReluOp : public MusaOpKernel {
   bool trans_b_ = false;
   bool tf32_enabled_ = false;  // TF32 acceleration enabled by default
 
-  void UseMudnn(OpKernelContext* ctx, const Tensor& bias_input,
-                const TensorShape& mm_out_shape, const mTensor& mt_mm_out) {
+  void ApplyBiasAddRelu(OpKernelContext* ctx, const Tensor& bias_input,
+                        const TensorShape& mm_out_shape, mTensor& mt_out,
+                        bool bias_already_applied) {
     auto& handle = GetHandleByCtx(ctx);
-
-    Tensor* output = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, mm_out_shape, &output));
-
     mTensor mt_bias = CreateMTensor(bias_input);
-    mTensor mt_out = CreateMTensor(*output);
 
     int channel_dim = mm_out_shape.dims() - 1;
     OP_REQUIRES(
@@ -149,32 +154,22 @@ class MusaLinearReluOp : public MusaOpKernel {
 
     mt_bias.SetNdInfo(dims_cnt, b_dims.data(), b_strides.data());
 
-    mBinary bias_op;
-    bias_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    mStatus status = bias_op.Run(handle, mt_out, mt_mm_out, mt_bias);
+    if (!bias_already_applied) {
+      mBinary bias_op;
+      bias_op.SetMode(::musa::dnn::Binary::Mode::ADD);
+      mStatus status = bias_op.Run(handle, mt_out, mt_out, mt_bias);
 
-    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
-                errors::Internal("MUSA BiasAdd failed in LinearRelu."));
+      OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
+                  errors::Internal("MUSA BiasAdd failed in LinearRelu."));
+    }
 
     // 3. Relu (In-place on current output)
     mUnary relu_op;
     relu_op.SetMode(::musa::dnn::Unary::Mode::RELU);
-    status = relu_op.Run(handle, mt_out, mt_out);
+    auto status = relu_op.Run(handle, mt_out, mt_out);
 
     OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
                 errors::Internal("MUSA Relu failed in LinearRelu."));
-  }
-
-  void UseKernel(OpKernelContext* ctx, const Tensor& bias_input,
-                 const TensorShape& mm_out_shape, const Tensor& mm_out_tensor) {
-    Tensor* output = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, mm_out_shape, &output));
-    musaStream_t stream = GetMusaStreamByCtx(ctx);
-    const T* mm_ptr = mm_out_tensor.flat<T>().data();
-    LaunchBiasAddReluKernel(
-        mm_ptr, bias_input.flat<T>().data(), output->flat<T>().data(),
-        mm_out_shape.num_elements(),
-        mm_out_shape.dim_size(mm_out_shape.dims() - 1), stream);
   }
 };
 
