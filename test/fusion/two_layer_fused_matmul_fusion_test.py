@@ -56,12 +56,12 @@ class TwoLayerFusedMatMulFusionTest(MUSATestCase):
         fused_node = None
         for partition_graph in run_metadata.partition_graphs:
             for node in partition_graph.node:
-                if node.op == "MusaTwoLayerFusedMatMul":
+                if node.op == "MusaTwoLayerLinearMatMul":
                     fused_node = node
                     break
 
         self.assertIsNotNone(
-            fused_node, "MusaTwoLayerFusedMatMul fusion was NOT applied"
+            fused_node, "MusaTwoLayerLinearMatMul fusion was NOT applied"
         )
         self.assertEqual(
             fused_node.attr["activation_type"].s.decode("utf-8"),

@@ -1,5 +1,5 @@
-#ifndef TENSORFLOW_MUSA_EXTENSION_MU_GRAPH_FUSION_TWO_LAYER_FUSED_MATMUL_FUSION_H_
-#define TENSORFLOW_MUSA_EXTENSION_MU_GRAPH_FUSION_TWO_LAYER_FUSED_MATMUL_FUSION_H_
+#ifndef TENSORFLOW_MUSA_EXTENSION_MU_GRAPH_FUSION_TWO_LAYER_CONCAT_MATMUL_FUSION_H_
+#define TENSORFLOW_MUSA_EXTENSION_MU_GRAPH_FUSION_TWO_LAYER_CONCAT_MATMUL_FUSION_H_
 
 #include <string>
 
@@ -10,12 +10,12 @@ namespace grappler {
 namespace musa_fusion {
 
 // Computes:
-//   MatMul + BiasAdd/Add/AddV2 + Relu + MatMul + BiasAdd/Add/AddV2
-//   MatMul + BiasAdd/Add/AddV2 + LeakyRelu + MatMul + BiasAdd/Add/AddV2
-class TwoLayerFusedMatMulFusion : public FusionPattern {
+//   ConcatV2 + MatMul + BiasAdd + Relu + MatMul + BiasAdd
+//   ConcatV2 + MatMul + BiasAdd + LeakyRelu + MatMul + BiasAdd
+class TwoLayerConcatMatMulFusion : public FusionPattern {
  public:
-  TwoLayerFusedMatMulFusion() = default;
-  ~TwoLayerFusedMatMulFusion() override = default;
+  TwoLayerConcatMatMulFusion() = default;
+  ~TwoLayerConcatMatMulFusion() override = default;
 
   FusionMatchResult Match(const GraphDef& graph,
                           int start_node_idx) const override;
@@ -23,17 +23,17 @@ class TwoLayerFusedMatMulFusion : public FusionPattern {
   Status Apply(GraphDef* graph,
                const FusionMatchResult& match_result) const override;
 
-  int GetPriority() const override { return 130; }
+  int GetPriority() const override { return 140; }
 
   bool IsKernelAvailable() const override;
 
   std::string GetName() const override {
-    return "TwoLayerFusedMatMulFusion";
+    return "TwoLayerConcatMatMulFusion";
   }
 
   std::string GetFallbackReason() const override {
     if (!kernel_available_) {
-      return "TwoLayerFusedMatMulFusion kernel not available on this device";
+      return "TwoLayerConcatMatMulFusion kernel not available on this device";
     }
     return "";
   }
@@ -47,4 +47,4 @@ class TwoLayerFusedMatMulFusion : public FusionPattern {
 }  // namespace grappler
 }  // namespace tensorflow
 
-#endif  // TENSORFLOW_MUSA_EXTENSION_MU_GRAPH_FUSION_TWO_LAYER_FUSED_MATMUL_FUSION_H_
+#endif  // TENSORFLOW_MUSA_EXTENSION_MU_GRAPH_FUSION_TWO_LAYER_CONCAT_MATMUL_FUSION_H_

@@ -361,7 +361,7 @@ Status TwoLayerFusedMatMulFusion::Apply(
 
   for (const auto& node : graph->node()) {
     if (node.name() == fused_output_name &&
-        node.op() == "MusaTwoLayerFusedMatMul") {
+        node.op() == "MusaTwoLayerLinearMatMul") {
       return Status::OK();
     }
   }
@@ -380,7 +380,7 @@ Status TwoLayerFusedMatMulFusion::Apply(
 
   NodeDef* fused_node = graph->add_node();
   fused_node->set_name(fused_output_name);
-  fused_node->set_op("MusaTwoLayerFusedMatMul");
+  fused_node->set_op("MusaTwoLayerLinearMatMul");
   fused_node->set_device(output_device);
   fused_node->add_input(input_a0_it->second);
   fused_node->add_input(input_b0_it->second);
