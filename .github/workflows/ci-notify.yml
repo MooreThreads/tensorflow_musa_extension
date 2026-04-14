@@ -9,17 +9,35 @@ permissions:
   actions: read
   contents: read
 
+env:
+  MAX_AUTO_RERUNS: 5
+
 jobs:
   notify:
     name: Send DingTalk Notification
     if: ${{ github.event.workflow_run.conclusion != 'cancelled' }}
     runs-on: ubuntu-latest
     steps:
+      - name: Fetch run metadata
+        id: runmeta
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+
+          RUN_FILE="$RUNNER_TEMP/workflow-run.json"
+          gh api "repos/$REPO/actions/runs/$RUN_ID" > "$RUN_FILE"
+          echo "run_attempt=$(jq -r '.run_attempt // 1' "$RUN_FILE")" >> "$GITHUB_OUTPUT"
+
       - name: Decide notification policy
         id: policy
         env:
           RUN_EVENT: ${{ github.event.workflow_run.event }}
           RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_ATTEMPT: ${{ steps.runmeta.outputs.run_attempt }}
+          MAX_AUTO_RERUNS: ${{ env.MAX_AUTO_RERUNS }}
         run: |
           set -euo pipefail
 
@@ -27,7 +45,9 @@ jobs:
           STYLE="skip"
           REASON="notification skipped by policy"
 
-          if [[ "$RUN_EVENT" == "schedule" ]]; then
+          if [[ "$RUN_CONCLUSION" == "failure" && "$RUN_ATTEMPT" -le "$MAX_AUTO_RERUNS" ]]; then
+            REASON="run failed on attempt $RUN_ATTEMPT and will be auto-rerun"
+          elif [[ "$RUN_EVENT" == "schedule" ]]; then
             NOTIFY="yes"
             STYLE="daily"
             REASON="daily run should always notify"
@@ -50,6 +70,8 @@ jobs:
           echo "notify=${{ steps.policy.outputs.notify }}"
           echo "style=${{ steps.policy.outputs.style }}"
           echo "reason=${{ steps.policy.outputs.reason }}"
+          echo "run_attempt=${{ steps.runmeta.outputs.run_attempt }}"
+          echo "max_auto_reruns=${{ env.MAX_AUTO_RERUNS }}"
 
       - name: Download final summary artifact
         id: summary
@@ -102,6 +124,8 @@ jobs:
           RUN_URL: ${{ github.event.workflow_run.html_url }}
           RUN_EVENT: ${{ github.event.workflow_run.event }}
           RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_ATTEMPT: ${{ steps.runmeta.outputs.run_attempt }}
+          MAX_AUTO_RERUNS: ${{ env.MAX_AUTO_RERUNS }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           SUMMARY_FILE: ${{ steps.summary.outputs.summary_file }}
@@ -160,6 +184,8 @@ jobs:
           run_url = os.environ["RUN_URL"]
           run_event = os.environ["RUN_EVENT"]
           run_conclusion = os.environ["RUN_CONCLUSION"]
+          run_attempt = os.environ.get("RUN_ATTEMPT", "1")
+          max_auto_reruns = os.environ.get("MAX_AUTO_RERUNS", "5")
           head_branch = os.environ["HEAD_BRANCH"] or "unknown"
           head_sha = os.environ["HEAD_SHA"] or ""
           short_sha = head_sha[:8] if head_sha else "unknown"
@@ -227,6 +253,7 @@ jobs:
                   f"- 主机IP: {host_ip}",
                   f"- 主机SN: {host_sn}",
                   f"- Baseline commit: `{baseline_commit}`",
+                  f"- 当前尝试: 第{run_attempt}次（自动重跑上限: {max_auto_reruns}次）",
                   f"- 运行详情: [GitHub Actions]({run_url})",
                   "",
                   "#### Job 状态",
@@ -254,6 +281,7 @@ jobs:
                   f"- PR: #{pr_number} {pr_url}" if pr_number else "- PR: n/a",
                   f"- 分支: {head_branch}",
                   f"- Commit: `{short_sha}`",
+                  f"- 当前尝试: 第{run_attempt}次（自动重跑上限: {max_auto_reruns}次）",
                   f"- 触发方式: {run_event}",
                   f"- 运行详情: [GitHub Actions]({run_url})",
               ]
@@ -280,6 +308,7 @@ jobs:
                   f"- 仓库: {repo}",
                   f"- 分支: {head_branch}",
                   f"- Commit: `{short_sha}`",
+                  f"- 当前尝试: 第{run_attempt}次（自动重跑上限: {max_auto_reruns}次）",
                   f"- 触发方式: {run_event}",
                   f"- 运行详情: [GitHub Actions]({run_url})",
               ]
