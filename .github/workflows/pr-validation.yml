@@ -532,7 +532,7 @@ jobs:
         run: exit 1
 
   tencent_perf:
-    name: Tencent Performance
+    name: T Performance
     needs: [prepare_metadata, build_current, build_baseline]
     if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
     runs-on: [self-hosted, musa-gpu]
@@ -557,7 +557,7 @@ jobs:
           name: ${{ env.BASELINE_PLUGIN_ARTIFACT }}
           path: ${{ runner.temp }}/baseline-plugin
 
-      - name: Run Tencent performance baseline/current
+      - name: Run T performance baseline/current
         id: run_perf
         run: |
           set +e
@@ -593,7 +593,7 @@ jobs:
           echo "baseline_exit=$baseline_exit" >> "$GITHUB_OUTPUT"
           echo "current_exit=$current_exit" >> "$GITHUB_OUTPUT"
 
-      - name: Collect Tencent performance summary
+      - name: Collect T performance summary
         id: collect
         if: always()
         run: |
@@ -625,7 +625,7 @@ jobs:
           fi
 
           {
-            echo "## Tencent Performance"
+            echo "## T Performance"
             echo
             echo "- Status: $STATUS"
             echo "- Baseline commit: ${{ needs.build_baseline.outputs.baseline_sha }}"
@@ -659,21 +659,21 @@ jobs:
           echo "threshold_ms=$THRESHOLD_MS" >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: Upload Tencent performance summary artifact
+      - name: Upload T performance summary artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: summary-tencent-perf
+          name: summary-t-perf
           path: ${{ steps.collect.outputs.summary_file }}
           if-no-files-found: error
           retention-days: 7
 
-      - name: Fail job if Tencent performance regressed
+      - name: Fail job if T performance regressed
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
 
   tencent_accuracy:
-    name: Tencent Accuracy
+    name: T Accuracy
     needs: [prepare_metadata, build_current]
     if: needs.build_current.result == 'success'
     runs-on: [self-hosted, musa-gpu]
@@ -689,7 +689,7 @@ jobs:
           name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
           path: ${{ runner.temp }}/current-plugin
 
-      - name: Run Tencent accuracy current only
+      - name: Run T accuracy current only
         id: run_acc
         run: |
           set +e
@@ -715,7 +715,7 @@ jobs:
 
           echo "current_exit=$current_exit" >> "$GITHUB_OUTPUT"
 
-      - name: Collect Tencent accuracy summary
+      - name: Collect T accuracy summary
         id: collect
         if: always()
         run: |
@@ -735,7 +735,7 @@ jobs:
           fi
 
           {
-            echo "## Tencent Accuracy"
+            echo "## T Accuracy"
             echo
             echo "- Status: $STATUS"
             echo "- Current: ${CURRENT_ACC:-unavailable}"
@@ -755,21 +755,21 @@ jobs:
           echo "current_acc=$CURRENT_ACC" >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: Upload Tencent accuracy summary artifact
+      - name: Upload T accuracy summary artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: summary-tencent-accuracy
+          name: summary-t-accuracy
           path: ${{ steps.collect.outputs.summary_file }}
           if-no-files-found: error
           retention-days: 7
 
-      - name: Fail job if Tencent accuracy failed
+      - name: Fail job if T accuracy failed
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
 
   bytedance_model1:
-    name: ByteDance Model 1
+    name: BD Model 1
     needs: [prepare_metadata, build_current, build_baseline]
     if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
     runs-on: [self-hosted, musa-gpu]
@@ -1025,7 +1025,7 @@ jobs:
           fi
 
           {
-            echo "## ByteDance Model 1"
+            echo "## BD Model 1"
             echo
             echo "- Status: $STATUS"
             echo "- Baseline: ${BASELINE_MS:-n/a}"
@@ -1066,7 +1066,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: summary-bytedance-model1
+          name: summary-bd-model1
           path: ${{ steps.collect.outputs.summary_file }}
           if-no-files-found: error
           retention-days: 7
@@ -1076,7 +1076,7 @@ jobs:
         run: exit 1
 
   bytedance_model2:
-    name: ByteDance Model 2
+    name: BD Model 2
     needs: [prepare_metadata, build_current, build_baseline]
     if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
     runs-on: [self-hosted, musa-gpu]
@@ -1333,7 +1333,7 @@ jobs:
           fi
 
           {
-            echo "## ByteDance Model 2"
+            echo "## BD Model 2"
             echo
             echo "- Status: $STATUS"
             echo "- Baseline: ${BASELINE_MS:-n/a}"
@@ -1374,7 +1374,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: summary-bytedance-model2
+          name: summary-bd-model2
           path: ${{ steps.collect.outputs.summary_file }}
           if-no-files-found: error
           retention-days: 7
@@ -1384,7 +1384,7 @@ jobs:
         run: exit 1
 
   bytedance_model3:
-    name: ByteDance Model 3
+    name: BD Model 3
     needs: [prepare_metadata, build_current, build_baseline]
     if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
     runs-on: [self-hosted, musa-gpu]
@@ -1641,7 +1641,7 @@ jobs:
           fi
 
           {
-            echo "## ByteDance Model 3"
+            echo "## BD Model 3"
             echo
             echo "- Status: $STATUS"
             echo "- Baseline: ${BASELINE_MS:-n/a}"
@@ -1682,7 +1682,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: summary-bytedance-model3
+          name: summary-bd-model3
           path: ${{ steps.collect.outputs.summary_file }}
           if-no-files-found: error
           retention-days: 7
@@ -1852,21 +1852,21 @@ jobs:
             echo "| Build Current | $BUILD_CURRENT_STATUS | yes |"
             echo "| Integration | $INTEGRATION_STATUS | yes |"
             echo "| Build Baseline | $BUILD_BASELINE_STATUS | yes |"
-            echo "| Tencent Performance | $TENCENT_PERF_STATUS | yes |"
-            echo "| Tencent Accuracy | $TENCENT_ACC_STATUS | yes |"
-            echo "| ByteDance Model 1 | $BYTE1_STATUS | yes |"
-            echo "| ByteDance Model 2 | $BYTE2_STATUS | yes |"
-            echo "| ByteDance Model 3 | $BYTE3_STATUS | yes |"
+            echo "| T Performance | $TENCENT_PERF_STATUS | yes |"
+            echo "| T Accuracy | $TENCENT_ACC_STATUS | yes |"
+            echo "| BD Model 1 | $BYTE1_STATUS | yes |"
+            echo "| BD Model 2 | $BYTE2_STATUS | yes |"
+            echo "| BD Model 3 | $BYTE3_STATUS | yes |"
             echo "| Training | $TRAINING_STATUS | no |"
             echo
             echo "## Performance Metrics"
-            echo "- Tencent Performance: baseline=${{ needs.tencent_perf.outputs.baseline_ms || 'n/a' }} ms, current=${{ needs.tencent_perf.outputs.current_ms || 'n/a' }} ms, threshold=${{ needs.tencent_perf.outputs.threshold_ms || 'n/a' }} ms"
-            echo "- ByteDance Model 1: ${{ needs.bytedance_model1.outputs.metrics_summary || 'n/a' }}"
-            echo "- ByteDance Model 2: ${{ needs.bytedance_model2.outputs.metrics_summary || 'n/a' }}"
-            echo "- ByteDance Model 3: ${{ needs.bytedance_model3.outputs.metrics_summary || 'n/a' }}"
+            echo "- T Performance: baseline=${{ needs.tencent_perf.outputs.baseline_ms || 'n/a' }} ms, current=${{ needs.tencent_perf.outputs.current_ms || 'n/a' }} ms, threshold=${{ needs.tencent_perf.outputs.threshold_ms || 'n/a' }} ms"
+            echo "- BD Model 1: ${{ needs.bytedance_model1.outputs.metrics_summary || 'n/a' }}"
+            echo "- BD Model 2: ${{ needs.bytedance_model2.outputs.metrics_summary || 'n/a' }}"
+            echo "- BD Model 3: ${{ needs.bytedance_model3.outputs.metrics_summary || 'n/a' }}"
             echo
             echo "## Accuracy Highlights"
-            echo "- Tencent Accuracy current: ${{ needs.tencent_accuracy.outputs.current_acc || 'n/a' }}"
+            echo "- T Accuracy current: ${{ needs.tencent_accuracy.outputs.current_acc || 'n/a' }}"
             echo
           } > "$SUMMARY_FILE"
 

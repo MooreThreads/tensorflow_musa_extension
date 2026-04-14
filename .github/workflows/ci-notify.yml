@@ -177,11 +177,11 @@ jobs:
           host_ip = find_value(summary_lines, "- Host IP: ", "unavailable")
           host_sn = find_value(summary_lines, "- Host SN: ", "unavailable")
           baseline_commit = find_value(summary_lines, "- Baseline commit: ", "unavailable")
-          tencent_perf = find_value(summary_lines, "- Tencent Performance: ", "n/a")
-          byte1 = find_value(summary_lines, "- ByteDance Model 1: ", "n/a")
-          byte2 = find_value(summary_lines, "- ByteDance Model 2: ", "n/a")
-          byte3 = find_value(summary_lines, "- ByteDance Model 3: ", "n/a")
-          accuracy = find_value(summary_lines, "- Tencent Accuracy current: ", "n/a")
+          tencent_perf = find_value(summary_lines, "- T Performance: ", "n/a")
+          byte1 = find_value(summary_lines, "- BD Model 1: ", "n/a")
+          byte2 = find_value(summary_lines, "- BD Model 2: ", "n/a")
+          byte3 = find_value(summary_lines, "- BD Model 3: ", "n/a")
+          accuracy = find_value(summary_lines, "- T Accuracy current: ", "n/a")
 
           jobs_payload = {}
           jobs_file = os.environ.get("JOBS_FILE", "")
@@ -236,11 +236,11 @@ jobs:
                   [
                       "",
                       "#### 性能与精度摘要",
-                      f"- Tencent Performance: {tencent_perf}",
-                      f"- ByteDance Model 1: {byte1}",
-                      f"- ByteDance Model 2: {byte2}",
-                      f"- ByteDance Model 3: {byte3}",
-                      f"- Tencent Accuracy: {accuracy}",
+                      f"- T Performance: {tencent_perf}",
+                      f"- BD Model 1: {byte1}",
+                      f"- BD Model 2: {byte2}",
+                      f"- BD Model 3: {byte3}",
+                      f"- T Accuracy: {accuracy}",
                   ]
               )
               if failed_jobs:
@@ -266,11 +266,11 @@ jobs:
                   [
                       "",
                       "#### 关键摘要",
-                      f"- Tencent Performance: {tencent_perf}",
-                      f"- ByteDance Model 1: {byte1}",
-                      f"- ByteDance Model 2: {byte2}",
-                      f"- ByteDance Model 3: {byte3}",
-                      f"- Tencent Accuracy: {accuracy}",
+                      f"- T Performance: {tencent_perf}",
+                      f"- BD Model 1: {byte1}",
+                      f"- BD Model 2: {byte2}",
+                      f"- BD Model 3: {byte3}",
+                      f"- T Accuracy: {accuracy}",
                   ]
               )
           else:
