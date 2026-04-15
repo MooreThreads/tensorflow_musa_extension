@@ -44,7 +44,27 @@ def get_concat_matmul_split_nodes(run_metadata):
 
 
 class ConcatMatMulSplitFusionE2ETest(MUSATestCase):
-    def test_concat_matmul_then_slice_is_fused(self):
+    def _run_and_assert_fused(self, graph, fetches, feed_dict):
+        config = create_config_with_musa_optimizer()
+        run_options = tf.compat.v1.RunOptions(output_partition_graphs=True)
+        run_metadata = tf.compat.v1.RunMetadata()
+
+        with tf.compat.v1.Session(graph=graph, config=config) as sess:
+            results = sess.run(
+                fetches,
+                feed_dict=feed_dict,
+                options=run_options,
+                run_metadata=run_metadata,
+            )
+
+        fused_nodes = get_concat_matmul_split_nodes(run_metadata)
+        self.assertTrue(
+            fused_nodes,
+            "Expected ConcatV2 -> MatMul -> many Slice to be fused into MusaConcatMatMulSplit",
+        )
+        return results
+
+    def test_concat_matmul_then_col_slice_is_fused(self):
         x0_np = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
         x1_np = np.array([[5.0, 6.0], [7.0, 8.0]], dtype=np.float32)
         weight_np = np.array(
@@ -87,26 +107,62 @@ class ConcatMatMulSplitFusionE2ETest(MUSATestCase):
                     name="slice1",
                 )
 
-        config = create_config_with_musa_optimizer()
-        run_options = tf.compat.v1.RunOptions(output_partition_graphs=True)
-        run_metadata = tf.compat.v1.RunMetadata()
-
-        with tf.compat.v1.Session(graph=graph, config=config) as sess:
-            result0, result1 = sess.run(
-                [out0, out1],
-                feed_dict={x0: x0_np, x1: x1_np},
-                options=run_options,
-                run_metadata=run_metadata,
-            )
-
-        fused_nodes = get_concat_matmul_split_nodes(run_metadata)
+        result0, result1 = self._run_and_assert_fused(
+            graph, [out0, out1], {x0: x0_np, x1: x1_np}
+        )
 
         self.assertAllClose(result0, expected0, rtol=1e-5, atol=1e-6)
         self.assertAllClose(result1, expected1, rtol=1e-5, atol=1e-6)
-        self.assertTrue(
-            fused_nodes,
-            "Expected ConcatV2 -> MatMul -> many Slice to be fused into MusaConcatMatMulSplit",
+
+    def test_concat_matmul_then_row_slice_is_fused(self):
+        x0_np = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+        x1_np = np.array([[5.0, 6.0], [7.0, 8.0]], dtype=np.float32)
+        weight_np = np.array(
+            [
+                [1.0, 0.0, 2.0, 1.0],
+                [0.0, 1.0, 1.0, 2.0],
+                [1.0, 1.0, 0.0, 1.0],
+                [2.0, 0.0, 1.0, 0.0],
+            ],
+            dtype=np.float32,
         )
+
+        concat_np = np.concatenate([x0_np, x1_np], axis=1)
+        matmul_np = np.matmul(concat_np, weight_np)
+        expected0 = matmul_np[:1, :]
+        expected1 = matmul_np[1:, :]
+
+        graph = tf.Graph()
+        with graph.as_default():
+            with tf.device("/device:MUSA:0"):
+                x0 = tf.compat.v1.placeholder(
+                    tf.float32, shape=[2, 2], name="x0"
+                )
+                x1 = tf.compat.v1.placeholder(
+                    tf.float32, shape=[2, 2], name="x1"
+                )
+                weight = tf.constant(weight_np, dtype=tf.float32, name="weight")
+                concat = tf.concat([x0, x1], axis=1, name="concat_inputs")
+                matmul = tf.matmul(concat, weight, name="concat_matmul")
+                out0 = tf.raw_ops.Slice(
+                    input=matmul,
+                    begin=tf.constant([0, 0], dtype=tf.int32, name="row0_begin"),
+                    size=tf.constant([1, 4], dtype=tf.int32, name="row0_size"),
+                    name="row0",
+                )
+                out1 = tf.raw_ops.Slice(
+                    input=matmul,
+                    begin=tf.constant([1, 0], dtype=tf.int32, name="row1_begin"),
+                    size=tf.constant([1, 4], dtype=tf.int32, name="row1_size"),
+                    name="row1",
+                )
+
+        result0, result1 = self._run_and_assert_fused(
+            graph, [out0, out1], {x0: x0_np, x1: x1_np}
+        )
+
+        self.assertAllClose(result0, expected0, rtol=1e-5, atol=1e-6)
+        self.assertAllClose(result1, expected1, rtol=1e-5, atol=1e-6)
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/util/matmul_bcast.h"
+#include "utils/logging.h"
 
 namespace tensorflow {
 namespace musa {
@@ -28,6 +29,13 @@ std::vector<int64_t> MakeContiguousStrides(const TensorShape& shape) {
     strides[i] = strides[i + 1] * shape.dim_size(i + 1);
   }
   return strides;
+}
+
+TensorShape MakeSlicedShape(const TensorShape& shape, int slice_dim,
+                            int64_t slice_size) {
+  TensorShape sliced = shape;
+  sliced.set_dim(slice_dim, slice_size);
+  return sliced;
 }
 
 Status CreateSliceView(const Tensor& tensor, int slice_dim, int64_t slice_begin,
@@ -72,6 +80,37 @@ Status CreateSliceView(const Tensor& tensor, int slice_dim, int64_t slice_begin,
     return errors::Internal("SetNdInfo failed while building slice view. "
                             "Status: ",
                             static_cast<int>(status));
+  }
+  return Status::OK();
+}
+
+Status ConfigureBatchMatMulTensor(mTensor* tensor, const TensorShape& shape,
+                                  int64_t out_batch) {
+  const int dims = shape.dims();
+  if (dims < 2) {
+    return errors::InvalidArgument("BatchMatMul tensor rank must be >= 2, got ",
+                                   dims);
+  }
+
+  const int64_t rows = shape.dim_size(dims - 2);
+  const int64_t cols = shape.dim_size(dims - 1);
+  const int64_t batch = shape.num_elements() / (rows * cols);
+
+  ::musa::dnn::Status status = ::musa::dnn::Status::SUCCESS;
+  if (dims != 3) {
+    if (batch == 1 && out_batch > 1) {
+      status = tensor->SetNdInfo({out_batch, rows, cols}, {0, cols, 1});
+    } else {
+      status = tensor->SetNdInfo({batch, rows, cols}, {rows * cols, cols, 1});
+    }
+  } else if (batch == 1 && out_batch > 1) {
+    status = tensor->SetNdInfo({out_batch, rows, cols}, {0, cols, 1});
+  }
+
+  if (status != ::musa::dnn::Status::SUCCESS) {
+    return errors::Internal(
+        "Failed to configure BatchMatMul tensor view. Status: ",
+        static_cast<int>(status));
   }
   return Status::OK();
 }
@@ -263,10 +302,19 @@ class MusaConcatMatMulSplitOp : public MusaOpKernel {
             "slice_sizes exceed output dimension: consumed=", consumed_axis,
             ", available=", mm_out_shape.dim_size(normalized_slice_axis)));
 
-    if (CanUseDirectOutputColumnSplitFastPath(in0, in1, mm_out_shape,
+    if (CanUseDirectOutputColumnSplitFastPath(mm_out_shape,
                                               normalized_slice_axis)) {
       OP_REQUIRES_OK(ctx, RunDirectOutputColumnSplitFastPath(
-                              ctx, in0, in1, bias, normalized_slice_axis));
+                              ctx, in0, in1, bias, mm_out_shape,
+                              normalized_slice_axis));
+      return;
+    }
+
+    if (CanUseDirectOutputRowSplitFastPath(mm_out_shape,
+                                           normalized_slice_axis)) {
+      OP_REQUIRES_OK(ctx, RunDirectOutputRowSplitFastPath(
+                              ctx, in0, in1, bias, mm_out_shape,
+                              normalized_slice_axis));
       return;
     }
 
@@ -336,10 +384,8 @@ class MusaConcatMatMulSplitOp : public MusaOpKernel {
   }
 
   bool CanUseDirectOutputColumnSplitFastPath(
-      const Tensor& in0, const Tensor& in1, const TensorShape& mm_out_shape,
-      int normalized_slice_axis) const {
-    return in0.dims() == 2 && in1.dims() == 2 &&
-           mm_out_shape.dims() == 2 &&
+      const TensorShape& mm_out_shape, int normalized_slice_axis) const {
+    return mm_out_shape.dims() >= 2 &&
            normalized_slice_axis == mm_out_shape.dims() - 1;
   }
 
@@ -347,16 +393,16 @@ class MusaConcatMatMulSplitOp : public MusaOpKernel {
                                             const Tensor& in0,
                                             const Tensor& in1,
                                             const Tensor* bias,
+                                            const TensorShape& mm_out_shape,
                                             int normalized_slice_axis) {
-    const int slice_dim_in_b = trans_b_ ? 0 : 1;
+    const int slice_dim_in_b = trans_b_ ? in1.dims() - 2 : in1.dims() - 1;
     int64_t current_offset = 0;
 
     for (int i = 0; i < num_outputs_; ++i) {
-      TensorShape output_shape;
-      output_shape.AddDim(
-          trans_a_ ? in0.dim_size(in0.dims() - 1) : in0.dim_size(in0.dims() - 2));
-      output_shape.AddDim(slice_sizes_[i]);
-      output_shape.set_dim(normalized_slice_axis, slice_sizes_[i]);
+      const TensorShape rhs_slice_shape =
+          MakeSlicedShape(in1.shape(), slice_dim_in_b, slice_sizes_[i]);
+      const TensorShape output_shape =
+          MakeSlicedShape(mm_out_shape, normalized_slice_axis, slice_sizes_[i]);
 
       Tensor* output = nullptr;
       TF_RETURN_IF_ERROR(ctx->allocate_output(i, output_shape, &output));
@@ -370,14 +416,25 @@ class MusaConcatMatMulSplitOp : public MusaOpKernel {
       TF_RETURN_IF_ERROR(CreateSliceView(in1, slice_dim_in_b, current_offset,
                                          slice_sizes_[i], format_, &mt_b));
 
-      if (HasBiasFusion()) {
+      if (HasBiasFusion() && output_shape.dims() == 2) {
         mTensor mt_bias;
         TF_RETURN_IF_ERROR(
             CreateSliceView(*bias, 0, current_offset, slice_sizes_[i], format_,
                             &mt_bias));
-        TF_RETURN_IF_ERROR(Run2DMatMulWithBias(ctx, mt_a, mt_b, mt_bias, output));
+        TF_RETURN_IF_ERROR(
+            Run2DMatMulWithBias(ctx, mt_a, mt_b, mt_bias, output));
       } else {
-        TF_RETURN_IF_ERROR(Run2DMatMul(ctx, mt_a, mt_b, output));
+        TF_RETURN_IF_ERROR(RunMatMulWithViews(
+            ctx, in0.shape(), mt_a, rhs_slice_shape, mt_b, output_shape,
+            output));
+        if (HasBiasFusion()) {
+          mTensor mt_bias;
+          TF_RETURN_IF_ERROR(
+              CreateSliceView(*bias, 0, current_offset, slice_sizes_[i],
+                              format_, &mt_bias));
+          TF_RETURN_IF_ERROR(ApplyBiasAddInPlace(
+              ctx, mt_bias, slice_sizes_[i], output_shape, output));
+        }
       }
 
       if (HasActivationFusion()) {
@@ -386,6 +443,59 @@ class MusaConcatMatMulSplitOp : public MusaOpKernel {
       current_offset += slice_sizes_[i];
     }
 
+    return Status::OK();
+  }
+
+  bool CanUseDirectOutputRowSplitFastPath(const TensorShape& mm_out_shape,
+                                          int normalized_slice_axis) const {
+    return mm_out_shape.dims() >= 2 &&
+           normalized_slice_axis == mm_out_shape.dims() - 2;
+  }
+
+  Status RunDirectOutputRowSplitFastPath(OpKernelContext* ctx, const Tensor& in0,
+                                         const Tensor& in1, const Tensor* bias,
+                                         const TensorShape& mm_out_shape,
+                                         int normalized_slice_axis) {
+    const int slice_dim_in_a = trans_a_ ? in0.dims() - 1 : in0.dims() - 2;
+    int64_t current_offset = 0;
+
+    for (int i = 0; i < num_outputs_; ++i) {
+      const TensorShape lhs_slice_shape =
+          MakeSlicedShape(in0.shape(), slice_dim_in_a, slice_sizes_[i]);
+      const TensorShape output_shape =
+          MakeSlicedShape(mm_out_shape, normalized_slice_axis, slice_sizes_[i]);
+
+      Tensor* output = nullptr;
+      TF_RETURN_IF_ERROR(ctx->allocate_output(i, output_shape, &output));
+      if (output->NumElements() == 0) {
+        current_offset += slice_sizes_[i];
+        continue;
+      }
+
+      mTensor mt_a;
+      TF_RETURN_IF_ERROR(CreateSliceView(in0, slice_dim_in_a, current_offset,
+                                         slice_sizes_[i], format_, &mt_a));
+      mTensor mt_b = CreateMTensor(in1, format_);
+
+      if (HasBiasFusion() && output_shape.dims() == 2) {
+        mTensor mt_bias = CreateMTensor(*bias, format_);
+        TF_RETURN_IF_ERROR(
+            Run2DMatMulWithBias(ctx, mt_a, mt_b, mt_bias, output));
+      } else {
+        TF_RETURN_IF_ERROR(RunMatMulWithViews(
+            ctx, lhs_slice_shape, mt_a, in1.shape(), mt_b, output_shape,
+            output));
+        if (HasBiasFusion()) {
+          TF_RETURN_IF_ERROR(
+              ApplyBiasAddInPlace(ctx, *bias, output_shape, output));
+        }
+      }
+
+      if (HasActivationFusion()) {
+        TF_RETURN_IF_ERROR(ApplyActivationInPlace(ctx, output));
+      }
+      current_offset += slice_sizes_[i];
+    }
     return Status::OK();
   }
 
@@ -403,6 +513,60 @@ class MusaConcatMatMulSplitOp : public MusaOpKernel {
       return errors::Internal("MUSA MatMul failed in MusaConcatMatMulSplit. "
                               "Status: ",
                               static_cast<int>(status));
+    }
+    return Status::OK();
+  }
+
+  Status RunMatMulWithViews(OpKernelContext* ctx, const TensorShape& lhs_shape,
+                            mTensor mt_a, const TensorShape& rhs_shape,
+                            mTensor mt_b, const TensorShape& output_shape,
+                            Tensor* output) {
+    auto& handle = GetHandleByCtx(ctx);
+    mTensor mt_out = CreateMTensor(*output, format_);
+
+    ::musa::dnn::Status status;
+    if (lhs_shape.dims() == 2 && rhs_shape.dims() == 2) {
+      mMatMul mm_op;
+      mm_op.SetTranspose(trans_a_, trans_b_);
+      mm_op.SetAlpha(1.0);
+      mm_op.SetBeta(0.0);
+      status = mm_op.Run(handle, mt_out, mt_a, mt_b);
+    } else {
+      const int64_t m = output_shape.dim_size(output_shape.dims() - 2);
+      const int64_t n = output_shape.dim_size(output_shape.dims() - 1);
+      const int64_t out_batch = output_shape.num_elements() / (m * n);
+
+      TF_RETURN_IF_ERROR(
+          ConfigureBatchMatMulTensor(&mt_a, lhs_shape, out_batch));
+      TF_RETURN_IF_ERROR(
+          ConfigureBatchMatMulTensor(&mt_b, rhs_shape, out_batch));
+      if (output_shape.dims() > 3) {
+        status = mt_out.SetNdInfo({out_batch, m, n}, {m * n, n, 1});
+        if (status != ::musa::dnn::Status::SUCCESS) {
+          return errors::Internal(
+              "Failed to configure BatchMatMul output view. Status: ",
+              static_cast<int>(status));
+        }
+      } else if (output_shape.dims() == 2) {
+        status = mt_out.SetNdInfo({1, m, n}, {m * n, n, 1});
+        if (status != ::musa::dnn::Status::SUCCESS) {
+          return errors::Internal(
+              "Failed to configure BatchMatMul 2D output view. Status: ",
+              static_cast<int>(status));
+        }
+      }
+
+      mBatchMatMul mm_op;
+      mm_op.SetTranspose(trans_a_, trans_b_);
+      mm_op.SetAlpha(1.0);
+      mm_op.SetBeta(0.0);
+      status = mm_op.Run(handle, mt_out, mt_a, mt_b);
+    }
+
+    if (status != ::musa::dnn::Status::SUCCESS) {
+      return errors::Internal(
+          "MUSA MatMul failed in MusaConcatMatMulSplit. Status: ",
+          static_cast<int>(status));
     }
     return Status::OK();
   }
@@ -483,21 +647,33 @@ class MusaConcatMatMulSplitOp : public MusaOpKernel {
 
   Status ApplyBiasAddInPlace(OpKernelContext* ctx, const Tensor& bias,
                              const TensorShape& out_shape, Tensor* output) {
+    mTensor mt_bias = CreateMTensor(bias, format_);
+    return ApplyBiasAddInPlace(ctx, mt_bias, bias.dim_size(0), out_shape,
+                               output);
+  }
+
+  Status ApplyBiasAddInPlace(OpKernelContext* ctx, mTensor mt_bias,
+                             int64_t bias_size, const TensorShape& out_shape,
+                             Tensor* output) {
     auto& handle = GetHandleByCtx(ctx);
     mTensor mt_out = CreateMTensor(*output, format_);
-    mTensor mt_bias = CreateMTensor(bias, format_);
 
     const int dims_cnt = out_shape.dims();
     const int channel_dim = dims_cnt - 1;
     std::vector<int64_t> b_dims(dims_cnt, 1);
     std::vector<int64_t> b_strides(dims_cnt, 0);
-    b_dims[channel_dim] = bias.dim_size(0);
+    b_dims[channel_dim] = bias_size;
     b_strides[channel_dim] = 1;
-    mt_bias.SetNdInfo(dims_cnt, b_dims.data(), b_strides.data());
+    auto status = mt_bias.SetNdInfo(dims_cnt, b_dims.data(), b_strides.data());
+    if (status != ::musa::dnn::Status::SUCCESS) {
+      return errors::Internal(
+          "Failed to configure BiasAdd view in MusaConcatMatMulSplit. Status: ",
+          static_cast<int>(status));
+    }
 
     mBinary bias_add_op;
     bias_add_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    auto status = bias_add_op.Run(handle, mt_out, mt_out, mt_bias);
+    status = bias_add_op.Run(handle, mt_out, mt_out, mt_bias);
     if (status != ::musa::dnn::Status::SUCCESS) {
       return errors::Internal(
           "MUSA BiasAdd failed in MusaConcatMatMulSplit. Status: ",
