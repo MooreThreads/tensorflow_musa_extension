@@ -340,34 +340,6 @@ void SetIntListAttr(NodeDef* node, const std::string& attr_name,
   }
 }
 
-void RewriteConsumerInputs(GraphDef* graph,
-                           const std::unordered_map<std::string, int>& port_map,
-                           const std::string& fused_node_name) {
-  for (int node_idx = 0; node_idx < graph->node_size(); ++node_idx) {
-    NodeDef* node = graph->mutable_node(node_idx);
-    if (node->name() == fused_node_name) {
-      continue;
-    }
-    for (int input_idx = 0; input_idx < node->input_size(); ++input_idx) {
-      const std::string current_input = node->input(input_idx);
-      const std::string producer_name =
-          FusionGraphUtils::GetProducerNodeName(current_input);
-      const auto it = port_map.find(producer_name);
-      if (it == port_map.end()) {
-        continue;
-      }
-
-      const bool is_control = !current_input.empty() && current_input[0] == '^';
-      if (is_control) {
-        node->set_input(input_idx, "^" + fused_node_name);
-      } else {
-        node->set_input(input_idx,
-                        fused_node_name + ":" + std::to_string(it->second));
-      }
-    }
-  }
-}
-
 void ProtectInputProducer(std::unordered_set<std::string>* protected_names,
                           const std::string& input_name) {
   if (!input_name.empty()) {
@@ -485,18 +457,63 @@ Status ConcatMatMulSplitFusion::Apply(
     }
   }
 
-  std::unordered_map<std::string, int> slice_port_map;
+  std::vector<std::string> removable_names;
+  removable_names.reserve(plan.removable_nodes.size());
+  removable_names.push_back(original_producer_name);
+
   for (size_t i = 0; i < plan.ordered_slice_nodes.size(); ++i) {
-    slice_port_map[plan.ordered_slice_nodes[i]->name()] = static_cast<int>(i);
+    const NodeDef* slice_node = plan.ordered_slice_nodes[i];
+    const int slice_idx = FusionGraphUtils::FindNodeIndex(*graph, slice_node->name());
+    if (slice_idx < 0) {
+      return Status(error::INVALID_ARGUMENT,
+                    "Failed to locate slice node for ConcatMatMulSplit: " +
+                        slice_node->name());
+    }
+
+    const std::string original_slice_name = slice_node->name();
+    const std::string renamed_slice_name = original_slice_name + "_original";
+    const auto slice_attrs = graph->node(slice_idx).attr();
+    const std::string slice_device = graph->node(slice_idx).device();
+
+    NodeDef* slice_mutable = graph->mutable_node(slice_idx);
+    slice_mutable->set_name(renamed_slice_name);
+    removable_names.push_back(renamed_slice_name);
+
+    NodeDef* identity_node = graph->add_node();
+    identity_node->set_name(original_slice_name);
+    identity_node->set_op("Identity");
+    identity_node->set_device(slice_device);
+    identity_node->add_input(original_name + ":" + std::to_string(i));
+
+    const auto t_it = slice_attrs.find("T");
+    if (t_it != slice_attrs.end()) {
+      (*identity_node->mutable_attr())["T"] = t_it->second;
+    } else {
+      (*identity_node->mutable_attr())["T"] = producer_attrs.at("T");
+    }
+
+    const auto output_shapes_it = slice_attrs.find("_output_shapes");
+    if (output_shapes_it != slice_attrs.end()) {
+      (*identity_node->mutable_attr())["_output_shapes"] = output_shapes_it->second;
+    }
   }
-  RewriteConsumerInputs(graph, slice_port_map, original_name);
+
+  for (const auto& removable_name : plan.removable_nodes) {
+    if (removable_name == original_name + "_original") {
+      continue;
+    }
+    if (std::find(removable_names.begin(), removable_names.end(), removable_name) ==
+        removable_names.end()) {
+      removable_names.push_back(removable_name);
+    }
+  }
 
   std::unordered_set<std::string> protected_names = {original_name};
   for (const auto& input : producer_inputs) {
     ProtectInputProducer(&protected_names, input);
   }
 
-  FusionGraphUtils::RemoveNodesIfUnused(graph, plan.removable_nodes,
+  FusionGraphUtils::RemoveNodesIfUnused(graph, removable_names,
                                         protected_names);
   return Status::OK();
 }
