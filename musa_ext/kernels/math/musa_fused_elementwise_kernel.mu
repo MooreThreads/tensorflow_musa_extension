@@ -26,6 +26,7 @@ struct MusaFusedElementwiseAccumType<double> {
   using type = double;
 };
 
+__device__ __forceinline__ bool LoadElement(const bool* p) { return *p; }
 __device__ __forceinline__ float LoadElement(const float* p) { return *p; }
 __device__ __forceinline__ double LoadElement(const double* p) { return *p; }
 
@@ -58,17 +59,23 @@ __device__ __forceinline__ void StoreElement(bfloat16* p, float v) {
 
 template <typename T>
 __device__ __forceinline__ const T* GetInputPointer(
-    MusaFusedElementwiseInlinePointers inputs, int input_index) {
-  return reinterpret_cast<const T*>(inputs.ptrs[input_index]);
+    const void* const* ptrs, int input_index) {
+  return reinterpret_cast<const T*>(ptrs[input_index]);
 }
 
 template <typename T>
 __device__ __forceinline__ typename MusaFusedElementwiseAccumType<T>::type
-LoadInputValue(MusaFusedElementwiseInlinePointers inputs, int input_index,
-               int offset) {
-  const T* ptr = GetInputPointer<T>(inputs, input_index);
+LoadDataInputValue(MusaFusedElementwiseInlinePointers inputs, int input_index,
+                   int offset) {
+  const T* ptr = GetInputPointer<T>(inputs.data_ptrs, input_index);
   return static_cast<typename MusaFusedElementwiseAccumType<T>::type>(
       LoadElement(ptr + offset));
+}
+
+__device__ __forceinline__ bool LoadBoolInputValue(
+    MusaFusedElementwiseInlinePointers inputs, int input_index, int offset) {
+  const bool* ptr = GetInputPointer<bool>(inputs.bool_ptrs, input_index);
+  return LoadElement(ptr + offset);
 }
 
 template <typename AccT>
@@ -108,9 +115,17 @@ __device__ __forceinline__ AccT ApplyBinary(int opcode, AccT lhs, AccT rhs) {
       return lhs > rhs ? lhs : rhs;
     case kOpcodeMinimum:
       return lhs < rhs ? lhs : rhs;
+    case kOpcodePow:
+      return pow(lhs, rhs);
     default:
       return lhs;
   }
+}
+
+template <typename AccT>
+__device__ __forceinline__ AccT ApplySelect(bool cond, AccT then_val,
+                                            AccT else_val) {
+  return cond ? then_val : else_val;
 }
 
 template <typename T>
@@ -130,41 +145,75 @@ __global__ void MusaFusedElementwiseKernel(
     remaining /= size;
   }
 
-  int input_offsets[kMusaFusedElementwiseMaxInputs] = {0};
-  for (int input_idx = 0; input_idx < config.num_inputs; ++input_idx) {
+  int data_input_offsets[kMusaFusedElementwiseMaxDataInputs] = {0};
+  for (int input_idx = 0; input_idx < config.num_data_inputs; ++input_idx) {
     int offset = 0;
     for (int dim = 0; dim < config.rank; ++dim) {
-      offset += coords[dim] * config.input_strides[input_idx][dim];
+      offset += coords[dim] * config.data_input_strides[input_idx][dim];
     }
-    input_offsets[input_idx] = offset;
+    data_input_offsets[input_idx] = offset;
+  }
+
+  int bool_input_offsets[kMusaFusedElementwiseMaxBoolInputs] = {0};
+  for (int input_idx = 0; input_idx < config.num_bool_inputs; ++input_idx) {
+    int offset = 0;
+    for (int dim = 0; dim < config.rank; ++dim) {
+      offset += coords[dim] * config.bool_input_strides[input_idx][dim];
+    }
+    bool_input_offsets[input_idx] = offset;
   }
 
   using AccT = typename MusaFusedElementwiseAccumType<T>::type;
-  AccT prev = AccT(0);
+  AccT step_values[kMusaFusedElementwiseMaxSteps] = {AccT(0)};
 
   for (int step = 0; step < config.num_steps; ++step) {
     const int arg0_kind = config.step_arg_kind[step][0];
     const int arg0_input = config.step_arg_input[step][0];
-    const AccT arg0 =
-        arg0_kind == kOperandPrev
-            ? prev
-            : LoadInputValue<T>(inputs, arg0_input, input_offsets[arg0_input]);
+    const AccT arg0 = arg0_kind == kOperandStep
+                          ? step_values[arg0_input]
+                          : LoadDataInputValue<T>(inputs, arg0_input,
+                                                  data_input_offsets[arg0_input]);
 
     if (config.step_arity[step] == 1) {
-      prev = ApplyUnary(config.step_opcode[step], arg0);
+      step_values[step] = ApplyUnary(config.step_opcode[step], arg0);
+      continue;
+    }
+
+    if (config.step_arity[step] == 3) {
+      const int cond_kind = config.step_arg_kind[step][0];
+      const int cond_input = config.step_arg_input[step][0];
+      const bool cond = cond_kind == kOperandStep
+                            ? static_cast<bool>(step_values[cond_input])
+                            : LoadBoolInputValue(inputs, cond_input,
+                                                 bool_input_offsets[cond_input]);
+      const int arg1_kind = config.step_arg_kind[step][1];
+      const int arg1_input = config.step_arg_input[step][1];
+      const AccT then_val =
+          arg1_kind == kOperandStep
+              ? step_values[arg1_input]
+              : LoadDataInputValue<T>(inputs, arg1_input,
+                                      data_input_offsets[arg1_input]);
+      const int arg2_kind = config.step_arg_kind[step][2];
+      const int arg2_input = config.step_arg_input[step][2];
+      const AccT else_val =
+          arg2_kind == kOperandStep
+              ? step_values[arg2_input]
+              : LoadDataInputValue<T>(inputs, arg2_input,
+                                      data_input_offsets[arg2_input]);
+      step_values[step] = ApplySelect(cond, then_val, else_val);
       continue;
     }
 
     const int arg1_kind = config.step_arg_kind[step][1];
     const int arg1_input = config.step_arg_input[step][1];
-    const AccT arg1 =
-        arg1_kind == kOperandPrev
-            ? prev
-            : LoadInputValue<T>(inputs, arg1_input, input_offsets[arg1_input]);
-    prev = ApplyBinary(config.step_opcode[step], arg0, arg1);
+    const AccT arg1 = arg1_kind == kOperandStep
+                          ? step_values[arg1_input]
+                          : LoadDataInputValue<T>(inputs, arg1_input,
+                                                  data_input_offsets[arg1_input]);
+    step_values[step] = ApplyBinary(config.step_opcode[step], arg0, arg1);
   }
 
-  StoreElement(output + idx, prev);
+  StoreElement(output + idx, step_values[config.num_steps - 1]);
 }
 
 template <typename T>

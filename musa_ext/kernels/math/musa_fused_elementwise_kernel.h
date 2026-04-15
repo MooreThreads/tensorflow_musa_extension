@@ -7,13 +7,16 @@ namespace tensorflow {
 namespace musa {
 
 constexpr int kMusaFusedElementwiseMaxDims = 8;
-constexpr int kMusaFusedElementwiseMaxInputs = 8;
-constexpr int kMusaFusedElementwiseMaxSteps = 8;
+constexpr int kMusaFusedElementwiseMaxDataInputs = 8;
+constexpr int kMusaFusedElementwiseMaxBoolInputs = 4;
+constexpr int kMusaFusedElementwiseMaxSteps = 16;
+constexpr int kMusaFusedElementwiseMaxArity = 3;
 
 enum MusaFusedElementwiseOperandKind : int {
   kOperandNone = -1,
-  kOperandPrev = 0,
-  kOperandInput = 1,
+  kOperandDataInput = 0,
+  kOperandBoolInput = 1,
+  kOperandStep = 2,
 };
 
 enum MusaFusedElementwiseOpcode : int {
@@ -30,23 +33,31 @@ enum MusaFusedElementwiseOpcode : int {
   kOpcodeMaximum = 11,
   kOpcodeMinimum = 12,
   kOpcodeNeg = 13,
+  kOpcodePow = 14,
+  kOpcodeSelect = 15,
 };
 
 struct MusaFusedElementwiseInlinePointers {
-  const void* ptrs[kMusaFusedElementwiseMaxInputs];
+  const void* data_ptrs[kMusaFusedElementwiseMaxDataInputs];
+  const void* bool_ptrs[kMusaFusedElementwiseMaxBoolInputs];
 };
 
 struct MusaFusedElementwiseConfig {
   int rank;
   int dims[kMusaFusedElementwiseMaxDims];
-  int num_inputs;
+  int num_data_inputs;
+  int num_bool_inputs;
   int num_steps;
-  int input_strides[kMusaFusedElementwiseMaxInputs]
-                   [kMusaFusedElementwiseMaxDims];
+  int data_input_strides[kMusaFusedElementwiseMaxDataInputs]
+                        [kMusaFusedElementwiseMaxDims];
+  int bool_input_strides[kMusaFusedElementwiseMaxBoolInputs]
+                        [kMusaFusedElementwiseMaxDims];
   int step_opcode[kMusaFusedElementwiseMaxSteps];
   int step_arity[kMusaFusedElementwiseMaxSteps];
-  int step_arg_kind[kMusaFusedElementwiseMaxSteps][2];
-  int step_arg_input[kMusaFusedElementwiseMaxSteps][2];
+  int step_arg_kind[kMusaFusedElementwiseMaxSteps]
+                   [kMusaFusedElementwiseMaxArity];
+  int step_arg_input[kMusaFusedElementwiseMaxSteps]
+                    [kMusaFusedElementwiseMaxArity];
 };
 
 template <typename T>

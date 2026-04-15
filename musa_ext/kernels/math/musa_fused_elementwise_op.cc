@@ -41,15 +41,49 @@ Status ComputeOutputShape(OpKernelContext* ctx, TensorShape* output_shape) {
   return Status::OK();
 }
 
+void FillBroadcastStrides(const TensorShape& input_shape,
+                          const TensorShape& output_shape,
+                          int* target_strides) {
+  for (int dim = 0; dim < kMusaFusedElementwiseMaxDims; ++dim) {
+    target_strides[dim] = 0;
+  }
+
+  std::vector<int64_t> dense_strides(input_shape.dims(), 1);
+  int64_t acc = 1;
+  for (int dim = input_shape.dims() - 1; dim >= 0; --dim) {
+    dense_strides[dim] = acc;
+    acc *= input_shape.dim_size(dim);
+  }
+
+  const int rank_delta = output_shape.dims() - input_shape.dims();
+  for (int out_axis = 0; out_axis < output_shape.dims(); ++out_axis) {
+    const int in_axis = out_axis - rank_delta;
+    if (in_axis < 0) {
+      target_strides[out_axis] = 0;
+      continue;
+    }
+
+    if (input_shape.dim_size(in_axis) == 1 &&
+        output_shape.dim_size(out_axis) > 1) {
+      target_strides[out_axis] = 0;
+    } else {
+      target_strides[out_axis] = static_cast<int>(dense_strides[in_axis]);
+    }
+  }
+}
+
 MusaFusedElementwiseConfig BuildKernelConfig(
-    const std::vector<TensorShape>& input_shapes,
+    const std::vector<TensorShape>& data_input_shapes,
+    const std::vector<TensorShape>& bool_input_shapes,
     const TensorShape& output_shape, const std::vector<int>& opcodes,
     const std::vector<int>& step_arities, const std::vector<int>& arg0_kinds,
     const std::vector<int>& arg0_inputs, const std::vector<int>& arg1_kinds,
-    const std::vector<int>& arg1_inputs) {
+    const std::vector<int>& arg1_inputs, const std::vector<int>& arg2_kinds,
+    const std::vector<int>& arg2_inputs) {
   MusaFusedElementwiseConfig config{};
   config.rank = output_shape.dims();
-  config.num_inputs = static_cast<int>(input_shapes.size());
+  config.num_data_inputs = static_cast<int>(data_input_shapes.size());
+  config.num_bool_inputs = static_cast<int>(bool_input_shapes.size());
   config.num_steps = static_cast<int>(opcodes.size());
 
   for (int dim = 0; dim < kMusaFusedElementwiseMaxDims; ++dim) {
@@ -59,35 +93,13 @@ MusaFusedElementwiseConfig BuildKernelConfig(
     config.dims[dim] = static_cast<int>(output_shape.dim_size(dim));
   }
 
-  for (int input_idx = 0; input_idx < config.num_inputs; ++input_idx) {
-    for (int dim = 0; dim < kMusaFusedElementwiseMaxDims; ++dim) {
-      config.input_strides[input_idx][dim] = 0;
-    }
-
-    const TensorShape& input_shape = input_shapes[input_idx];
-    std::vector<int64_t> dense_strides(input_shape.dims(), 1);
-    int64_t acc = 1;
-    for (int dim = input_shape.dims() - 1; dim >= 0; --dim) {
-      dense_strides[dim] = acc;
-      acc *= input_shape.dim_size(dim);
-    }
-
-    const int rank_delta = output_shape.dims() - input_shape.dims();
-    for (int out_axis = 0; out_axis < output_shape.dims(); ++out_axis) {
-      const int in_axis = out_axis - rank_delta;
-      if (in_axis < 0) {
-        config.input_strides[input_idx][out_axis] = 0;
-        continue;
-      }
-
-      if (input_shape.dim_size(in_axis) == 1 &&
-          output_shape.dim_size(out_axis) > 1) {
-        config.input_strides[input_idx][out_axis] = 0;
-      } else {
-        config.input_strides[input_idx][out_axis] =
-            static_cast<int>(dense_strides[in_axis]);
-      }
-    }
+  for (int input_idx = 0; input_idx < config.num_data_inputs; ++input_idx) {
+    FillBroadcastStrides(data_input_shapes[input_idx], output_shape,
+                         config.data_input_strides[input_idx]);
+  }
+  for (int input_idx = 0; input_idx < config.num_bool_inputs; ++input_idx) {
+    FillBroadcastStrides(bool_input_shapes[input_idx], output_shape,
+                         config.bool_input_strides[input_idx]);
   }
 
   for (int step = 0; step < config.num_steps; ++step) {
@@ -97,17 +109,24 @@ MusaFusedElementwiseConfig BuildKernelConfig(
     config.step_arg_input[step][0] = arg0_inputs[step];
     config.step_arg_kind[step][1] = arg1_kinds[step];
     config.step_arg_input[step][1] = arg1_inputs[step];
+    config.step_arg_kind[step][2] = arg2_kinds[step];
+    config.step_arg_input[step][2] = arg2_inputs[step];
   }
 
   return config;
 }
 
-bool IsValidOperand(int operand_kind, int operand_input, int num_inputs) {
-  if (operand_kind == kOperandPrev) {
-    return operand_input == -1;
+bool IsValidOperand(int operand_kind, int operand_input, int num_data_inputs,
+                    int num_bool_inputs, int num_steps, int step_index) {
+  if (operand_kind == kOperandDataInput) {
+    return operand_input >= 0 && operand_input < num_data_inputs;
   }
-  if (operand_kind == kOperandInput) {
-    return operand_input >= 0 && operand_input < num_inputs;
+  if (operand_kind == kOperandBoolInput) {
+    return operand_input >= 0 && operand_input < num_bool_inputs;
+  }
+  if (operand_kind == kOperandStep) {
+    return operand_input >= 0 && operand_input < num_steps &&
+           operand_input < step_index;
   }
   return operand_kind == kOperandNone && operand_input == -1;
 }
@@ -115,16 +134,20 @@ bool IsValidOperand(int operand_kind, int operand_input, int num_inputs) {
 }  // namespace
 
 REGISTER_OP("MusaFusedElementwise")
-    .Input("inputs: num_inputs * T")
+    .Input("data_inputs: num_data_inputs * T")
+    .Input("bool_inputs: num_bool_inputs * bool")
     .Output("output: T")
     .Attr("T: {float, double, half, bfloat16}")
-    .Attr("num_inputs: int >= 1")
+    .Attr("num_data_inputs: int >= 1")
+    .Attr("num_bool_inputs: int >= 0 = 0")
     .Attr("opcodes: list(int)")
     .Attr("step_arities: list(int)")
     .Attr("arg0_kinds: list(int)")
     .Attr("arg0_inputs: list(int)")
     .Attr("arg1_kinds: list(int)")
     .Attr("arg1_inputs: list(int)")
+    .Attr("arg2_kinds: list(int)")
+    .Attr("arg2_inputs: list(int)")
     .SetShapeFn([](shape_inference::InferenceContext* c) {
       using ::tensorflow::shape_inference::DimensionHandle;
       using ::tensorflow::shape_inference::ShapeHandle;
@@ -192,17 +215,22 @@ class MusaFusedElementwiseOp : public MusaOpKernel {
  public:
   explicit MusaFusedElementwiseOp(OpKernelConstruction* ctx)
       : MusaOpKernel(ctx) {
-    OP_REQUIRES_OK(ctx, ctx->GetAttr("num_inputs", &num_inputs_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("num_data_inputs", &num_data_inputs_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("num_bool_inputs", &num_bool_inputs_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("opcodes", &opcodes_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("step_arities", &step_arities_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("arg0_kinds", &arg0_kinds_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("arg0_inputs", &arg0_inputs_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("arg1_kinds", &arg1_kinds_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("arg1_inputs", &arg1_inputs_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("arg2_kinds", &arg2_kinds_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("arg2_inputs", &arg2_inputs_));
 
     const size_t num_steps = opcodes_.size();
-    OP_REQUIRES(ctx, num_inputs_ >= 1,
-                errors::InvalidArgument("num_inputs must be >= 1"));
+    OP_REQUIRES(ctx, num_data_inputs_ >= 1,
+                errors::InvalidArgument("num_data_inputs must be >= 1"));
+    OP_REQUIRES(ctx, num_bool_inputs_ >= 0,
+                errors::InvalidArgument("num_bool_inputs must be >= 0"));
     OP_REQUIRES(ctx, num_steps > 0,
                 errors::InvalidArgument("MusaFusedElementwise requires at "
                                         "least one step"));
@@ -211,34 +239,79 @@ class MusaFusedElementwiseOp : public MusaOpKernel {
         num_steps == step_arities_.size() && num_steps == arg0_kinds_.size() &&
             num_steps == arg0_inputs_.size() &&
             num_steps == arg1_kinds_.size() &&
-            num_steps == arg1_inputs_.size(),
+            num_steps == arg1_inputs_.size() &&
+            num_steps == arg2_kinds_.size() &&
+            num_steps == arg2_inputs_.size(),
         errors::InvalidArgument(
             "MusaFusedElementwise attr list sizes must match"));
-    OP_REQUIRES(ctx, num_inputs_ <= kMusaFusedElementwiseMaxInputs,
-                errors::InvalidArgument("num_inputs exceeds kernel limit"));
+    OP_REQUIRES(
+        ctx, num_data_inputs_ <= kMusaFusedElementwiseMaxDataInputs,
+        errors::InvalidArgument("num_data_inputs exceeds kernel limit"));
+    OP_REQUIRES(
+        ctx, num_bool_inputs_ <= kMusaFusedElementwiseMaxBoolInputs,
+        errors::InvalidArgument("num_bool_inputs exceeds kernel limit"));
     OP_REQUIRES(ctx, num_steps <= kMusaFusedElementwiseMaxSteps,
                 errors::InvalidArgument("num_steps exceeds kernel limit"));
 
     for (size_t i = 0; i < num_steps; ++i) {
-      OP_REQUIRES(ctx, step_arities_[i] == 1 || step_arities_[i] == 2,
+      OP_REQUIRES(ctx,
+                  step_arities_[i] >= 1 &&
+                      step_arities_[i] <= kMusaFusedElementwiseMaxArity,
                   errors::InvalidArgument("Unsupported step arity at step ",
                                           i, ": ", step_arities_[i]));
-      OP_REQUIRES(ctx,
-                  IsValidOperand(arg0_kinds_[i], arg0_inputs_[i], num_inputs_),
-                  errors::InvalidArgument("Invalid arg0 operand encoding at "
-                                          "step ",
-                                          i));
+      OP_REQUIRES(
+          ctx,
+          IsValidOperand(arg0_kinds_[i], arg0_inputs_[i], num_data_inputs_,
+                         num_bool_inputs_, static_cast<int>(num_steps),
+                         static_cast<int>(i)),
+          errors::InvalidArgument("Invalid arg0 operand encoding at step ",
+                                  i));
+
       if (step_arities_[i] == 1) {
         OP_REQUIRES(
-            ctx, IsValidOperand(arg1_kinds_[i], arg1_inputs_[i], num_inputs_) &&
-                     arg1_kinds_[i] == kOperandNone,
+            ctx,
+            IsValidOperand(arg1_kinds_[i], arg1_inputs_[i], num_data_inputs_,
+                           num_bool_inputs_, static_cast<int>(num_steps),
+                           static_cast<int>(i)) &&
+                arg1_kinds_[i] == kOperandNone &&
+                IsValidOperand(arg2_kinds_[i], arg2_inputs_[i],
+                               num_data_inputs_, num_bool_inputs_,
+                               static_cast<int>(num_steps),
+                               static_cast<int>(i)) &&
+                arg2_kinds_[i] == kOperandNone,
             errors::InvalidArgument("Unary step ", i,
-                                    " must leave arg1 unused"));
+                                    " must leave arg1/arg2 unused"));
+      } else if (step_arities_[i] == 2) {
+        OP_REQUIRES(
+            ctx,
+            IsValidOperand(arg1_kinds_[i], arg1_inputs_[i], num_data_inputs_,
+                           num_bool_inputs_, static_cast<int>(num_steps),
+                           static_cast<int>(i)) &&
+                IsValidOperand(arg2_kinds_[i], arg2_inputs_[i],
+                               num_data_inputs_, num_bool_inputs_,
+                               static_cast<int>(num_steps),
+                               static_cast<int>(i)) &&
+                arg2_kinds_[i] == kOperandNone,
+            errors::InvalidArgument("Invalid binary operand encoding at step ",
+                                    i));
       } else {
         OP_REQUIRES(
-            ctx, IsValidOperand(arg1_kinds_[i], arg1_inputs_[i], num_inputs_),
-            errors::InvalidArgument("Invalid arg1 operand encoding at step ",
+            ctx,
+            IsValidOperand(arg1_kinds_[i], arg1_inputs_[i], num_data_inputs_,
+                           num_bool_inputs_, static_cast<int>(num_steps),
+                           static_cast<int>(i)) &&
+                IsValidOperand(arg2_kinds_[i], arg2_inputs_[i],
+                               num_data_inputs_, num_bool_inputs_,
+                               static_cast<int>(num_steps),
+                               static_cast<int>(i)),
+            errors::InvalidArgument("Invalid ternary operand encoding at step ",
                                     i));
+        OP_REQUIRES(ctx, opcodes_[i] == kOpcodeSelect,
+                    errors::InvalidArgument(
+                        "Only Select may use ternary arity, step ", i));
+        OP_REQUIRES(ctx, arg0_kinds_[i] == kOperandBoolInput,
+                    errors::InvalidArgument(
+                        "Select step ", i, " requires a bool condition"));
       }
     }
   }
@@ -246,8 +319,10 @@ class MusaFusedElementwiseOp : public MusaOpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
-    OP_REQUIRES(ctx, ctx->num_inputs() == num_inputs_,
-                errors::InvalidArgument("Expected ", num_inputs_,
+    OP_REQUIRES(ctx,
+                ctx->num_inputs() == num_data_inputs_ + num_bool_inputs_,
+                errors::InvalidArgument("Expected ",
+                                        num_data_inputs_ + num_bool_inputs_,
                                         " inputs, got ", ctx->num_inputs()));
 
     TensorShape output_shape;
@@ -269,19 +344,31 @@ class MusaFusedElementwiseOp : public MusaOpKernel {
                                 "single-kernel indexing: ",
                                 output->NumElements()));
 
-    std::vector<TensorShape> input_shapes;
-    input_shapes.reserve(ctx->num_inputs());
+    std::vector<TensorShape> data_input_shapes;
+    data_input_shapes.reserve(num_data_inputs_);
+    for (int i = 0; i < num_data_inputs_; ++i) {
+      data_input_shapes.push_back(ctx->input(i).shape());
+    }
+
+    std::vector<TensorShape> bool_input_shapes;
+    bool_input_shapes.reserve(num_bool_inputs_);
+    for (int i = 0; i < num_bool_inputs_; ++i) {
+      bool_input_shapes.push_back(ctx->input(num_data_inputs_ + i).shape());
+    }
 
     MusaFusedElementwiseInlinePointers input_ptrs{};
-    for (int i = 0; i < ctx->num_inputs(); ++i) {
-      const Tensor& input = ctx->input(i);
-      input_shapes.push_back(input.shape());
-      input_ptrs.ptrs[i] = input.tensor_data().data();
+    for (int i = 0; i < num_data_inputs_; ++i) {
+      input_ptrs.data_ptrs[i] = ctx->input(i).tensor_data().data();
+    }
+    for (int i = 0; i < num_bool_inputs_; ++i) {
+      input_ptrs.bool_ptrs[i] =
+          ctx->input(num_data_inputs_ + i).tensor_data().data();
     }
 
     const MusaFusedElementwiseConfig config = BuildKernelConfig(
-        input_shapes, output_shape, opcodes_, step_arities_, arg0_kinds_,
-        arg0_inputs_, arg1_kinds_, arg1_inputs_);
+        data_input_shapes, bool_input_shapes, output_shape, opcodes_,
+        step_arities_, arg0_kinds_, arg0_inputs_, arg1_kinds_, arg1_inputs_,
+        arg2_kinds_, arg2_inputs_);
 
     musaStream_t stream = GetMusaStreamByCtx(ctx);
     OP_REQUIRES(ctx, stream != nullptr,
@@ -299,19 +386,22 @@ class MusaFusedElementwiseOp : public MusaOpKernel {
   }
 
  private:
-  int num_inputs_ = 0;
+  int num_data_inputs_ = 0;
+  int num_bool_inputs_ = 0;
   std::vector<int> opcodes_;
   std::vector<int> step_arities_;
   std::vector<int> arg0_kinds_;
   std::vector<int> arg0_inputs_;
   std::vector<int> arg1_kinds_;
   std::vector<int> arg1_inputs_;
+  std::vector<int> arg2_kinds_;
+  std::vector<int> arg2_inputs_;
 };
 
-#define REGISTER_MUSA_FUSED_ELEMENTWISE(TYPE)                          \
-  REGISTER_KERNEL_BUILDER(                                             \
-      Name("MusaFusedElementwise").Device("MUSA").TypeConstraint<TYPE>( \
-          "T"),                                                        \
+#define REGISTER_MUSA_FUSED_ELEMENTWISE(TYPE)                            \
+  REGISTER_KERNEL_BUILDER(                                               \
+      Name("MusaFusedElementwise").Device("MUSA").TypeConstraint<TYPE>(  \
+          "T"),                                                          \
       MusaFusedElementwiseOp<TYPE>);
 
 REGISTER_MUSA_FUSED_ELEMENTWISE(float);

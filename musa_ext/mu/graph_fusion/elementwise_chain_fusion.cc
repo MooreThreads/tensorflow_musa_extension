@@ -16,6 +16,7 @@ limitations under the License.
 #include "mu/graph_fusion/elementwise_chain_fusion.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -34,18 +35,34 @@ namespace {
 struct StepSpec {
   int opcode = 0;
   int arity = 0;
-  int arg0_kind = ::tensorflow::musa::kOperandNone;
-  int arg0_input = -1;
-  int arg1_kind = ::tensorflow::musa::kOperandNone;
-  int arg1_input = -1;
+  int arg_kind[::tensorflow::musa::kMusaFusedElementwiseMaxArity] = {
+      ::tensorflow::musa::kOperandNone, ::tensorflow::musa::kOperandNone,
+      ::tensorflow::musa::kOperandNone};
+  int arg_input[::tensorflow::musa::kMusaFusedElementwiseMaxArity] = {-1, -1,
+                                                                      -1};
 };
 
-struct ChainBuildResult {
+struct ClusterBuildResult {
   bool valid = false;
   DataType dtype = DT_INVALID;
-  std::vector<const NodeDef*> chain_nodes;
-  std::vector<std::string> boundary_inputs;
+  std::vector<const NodeDef*> nodes;
+  std::vector<std::string> data_inputs;
+  std::vector<std::string> bool_inputs;
   std::vector<StepSpec> steps;
+};
+
+struct ClusterBuildState {
+  explicit ClusterBuildState(DataType dtype_in) : dtype(dtype_in) {}
+
+  const DataType dtype;
+  std::vector<const NodeDef*> nodes;
+  std::vector<std::string> data_inputs;
+  std::vector<std::string> bool_inputs;
+  std::vector<StepSpec> steps;
+  std::unordered_map<std::string, int> data_input_map;
+  std::unordered_map<std::string, int> bool_input_map;
+  std::unordered_map<std::string, int> node_to_step;
+  std::unordered_set<std::string> visiting;
 };
 
 bool HasOriginalSuffix(const std::string& node_name) {
@@ -73,25 +90,35 @@ const NodeDef* FindProducer(const GraphDef& graph, const std::string& input) {
   return FusionGraphUtils::GetNodeByName(graph, producer_name);
 }
 
-int CountConsumers(const GraphDef& graph, const std::string& node_name) {
-  int consumers = 0;
+int CountConsumerNodes(const GraphDef& graph, const std::string& node_name) {
+  std::unordered_set<std::string> consumer_names;
   for (const auto& node : graph.node()) {
     for (int i = 0; i < node.input_size(); ++i) {
       if (FusionGraphUtils::GetProducerNodeName(node.input(i)) == node_name) {
-        ++consumers;
+        consumer_names.insert(node.name());
       }
     }
   }
-  return consumers;
+  return static_cast<int>(consumer_names.size());
 }
 
 bool GetNodeType(const NodeDef& node, DataType* dtype) {
   auto type_it = node.attr().find("T");
-  if (type_it == node.attr().end()) {
-    return false;
+  if (type_it != node.attr().end()) {
+    *dtype = type_it->second.type();
+    return true;
   }
-  *dtype = type_it->second.type();
-  return true;
+  type_it = node.attr().find("dtype");
+  if (type_it != node.attr().end()) {
+    *dtype = type_it->second.type();
+    return true;
+  }
+  type_it = node.attr().find("value");
+  if (type_it != node.attr().end()) {
+    *dtype = type_it->second.tensor().dtype();
+    return true;
+  }
+  return false;
 }
 
 bool IsSupportedDataType(DataType dtype) {
@@ -165,6 +192,16 @@ bool GetSupportedOpSpec(const NodeDef& node, int* opcode, int* arity) {
     *arity = 1;
     return true;
   }
+  if (node.op() == "Pow") {
+    *opcode = ::tensorflow::musa::kOpcodePow;
+    *arity = 2;
+    return true;
+  }
+  if (node.op() == "Select" || node.op() == "SelectV2") {
+    *opcode = ::tensorflow::musa::kOpcodeSelect;
+    *arity = 3;
+    return true;
+  }
   return false;
 }
 
@@ -186,43 +223,195 @@ bool IsSupportedElementwiseNode(const GraphDef& graph, const NodeDef& node,
   if (!GetNodeType(node, &dtype) || !IsSupportedDataType(dtype)) {
     return false;
   }
-
   return dtype == expected_dtype;
 }
 
 int RegisterBoundaryInput(const std::string& input,
-                          std::vector<std::string>* boundary_inputs,
+                          std::vector<std::string>* inputs,
                           std::unordered_map<std::string, int>* input_map) {
-  auto it = input_map->find(input);
+  const auto it = input_map->find(input);
   if (it != input_map->end()) {
     return it->second;
   }
 
-  const int index = static_cast<int>(boundary_inputs->size());
-  boundary_inputs->push_back(input);
+  const int index = static_cast<int>(inputs->size());
+  inputs->push_back(input);
   (*input_map)[input] = index;
   return index;
 }
 
-bool MaybeSetOperandFromInput(int input_index, int internal_input_index,
-                              const NodeDef& node,
-                              std::vector<std::string>* boundary_inputs,
-                              std::unordered_map<std::string, int>* input_map,
-                              int* operand_kind, int* operand_input) {
-  if (input_index == internal_input_index) {
-    *operand_kind = ::tensorflow::musa::kOperandPrev;
-    *operand_input = -1;
+bool EncodeBoundaryOperand(const GraphDef& graph, const std::string& input_name,
+                           DataType expected_dtype, ClusterBuildState* state,
+                           int* operand_kind, int* operand_input) {
+  const NodeDef* producer = FindProducer(graph, input_name);
+  if (!producer) {
+    return false;
+  }
+
+  DataType input_dtype = DT_INVALID;
+  if (!GetNodeType(*producer, &input_dtype)) {
+    return false;
+  }
+
+  if (input_dtype == DT_BOOL) {
+    *operand_kind = ::tensorflow::musa::kOperandBoolInput;
+    *operand_input =
+        RegisterBoundaryInput(input_name, &state->bool_inputs,
+                              &state->bool_input_map);
     return true;
   }
 
-  *operand_kind = ::tensorflow::musa::kOperandInput;
-  *operand_input = RegisterBoundaryInput(node.input(input_index), boundary_inputs,
-                                         input_map);
+  if (input_dtype == expected_dtype) {
+    *operand_kind = ::tensorflow::musa::kOperandDataInput;
+    *operand_input =
+        RegisterBoundaryInput(input_name, &state->data_inputs,
+                              &state->data_input_map);
+    return true;
+  }
+
+  return false;
+}
+
+bool BuildClusterRecursive(const GraphDef& graph, const NodeDef* node,
+                           bool is_sink, ClusterBuildState* state) {
+  const auto step_it = state->node_to_step.find(node->name());
+  if (step_it != state->node_to_step.end()) {
+    return true;
+  }
+  if (!IsSupportedElementwiseNode(graph, *node, state->dtype)) {
+    return false;
+  }
+  if (!is_sink && CountConsumerNodes(graph, node->name()) != 1) {
+    return false;
+  }
+  if (!state->visiting.insert(node->name()).second) {
+    return false;
+  }
+
+  int opcode = 0;
+  int arity = 0;
+  if (!GetSupportedOpSpec(*node, &opcode, &arity) || node->input_size() != arity) {
+    state->visiting.erase(node->name());
+    return false;
+  }
+
+  StepSpec step;
+  step.opcode = opcode;
+  step.arity = arity;
+
+  for (int input_idx = 0; input_idx < arity; ++input_idx) {
+    const std::string input_name = node->input(input_idx);
+    const NodeDef* producer = FindProducer(graph, input_name);
+    const bool can_absorb =
+        producer != nullptr &&
+        IsSupportedElementwiseNode(graph, *producer, state->dtype) &&
+        CountConsumerNodes(graph, producer->name()) == 1;
+
+    if (can_absorb) {
+      if (!BuildClusterRecursive(graph, producer, false, state)) {
+        state->visiting.erase(node->name());
+        return false;
+      }
+      const auto producer_it = state->node_to_step.find(producer->name());
+      if (producer_it == state->node_to_step.end()) {
+        state->visiting.erase(node->name());
+        return false;
+      }
+      step.arg_kind[input_idx] = ::tensorflow::musa::kOperandStep;
+      step.arg_input[input_idx] = producer_it->second;
+      continue;
+    }
+
+    if (!EncodeBoundaryOperand(graph, input_name, state->dtype, state,
+                               &step.arg_kind[input_idx],
+                               &step.arg_input[input_idx])) {
+      state->visiting.erase(node->name());
+      return false;
+    }
+  }
+
+  state->node_to_step[node->name()] = static_cast<int>(state->steps.size());
+  state->steps.push_back(step);
+  state->nodes.push_back(node);
+  state->visiting.erase(node->name());
   return true;
 }
 
-ChainBuildResult BuildLinearChain(const GraphDef& graph, const NodeDef& sink) {
-  ChainBuildResult result;
+bool IsHeavyOpcode(int opcode) {
+  return opcode == ::tensorflow::musa::kOpcodeExp ||
+         opcode == ::tensorflow::musa::kOpcodeLog ||
+         opcode == ::tensorflow::musa::kOpcodeRsqrt ||
+         opcode == ::tensorflow::musa::kOpcodeTanh ||
+         opcode == ::tensorflow::musa::kOpcodeSigmoid ||
+         opcode == ::tensorflow::musa::kOpcodePow ||
+         opcode == ::tensorflow::musa::kOpcodeSelect;
+}
+
+bool HasInternalMerge(const std::vector<StepSpec>& steps) {
+  for (const StepSpec& step : steps) {
+    int internal_inputs = 0;
+    for (int i = 0; i < step.arity; ++i) {
+      if (step.arg_kind[i] == ::tensorflow::musa::kOperandStep) {
+        ++internal_inputs;
+      }
+    }
+    if (internal_inputs >= 2) {
+      return true;
+    }
+  }
+  return false;
+}
+
+int64_t GetStaticOutputElements(const NodeDef& node) {
+  const auto output_shapes_it = node.attr().find("_output_shapes");
+  if (output_shapes_it == node.attr().end() ||
+      output_shapes_it->second.list().shape_size() <= 0) {
+    return -1;
+  }
+
+  const auto& shape = output_shapes_it->second.list().shape(0);
+  int64_t elements = 1;
+  for (const auto& dim : shape.dim()) {
+    if (dim.size() <= 0) {
+      return -1;
+    }
+    elements *= dim.size();
+  }
+  return elements;
+}
+
+bool IsProfitableCluster(const ClusterBuildResult& cluster,
+                         const NodeDef& sink_node) {
+  const int num_steps = static_cast<int>(cluster.steps.size());
+  if (num_steps < 2) {
+    return false;
+  }
+
+  bool has_heavy_opcode = false;
+  for (const StepSpec& step : cluster.steps) {
+    if (IsHeavyOpcode(step.opcode)) {
+      has_heavy_opcode = true;
+      break;
+    }
+  }
+
+  if (num_steps >= 4) {
+    return true;
+  }
+  if (has_heavy_opcode && num_steps >= 2) {
+    return true;
+  }
+  if (HasInternalMerge(cluster.steps) && num_steps >= 3) {
+    return true;
+  }
+
+  const int64_t static_elements = GetStaticOutputElements(sink_node);
+  return static_elements >= 4096 && num_steps >= 3;
+}
+
+ClusterBuildResult BuildElementwiseCluster(const GraphDef& graph,
+                                           const NodeDef& sink) {
+  ClusterBuildResult result;
 
   DataType dtype = DT_INVALID;
   if (!GetNodeType(sink, &dtype) || !IsSupportedDataType(dtype) ||
@@ -230,82 +419,29 @@ ChainBuildResult BuildLinearChain(const GraphDef& graph, const NodeDef& sink) {
     return result;
   }
 
-  std::vector<const NodeDef*> reversed_nodes;
-  std::vector<StepSpec> reversed_steps;
-  std::vector<std::string> boundary_inputs;
-  std::unordered_map<std::string, int> input_map;
-  std::unordered_set<std::string> seen_nodes;
-
-  const NodeDef* current = &sink;
-  while (current != nullptr) {
-    if (!seen_nodes.insert(current->name()).second) {
-      return result;
-    }
-
-    int opcode = 0;
-    int arity = 0;
-    if (!GetSupportedOpSpec(*current, &opcode, &arity)) {
-      return result;
-    }
-    if (current->input_size() != arity) {
-      return result;
-    }
-
-    int candidate_count = 0;
-    int internal_input_index = -1;
-    for (int input_idx = 0; input_idx < current->input_size(); ++input_idx) {
-      const NodeDef* producer = FindProducer(graph, current->input(input_idx));
-      if (!producer ||
-          !IsSupportedElementwiseNode(graph, *producer, dtype) ||
-          CountConsumers(graph, producer->name()) != 1) {
-        continue;
-      }
-      ++candidate_count;
-      internal_input_index = input_idx;
-    }
-
-    if (candidate_count != 1) {
-      internal_input_index = -1;
-    }
-
-    StepSpec step;
-    step.opcode = opcode;
-    step.arity = arity;
-    if (arity == 1) {
-      MaybeSetOperandFromInput(0, internal_input_index, *current,
-                               &boundary_inputs, &input_map, &step.arg0_kind,
-                               &step.arg0_input);
-    } else if (arity == 2) {
-      MaybeSetOperandFromInput(0, internal_input_index, *current,
-                               &boundary_inputs, &input_map, &step.arg0_kind,
-                               &step.arg0_input);
-      MaybeSetOperandFromInput(1, internal_input_index, *current,
-                               &boundary_inputs, &input_map, &step.arg1_kind,
-                               &step.arg1_input);
-    }
-
-    reversed_nodes.push_back(current);
-    reversed_steps.push_back(step);
-
-    if (internal_input_index < 0) {
-      break;
-    }
-    current = FindProducer(graph, current->input(internal_input_index));
-  }
-
-  if (reversed_nodes.size() < 2) {
+  ClusterBuildState state(dtype);
+  if (!BuildClusterRecursive(graph, &sink, true, &state)) {
     return result;
   }
-  if (boundary_inputs.size() > ::tensorflow::musa::kMusaFusedElementwiseMaxInputs ||
-      reversed_steps.size() > ::tensorflow::musa::kMusaFusedElementwiseMaxSteps) {
+
+  if (state.steps.size() > ::tensorflow::musa::kMusaFusedElementwiseMaxSteps ||
+      state.data_inputs.size() >
+          ::tensorflow::musa::kMusaFusedElementwiseMaxDataInputs ||
+      state.bool_inputs.size() >
+          ::tensorflow::musa::kMusaFusedElementwiseMaxBoolInputs) {
     return result;
   }
 
   result.valid = true;
   result.dtype = dtype;
-  result.chain_nodes.assign(reversed_nodes.rbegin(), reversed_nodes.rend());
-  result.steps.assign(reversed_steps.rbegin(), reversed_steps.rend());
-  result.boundary_inputs = std::move(boundary_inputs);
+  result.nodes = std::move(state.nodes);
+  result.data_inputs = std::move(state.data_inputs);
+  result.bool_inputs = std::move(state.bool_inputs);
+  result.steps = std::move(state.steps);
+
+  if (!IsProfitableCluster(result, sink)) {
+    result.valid = false;
+  }
   return result;
 }
 
@@ -316,7 +452,7 @@ bool IsSinkCandidate(const GraphDef& graph, const NodeDef& node) {
     return false;
   }
 
-  const int consumer_count = CountConsumers(graph, node.name());
+  const int consumer_count = CountConsumerNodes(graph, node.name());
   if (consumer_count != 1) {
     return true;
   }
@@ -327,11 +463,9 @@ bool IsSinkCandidate(const GraphDef& graph, const NodeDef& node) {
           node.name()) {
         continue;
       }
-
       return !IsSupportedElementwiseNode(graph, consumer, dtype);
     }
   }
-
   return true;
 }
 
@@ -366,13 +500,13 @@ FusionMatchResult ElementwiseChainFusion::Match(const GraphDef& graph,
     return result;
   }
 
-  const ChainBuildResult chain = BuildLinearChain(graph, node);
-  if (!chain.valid) {
+  const ClusterBuildResult cluster = BuildElementwiseCluster(graph, node);
+  if (!cluster.valid) {
     return result;
   }
 
   result.matched = true;
-  result.matched_nodes = chain.chain_nodes;
+  result.matched_nodes = cluster.nodes;
   result.captured_nodes["sink"] = &node;
   result.captured_attrs["sink_name"] = node.name();
   return result;
@@ -388,7 +522,7 @@ Status ElementwiseChainFusion::Apply(
     return Status::OK();
   }
 
-  auto sink_name_it = match_result.captured_attrs.find("sink_name");
+  const auto sink_name_it = match_result.captured_attrs.find("sink_name");
   if (sink_name_it == match_result.captured_attrs.end()) {
     return Status(error::INVALID_ARGUMENT,
                   "Missing sink_name in ElementwiseChainFusion result");
@@ -401,28 +535,21 @@ Status ElementwiseChainFusion::Apply(
                   "Sink node disappeared before apply");
   }
 
-  const ChainBuildResult chain = BuildLinearChain(*graph, *sink_node);
-  if (!chain.valid) {
+  const ClusterBuildResult cluster = BuildElementwiseCluster(*graph, *sink_node);
+  if (!cluster.valid) {
     return Status(error::INVALID_ARGUMENT,
-                  "Failed to rebuild elementwise chain during apply");
-  }
-
-  std::vector<std::string> chain_node_names;
-  chain_node_names.reserve(chain.chain_nodes.size());
-  for (const NodeDef* node : chain.chain_nodes) {
-    chain_node_names.push_back(node->name());
+                  "Failed to rebuild elementwise cluster during apply");
   }
 
   const std::string original_name = sink_node->name();
   const std::string renamed_output_name = original_name + "_original";
   const std::string output_device = sink_node->device();
   const auto output_shapes_it = sink_node->attr().find("_output_shapes");
-  const bool has_output_shapes =
-      output_shapes_it != sink_node->attr().end();
+  const bool has_output_shapes = output_shapes_it != sink_node->attr().end();
   const AttrValue output_shapes_attr =
       has_output_shapes ? output_shapes_it->second : AttrValue();
 
-  int sink_node_idx = FusionGraphUtils::FindNodeIndex(*graph, original_name);
+  const int sink_node_idx = FusionGraphUtils::FindNodeIndex(*graph, original_name);
   if (sink_node_idx < 0) {
     return Status(error::INVALID_ARGUMENT,
                   "Failed to locate sink node for apply");
@@ -436,13 +563,18 @@ Status ElementwiseChainFusion::Apply(
   fused_node->set_op("MusaFusedElementwise");
   fused_node->set_device(output_device);
 
-  for (const auto& input : chain.boundary_inputs) {
+  for (const auto& input : cluster.data_inputs) {
+    fused_node->add_input(input);
+  }
+  for (const auto& input : cluster.bool_inputs) {
     fused_node->add_input(input);
   }
 
-  (*fused_node->mutable_attr())["T"].set_type(chain.dtype);
-  (*fused_node->mutable_attr())["num_inputs"].set_i(
-      static_cast<int64_t>(chain.boundary_inputs.size()));
+  (*fused_node->mutable_attr())["T"].set_type(cluster.dtype);
+  (*fused_node->mutable_attr())["num_data_inputs"].set_i(
+      static_cast<int64_t>(cluster.data_inputs.size()));
+  (*fused_node->mutable_attr())["num_bool_inputs"].set_i(
+      static_cast<int64_t>(cluster.bool_inputs.size()));
 
   std::vector<int> opcodes;
   std::vector<int> step_arities;
@@ -450,21 +582,27 @@ Status ElementwiseChainFusion::Apply(
   std::vector<int> arg0_inputs;
   std::vector<int> arg1_kinds;
   std::vector<int> arg1_inputs;
+  std::vector<int> arg2_kinds;
+  std::vector<int> arg2_inputs;
 
-  opcodes.reserve(chain.steps.size());
-  step_arities.reserve(chain.steps.size());
-  arg0_kinds.reserve(chain.steps.size());
-  arg0_inputs.reserve(chain.steps.size());
-  arg1_kinds.reserve(chain.steps.size());
-  arg1_inputs.reserve(chain.steps.size());
+  opcodes.reserve(cluster.steps.size());
+  step_arities.reserve(cluster.steps.size());
+  arg0_kinds.reserve(cluster.steps.size());
+  arg0_inputs.reserve(cluster.steps.size());
+  arg1_kinds.reserve(cluster.steps.size());
+  arg1_inputs.reserve(cluster.steps.size());
+  arg2_kinds.reserve(cluster.steps.size());
+  arg2_inputs.reserve(cluster.steps.size());
 
-  for (const StepSpec& step : chain.steps) {
+  for (const StepSpec& step : cluster.steps) {
     opcodes.push_back(step.opcode);
     step_arities.push_back(step.arity);
-    arg0_kinds.push_back(step.arg0_kind);
-    arg0_inputs.push_back(step.arg0_input);
-    arg1_kinds.push_back(step.arg1_kind);
-    arg1_inputs.push_back(step.arg1_input);
+    arg0_kinds.push_back(step.arg_kind[0]);
+    arg0_inputs.push_back(step.arg_input[0]);
+    arg1_kinds.push_back(step.arg_kind[1]);
+    arg1_inputs.push_back(step.arg_input[1]);
+    arg2_kinds.push_back(step.arg_kind[2]);
+    arg2_inputs.push_back(step.arg_input[2]);
   }
 
   SetIntListAttr(fused_node, "opcodes", opcodes);
@@ -473,20 +611,25 @@ Status ElementwiseChainFusion::Apply(
   SetIntListAttr(fused_node, "arg0_inputs", arg0_inputs);
   SetIntListAttr(fused_node, "arg1_kinds", arg1_kinds);
   SetIntListAttr(fused_node, "arg1_inputs", arg1_inputs);
+  SetIntListAttr(fused_node, "arg2_kinds", arg2_kinds);
+  SetIntListAttr(fused_node, "arg2_inputs", arg2_inputs);
 
   if (has_output_shapes) {
     (*fused_node->mutable_attr())["_output_shapes"] = output_shapes_attr;
   }
 
   std::vector<std::string> removable_names;
-  removable_names.reserve(chain_node_names.size());
+  removable_names.reserve(cluster.nodes.size());
   removable_names.push_back(renamed_output_name);
-  for (size_t i = 0; i + 1 < chain_node_names.size(); ++i) {
-    removable_names.push_back(chain_node_names[i]);
+  for (size_t i = 0; i + 1 < cluster.nodes.size(); ++i) {
+    removable_names.push_back(cluster.nodes[i]->name());
   }
 
   std::unordered_set<std::string> protected_nodes = {original_name};
-  for (const auto& input : chain.boundary_inputs) {
+  for (const auto& input : cluster.data_inputs) {
+    protected_nodes.insert(FusionGraphUtils::GetProducerNodeName(input));
+  }
+  for (const auto& input : cluster.bool_inputs) {
     protected_nodes.insert(FusionGraphUtils::GetProducerNodeName(input));
   }
 
