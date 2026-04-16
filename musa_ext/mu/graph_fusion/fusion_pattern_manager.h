@@ -176,10 +176,8 @@ class FusionGraphUtils {
   // Remove a node from the graph
   static void RemoveNode(GraphDef* graph, int node_idx);
 
-  // Check whether a node still has consumers outside a removable node set.
-  static bool HasExternalConsumers(
-      const GraphDef& graph, const std::string& node_name,
-      const std::unordered_set<std::string>& removable_node_names);
+  // Check whether a node still has any consumers in the graph.
+  static bool HasAnyConsumer(const GraphDef& graph, const std::string& node_name);
 
   // Remove nodes that are no longer referenced outside the removable set.
   // Protected nodes are excluded from deletion even if listed in node_names.

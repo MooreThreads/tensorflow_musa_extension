@@ -260,19 +260,15 @@ void FusionGraphUtils::RemoveNode(GraphDef* graph, int node_idx) {
   graph->mutable_node()->RemoveLast();
 }
 
-bool FusionGraphUtils::HasExternalConsumers(
-    const GraphDef& graph, const std::string& node_name,
-    const std::unordered_set<std::string>& removable_node_names) {
+bool FusionGraphUtils::HasAnyConsumer(
+    const GraphDef& graph, const std::string& node_name) {
   for (const auto& node : graph.node()) {
     if (node.name() == node_name) {
       continue;
     }
 
     for (int i = 0; i < node.input_size(); ++i) {
-      if (GetProducerNodeName(node.input(i)) != node_name) {
-        continue;
-      }
-      if (removable_node_names.find(node.name()) == removable_node_names.end()) {
+      if (GetProducerNodeName(node.input(i)) == node_name) {
         return true;
       }
     }
@@ -313,7 +309,7 @@ int FusionGraphUtils::RemoveNodesIfUnused(
         continue;
       }
 
-      if (HasExternalConsumers(*graph, node_name, removable_node_names)) {
+      if (HasAnyConsumer(*graph, node_name)) {
         continue;
       }
 
