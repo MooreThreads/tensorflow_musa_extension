@@ -725,7 +725,7 @@ jobs:
           CURRENT_LOG="$JOB_LOG_DIR/tencent_accuracy_current.log"
           SUMMARY_FILE="$RUNNER_TEMP/tencent-accuracy.md"
           STATUS="success"
-          CURRENT_ACC="$(grep -E "整体状态:.*(PASSED|FAILED)" "$CURRENT_LOG" | tail -1 | sed 's/^[[:space:]]*//' || true)"
+          CURRENT_ACC="$(grep -E "整体状态:.*(PASSED|FAILED)" "$CURRENT_LOG" | tail -1 | grep -oE "PASSED|FAILED" || echo "n/a")"
 
           if [[ "${{ steps.run_acc.outputs.current_exit }}" != "0" ]]; then
             STATUS="failure"

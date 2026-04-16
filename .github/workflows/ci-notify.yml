@@ -11,6 +11,18 @@ permissions:
 
 env:
   MAX_AUTO_RERUNS: 5
+  MAX_RERUNS_PREPARE_METADATA: 5
+  MAX_RERUNS_FORMAT_CHECK: 5
+  MAX_RERUNS_BUILD_CURRENT: 5
+  MAX_RERUNS_INTEGRATION_TEST: 5
+  MAX_RERUNS_BUILD_BASELINE: 5
+  MAX_RERUNS_T_PERFORMANCE: 5
+  MAX_RERUNS_T_ACCURACY: 5
+  MAX_RERUNS_BD_MODEL_1: 5
+  MAX_RERUNS_BD_MODEL_2: 5
+  MAX_RERUNS_BD_MODEL_3: 5
+  MAX_RERUNS_TRAINING: 5
+  MAX_RERUNS_FINAL_SUMMARY: 5
 
 jobs:
   notify:
@@ -30,6 +42,117 @@ jobs:
           RUN_FILE="$RUNNER_TEMP/workflow-run.json"
           gh api "repos/$REPO/actions/runs/$RUN_ID" > "$RUN_FILE"
           echo "run_attempt=$(jq -r '.run_attempt // 1' "$RUN_FILE")" >> "$GITHUB_OUTPUT"
+          {
+            echo "pull_requests_json<<EOF"
+            jq -c '.pull_requests // []' "$RUN_FILE"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Compute rerun state
+        id: retry_state
+        uses: actions/github-script@v7
+        env:
+          RUN_ATTEMPT: ${{ steps.runmeta.outputs.run_attempt }}
+          MAX_AUTO_RERUNS: ${{ env.MAX_AUTO_RERUNS }}
+          MAX_RERUNS_PREPARE_METADATA: ${{ env.MAX_RERUNS_PREPARE_METADATA }}
+          MAX_RERUNS_FORMAT_CHECK: ${{ env.MAX_RERUNS_FORMAT_CHECK }}
+          MAX_RERUNS_BUILD_CURRENT: ${{ env.MAX_RERUNS_BUILD_CURRENT }}
+          MAX_RERUNS_INTEGRATION_TEST: ${{ env.MAX_RERUNS_INTEGRATION_TEST }}
+          MAX_RERUNS_BUILD_BASELINE: ${{ env.MAX_RERUNS_BUILD_BASELINE }}
+          MAX_RERUNS_T_PERFORMANCE: ${{ env.MAX_RERUNS_T_PERFORMANCE }}
+          MAX_RERUNS_T_ACCURACY: ${{ env.MAX_RERUNS_T_ACCURACY }}
+          MAX_RERUNS_BD_MODEL_1: ${{ env.MAX_RERUNS_BD_MODEL_1 }}
+          MAX_RERUNS_BD_MODEL_2: ${{ env.MAX_RERUNS_BD_MODEL_2 }}
+          MAX_RERUNS_BD_MODEL_3: ${{ env.MAX_RERUNS_BD_MODEL_3 }}
+          MAX_RERUNS_TRAINING: ${{ env.MAX_RERUNS_TRAINING }}
+          MAX_RERUNS_FINAL_SUMMARY: ${{ env.MAX_RERUNS_FINAL_SUMMARY }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const runId = context.payload.workflow_run.id;
+            const runConclusion = context.payload.workflow_run.conclusion;
+            const attempt = Number(process.env.RUN_ATTEMPT || "1");
+            const defaultLimit = Number(process.env.MAX_AUTO_RERUNS || "5");
+
+            const getJobLimit = (jobName) => {
+              const envVarName = `MAX_RERUNS_${jobName
+                .replace(/[^a-zA-Z0-9_]/g, "_")
+                .toUpperCase()}`;
+              return Number(process.env[envVarName] || defaultLimit || "5");
+            };
+
+            if (runConclusion !== "failure") {
+              core.setOutput("will_auto_rerun", "no");
+              core.setOutput("reason", "run is not in failure state");
+              return;
+            }
+
+            const failedJobCounts = {};
+            const currentlyFailedJobs = new Set();
+
+            for (let i = 1; i <= attempt; i++) {
+              const jobs = await github.paginate(
+                github.rest.actions.listJobsForWorkflowRunAttempt,
+                {
+                  owner,
+                  repo,
+                  run_id: runId,
+                  attempt_number: i,
+                  per_page: 100,
+                }
+              );
+
+              for (const job of jobs) {
+                if (job.conclusion === "failure") {
+                  failedJobCounts[job.name] = (failedJobCounts[job.name] || 0) + 1;
+                  if (i === attempt) {
+                    currentlyFailedJobs.add(job.name);
+                  }
+                }
+              }
+            }
+
+            if (currentlyFailedJobs.size === 0) {
+              core.setOutput("will_auto_rerun", "no");
+              core.setOutput("reason", "no currently failed jobs in latest attempt");
+              return;
+            }
+
+            const exhaustedJobs = [];
+            const retryableJobs = [];
+            const detailLines = [];
+
+            for (const jobName of [...currentlyFailedJobs].sort()) {
+              const limit = getJobLimit(jobName);
+              const failedAttempts = failedJobCounts[jobName] || 1;
+              const rerunsUsed = Math.max(0, failedAttempts - 1);
+              detailLines.push(
+                `${jobName}: failed ${failedAttempts} attempt(s), reruns used ${rerunsUsed}/${limit}`
+              );
+              if (rerunsUsed >= limit) {
+                exhaustedJobs.push(jobName);
+              } else {
+                retryableJobs.push(jobName);
+              }
+            }
+
+            if (retryableJobs.length > 0 && exhaustedJobs.length === 0) {
+              core.setOutput("will_auto_rerun", "yes");
+              core.setOutput(
+                "reason",
+                `current failed jobs still have retry budget: ${detailLines.join("; ")}`
+              );
+              return;
+            }
+
+            core.setOutput("will_auto_rerun", "no");
+            core.setOutput(
+              "reason",
+              exhaustedJobs.length > 0
+                ? `auto rerun stopped because at least one current failed job exhausted its limit: ${detailLines.join("; ")}`
+                : `no retryable failed jobs remain: ${detailLines.join("; ")}`
+            );
 
       - name: Decide notification policy
         id: policy
@@ -37,7 +160,8 @@ jobs:
           RUN_EVENT: ${{ github.event.workflow_run.event }}
           RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           RUN_ATTEMPT: ${{ steps.runmeta.outputs.run_attempt }}
-          MAX_AUTO_RERUNS: ${{ env.MAX_AUTO_RERUNS }}
+          WILL_AUTO_RERUN: ${{ steps.retry_state.outputs.will_auto_rerun }}
+          RETRY_REASON: ${{ steps.retry_state.outputs.reason }}
         run: |
           set -euo pipefail
 
@@ -45,8 +169,8 @@ jobs:
           STYLE="skip"
           REASON="notification skipped by policy"
 
-          if [[ "$RUN_CONCLUSION" == "failure" && "$RUN_ATTEMPT" -le "$MAX_AUTO_RERUNS" ]]; then
-            REASON="run failed on attempt $RUN_ATTEMPT and will be auto-rerun"
+          if [[ "$RUN_CONCLUSION" == "failure" && "$WILL_AUTO_RERUN" == "yes" ]]; then
+            REASON="run failed on attempt $RUN_ATTEMPT and will be auto-rerun: $RETRY_REASON"
           elif [[ "$RUN_EVENT" == "schedule" ]]; then
             NOTIFY="yes"
             STYLE="daily"
@@ -71,7 +195,8 @@ jobs:
           echo "style=${{ steps.policy.outputs.style }}"
           echo "reason=${{ steps.policy.outputs.reason }}"
           echo "run_attempt=${{ steps.runmeta.outputs.run_attempt }}"
-          echo "max_auto_reruns=${{ env.MAX_AUTO_RERUNS }}"
+          echo "will_auto_rerun=${{ steps.retry_state.outputs.will_auto_rerun }}"
+          echo "retry_reason=${{ steps.retry_state.outputs.reason }}"
 
       - name: Download final summary artifact
         id: summary
@@ -106,12 +231,60 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.event.workflow_run.id }}
+          ATTEMPT: ${{ steps.runmeta.outputs.run_attempt }}
         run: |
           set -euo pipefail
 
           JOBS_FILE="$RUNNER_TEMP/workflow-run-jobs.json"
           gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" > "$JOBS_FILE"
           echo "jobs_file=$JOBS_FILE" >> "$GITHUB_OUTPUT"
+
+          COUNTS_FILE="$RUNNER_TEMP/workflow-run-job-counts.json"
+          node - "$ATTEMPT" "$REPO" "$RUN_ID" > "$COUNTS_FILE" <<'NODE_SCRIPT'
+          const cp = require('child_process');
+          const attempt = parseInt(process.argv[1], 10) || 1;
+          const repo = process.argv[2];
+          const runId = process.argv[3];
+          let counts = {};
+          for (let i = 1; i <= attempt; i++) {
+              try {
+                  const out = cp.execSync(`gh api repos/${repo}/actions/runs/${runId}/attempts/${i}/jobs?per_page=100`, {encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore']});
+                  const data = JSON.parse(out);
+                  for (const job of (data.jobs || [])) {
+                      counts[job.name] = (counts[job.name] || 0) + 1;
+                  }
+              } catch (e) {}
+          }
+          console.log(JSON.stringify(counts));
+          NODE_SCRIPT
+          echo "counts_file=$COUNTS_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve PR context
+        id: prctx
+        if: steps.policy.outputs.notify == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          RUN_PULL_REQUESTS_JSON: ${{ steps.runmeta.outputs.pull_requests_json }}
+        run: |
+          set -euo pipefail
+
+          PRS_JSON="${RUN_PULL_REQUESTS_JSON:-[]}"
+          if [[ -z "$PRS_JSON" ]]; then
+            PRS_JSON="[]"
+          fi
+
+          if [[ "$PRS_JSON" == "[]" && "$RUN_EVENT" == "pull_request" && -n "${HEAD_SHA:-}" ]]; then
+            PRS_JSON="$(gh api -H "Accept: application/vnd.github+json" "repos/$REPO/commits/$HEAD_SHA/pulls" 2>/dev/null || echo '[]')"
+          fi
+
+          {
+            echo "pull_requests_json<<EOF"
+            echo "$PRS_JSON"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Send DingTalk notification
         if: steps.policy.outputs.notify == 'yes'
@@ -130,7 +303,9 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           SUMMARY_FILE: ${{ steps.summary.outputs.summary_file }}
           JOBS_FILE: ${{ steps.jobs.outputs.jobs_file }}
-          PULL_REQUESTS_JSON: ${{ toJson(github.event.workflow_run.pull_requests) }}
+          COUNTS_FILE: ${{ steps.jobs.outputs.counts_file }}
+          HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          PULL_REQUESTS_JSON: ${{ steps.prctx.outputs.pull_requests_json }}
         run: |
           set -euo pipefail
 
@@ -142,6 +317,7 @@ jobs:
           PAYLOAD="$(python3 - <<'PY'
           import json
           import os
+          import re
           from datetime import datetime
           from pathlib import Path
 
@@ -179,15 +355,58 @@ jobs:
               return default
 
 
+          def normalize_text(value):
+              return re.sub(r"\s+", " ", (value or "").strip())
+
+
+          def normalize_accuracy(value):
+              text = normalize_text(value)
+              match = re.search(r"\b(PASSED|FAILED)\b", text)
+              if match:
+                  return match.group(1)
+              return text or "n/a"
+
+
+          def is_all_na_segment(segment):
+              text = normalize_text(segment).lower()
+              return (
+                  "baseline=n/a" in text
+                  and "current=n/a" in text
+                  and "threshold=n/a" in text
+                  and ("result=n/a" in text or "result=unknown" in text)
+              )
+
+
+          def format_metric_lines(label, value, *, accuracy_mode=False):
+              text = normalize_accuracy(value) if accuracy_mode else normalize_text(value)
+              if not text or text.lower() in {"n/a", "unavailable", "none"}:
+                  return []
+              if ";" not in text:
+                  return [f"- {label}: {text}"]
+
+              segments = []
+              for part in text.split(";"):
+                  part = normalize_text(part)
+                  if not part or is_all_na_segment(part):
+                      continue
+                  segments.append(part)
+
+              if not segments:
+                  return []
+              return [f"- {label} / {part}" for part in segments]
+
+
           repo = os.environ["REPOSITORY"]
           run_style = os.environ["RUN_STYLE"]
           run_url = os.environ["RUN_URL"]
           run_event = os.environ["RUN_EVENT"]
           run_conclusion = os.environ["RUN_CONCLUSION"]
           run_attempt = os.environ.get("RUN_ATTEMPT", "1")
-          max_auto_reruns = os.environ.get("MAX_AUTO_RERUNS", "5")
-          head_branch = os.environ["HEAD_BRANCH"] or "unknown"
-          head_sha = os.environ["HEAD_SHA"] or ""
+          head_repo = os.environ.get("HEAD_REPO") or repo
+          head_owner = head_repo.split("/", 1)[0] if "/" in head_repo else head_repo
+          head_branch_raw = os.environ.get("HEAD_BRANCH") or "unknown"
+          head_branch = f"{head_owner}/{head_branch_raw}"
+          head_sha = os.environ.get("HEAD_SHA") or ""
           short_sha = head_sha[:8] if head_sha else "unknown"
 
           pull_requests = json.loads(os.environ.get("PULL_REQUESTS_JSON", "[]") or "[]")
@@ -215,6 +434,35 @@ jobs:
               jobs_payload = json.loads(Path(jobs_file).read_text(encoding="utf-8"))
 
           jobs = jobs_payload.get("jobs", [])
+          counts_payload = {}
+          counts_file = os.environ.get("COUNTS_FILE", "")
+          if counts_file and Path(counts_file).is_file():
+              counts_payload = json.loads(Path(counts_file).read_text(encoding="utf-8"))
+
+          job_order = [
+              "Prepare Metadata",
+              "Format Check",
+              "Build Current",
+              "Integration Test",
+              "Build Baseline",
+              "T Performance",
+              "T Accuracy",
+              "BD Model 1",
+              "BD Model 2",
+              "BD Model 3",
+              "Training",
+              "Final Summary"
+          ]
+
+          def sort_job(j):
+              name = j.get("name", "")
+              try:
+                  return job_order.index(name)
+              except ValueError:
+                  return len(job_order)
+
+          jobs = sorted(jobs, key=sort_job)
+
           display_jobs = []
           failed_jobs = []
 
@@ -230,7 +478,11 @@ jobs:
                   duration = (completed - started).total_seconds()
               conclusion_text = conclusion.upper()
               duration_text = format_duration(duration)
-              display_jobs.append(f"- {name}: {conclusion_text} ({duration_text})")
+
+              runs = counts_payload.get(name, 1)
+              retry_text = f", 第{runs}次尝试" if runs > 1 else ""
+
+              display_jobs.append(f"- {name}: {conclusion_text} ({duration_text}{retry_text})")
               if conclusion not in {"success", "skipped"}:
                   failed_jobs.append(name)
 
@@ -240,6 +492,13 @@ jobs:
           else:
               status_text = "失败"
               status_icon = "FAILURE"
+
+          perf_lines = []
+          perf_lines.extend(format_metric_lines("T Performance", tencent_perf))
+          perf_lines.extend(format_metric_lines("BD Model 1", byte1))
+          perf_lines.extend(format_metric_lines("BD Model 2", byte2))
+          perf_lines.extend(format_metric_lines("BD Model 3", byte3))
+          perf_lines.extend(format_metric_lines("T Accuracy", accuracy, accuracy_mode=True))
 
           if run_style == "daily":
               title = f"Daily CI {status_icon}: {repo}@{head_branch}"
@@ -253,26 +512,21 @@ jobs:
                   f"- 主机IP: {host_ip}",
                   f"- 主机SN: {host_sn}",
                   f"- Baseline commit: `{baseline_commit}`",
-                  f"- 当前尝试: 第{run_attempt}次（自动重跑上限: {max_auto_reruns}次）",
+                  f"- 当前尝试: 第{run_attempt}次（自动重跑按 Job 单独计数）",
                   f"- 运行详情: [GitHub Actions]({run_url})",
                   "",
                   "#### Job 状态",
               ]
               lines.extend(display_jobs or ["- 暂无 job 信息"])
-              lines.extend(
-                  [
-                      "",
-                      "#### 性能与精度摘要",
-                      f"- T Performance: {tencent_perf}",
-                      f"- BD Model 1: {byte1}",
-                      f"- BD Model 2: {byte2}",
-                      f"- BD Model 3: {byte3}",
-                      f"- T Accuracy: {accuracy}",
-                  ]
-              )
+
               if failed_jobs:
                   lines.extend(["", "#### 失败任务"])
                   lines.extend([f"- {name}" for name in failed_jobs])
+
+              if perf_lines:
+                  lines.extend(["", "#### 性能与精度摘要"])
+                  lines.extend(perf_lines)
+
           elif run_style == "pr":
               title = f"PR CI {status_icon}: {repo}#{pr_number or 'n/a'}"
               lines = [
@@ -281,26 +535,21 @@ jobs:
                   f"- PR: #{pr_number} {pr_url}" if pr_number else "- PR: n/a",
                   f"- 分支: {head_branch}",
                   f"- Commit: `{short_sha}`",
-                  f"- 当前尝试: 第{run_attempt}次（自动重跑上限: {max_auto_reruns}次）",
+                  f"- 当前尝试: 第{run_attempt}次（自动重跑按 Job 单独计数）",
                   f"- 触发方式: {run_event}",
                   f"- 运行详情: [GitHub Actions]({run_url})",
               ]
               lines.extend(["", "#### Job 状态"])
               lines.extend(display_jobs or ["- 暂无 job 信息"])
+
               if failed_jobs:
                   lines.extend(["", "#### 失败任务"])
                   lines.extend([f"- {name}" for name in failed_jobs])
-              lines.extend(
-                  [
-                      "",
-                      "#### 关键摘要",
-                      f"- T Performance: {tencent_perf}",
-                      f"- BD Model 1: {byte1}",
-                      f"- BD Model 2: {byte2}",
-                      f"- BD Model 3: {byte3}",
-                      f"- T Accuracy: {accuracy}",
-                  ]
-              )
+
+              if perf_lines:
+                  lines.extend(["", "#### 关键摘要"])
+                  lines.extend(perf_lines)
+
           else:
               title = f"Manual CI {status_icon}: {repo}@{head_branch}"
               lines = [
@@ -308,12 +557,13 @@ jobs:
                   f"- 仓库: {repo}",
                   f"- 分支: {head_branch}",
                   f"- Commit: `{short_sha}`",
-                  f"- 当前尝试: 第{run_attempt}次（自动重跑上限: {max_auto_reruns}次）",
+                  f"- 当前尝试: 第{run_attempt}次（自动重跑按 Job 单独计数）",
                   f"- 触发方式: {run_event}",
                   f"- 运行详情: [GitHub Actions]({run_url})",
               ]
               lines.extend(["", "#### Job 状态"])
               lines.extend(display_jobs or ["- 暂无 job 信息"])
+
               if failed_jobs:
                   lines.extend(["", "#### 失败任务"])
                   lines.extend([f"- {name}" for name in failed_jobs])
