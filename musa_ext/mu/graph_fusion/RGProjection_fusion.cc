@@ -138,6 +138,25 @@ FusionMatchResult BiasAddReluMatMulFusion::Match(const GraphDef& graph,
     result.captured_nodes["matmul_other_input"] = other_input_node;
   }
 
+  // Ensure Relu and BiasAdd don't have multiple consumers preventing Safe Fusion
+  for (int i = 0; i < graph.node_size(); ++i) {
+    const NodeDef& consumer = graph.node(i);
+    if (consumer.name() == matmul_node.name()) {
+      continue;
+    }
+    for (int j = 0; j < consumer.input_size(); ++j) {
+      const std::string producer_name = FusionGraphUtils::GetProducerNodeName(consumer.input(j));
+      if (producer_name == relu_node->name()) {
+        // Relu has a consumer other than MatMul
+        return FusionMatchResult();
+      }
+      if (producer_name == bias_add_node->name() && consumer.name() != relu_node->name()) {
+        // BiasAdd has a consumer other than Relu
+        return FusionMatchResult();
+      }
+    }
+  }
+
   return result;
 }
 
