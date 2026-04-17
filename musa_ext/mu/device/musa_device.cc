@@ -145,13 +145,14 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
       return;
     }
 
-    // Use GPUPinnedMemoryPool for bounce buffer allocation
-    // This ensures memory addresses are not reused until GPU async copies
-    // complete
-    void* bounce_buffer = musa_dev->pinned_memory_pool()->Allocate(bytes);
-    if (bounce_buffer == nullptr) {
-      LOG(WARNING)
-          << "PinnedMemoryPool allocation failed, falling back to sync copy";
+    // Step 4-min-2: Use musaMallocHost directly instead of GPUPinnedMemoryPool
+    // to isolate whether the problem is pool allocation reuse or async bounce
+    // buffer mechanism itself.
+    void* bounce_buffer = nullptr;
+    musaError_t alloc_err = musaMallocHost(&bounce_buffer, bytes);
+    if (alloc_err != musaSuccess || bounce_buffer == nullptr) {
+      LOG(WARNING) << "musaMallocHost failed (" << alloc_err
+                   << "), falling back to sync copy";
       musaError_t err = musaMemcpy(dst, src, bytes, musaMemcpyHostToDevice);
       if (err != musaSuccess) {
         done(errors::Internal("MUSA H2D sync copy failed"));
@@ -164,62 +165,55 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
     // Stage 1: Copy from pageable to pinned (CPU-side, synchronous)
     std::memcpy(bounce_buffer, src, bytes);
 
-    // Stage 2: Async copy from pinned to GPU
+    // Stage 2: Async H2D on h2d_stream_ + host-side sync via musaEventSynchronize
     MUSA_TELEMETRY_ON_MEMCPY(dst, bounce_buffer, bytes, device_id,
                              MUSA_TELEMETRY_STREAM_ID(h2d_stream_),
                              TelemetryEventType::kMemcpyH2D);
+
     musaError_t err = musaMemcpyAsync(dst, bounce_buffer, bytes,
                                       musaMemcpyHostToDevice, h2d_stream_);
     if (err != musaSuccess) {
-      LOG(ERROR) << "MUSA H2D async copy failed: " << musaGetErrorString(err)
-                 << " dst=" << dst << " bounce_buffer=" << bounce_buffer
-                 << " bytes=" << bytes << " stream=" << h2d_stream_;
       musaFreeHost(bounce_buffer);
-      done(errors::Internal("MUSA H2D async copy via bounce buffer failed"));
+      done(errors::Internal("MUSA H2D async copy failed"));
       return;
     }
 
-    // Setup stream dependency if needed
-    if (sync_dst_compute) {
-      musaEvent_t copy_done_event;
-      musaEventCreateWithFlags(&copy_done_event, musaEventDisableTiming);
-      musaEventRecord(copy_done_event, h2d_stream_);
-      MUSA_TELEMETRY_ON_EVENT_RECORD(
-          copy_done_event, MUSA_TELEMETRY_STREAM_ID(h2d_stream_), device_id);
-      musaStreamWaitEvent(stream_handle_, copy_done_event, 0);
-      MUSA_TELEMETRY_ON_EVENT_WAIT(
-          copy_done_event, MUSA_TELEMETRY_STREAM_ID(stream_handle_),
-          MUSA_TELEMETRY_STREAM_ID(h2d_stream_), device_id);
-      // CRITICAL FIX: Defer event destruction until the waiting stream
-      // completes. musaStreamWaitEvent() is asynchronous - the wait command is
-      // queued but may not have executed when this function returns. Destroying
-      // the event immediately can cause the wait to be ignored, leading to race
-      // conditions and dirty data.
-      if (event_mgr_) {
-        event_mgr_->ThenExecute(stream_handle_, [copy_done_event, device_id]() {
-          musaSetDevice(device_id);
-          musaEventDestroy(copy_done_event);
-        });
-      } else {
-        // Fallback: synchronize before destroy (conservative)
-        musaStreamSynchronize(stream_handle_);
-        musaEventDestroy(copy_done_event);
-      }
+    musaEvent_t copy_done_event;
+    err = musaEventCreateWithFlags(&copy_done_event, musaEventDisableTiming);
+    if (err != musaSuccess) {
+      musaFreeHost(bounce_buffer);
+      done(errors::Internal("MUSA H2D event create failed"));
+      return;
     }
 
-    // Free bounce buffer - will be returned to pool after GPU copy completes
-    musa_dev->pinned_memory_pool()->FreeAsync(bounce_buffer, bytes,
-                                              h2d_stream_);
-
-    if (event_mgr_) {
-      event_mgr_->ThenExecute(h2d_stream_, [device_id, done]() {
-        musaSetDevice(device_id);
-        done(Status::OK());
-      });
-    } else {
-      musaStreamSynchronize(h2d_stream_);
-      done(Status::OK());
+    err = musaEventRecord(copy_done_event, h2d_stream_);
+    if (err != musaSuccess) {
+      musaEventDestroy(copy_done_event);
+      musaFreeHost(bounce_buffer);
+      done(errors::Internal("MUSA H2D event record failed"));
+      return;
     }
+
+    // musaStreamWaitEvent is unreliable on current MUSA driver (see debug_log.md).
+    // Use musaEventSynchronize to block host until H2D completes, ensuring data
+    // is on device before done() triggers TF to schedule compute kernels.
+    err = musaEventSynchronize(copy_done_event);
+    if (err != musaSuccess) {
+      musaEventDestroy(copy_done_event);
+      musaFreeHost(bounce_buffer);
+      done(errors::Internal("MUSA H2D event sync failed"));
+      return;
+    }
+
+    err = musaEventDestroy(copy_done_event);
+    if (err != musaSuccess) {
+      musaFreeHost(bounce_buffer);
+      done(errors::Internal("MUSA H2D event destroy failed"));
+      return;
+    }
+
+    musaFreeHost(bounce_buffer);
+    done(Status::OK());
   }
 }
 
