@@ -327,6 +327,7 @@ class MusaPlnCascadeBlockOp : public MusaOpKernel {
     for (int step = 0; step < kPlnCascadeBlockMaxSteps; ++step) {
       gate_ptrs.values[step] = nullptr;
       meta.table_indices[step] = 0;
+      meta.table_base_offsets[step] = 0;
       meta.select_on_true[step] = 1;
       for (int dim = 0; dim < kPlnCascadeBlockMaxDims; ++dim) {
         meta.gate_strides[step].values[dim] = 0;
@@ -336,6 +337,7 @@ class MusaPlnCascadeBlockOp : public MusaOpKernel {
     for (int step = 0; step < num_steps; ++step) {
       gate_ptrs.values[step] = gates[step].flat<bool>().data();
       meta.table_indices[step] = table_indices_[step];
+      meta.table_base_offsets[step] = table_indices_[step] * table_width;
       meta.select_on_true[step] = select_on_true_[step] ? 1 : 0;
 
       const TensorShape& gate_shape = gates[step].shape();

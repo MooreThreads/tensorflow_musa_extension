@@ -33,7 +33,6 @@ class MusaLinearReluOp : public MusaOpKernel {
     const Tensor& in1 = ctx->input(1);
     const Tensor& bias_input = ctx->input(2);
 
-    // 1. MatMul
     MatMulBCast bcast(in0.shape().dim_sizes(), in1.shape().dim_sizes());
     OP_REQUIRES(ctx, bcast.IsValid(),
                 errors::InvalidArgument(
@@ -54,39 +53,40 @@ class MusaLinearReluOp : public MusaOpKernel {
                 errors::InvalidArgument(
                     "Matrix size-incompatible: In[0] mismatch In[1]"));
 
-    TensorShape mm_out_shape = bcast.output_batch_shape();
-    mm_out_shape.AddDim(m);
-    mm_out_shape.AddDim(n);
+    TensorShape out_shape = bcast.output_batch_shape();
+    out_shape.AddDim(m);
+    out_shape.AddDim(n);
 
-    Tensor mm_out_tensor;
-    OP_REQUIRES_OK(
-        ctx, ctx->allocate_temp(in0.dtype(), mm_out_shape, &mm_out_tensor));
+    Tensor* output = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, out_shape, &output));
 
-    if (mm_out_tensor.NumElements() == 0) {
-      Tensor* final_output = nullptr;
-      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, mm_out_shape, &final_output));
-      return;
-    }
+    if (output->NumElements() == 0) return;
 
     auto& handle = GetHandleByCtx(ctx);
     handle.SetAllowTF32(tf32_enabled_);
+
     mTensor mt_a = CreateMTensor(in0);
     mTensor mt_b = CreateMTensor(in1);
-    mTensor mt_mm_out = CreateMTensor(mm_out_tensor);
+    mTensor mt_out = CreateMTensor(*output);
+    mTensor mt_bias = CreateMTensor(bias_input);
 
     ::musa::dnn::Status status;
 
+    // Fused MatMul+BiasAdd via RunWithBiasAdd, then Relu in-place
+    // Saves 1 kernel launch vs separate MatMul + BiasAdd + Relu
     if (in0.dims() == 2 && in1.dims() == 2) {
       mMatMul op;
       op.SetTranspose(trans_a_, trans_b_);
       op.SetAlpha(1.0);
       op.SetBeta(0.0);
-      status = op.Run(handle, mt_mm_out, mt_a, mt_b);
+      op.SetGamma(1.0);
+      status = op.RunWithBiasAdd(handle, mt_out, mt_a, mt_b, mt_bias);
     } else {
       mBatchMatMul op;
       op.SetTranspose(trans_a_, trans_b_);
       op.SetAlpha(1.0);
       op.SetBeta(0.0);
+      op.SetGamma(1.0);
       int64_t out_batch = bcast.output_batch_shape().num_elements();
 
       auto ReshapeTo3D = [out_batch](mTensor& mt, const Tensor& t) {
@@ -102,21 +102,21 @@ class MusaLinearReluOp : public MusaOpKernel {
       };
       ReshapeTo3D(mt_a, in0);
       ReshapeTo3D(mt_b, in1);
-      mt_mm_out.SetNdInfo({out_batch, m, n}, {m * n, n, 1});
-      status = op.Run(handle, mt_mm_out, mt_a, mt_b);
+      mt_out.SetNdInfo({out_batch, m, n}, {m * n, n, 1});
+      status = op.RunWithBiasAdd(handle, mt_out, mt_a, mt_b, mt_bias);
     }
 
     OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
                 errors::Internal(
-                    "MUSA MatMul/BatchMatMul execution failed in LinearRelu."));
+                    "MUSA RunWithBiasAdd failed in LinearRelu."));
 
-    // 2. BiasAdd + Relu
-    MUSA_KERNEL_TRACE_START("UseMudnn");
-    UseMudnn(ctx, bias_input, mm_out_shape, mt_mm_out);
-    MUSA_KERNEL_TRACE_END("UseMudnn");
-    // MUSA_KERNEL_TRACE_START("UseKernel");
-    // UseKernel(ctx, bias_input, mm_out_shape, mm_out_tensor);
-    // MUSA_KERNEL_TRACE_END("UseKernel");
+    // Relu in-place on output
+    mUnary relu_op;
+    relu_op.SetMode(::musa::dnn::Unary::Mode::RELU);
+    status = relu_op.Run(handle, mt_out, mt_out);
+
+    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
+                errors::Internal("MUSA Relu failed in LinearRelu."));
   }
 
   bool IsExpensive() override { return true; }
@@ -124,7 +124,7 @@ class MusaLinearReluOp : public MusaOpKernel {
  private:
   bool trans_a_ = false;
   bool trans_b_ = false;
-  bool tf32_enabled_ = false;  // TF32 acceleration enabled by default
+  bool tf32_enabled_ = true;  // TF32 acceleration enabled by default
 
   void UseMudnn(OpKernelContext* ctx, const Tensor& bias_input,
                 const TensorShape& mm_out_shape, const mTensor& mt_mm_out) {

@@ -27,6 +27,7 @@ struct PlnCascadeBlockMeta {
   int table_rows;
   int table_width;
   int table_indices[kPlnCascadeBlockMaxSteps];
+  int table_base_offsets[kPlnCascadeBlockMaxSteps];
   int select_on_true[kPlnCascadeBlockMaxSteps];
   PlnCascadeBlockStrides gate_strides[kPlnCascadeBlockMaxSteps];
 };
