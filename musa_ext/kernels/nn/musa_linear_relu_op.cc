@@ -107,8 +107,7 @@ class MusaLinearReluOp : public MusaOpKernel {
     }
 
     OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
-                errors::Internal(
-                    "MUSA RunWithBiasAdd failed in LinearRelu."));
+                errors::Internal("MUSA RunWithBiasAdd failed in LinearRelu."));
 
     // Relu in-place on output
     mUnary relu_op;

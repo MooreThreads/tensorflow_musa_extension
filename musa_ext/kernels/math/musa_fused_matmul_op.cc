@@ -1,11 +1,11 @@
 #include <mudnn.h>
 #include <mudnn_xmma.h>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/util/matmul_bcast.h"
-#include "../utils_op.h"
 
 #define ENABLE_MUSA_DEBUG 0
 
@@ -135,7 +135,8 @@ class MusaFusedMatMulOp : public MusaOpKernel {
 
       auto status = matmul_op.RunWithBiasAdd(handle, mt_out, mt0, mt1, mt_bias);
       OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
-                  errors::Internal("FusedMatMul+BiasAdd failed. Status: ", (int)status));
+                  errors::Internal("FusedMatMul+BiasAdd failed. Status: ",
+                                   (int)status));
     }
 
     if (fusion_type_ == FusionType::BIAS_ADD_RELU) {
