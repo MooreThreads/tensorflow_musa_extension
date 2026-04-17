@@ -4,13 +4,34 @@ set -e
 # ============================================================================
 # MUSA Plugin Build Script
 # Usage:
-#   ./build.sh [release|debug]
+#   ./build.sh [release|debug|wheel]
 #
 # Examples:
-#   ./build.sh           # Default: release mode
+#   ./build.sh           # Default: release mode (build .so only)
 #   ./build.sh release   # Release mode (optimized)
 #   ./build.sh debug     # Debug mode (kernel timing enabled)
+#   ./build.sh wheel     # Build wheel package directly (recommended for distribution)
 # ============================================================================
+
+# Required TensorFlow version
+REQUIRED_TF_VERSION="2.6.1"
+
+# Function to check TensorFlow version
+check_tf_version() {
+    echo "Checking TensorFlow version..."
+    python3 -c "
+import tensorflow as tf
+version = tf.__version__
+required = '${REQUIRED_TF_VERSION}'
+if version != required:
+    print(f'ERROR: TensorFlow version mismatch!')
+    print(f'  Required: {required}')
+    print(f'  Installed: {version}')
+    print(f'  Please install: pip install tensorflow=={required}')
+    exit(1)
+print(f'TensorFlow {version} found - OK')
+" || exit 1
+}
 
 # Parse build type from command line argument
 BUILD_TYPE="${1:-release}"
@@ -40,16 +61,54 @@ case "$BUILD_TYPE" in
         echo "  • Use env vars MUSA_TIMING_KERNEL_* to control output"
         echo ""
         ;;
+    wheel)
+        echo "=========================================="
+        echo "Building tensorflow_musa Wheel Package"
+        echo "=========================================="
+        echo ""
+        check_tf_version
+        echo ""
+        echo "Building wheel package..."
+        echo ""
+
+        # Clean previous wheel builds
+        rm -rf build/lib build/bdist.* dist/*.whl 2>/dev/null || true
+
+        # Build wheel using setup.py (no isolation to use existing TF)
+        python3 setup.py bdist_wheel
+
+        # Find and display the built wheel
+        WHEEL_FILE=$(ls dist/*.whl 2>/dev/null | head -1)
+        if [ -n "$WHEEL_FILE" ]; then
+            echo ""
+            echo "[SUCCESS] Wheel package built successfully!"
+            ls -lh "$WHEEL_FILE"
+            echo ""
+            echo "=========================================="
+            echo "Install with:"
+            echo "  pip install $WHEEL_FILE --no-deps"
+            echo "=========================================="
+        else
+            echo ""
+            echo "[FAIL] Wheel package not found in dist/"
+            exit 1
+        fi
+        exit 0
+        ;;
     *)
         echo "Error: Unknown build type '$BUILD_TYPE'"
-        echo "Usage: ./build.sh [release|debug]"
+        echo "Usage: ./build.sh [release|debug|wheel]"
         echo ""
         echo "Options:"
         echo "  release  - Optimized release build (default)"
         echo "  debug    - Enable MUSA kernel debug/timing macros"
+        echo "  wheel    - Build wheel package for distribution"
         exit 1
         ;;
 esac
+
+# Check TensorFlow version before building .so
+check_tf_version
 
 # Clean previous build if needed
 rm -rf build
@@ -88,4 +147,7 @@ echo "Build Complete!"
 echo "=========================================="
 echo "Build Type: $BUILD_TYPE"
 echo "Plugin: $(pwd)/libmusa_plugin.so"
+echo ""
+echo "To build wheel package:"
+echo "  ./build.sh wheel"
 echo "=========================================="
