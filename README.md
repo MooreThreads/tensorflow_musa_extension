@@ -77,6 +77,9 @@ pip install tensorflow==2.6.1
 
 # 安装 WHL 包
 pip install dist/tensorflow_musa-0.1.0-py3-none-any.whl --no-deps
+
+# 重新构建后安装 WHL 包
+pip install dist/tensorflow_musa-0.1.0-py3-none-any.whl --no-deps --force-reinstall
 ```
 
 #### 方式二：开发模式

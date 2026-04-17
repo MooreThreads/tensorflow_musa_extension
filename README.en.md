@@ -77,6 +77,9 @@ pip install tensorflow==2.6.1
 
 # Install WHL package
 pip install dist/tensorflow_musa-0.1.0-py3-none-any.whl --no-deps
+
+# Install WHL packages after rebuilding
+pip install dist/tensorflow_musa-0.1.0-py3-none-any.whl --no-deps --force-reinstall
 ```
 
 #### Method 2: Development Mode

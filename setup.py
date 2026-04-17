@@ -131,12 +131,10 @@ class BdistWheelCommand(bdist_wheel):
         # Check TensorFlow version first
         check_tensorflow_version()
 
-        # Build plugin first if needed
+        # Always rebuild the plugin for wheel packaging so the wheel
+        # contains a library matching the current source tree.
         project_root = os.path.abspath(os.path.dirname(__file__))
-        package_lib_path = os.path.join(project_root, SOURCE_DIR, PLUGIN_LIBRARY)
-
-        if not os.path.exists(package_lib_path):
-            BuildPluginCommand(self.distribution).run()
+        BuildPluginCommand(self.distribution).run()
 
         # Force only tensorflow_musa packages (source is in python directory)
         self.distribution.packages = ["tensorflow_musa", "tensorflow_musa.optimizer"]
