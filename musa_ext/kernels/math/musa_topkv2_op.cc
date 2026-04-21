@@ -1,6 +1,5 @@
 #include <limits>
 
-#include "mu/device/musa_device.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -103,8 +102,7 @@ class MusaTopKV2Op : public MusaOpKernel {
     T* values_ptr = values->flat<T>().data();
     int32* indices_ptr = indices->flat<int32>().data();
 
-    auto* device = GetDeviceByCtx(ctx);
-    auto stream = device->GetStream();
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
 
     LaunchTopKV2<T, int32>(input_ptr, values_ptr, indices_ptr, rows, cols, k,
                            sorted_, stream);

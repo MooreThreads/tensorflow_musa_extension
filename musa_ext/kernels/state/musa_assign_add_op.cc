@@ -3,7 +3,6 @@
 // Performs in-place addition: ref = ref + value
 
 #include "../utils_op.h"
-#include "mu/device/musa_device.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"

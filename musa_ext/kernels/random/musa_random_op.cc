@@ -1,4 +1,7 @@
-#include "mu/device/musa_executor.h"
+#include <musa_runtime.h>
+
+#include "../utils_op.h"
+#include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_shape.h"
@@ -10,7 +13,13 @@ namespace tensorflow {
 namespace musa {
 
 using random::PhiloxRandom;
-using stream_executor::musa::FromMusaStatus;
+
+// Converts an mudnn status to a tensorflow::Status. Used to match the
+// legacy helper that lived inside the deleted musa_executor.h.
+static inline Status FromMusaStatus(::musa::dnn::Status s) {
+  if (s == ::musa::dnn::Status::SUCCESS) return Status::OK();
+  return errors::Internal("MUSA runtime status: ", static_cast<int>(s));
+}
 
 namespace {
 

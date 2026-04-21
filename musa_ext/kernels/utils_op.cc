@@ -1,8 +1,21 @@
+/* Copyright 2026 The TensorFlow MUSA Authors. All Rights Reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
 #include "utils_op.h"
 
 #include "mu/kernel_register.h"
-#include "tensorflow/core/common_runtime/device_mgr.h"
-#include "tensorflow/core/framework/device_attributes.pb.h"
 
 namespace tensorflow {
 namespace musa {
@@ -43,10 +56,8 @@ mType GetType(DataType t) {
 }
 }  // namespace
 
-// Helper function to convert musaError_t to mStatus (mudnn Status)
 static inline mStatus FromMusaError(musaError_t err) {
   if (err == musaSuccess) return mStatus::SUCCESS;
-  // mudnn Status doesn't have OUT_OF_MEMORY, use INTERNAL_ERROR for all errors
   return mStatus::INTERNAL_ERROR;
 }
 
@@ -74,8 +85,7 @@ mTensor CreateMTensor(const Tensor& t, mFormat format) {
   // Reuse TensorFlow's shape storage directly instead of copying dims into a
   // temporary vector. For small elementwise ops this shaves a bit of host-side
   // wrapper overhead.
-  const int64_t* dims =
-      reinterpret_cast<const int64_t*>(dims_raw.data());
+  const int64_t* dims = reinterpret_cast<const int64_t*>(dims_raw.data());
 
   if (rank >= 4) {
     rst.SetFormat(format);
@@ -109,22 +119,6 @@ mFormat GetMusaFormat(OpKernelConstruction* ctx) {
     }
   }
   return mFormat::NHWC;
-}
-
-MusaDevice* GetDeviceByCtx(tensorflow::OpKernelContext* context) {
-  DeviceBase* device_base = context->device();
-  if (!device_base) {
-    LOG(ERROR) << "GetDeviceByCtx: device_base is null";
-    return nullptr;
-  }
-  MusaDevice* musa_device = reinterpret_cast<MusaDevice*>(device_base);
-  if (!musa_device) {
-    LOG(ERROR) << "GetDeviceByCtx: musa_device is null";
-    return nullptr;
-  }
-  // Note: musaSetDevice is called in GetHandleByCtx with caching
-  // We skip it here to avoid redundant calls
-  return musa_device;
 }
 
 }  // namespace musa

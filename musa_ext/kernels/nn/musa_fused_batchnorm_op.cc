@@ -1,5 +1,6 @@
 #include <vector>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/common_shape_fns.h"
 #include "tensorflow/core/framework/numeric_types.h"
@@ -7,7 +8,6 @@
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/framework/tensor.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -48,9 +48,8 @@ class MusaFusedBatchNormOp : public MusaOpKernel {
     Tensor* reserve_3 = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(5, TensorShape({}), &reserve_3));
 
-    auto* device = GetDeviceByCtx(ctx);
-    auto& handle = device->mudnn_handle();
-    auto stream = device->GetStream();
+    auto& handle = GetHandleByCtx(ctx);
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
     handle.SetAllowTF32(false);
 
     std::vector<Tensor> workspace_holder;
@@ -64,7 +63,7 @@ class MusaFusedBatchNormOp : public MusaOpKernel {
       return ::musa::dnn::MemoryHandler(temp.flat<uint8_t>().data(),
                                         [](void*) {});
     };
-    auto maintainer = device->GetMemMaintainer(internal_maintainer);
+    auto maintainer = MakeMusaMemMaintainer(internal_maintainer);
 
     mFormat data_fmt = is_nhwc_ ? mFormat::NHWC : mFormat::NCHW;
 
@@ -162,9 +161,8 @@ class MusaFusedBatchNormGradOp : public MusaOpKernel {
     Tensor* d_var = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(4, scale.shape(), &d_var));
 
-    auto* device = GetDeviceByCtx(ctx);
-    auto& handle = device->mudnn_handle();
-    auto stream = device->GetStream();
+    auto& handle = GetHandleByCtx(ctx);
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
     handle.SetAllowTF32(false);
 
     musaMemsetAsync(d_scale->flat<float>().data(), 0,
@@ -186,7 +184,7 @@ class MusaFusedBatchNormGradOp : public MusaOpKernel {
       return ::musa::dnn::MemoryHandler(temp.flat<uint8_t>().data(),
                                         [](void*) {});
     };
-    auto maintainer = device->GetMemMaintainer(maintainer_func);
+    auto maintainer = MakeMusaMemMaintainer(maintainer_func);
 
     mFormat data_fmt = is_nhwc_ ? mFormat::NHWC : mFormat::NCHW;
 
