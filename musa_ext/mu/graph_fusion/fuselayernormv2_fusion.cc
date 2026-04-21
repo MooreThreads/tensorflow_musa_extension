@@ -16,8 +16,8 @@ limitations under the License.
 #include "mu/graph_fusion/fuselayernormv2_fusion.h"
 
 #include <algorithm>
-#include <cstdint>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <sstream>
 #include <unordered_set>
@@ -311,10 +311,12 @@ bool MatchReshapeInputShape(const GraphDef& graph, const NodeDef* reshape_dims,
     return false;
   }
 
-  const NodeDef* first_dim = FindResolvedProducer(graph, resolved_shape->input(0));
+  const NodeDef* first_dim =
+      FindResolvedProducer(graph, resolved_shape->input(0));
   const NodeDef* second_dim =
       FindResolvedProducer(graph, resolved_shape->input(1));
-  const NodeDef* last_dim = FindResolvedProducer(graph, resolved_shape->input(3));
+  const NodeDef* last_dim =
+      FindResolvedProducer(graph, resolved_shape->input(3));
   if (!HasIntValue(first_dim, 1) || !HasIntValue(last_dim, 1) || !second_dim) {
     return false;
   }
@@ -435,11 +437,13 @@ FusionMatchResult MusaFuseLayerNormV2Fusion::MatchFromAddNode(
 
   const NodeDef* shape_node =
       FindResolvedProducer(graph, reshape_out_node->input(1));
-  if (!shape_node || !IsOp(*shape_node, "Shape") || shape_node->input_size() != 1) {
+  if (!shape_node || !IsOp(*shape_node, "Shape") ||
+      shape_node->input_size() != 1) {
     return result;
   }
 
-  const NodeDef* reshape_in_node = FindResolvedProducer(graph, bn_node->input(0));
+  const NodeDef* reshape_in_node =
+      FindResolvedProducer(graph, bn_node->input(0));
   if (!reshape_in_node || !IsOp(*reshape_in_node, "Reshape") ||
       reshape_in_node->input_size() != 2) {
     return result;
@@ -497,10 +501,10 @@ FusionMatchResult MusaFuseLayerNormV2Fusion::MatchFromAddNode(
   result.captured_attrs["beta_tensor"] = beta_tensor;
   result.captured_attrs["epsilon"] = FloatToString(epsilon);
 
-  LOG(INFO) << "[FuseLayerNormV2][Match] matched subgraph at output="
-            << add_node.name() << ", bn=" << bn_node->name()
-            << ", reshape_in=" << reshape_in_node->name()
-            << ", reshape_out=" << reshape_out_node->name();
+  // LOG(INFO) << "[FuseLayerNormV2][Match] matched subgraph at output="
+  //           << add_node.name() << ", bn=" << bn_node->name()
+  //           << ", reshape_in=" << reshape_in_node->name()
+  //           << ", reshape_out=" << reshape_out_node->name();
 
   return result;
 }
@@ -540,9 +544,9 @@ Status MusaFuseLayerNormV2Fusion::Apply(
   const std::string original_name = output_node->name();
   const std::string original_output_name = original_name + "_original";
 
-  LOG(INFO) << "[FuseLayerNormV2][Apply] start apply for output="
-            << original_name << ", input=" << input_tensor
-            << ", gamma=" << gamma_tensor << ", beta=" << beta_tensor;
+  // LOG(INFO) << "[FuseLayerNormV2][Apply] start apply for output="
+  //           << original_name << ", input=" << input_tensor
+  //           << ", gamma=" << gamma_tensor << ", beta=" << beta_tensor;
 
   for (const auto& node : graph->node()) {
     if (node.name() == original_name && node.op() == "MusaLayerNorm") {
