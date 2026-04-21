@@ -21,6 +21,7 @@ class MusaConcatOp : public MusaOpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const int N = ctx->num_inputs() - 1;
     const Tensor& axis_tensor = ctx->input(N);
     int64 axis_val = axis_tensor.scalar<Tidx>()();

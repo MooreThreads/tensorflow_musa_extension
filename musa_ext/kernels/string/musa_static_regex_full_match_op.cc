@@ -3,6 +3,7 @@
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/framework/tensor.h"
+#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -23,6 +24,7 @@ class MusaStaticRegexFullMatchOp : public OpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& input_tensor = ctx->input(0);
     const auto& input_flat = input_tensor.flat<tstring>();
 

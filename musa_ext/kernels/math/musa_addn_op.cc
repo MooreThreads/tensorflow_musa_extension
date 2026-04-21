@@ -122,8 +122,6 @@ template <typename T>
 void AddNCompute(OpKernelContext* ctx, mFormat format,
                  void (*launcher)(const T**, InlinePointers, T*, int, int,
                                   musaStream_t)) {
-  MUSA_KERNEL_TIMING_GUARD_WITH_NAME(ctx, "AddN");
-  MUSA_KERNEL_TRACE_START("FULL");
 
   const int num_inputs = ctx->num_inputs();
   OP_REQUIRES(ctx, num_inputs >= 1,
@@ -166,10 +164,8 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
 
   // Allocate output tensor
   Tensor* output = nullptr;
-  MUSA_KERNEL_TRACE_START("Mem Alloc");
   OP_REQUIRES_OK(ctx, ctx->forward_input_or_allocate_output(
                           {0}, 0, output_shape, &output));
-  MUSA_KERNEL_TRACE_END("Mem Alloc");
   if (num_elements == 0) return;
 
   // ==========================================================================
@@ -197,12 +193,9 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
       ::musa::dnn::Binary op;
       op.SetMode(::musa::dnn::Binary::Mode::ADD);
 
-      MUSA_KERNEL_TRACE_START("Kernel");
       auto status = op.Run(handle, t_out, t0, t1);
-      MUSA_KERNEL_TRACE_END("Kernel");
       OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
                   errors::Internal("MUSA AddN two inputs (muDNN) failed."));
-      MUSA_KERNEL_TRACE_END("FULL");
       return;
     }
 
@@ -236,12 +229,9 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
 
     // Launch custom kernel
     void* output_ptr = const_cast<char*>(output->tensor_data().data());
-    MUSA_KERNEL_TRACE_START("Kernel");
     launcher(reinterpret_cast<const T**>(d_inputs), inline_inputs,
              reinterpret_cast<T*>(output_ptr), num_inputs,
              static_cast<int>(num_elements), stream);
-    MUSA_KERNEL_TRACE_END("Kernel");
-    MUSA_KERNEL_TRACE_END("FULL");
   } else {
     // ----------------------------------------------------------------------
     // FALLBACK PATH: Broadcasting required.
@@ -273,7 +263,6 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
               "MUSA AddN broadcast fallback: muDNN Binary failed at input %d",
               i));
     }
-    MUSA_KERNEL_TRACE_END("FULL");
   }
 }
 
@@ -287,6 +276,7 @@ class MusaAddNOp : public MusaOpKernel {
   explicit MusaAddNOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
   bool IsExpensive() override { return false; }
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     AddNCompute<T>(ctx, format_, GetLauncher());
   }
 

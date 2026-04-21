@@ -19,14 +19,12 @@ class MusaGeluOp : public MusaOpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
-    MUSA_KERNEL_TIMING_GUARD_WITH_NAME(ctx, "MusaGelu");
+    MUSA_DEBUG_LOG_KERNEL(ctx);
 
     const Tensor& input = ctx->input(0);
 
     Tensor* output = nullptr;
-    MUSA_KERNEL_TRACE_START("Mem Alloc");
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &output));
-    MUSA_KERNEL_TRACE_END("Mem Alloc");
 
     if (input.NumElements() == 0) {
       // VLOG(1) << "MusaGeluOp::Compute skipped empty tensor";
@@ -45,14 +43,10 @@ class MusaGeluOp : public MusaOpKernel {
             << num_elements << ", approximate=" << approximate_
             << ", mode=" << (approximate_ ? "GELU_TANH" : "GELU");
 
-    MUSA_KERNEL_TRACE_START("Set Mode");
     MTOP_CHECK_OK(op.SetMode(mode), "Set GELU Mode", ctx);
-    MUSA_KERNEL_TRACE_END("Set Mode");
 
-    MUSA_KERNEL_TRACE_START("Kernel");
     MTOP_CHECK_OK_RUN(op.Run(handle, mt_output, mt_input), "GELU Forward Run",
                       ctx);
-    MUSA_KERNEL_TRACE_END("Kernel");
 
     // VLOG(1) << "MusaGeluOp::Compute finished, elements=" << num_elements
     //         << ", approximate=" << approximate_;

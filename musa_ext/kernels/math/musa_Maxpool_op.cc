@@ -180,6 +180,7 @@ class MusaMaxPoolOp : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& input = ctx->input(0);
 
     OP_REQUIRES(ctx, input.dims() == 4,

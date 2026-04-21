@@ -20,6 +20,7 @@ class MusaBiasAddGradOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& output_backprop = ctx->input(0);
 
     OP_REQUIRES(ctx, output_backprop.dims() >= 1,

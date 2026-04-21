@@ -3,6 +3,7 @@
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/util/bcast.h"
+#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -13,6 +14,7 @@ class BroadcastGradientArgsOp : public OpKernel {
   explicit BroadcastGradientArgsOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& s0 = ctx->input(0);
     const Tensor& s1 = ctx->input(1);
 

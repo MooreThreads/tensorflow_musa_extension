@@ -18,6 +18,7 @@ class MusaWhereOp : public MusaOpKernel {
   explicit MusaWhereOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
   void Compute(OpKernelContext* context) override {
+    MUSA_DEBUG_LOG_KERNEL(context);
     const Tensor& input = context->input(0);
     const int input_dims = input.dims();
     if (input.NumElements() == 0) {

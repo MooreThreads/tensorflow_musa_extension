@@ -426,11 +426,26 @@ class CustomTestRunner(unittest.TextTestRunner):
         # Exit with error code if any tests failed
         if result.failures or result.errors:
             sys.exit(1)
+        return result
 
 
 # ============================================================================
 # Test Discovery and Execution
 # ============================================================================
+def run_module_tests(module, quiet=True, detail_mode=False, log_file=None):
+    """Run all tests from an already imported module."""
+    suite = unittest.TestLoader().loadTestsFromModule(module)
+    if suite.countTestCases() == 0:
+        print(f"{red('✗')} No tests found in module: {module.__name__}")
+        return None
+
+    runner = CustomTestRunner(verbosity=2 if detail_mode else 0,
+                            quiet=quiet,
+                            detail_mode=detail_mode,
+                            log_file=log_file)
+    return runner.run(suite)
+
+
 def discover_and_run_tests(test_pattern="*_op_test.py", test_dir_name="ops",
                           quiet=True, detail_mode=False, log_file=None):
     """Discover and run all test files matching the pattern."""
@@ -545,14 +560,10 @@ Examples:
         sys.path.insert(0, str(test_dir))
         try:
             module = importlib.import_module(module_name)
-            suite = unittest.TestLoader().loadTestsFromModule(module)
-            runner = CustomTestRunner(verbosity=2 if detail_mode else 0,
-                                    quiet=quiet_mode,
-                                    detail_mode=detail_mode,
-                                    log_file=args.log_file if detail_mode else None)
-            result = runner.run(suite)
-            if result and (result.failures or result.errors):
-                sys.exit(1)
+            run_module_tests(module,
+                           quiet=quiet_mode,
+                           detail_mode=detail_mode,
+                           log_file=args.log_file if detail_mode else None)
         except Exception as e:
             if detail_mode:
                 print(f"{red('✗')} Failed to run {args.single}: {e}")

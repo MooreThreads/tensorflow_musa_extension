@@ -28,7 +28,7 @@ class MusaLinearReluOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
-    MUSA_KERNEL_TIMING_GUARD(ctx);
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& in0 = ctx->input(0);
     const Tensor& in1 = ctx->input(1);
     const Tensor& bias_input = ctx->input(2);
@@ -111,12 +111,8 @@ class MusaLinearReluOp : public MusaOpKernel {
                     "MUSA MatMul/BatchMatMul execution failed in LinearRelu."));
 
     // 2. BiasAdd + Relu
-    MUSA_KERNEL_TRACE_START("UseMudnn");
     UseMudnn(ctx, bias_input, mm_out_shape, mt_mm_out);
-    MUSA_KERNEL_TRACE_END("UseMudnn");
-    // MUSA_KERNEL_TRACE_START("UseKernel");
     // UseKernel(ctx, bias_input, mm_out_shape, mm_out_tensor);
-    // MUSA_KERNEL_TRACE_END("UseKernel");
   }
 
   bool IsExpensive() override { return true; }

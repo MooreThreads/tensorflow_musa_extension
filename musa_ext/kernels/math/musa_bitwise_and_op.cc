@@ -28,6 +28,7 @@ class MusaBitwiseAndOp : public MusaOpKernel {
   explicit MusaBitwiseAndOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& input_a = ctx->input(0);
     const Tensor& input_b = ctx->input(1);
 

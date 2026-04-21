@@ -18,6 +18,7 @@ class MusaSoftmaxCall : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* context) override {
+    MUSA_DEBUG_LOG_KERNEL(context);
     const Tensor& logits_in = context->input(0);
 
     OP_REQUIRES(context, TensorShapeUtils::IsVectorOrHigher(logits_in.shape()),

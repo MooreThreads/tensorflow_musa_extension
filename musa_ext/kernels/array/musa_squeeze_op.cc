@@ -1,6 +1,7 @@
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/util/tensor_format.h"
+#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -12,6 +13,7 @@ class MusaSqueezeOp : public OpKernel {
   }
 
   void Compute(OpKernelContext* c) override {
+    MUSA_DEBUG_LOG_KERNEL(c);
     const Tensor& input = c->input(0);
 
     TensorShape output_shape;

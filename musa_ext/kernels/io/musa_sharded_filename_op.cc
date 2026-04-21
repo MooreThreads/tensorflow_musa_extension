@@ -3,6 +3,7 @@
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/lib/core/errors.h"
+#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -12,6 +13,7 @@ class MusaShardedFilenameOp : public OpKernel {
   explicit MusaShardedFilenameOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& basename_t = ctx->input(0);
     const Tensor& shard_t = ctx->input(1);
     const Tensor& num_shards_t = ctx->input(2);

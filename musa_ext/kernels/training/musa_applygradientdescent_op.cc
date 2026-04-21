@@ -62,6 +62,7 @@ class MusaResourceApplyGradientDescentOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     core::RefCountPtr<Var> var;
     OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 0), &var));
 
@@ -171,6 +172,7 @@ class MusaApplyGradientDescentOp : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
+    MUSA_DEBUG_LOG_KERNEL(ctx);
     const Tensor& var_t = ctx->input(0);
     const Tensor& lr_t = ctx->input(1);
     const Tensor& grad_t = ctx->input(2);
