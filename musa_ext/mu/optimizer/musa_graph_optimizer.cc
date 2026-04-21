@@ -242,6 +242,331 @@ class MusaGraphUtils {
   }
 };
 
+// --- Host-compute pinning helpers ----------------------------------------
+//
+// Many TF inference graphs contain a chain of tiny int32 "shape arithmetic"
+// nodes feeding Reshape/Tile/BroadcastTo/... whose shape-like inputs are
+// registered as `.HostMemory(...)`. When the user forces the entire graph
+// onto `/device:MUSA:0` (a very common pattern -- see run_inference.py's
+// `with tf.device("/device:MUSA:0")` wrapping `import_graph_def`), TF's own
+// `pin_to_host_optimization` grappler pass refuses to override the explicit
+// placement, and the whole shape-compute chain ends up on the device. Each
+// hop then triggers a cross-device transfer:
+//
+//   Shape(HostMem output) --H2D--> StridedSlice(MUSA) --> Pack(MUSA)
+//       --D2H--> Reshape.shape(HostMem input)
+//
+// and every H2D/D2H here implies a `musaStreamSynchronize` because the
+// consumer reads from host memory. On a mid-size inference graph this can
+// easily cost multiple milliseconds per step.
+//
+// This pass walks the graph and flips `node.device()` to `/device:CPU:0`
+// for shape-arithmetic subgraphs so the chain runs entirely on host, with
+// zero cross-device transfers. Correctness is preserved because:
+//
+//   * We only touch ops in the candidate set below (all cheap, stateless
+//     int32/int64 scalar/shape kernels).
+//   * We require every consumer of a pinned node's outputs to either be
+//     pinned itself or to use that output via a `HostMemory` input.
+//   * We require every input source of a pinned node to itself be pinned,
+//     a `Const`, or an op whose MUSA kernel already outputs to host memory
+//     (Shape/ShapeN/Size/Rank).
+//
+// Disable via `TF_MUSA_DISABLE_HOST_COMPUTE_PIN=1` if this ever needs to
+// be bypassed.
+
+// Op -> input indices that the MUSA kernel registers as .HostMemory(...).
+// The special value -1 means "last input" (used by ConcatV2 for its axis).
+// Keep this table in sync with the REGISTER_KERNEL_BUILDER declarations in
+// musa_ext/kernels/*.cc.
+const std::unordered_map<string, std::vector<int>>& HostMemoryInputMap() {
+  static const auto* m = new std::unordered_map<string, std::vector<int>>{
+      {"Reshape", {1}},      // shape
+      {"Tile", {1}},         // multiples
+      {"BroadcastTo", {1}},  // shape
+      {"Fill", {0}},         // dims
+      {"Slice", {1, 2}},     // begin, size
+      {"StridedSlice", {1, 2, 3}},
+      {"ExpandDims", {1}},   // dim
+      {"GatherV2", {2}},     // axis
+      {"Pad", {1}},          // paddings
+      {"PadV2", {1}},        // paddings
+      {"Split", {0}},        // split_dim
+      {"SplitV", {1, 2}},    // size_splits, split_dim
+      {"ConcatV2", {-1}},    // axis is the last input
+      {"Transpose", {1}},    // perm
+      {"ReverseV2", {1}},    // axis
+      {"Range", {0, 1, 2}},  // start, limit, delta
+      // Gather (non-V2) in TF 2.x doesn't have axis input but we include
+      // it for symmetry with ResourceGather variants above.
+  };
+  return *m;
+}
+
+// Nodes with outputs that live in host memory by construction under the
+// MUSA kernel set. Used as the accepted "root" producers when we walk
+// backward from candidate sinks.
+const std::unordered_set<string>& HostOutputOps() {
+  static const auto* s =
+      new std::unordered_set<string>{"Shape", "ShapeN", "Size", "Rank"};
+  return *s;
+}
+
+bool IsIntegerOrBoolType(DataType dt) {
+  switch (dt) {
+    case DT_INT8:
+    case DT_INT16:
+    case DT_INT32:
+    case DT_INT64:
+    case DT_UINT8:
+    case DT_UINT16:
+    case DT_UINT32:
+    case DT_UINT64:
+    case DT_BOOL:
+      return true;
+    default:
+      return false;
+  }
+}
+
+DataType NodeMainDataType(const NodeDef& n) {
+  if (n.attr().count("T")) return n.attr().at("T").type();
+  if (n.attr().count("dtype")) return n.attr().at("dtype").type();
+  if (n.attr().count("SrcT")) return n.attr().at("SrcT").type();
+  return DT_INVALID;
+}
+
+// Whether this op is a structural candidate for being pinned to CPU.
+// Structural = "moving to CPU is intrinsically safe". Whether we actually
+// pin it still depends on the forward/backward safety checks below.
+bool IsPinnableCandidate(const NodeDef& n) {
+  // Always-safe: produce host-memory output regardless of device, and their
+  // CPU impl is trivial.
+  if (HostOutputOps().count(n.op())) return true;
+
+  // Typed-safe: only integer/bool variants. An FP Add/Mul/Cast must NOT be
+  // moved to CPU.
+  static const std::unordered_set<string>* typed_ops =
+      new std::unordered_set<string>{
+          "Const",
+          "Identity",
+          "Cast",
+          // shape-like ops (take an int32 shape as data)
+          "StridedSlice",
+          "Slice",
+          "Pack",
+          "Unpack",
+          "ConcatV2",
+          "ExpandDims",
+          "Squeeze",
+          "Reshape",
+          "Range",
+          "Fill",
+          "Tile",
+          "BroadcastTo",
+          "Transpose",
+          "ReverseV2",
+          // arithmetic
+          "Add",
+          "AddV2",
+          "Sub",
+          "Mul",
+          "Div",
+          "RealDiv",
+          "FloorDiv",
+          "FloorMod",
+          "Mod",
+          "Neg",
+          "Abs",
+          "Sign",
+          "Square",
+          "Maximum",
+          "Minimum",
+          // reductions
+          "Prod",
+          "Sum",
+          "Max",
+          "Min",
+          "Mean",
+          // compare / boolean
+          "Equal",
+          "NotEqual",
+          "Less",
+          "LessEqual",
+          "Greater",
+          "GreaterEqual",
+          "LogicalAnd",
+          "LogicalOr",
+          "LogicalNot",
+          "Select",
+          "SelectV2",
+      };
+  if (!typed_ops->count(n.op())) return false;
+
+  const DataType dt = NodeMainDataType(n);
+  // Some ops (Const with dtype=int32) are fine. Some ops have no dtype (e.g.
+  // logical ops which are implicitly bool) -- accept those as well.
+  if (dt == DT_INVALID) {
+    if (n.op() == "LogicalAnd" || n.op() == "LogicalOr" ||
+        n.op() == "LogicalNot") {
+      return true;
+    }
+    return false;
+  }
+  return IsIntegerOrBoolType(dt);
+}
+
+string ProducerNodeName(const string& input) {
+  if (input.empty()) return input;
+  size_t start = (input[0] == '^') ? 1 : 0;
+  size_t colon = input.find(':', start);
+  return input.substr(start, colon - start);
+}
+
+// Finds input-position `pos` in `host_inputs`, resolving `-1` as
+// "last input index".
+bool HostInputsContains(const std::vector<int>& host_inputs, int pos,
+                        int total_inputs) {
+  for (int v : host_inputs) {
+    const int resolved = (v == -1) ? (total_inputs - 1) : v;
+    if (resolved == pos) return true;
+  }
+  return false;
+}
+
+// Pins shape-compute subgraphs to CPU. Returns number of nodes rewritten.
+int PinHostComputeToCpu(GraphDef* graph) {
+  const char* disable_env = std::getenv("TF_MUSA_DISABLE_HOST_COMPUTE_PIN");
+  if (disable_env && std::string(disable_env) == "1") {
+    VLOG(1) << "MusaGraphOptimizer: PinHostComputeToCpu disabled by env";
+    return 0;
+  }
+
+  const int n_nodes = graph->node_size();
+  std::unordered_map<string, int> name_to_idx;
+  name_to_idx.reserve(n_nodes);
+  for (int i = 0; i < n_nodes; ++i) {
+    name_to_idx[graph->node(i).name()] = i;
+  }
+
+  // consumers[producer_name] -> list of (consumer_idx, which input position
+  // inside that consumer). Data edges only; control edges (^name) don't
+  // transfer tensors and don't constrain device placement.
+  std::unordered_map<string, std::vector<std::pair<int, int>>> consumers;
+  consumers.reserve(n_nodes);
+  for (int i = 0; i < n_nodes; ++i) {
+    const NodeDef& n = graph->node(i);
+    for (int j = 0; j < n.input_size(); ++j) {
+      const string& in = n.input(j);
+      if (in.empty() || in[0] == '^') continue;
+      consumers[ProducerNodeName(in)].emplace_back(i, j);
+    }
+  }
+
+  // Initial pinnable set: structural candidates that are currently placed
+  // on a MUSA device. We don't touch nodes already on CPU (no-op anyway)
+  // and we don't touch nodes on unexpected devices.
+  std::unordered_set<int> pinnable;
+  pinnable.reserve(n_nodes);
+  for (int i = 0; i < n_nodes; ++i) {
+    const NodeDef& n = graph->node(i);
+    if (n.device().find(kMusaDeviceType) == std::string::npos) continue;
+    if (!IsPinnableCandidate(n)) continue;
+    pinnable.insert(i);
+  }
+
+  const auto& host_input_map = HostMemoryInputMap();
+  const auto& host_output_ops = HostOutputOps();
+
+  auto is_host_memory_consumer = [&](const NodeDef& consumer,
+                                     int input_pos) -> bool {
+    auto it = host_input_map.find(consumer.op());
+    if (it == host_input_map.end()) return false;
+    return HostInputsContains(it->second, input_pos, consumer.input_size());
+  };
+
+  auto is_host_friendly_producer = [&](int src_idx) -> bool {
+    if (src_idx < 0) return false;
+    const NodeDef& src = graph->node(src_idx);
+    if (pinnable.count(src_idx)) return true;
+    if (src.op() == "Const") return true;
+    if (host_output_ops.count(src.op())) return true;
+    return false;
+  };
+
+  // Iterative fix-point: drop nodes whose consumers or producers break the
+  // invariants until the set stops shrinking.
+  bool changed = true;
+  int passes = 0;
+  while (changed && passes < 32) {
+    changed = false;
+    passes++;
+    for (auto it = pinnable.begin(); it != pinnable.end();) {
+      const int idx = *it;
+      const NodeDef& n = graph->node(idx);
+      bool ok = true;
+
+      // Forward: every data consumer must be a peer or a HostMemory sink.
+      auto citer = consumers.find(n.name());
+      if (citer != consumers.end()) {
+        for (const auto& e : citer->second) {
+          if (pinnable.count(e.first)) continue;
+          const NodeDef& consumer = graph->node(e.first);
+          if (is_host_memory_consumer(consumer, e.second)) continue;
+          ok = false;
+          break;
+        }
+      }
+
+      // Backward: every data input must be a peer, a Const, or a natural
+      // host-output producer.
+      if (ok) {
+        for (int j = 0; j < n.input_size(); ++j) {
+          const string& in = n.input(j);
+          if (in.empty() || in[0] == '^') continue;
+          auto nit = name_to_idx.find(ProducerNodeName(in));
+          if (nit == name_to_idx.end()) {
+            ok = false;
+            break;
+          }
+          if (!is_host_friendly_producer(nit->second)) {
+            ok = false;
+            break;
+          }
+        }
+      }
+
+      if (!ok) {
+        it = pinnable.erase(it);
+        changed = true;
+      } else {
+        ++it;
+      }
+    }
+  }
+
+  // Apply.
+  int pinned = 0;
+  std::unordered_map<string, int> per_op_pinned;
+  for (int idx : pinnable) {
+    NodeDef* n = graph->mutable_node(idx);
+    if (n->device() == "/device:CPU:0") continue;
+    n->set_device("/device:CPU:0");
+    per_op_pinned[n->op()]++;
+    pinned++;
+  }
+
+  if (pinned > 0 && VLOG_IS_ON(1)) {
+    string summary;
+    for (const auto& kv : per_op_pinned) {
+      summary += " " + kv.first + "=" + std::to_string(kv.second);
+    }
+    VLOG(1) << "MusaGraphOptimizer: PinHostComputeToCpu pinned " << pinned
+            << " node(s) to CPU in " << passes << " pass(es);" << summary;
+  }
+  return pinned;
+}
+
 // Check if graph contains MUSA device nodes
 bool GraphHasMusaNodes(const GraphDef& graph) {
   for (const auto& node : graph.node()) {
@@ -427,6 +752,18 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
       }
     }
 
+    // Host-compute pinning: run after fusion so fusion pattern matchers that
+    // rely on node.device() containing "MUSA" see the graph unchanged. This
+    // reassigns shape-arithmetic subgraphs to /device:CPU:0 to eliminate
+    // per-step H2D/D2H synchronizations around HostMemory-typed op inputs.
+    dumper.DumpBeforePass(*optimized_graph, "pin_host_compute");
+    const int host_pinned = PinHostComputeToCpu(optimized_graph);
+    dumper.DumpAfterPass(*optimized_graph, "pin_host_compute");
+    if (host_pinned > 0) {
+      VLOG(1) << "MusaGraphOptimizer: Pinned " << host_pinned
+              << " shape-compute node(s) to /device:CPU:0";
+    }
+
     VLOG(1) << "MusaGraphOptimizer: Optimization complete, graph now has "
             << optimized_graph->node_size() << " nodes";
 
@@ -479,8 +816,9 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
       priority_groups[pattern->GetPriority()].push_back(pattern);
     }
 
-    auto run_scan = [&](const std::vector<const FusionPattern*>& active_patterns,
-                        bool reverse) -> bool {
+    auto run_scan =
+        [&](const std::vector<const FusionPattern*>& active_patterns,
+            bool reverse) -> bool {
       bool pass_modified = false;
 
       while (true) {
@@ -504,8 +842,7 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
               Status status = pattern->Apply(graph, match_result);
               if (!status.ok()) {
                 LOG(WARNING) << "MusaGraphOptimizer: Fallback for pattern '"
-                             << pattern->GetName()
-                             << "' failed: " << status;
+                             << pattern->GetName() << "' failed: " << status;
               }
               fusion_fallback_count++;
               continue;
@@ -519,8 +856,8 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
               pass_modified = true;
               fusion_applied_count++;
               applied_in_sweep = true;
-              VLOG(1) << "MusaGraphOptimizer: Pattern '"
-                      << pattern->GetName() << "' applied successfully";
+              VLOG(1) << "MusaGraphOptimizer: Pattern '" << pattern->GetName()
+                      << "' applied successfully";
               break;
             } else {
               LOG(WARNING) << "MusaGraphOptimizer: Pattern '"
