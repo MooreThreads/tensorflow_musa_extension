@@ -13,44 +13,31 @@
 # limitations under the License.
 # ==============================================================================
 
-"""
-TensorFlow MUSA Extension - High-performance TensorFlow plugin for Moore Threads GPUs.
+"""TensorFlow MUSA plugin package.
 
 This package provides:
 - Automatic plugin loading on import
-- Optimized optimizer implementations (Adam, etc.) using fused MUSA kernels
-- Device management utilities
-- Monkey patching of tf.keras.optimizers.Adam for transparent MUSA acceleration
+- Device discovery utilities for available MUSA devices
 
 Example usage:
     import tensorflow_musa as tf_musa
 
     # Plugin is automatically loaded on import
-    # tf.keras.optimizers.Adam is automatically patched to use MUSA kernels
-
-    # Use MUSA-accelerated Adam optimizer (no changes needed!)
-    optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
-
-    # Or use explicit MUSA optimizer
-    optimizer = tf_musa.optimizer.Adam(learning_rate=0.001)
-
-    # Check available MUSA devices
     devices = tf_musa.get_musa_devices()
 """
 
 import logging
 
-from ._loader import load_plugin, is_plugin_loaded, get_musa_devices, get_musa_ops_module
+from ._loader import get_musa_devices, is_plugin_loaded, load_plugin
 
 # Package version
 __version__ = "0.1.0"
 
 # Load plugin automatically on import
 _plugin_loaded = False
-_plugin_path = None
 
 try:
-    _plugin_path = load_plugin()
+    load_plugin()
     _plugin_loaded = True
 except Exception as e:
     logging.warning(f"Failed to load MUSA plugin: {e}")
@@ -59,29 +46,10 @@ except Exception as e:
         "Please ensure the plugin is built and MUSA SDK is installed."
     )
 
-
-# Import optimizer module after plugin is loaded
-from . import optimizer
-
-# Import patch utilities
-from ._patch import patch_keras_adam, unpatch_keras_adam, is_adam_patched
-
-# Auto-patch tf.keras.optimizers.Adam when MUSA devices are available
-if _plugin_loaded and get_musa_devices():
-    try:
-        patch_keras_adam()
-    except Exception as e:
-        logging.warning(f"Failed to patch tf.keras.optimizers.Adam: {e}")
-
 # Public API
 __all__ = [
     "__version__",
     "load_plugin",
     "is_plugin_loaded",
     "get_musa_devices",
-    "get_musa_ops_module",
-    "optimizer",
-    "patch_keras_adam",
-    "unpatch_keras_adam",
-    "is_adam_patched",
 ]

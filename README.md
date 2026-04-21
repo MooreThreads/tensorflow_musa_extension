@@ -26,11 +26,8 @@ tensorflow_musa_extension/
 ├── .github/                # CI/CD 配置
 ├── python/                 # Python 包源码目录（pip 安装名为 tensorflow_musa）
 │   ├── __init__.py         # 包入口，自动加载插件
-│   ├── _loader.py          # 插件加载工具
-│   ├── _patch.py           # tf.keras.optimizers.Adam monkey patch
-│   └── optimizer/          # 优化器模块
-│       ├── __init__.py
-│       └── adam.py         # MUSA Adam 优化器（支持 sparse update）
+│   ├── _loader.py          # 插件加载与设备查询工具
+│   └── libmusa_plugin.so   # 打包进 wheel 的 MUSA 插件动态库
 ├── musa_ext/               # 核心源码目录
 │   ├── kernels/            # MUSA 内核实现（.mu 文件）
 │   ├── mu/                 # MUSA 设备和优化器实现
@@ -227,7 +224,6 @@ python test_runner.py --quiet
 - **数据操作**：Reshape, Concat, Gather, StridedSlice, ExpandDims
 - **归一化**：LayerNorm, FusedBatchNorm
 - **特殊算子**：TensorInteraction, BiasAdd, Assign
-- **优化器**：ResourceApplyAdam, MusaResourceSparseApplyAdam（支持 embedding 稀疏更新）
 
 ## 使用示例
 
@@ -246,64 +242,6 @@ devices = tf_musa.get_musa_devices()
 print(f"可用 MUSA 设备: {devices}")
 ```
 
-### 自动 Patch tf.keras.optimizers.Adam（推荐）
-
-导入 `tensorflow_musa` 后，`tf.keras.optimizers.Adam` 会自动被 patch，
-使用 MUSA 融合内核，无需修改现有代码：
-
-```python
-import tensorflow as tf
-import tensorflow_musa as tf_musa  # 自动 patch Adam
-
-# 创建模型
-model = tf.keras.Sequential([
-    tf.keras.layers.Dense(128, activation='relu', input_shape=(784,)),
-    tf.keras.layers.Dense(10, activation='softmax')
-])
-
-# 使用标准的 tf.keras.optimizers.Adam（已被自动 patch）
-optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
-
-# 编译模型
-model.compile(
-    optimizer=optimizer,
-    loss='sparse_categorical_crossentropy',
-    metrics=['accuracy']
-)
-
-# 训练时 embedding 稀疏梯度会自动使用 MusaResourceSparseApplyAdam kernel
-```
-
-### 显式使用 MUSA Adam 优化器
-
-如果需要显式指定 MUSA 优化器：
-
-```python
-import tensorflow as tf
-import tensorflow_musa as tf_musa
-
-# 创建模型
-model = tf.keras.Sequential([
-    tf.keras.layers.Dense(128, activation='relu', input_shape=(784,)),
-    tf.keras.layers.Dense(10, activation='softmax')
-])
-
-# 显式使用 MUSA 融合 Adam 优化器
-optimizer = tf_musa.optimizer.Adam(
-    learning_rate=0.001,
-    beta_1=0.9,
-    beta_2=0.999,
-    epsilon=1e-7
-)
-
-# 编译模型
-model.compile(
-    optimizer=optimizer,
-    loss='sparse_categorical_crossentropy',
-    metrics=['accuracy']
-)
-```
-
 ### 设备管理
 
 ```python
@@ -317,32 +255,6 @@ with tf.device('/device:MUSA:0'):
     b = tf.constant([[5.0, 6.0], [7.0, 8.0]])
     c = tf.matmul(a, b)
     print(c)
-```
-
-### Embedding 稀疏更新示例
-
-MUSA Adam 优化器支持稀疏梯度更新，适用于 embedding 场景：
-
-```python
-import tensorflow as tf
-import tensorflow_musa as tf_musa
-
-# 创建 embedding 变量
-vocab_size = 10000
-embedding_dim = 128
-with tf.device('/device:MUSA:0'):
-    embedding = tf.Variable(tf.zeros([vocab_size, embedding_dim]))
-
-# 使用 patch 后的 Adam
-optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
-
-# 模拟 embedding lookup 的稀疏梯度
-indices = tf.constant([0, 5, 10, 15])  # batch 中涉及的词 ID
-values = tf.random.normal([4, embedding_dim])  # 对应的梯度
-sparse_grad = tf.IndexedSlices(values, indices)
-
-# 应用稀疏梯度更新（自动使用 MusaResourceSparseApplyAdam kernel）
-optimizer.apply_gradients([(sparse_grad, embedding)])
 ```
 
 ### 更多示例

@@ -136,8 +136,8 @@ class BdistWheelCommand(bdist_wheel):
         project_root = os.path.abspath(os.path.dirname(__file__))
         BuildPluginCommand(self.distribution).run()
 
-        # Force only tensorflow_musa packages (source is in python directory)
-        self.distribution.packages = ["tensorflow_musa", "tensorflow_musa.optimizer"]
+        # Force only the tensorflow_musa package (source is in python directory)
+        self.distribution.packages = ["tensorflow_musa"]
         self.distribution.package_data = {PACKAGE_NAME: [PLUGIN_LIBRARY]}
         self.distribution.py_modules = None
         # Map tensorflow_musa package name to python source directory
@@ -186,8 +186,8 @@ setup(
     license=LICENSE,
     # Map package name (tensorflow_musa) to source directory (python)
     package_dir={"tensorflow_musa": SOURCE_DIR},
-    # Package names (pip install tensorflow_musa)
-    packages=["tensorflow_musa", "tensorflow_musa.optimizer"],
+    # Package name (pip install tensorflow_musa)
+    packages=["tensorflow_musa"],
     package_data={
         PACKAGE_NAME: [PLUGIN_LIBRARY],
     },

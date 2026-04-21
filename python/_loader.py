@@ -16,16 +16,12 @@
 """MUSA plugin loading utilities."""
 
 import os
-import sys
 import logging
 
 logger = logging.getLogger(__name__)
 
 # Plugin library name
 PLUGIN_LIBRARY = "libmusa_plugin.so"
-
-# Global module for accessing custom ops (initialized by load_plugin)
-_musa_ops_module = None
 
 
 def _find_plugin_library():
@@ -86,14 +82,12 @@ def load_plugin():
         FileNotFoundError: If the plugin library cannot be found
         RuntimeError: If TensorFlow cannot load the plugin
     """
-    global _musa_ops_module
     import tensorflow as tf
 
     plugin_path = _find_plugin_library()
 
     try:
-        # Load op library to get custom ops (like MusaResourceSparseApplyAdam)
-        _musa_ops_module = tf.load_op_library(plugin_path)
+        tf.load_op_library(plugin_path)
         logger.info(f"MUSA plugin loaded successfully from: {plugin_path}")
         return plugin_path
     except Exception as e:
@@ -101,19 +95,6 @@ def load_plugin():
             f"Failed to load MUSA plugin from {plugin_path}: {e}\n"
             f"Please ensure TensorFlow and MUSA SDK are properly installed."
         )
-
-
-def get_musa_ops_module():
-    """Get the module containing custom MUSA ops.
-
-    After load_plugin() is called, this returns a module with
-    custom ops registered via REGISTER_OP, such as:
-    - musa_resource_sparse_apply_adam
-
-    Returns:
-        module: The MUSA ops module, or None if not loaded
-    """
-    return _musa_ops_module
 
 
 def is_plugin_loaded():
