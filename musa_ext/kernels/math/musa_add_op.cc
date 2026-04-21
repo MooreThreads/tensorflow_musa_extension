@@ -1,13 +1,13 @@
-#include <cstdlib>
 #include <cstdint>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/util/bcast.h"
-#include "../utils_op.h"
 #include "utils/logging.h"
 
 namespace tensorflow {
@@ -20,8 +20,7 @@ void LaunchMusaAddContiguousFloat(const float* lhs, const float* rhs,
                                   float* output, int64_t size,
                                   musaStream_t stream);
 void LaunchMusaAddScalarFloat(const float* dense, const float* scalar,
-                              float* output, int64_t size,
-                              musaStream_t stream);
+                              float* output, int64_t size, musaStream_t stream);
 void LaunchMusaAddTailVectorFloat(const float* dense, const float* tail_vector,
                                   float* output, int64_t size, int64_t width,
                                   musaStream_t stream);
@@ -34,14 +33,21 @@ enum class AddFastPathResult {
 };
 
 bool UseAddBroadcastViewOpt() {
-  const char* env = std::getenv("MUSA_ADDV2_ENABLE_BCAST_VIEW_OPT");
-  if (env == nullptr || std::string(env).empty()) {
-    return true;
-  }
-  const std::string value(env);
-  return !(value == "0" || value == "false" || value == "FALSE" ||
-           value == "off" || value == "OFF" || value == "no" ||
-           value == "NO");
+  // Cache the environment lookup in a function-local static: the graph may
+  // contain hundreds of AddV2 kernels and each one used to pay an O(n)
+  // `getenv` walk on every Compute() call, which shows up on CPU-bound
+  // inference of wide graphs.
+  static const bool kEnabled = []() {
+    const char* env = std::getenv("MUSA_ADDV2_ENABLE_BCAST_VIEW_OPT");
+    if (env == nullptr || std::string(env).empty()) {
+      return true;
+    }
+    const std::string value(env);
+    return !(value == "0" || value == "false" || value == "FALSE" ||
+             value == "off" || value == "OFF" || value == "no" ||
+             value == "NO");
+  }();
+  return kEnabled;
 }
 
 bool SameShape(const TensorShape& lhs, const TensorShape& rhs) {
@@ -112,18 +118,21 @@ bool IsSmallRepeatedBroadcast(const Tensor& tensor,
 }
 
 bool UseAddCustomKernelFastPath() {
-  const char* env = std::getenv("MUSA_ADDV2_ENABLE_CUSTOM_KERNEL");
-  if (env == nullptr || std::string(env).empty()) {
-    return true;
-  }
-  const std::string value(env);
-  return !(value == "0" || value == "false" || value == "FALSE" ||
-           value == "off" || value == "OFF" || value == "no" ||
-           value == "NO");
+  static const bool kEnabled = []() {
+    const char* env = std::getenv("MUSA_ADDV2_ENABLE_CUSTOM_KERNEL");
+    if (env == nullptr || std::string(env).empty()) {
+      return true;
+    }
+    const std::string value(env);
+    return !(value == "0" || value == "false" || value == "FALSE" ||
+             value == "off" || value == "OFF" || value == "no" ||
+             value == "NO");
+  }();
+  return kEnabled;
 }
 
-bool IsTailVectorBroadcast(const Tensor& tensor, const TensorShape& output_shape,
-                          int64_t* width) {
+bool IsTailVectorBroadcast(const Tensor& tensor,
+                           const TensorShape& output_shape, int64_t* width) {
   if (output_shape.dims() <= 0) {
     return false;
   }
@@ -159,9 +168,11 @@ AddFastPathResult TryLaunchAddFastPath(OpKernelContext* ctx, const Tensor& in0,
 }
 
 template <>
-AddFastPathResult TryLaunchAddFastPath<float>(
-    OpKernelContext* ctx, const Tensor& in0, const Tensor& in1,
-    const TensorShape& output_shape, bool same_shape, Tensor* out) {
+AddFastPathResult TryLaunchAddFastPath<float>(OpKernelContext* ctx,
+                                              const Tensor& in0,
+                                              const Tensor& in1,
+                                              const TensorShape& output_shape,
+                                              bool same_shape, Tensor* out) {
   if (!UseAddCustomKernelFastPath()) {
     return AddFastPathResult::kNotHandled;
   }
@@ -294,10 +305,9 @@ class MusaAddOp : public MusaOpKernel {
       BCast bcast(BCast::Vec(in0.shape().dim_sizes()),
                   BCast::Vec(in1.shape().dim_sizes()));
       OP_REQUIRES(ctx, bcast.IsValid(),
-                  errors::InvalidArgument(
-                      "Incompatible shapes for Add: ",
-                      in0.shape().DebugString(), " and ",
-                      in1.shape().DebugString()));
+                  errors::InvalidArgument("Incompatible shapes for Add: ",
+                                          in0.shape().DebugString(), " and ",
+                                          in1.shape().DebugString()));
       output_shape = BCast::ToShape(bcast.output_shape());
       MUSA_KERNEL_TRACE_END("BCast");
     }
@@ -307,8 +317,8 @@ class MusaAddOp : public MusaOpKernel {
     // the output shape matches input 0.
     MUSA_KERNEL_TRACE_START("Alloc");
     Tensor* out = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->forward_input_or_allocate_output(
-                            {0}, 0, output_shape, &out));
+    OP_REQUIRES_OK(
+        ctx, ctx->forward_input_or_allocate_output({0}, 0, output_shape, &out));
     MUSA_KERNEL_TRACE_END("Alloc");
 
     if (in0.NumElements() == 0 || in1.NumElements() == 0 ||
