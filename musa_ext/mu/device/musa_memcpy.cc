@@ -5,6 +5,27 @@
 
 #include "mu/device/musa_telemetry.h"
 
+// The telemetry prologue (`musaGetDevice` + `MUSA_TELEMETRY_ON_MEMCPY`) is
+// only meaningful when the tracing subsystem is compiled in. In release
+// builds (MUSA_DISABLE_TRACE_LOGGING), the macro is a no-op, so the
+// surrounding `musaGetDevice` call is pure overhead on a hot path that
+// kernels (AddN, Concat, ResourceVariable assign, etc.) walk many times
+// per step. Guard the whole block to drop the driver round-trip entirely.
+#ifdef MUSA_DISABLE_TRACE_LOGGING
+#define MUSA_MEMCPY_TELEMETRY_PROLOGUE(dst, src, size, stream_id, type) \
+  do {                                                                  \
+  } while (0)
+#else
+#define MUSA_MEMCPY_TELEMETRY_PROLOGUE(dst, src, size, stream_id, type)        \
+  do {                                                                         \
+    int _dev = -1;                                                             \
+    musaGetDevice(&_dev);                                                      \
+    MUSA_TELEMETRY_ON_MEMCPY((dst),                                            \
+                             const_cast<void*>(static_cast<const void*>(src)), \
+                             (size), _dev, (stream_id), (type));               \
+  } while (0)
+#endif
+
 namespace tensorflow {
 namespace musa {
 
@@ -20,24 +41,24 @@ mStatus MusaMemcpyD2H(void* h, const void* d, size_t size) {
     return mStatus::SUCCESS;
   }
   if (h == nullptr || d == nullptr) {
-    fprintf(stderr, "[MUSA] ERROR: MusaMemcpyD2H failed: null pointer "
-            "(dst=%p, src=%p, size=%zu)\n", h, d, size);
+    fprintf(stderr,
+            "[MUSA] ERROR: MusaMemcpyD2H failed: null pointer "
+            "(dst=%p, src=%p, size=%zu)\n",
+            h, d, size);
     return static_cast<mStatus>(1);
   }
 
-  // Record telemetry event
-  int device_id = -1;
-  musaGetDevice(&device_id);
-  MUSA_TELEMETRY_ON_MEMCPY(h, const_cast<void*>(d), size, device_id, 0,
-                           TelemetryEventType::kMemcpyD2H);
+  MUSA_MEMCPY_TELEMETRY_PROLOGUE(h, d, size, 0, TelemetryEventType::kMemcpyD2H);
 
   // Use async copy with immediate synchronization for better performance
   // and to allow potential optimizations in the driver
   musaStream_t sync_stream = GetSynchronousStream();
-  musaError_t err = musaMemcpyAsync(h, d, size, musaMemcpyDeviceToHost, sync_stream);
+  musaError_t err =
+      musaMemcpyAsync(h, d, size, musaMemcpyDeviceToHost, sync_stream);
 
   if (err != musaSuccess) {
-    fprintf(stderr, "[MUSA] ERROR: MusaMemcpyAsync D2H failed: %s "
+    fprintf(stderr,
+            "[MUSA] ERROR: MusaMemcpyAsync D2H failed: %s "
             "(dst=%p, src=%p, size=%zu)\n",
             musaGetErrorString(err), h, d, size);
     return static_cast<mStatus>(1);
@@ -59,23 +80,23 @@ mStatus MusaMemcpyH2D(void* d, const void* h, size_t size) {
     return mStatus::SUCCESS;
   }
   if (d == nullptr || h == nullptr) {
-    fprintf(stderr, "[MUSA] ERROR: MusaMemcpyH2D failed: null pointer "
-            "(dst=%p, src=%p, size=%zu)\n", d, h, size);
+    fprintf(stderr,
+            "[MUSA] ERROR: MusaMemcpyH2D failed: null pointer "
+            "(dst=%p, src=%p, size=%zu)\n",
+            d, h, size);
     return static_cast<mStatus>(1);
   }
 
-  // Record telemetry event
-  int device_id = -1;
-  musaGetDevice(&device_id);
-  MUSA_TELEMETRY_ON_MEMCPY(d, const_cast<void*>(h), size, device_id, 0,
-                           TelemetryEventType::kMemcpyH2D);
+  MUSA_MEMCPY_TELEMETRY_PROLOGUE(d, h, size, 0, TelemetryEventType::kMemcpyH2D);
 
   // Use async copy with immediate synchronization
   musaStream_t sync_stream = GetSynchronousStream();
-  musaError_t err = musaMemcpyAsync(d, h, size, musaMemcpyHostToDevice, sync_stream);
+  musaError_t err =
+      musaMemcpyAsync(d, h, size, musaMemcpyHostToDevice, sync_stream);
 
   if (err != musaSuccess) {
-    fprintf(stderr, "[MUSA] ERROR: MusaMemcpyAsync H2D failed: %s "
+    fprintf(stderr,
+            "[MUSA] ERROR: MusaMemcpyAsync H2D failed: %s "
             "(dst=%p, src=%p, size=%zu)\n",
             musaGetErrorString(err), d, h, size);
     return static_cast<mStatus>(1);
@@ -97,23 +118,24 @@ mStatus MusaMemcpyD2D(void* d1, const void* d2, size_t size) {
     return mStatus::SUCCESS;
   }
   if (d1 == nullptr || d2 == nullptr) {
-    fprintf(stderr, "[MUSA] ERROR: MusaMemcpyD2D failed: null pointer "
-            "(dst=%p, src=%p, size=%zu)\n", d1, d2, size);
+    fprintf(stderr,
+            "[MUSA] ERROR: MusaMemcpyD2D failed: null pointer "
+            "(dst=%p, src=%p, size=%zu)\n",
+            d1, d2, size);
     return static_cast<mStatus>(1);
   }
 
-  // Record telemetry event
-  int device_id = -1;
-  musaGetDevice(&device_id);
-  MUSA_TELEMETRY_ON_MEMCPY(d1, const_cast<void*>(d2), size, device_id, 0,
-                           TelemetryEventType::kMemcpyD2D);
+  MUSA_MEMCPY_TELEMETRY_PROLOGUE(d1, d2, size, 0,
+                                 TelemetryEventType::kMemcpyD2D);
 
   // For D2D, we can use the default stream since it's device-local
   musaStream_t sync_stream = GetSynchronousStream();
-  musaError_t err = musaMemcpyAsync(d1, d2, size, musaMemcpyDeviceToDevice, sync_stream);
-  
+  musaError_t err =
+      musaMemcpyAsync(d1, d2, size, musaMemcpyDeviceToDevice, sync_stream);
+
   if (err != musaSuccess) {
-    fprintf(stderr, "[MUSA] ERROR: MusaMemcpyAsync D2D failed: %s "
+    fprintf(stderr,
+            "[MUSA] ERROR: MusaMemcpyAsync D2D failed: %s "
             "(dst=%p, src=%p, size=%zu)\n",
             musaGetErrorString(err), d1, d2, size);
     return static_cast<mStatus>(1);
@@ -136,22 +158,21 @@ mStatus MusaMemcpyAsyncD2H(void* h, const void* d, size_t size,
     return mStatus::SUCCESS;
   }
   if (h == nullptr || d == nullptr) {
-    fprintf(stderr, "[MUSA] ERROR: MusaMemcpyAsyncD2H failed: null pointer "
-            "(dst=%p, src=%p, size=%zu)\n", h, d, size);
+    fprintf(stderr,
+            "[MUSA] ERROR: MusaMemcpyAsyncD2H failed: null pointer "
+            "(dst=%p, src=%p, size=%zu)\n",
+            h, d, size);
     return static_cast<mStatus>(1);
   }
 
-  // Record telemetry event
-  int device_id = -1;
-  musaGetDevice(&device_id);
-  MUSA_TELEMETRY_ON_MEMCPY(h, const_cast<void*>(d), size, device_id,
-                           MUSA_TELEMETRY_STREAM_ID(s),
-                           TelemetryEventType::kMemcpyD2H);
+  MUSA_MEMCPY_TELEMETRY_PROLOGUE(h, d, size, MUSA_TELEMETRY_STREAM_ID(s),
+                                 TelemetryEventType::kMemcpyD2H);
 
   musaError_t err = musaMemcpyAsync(h, d, size, musaMemcpyDeviceToHost, s);
 
   if (err != musaSuccess) {
-    fprintf(stderr, "[MUSA] ERROR: MusaMemcpyAsyncD2H failed: %s "
+    fprintf(stderr,
+            "[MUSA] ERROR: MusaMemcpyAsyncD2H failed: %s "
             "(dst=%p, src=%p, size=%zu)\n",
             musaGetErrorString(err), h, d, size);
     return static_cast<mStatus>(1);
@@ -165,22 +186,21 @@ mStatus MusaMemcpyAsyncH2D(void* d, const void* h, size_t size,
     return mStatus::SUCCESS;
   }
   if (d == nullptr || h == nullptr) {
-    fprintf(stderr, "[MUSA] ERROR: MusaMemcpyAsyncH2D failed: null pointer "
-            "(dst=%p, src=%p, size=%zu)\n", d, h, size);
+    fprintf(stderr,
+            "[MUSA] ERROR: MusaMemcpyAsyncH2D failed: null pointer "
+            "(dst=%p, src=%p, size=%zu)\n",
+            d, h, size);
     return static_cast<mStatus>(1);
   }
 
-  // Record telemetry event
-  int device_id = -1;
-  musaGetDevice(&device_id);
-  MUSA_TELEMETRY_ON_MEMCPY(d, const_cast<void*>(h), size, device_id,
-                           MUSA_TELEMETRY_STREAM_ID(s),
-                           TelemetryEventType::kMemcpyH2D);
+  MUSA_MEMCPY_TELEMETRY_PROLOGUE(d, h, size, MUSA_TELEMETRY_STREAM_ID(s),
+                                 TelemetryEventType::kMemcpyH2D);
 
   musaError_t err = musaMemcpyAsync(d, h, size, musaMemcpyHostToDevice, s);
 
   if (err != musaSuccess) {
-    fprintf(stderr, "[MUSA] ERROR: MusaMemcpyAsyncH2D failed: %s "
+    fprintf(stderr,
+            "[MUSA] ERROR: MusaMemcpyAsyncH2D failed: %s "
             "(dst=%p, src=%p, size=%zu)\n",
             musaGetErrorString(err), d, h, size);
     return static_cast<mStatus>(1);
@@ -194,22 +214,21 @@ mStatus MusaMemcpyAsyncD2D(void* d1, const void* d2, size_t size,
     return mStatus::SUCCESS;
   }
   if (d1 == nullptr || d2 == nullptr) {
-    fprintf(stderr, "[MUSA] ERROR: MusaMemcpyAsyncD2D failed: null pointer "
-            "(dst=%p, src=%p, size=%zu)\n", d1, d2, size);
+    fprintf(stderr,
+            "[MUSA] ERROR: MusaMemcpyAsyncD2D failed: null pointer "
+            "(dst=%p, src=%p, size=%zu)\n",
+            d1, d2, size);
     return static_cast<mStatus>(1);
   }
 
-  // Record telemetry event
-  int device_id = -1;
-  musaGetDevice(&device_id);
-  MUSA_TELEMETRY_ON_MEMCPY(d1, const_cast<void*>(d2), size, device_id,
-                           MUSA_TELEMETRY_STREAM_ID(s),
-                           TelemetryEventType::kMemcpyD2D);
+  MUSA_MEMCPY_TELEMETRY_PROLOGUE(d1, d2, size, MUSA_TELEMETRY_STREAM_ID(s),
+                                 TelemetryEventType::kMemcpyD2D);
 
   musaError_t err = musaMemcpyAsync(d1, d2, size, musaMemcpyDeviceToDevice, s);
 
   if (err != musaSuccess) {
-    fprintf(stderr, "[MUSA] ERROR: MusaMemcpyAsyncD2D failed: %s "
+    fprintf(stderr,
+            "[MUSA] ERROR: MusaMemcpyAsyncD2D failed: %s "
             "(dst=%p, src=%p, size=%zu)\n",
             musaGetErrorString(err), d1, d2, size);
     return static_cast<mStatus>(1);
