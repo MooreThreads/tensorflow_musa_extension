@@ -9,6 +9,10 @@ permissions:
   actions: write
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.id }}
+  cancel-in-progress: true
+
 env:
   MAX_AUTO_RERUNS: 5
   MAX_RERUNS_PREPARE_METADATA: 5
@@ -33,6 +37,7 @@ jobs:
       - name: Re-run failed jobs when retry budget remains
         uses: actions/github-script@v7
         env:
+          EVENT_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt || 1 }}
           MAX_AUTO_RERUNS: ${{ env.MAX_AUTO_RERUNS }}
           MAX_RERUNS_PREPARE_METADATA: ${{ env.MAX_RERUNS_PREPARE_METADATA }}
           MAX_RERUNS_FORMAT_CHECK: ${{ env.MAX_RERUNS_FORMAT_CHECK }}
@@ -52,6 +57,7 @@ jobs:
             const repo = context.repo.repo;
             const runId = context.payload.workflow_run.id;
             const defaultLimit = Number(process.env.MAX_AUTO_RERUNS || "5");
+            const eventAttempt = Number(process.env.EVENT_RUN_ATTEMPT || "1");
 
             const { data: run } = await github.rest.actions.getWorkflowRun({
               owner,
@@ -59,12 +65,25 @@ jobs:
               run_id: runId,
             });
 
+            if (run.status !== "completed") {
+              core.info(`Run ${runId} is currently ${run.status}; skip auto rerun.`);
+              return;
+            }
+
             if (run.conclusion !== "failure") {
               core.info("Run is not failed; skip auto rerun.");
               return;
             }
 
             const attempt = Number(run.run_attempt || 1);
+
+            if (attempt > eventAttempt) {
+              core.info(
+                `Skip stale workflow_run event for attempt ${eventAttempt}; latest completed attempt is ${attempt}.`
+              );
+              return;
+            }
+
             const failedJobCounts = {};
             const currentlyFailedJobs = new Set();
 
@@ -107,20 +126,21 @@ jobs:
               const limit = getJobLimit(jobName);
               const failedAttempts = failedJobCounts[jobName] || 1;
               const rerunsUsed = Math.max(0, failedAttempts - 1);
+              const maxReruns = Math.max(0, limit - 1);
 
               core.info(
-                `Job "${jobName}" failed ${failedAttempts} attempt(s); reruns used ${rerunsUsed}/${limit}.`
+                `Job "${jobName}" used ${failedAttempts}/${limit} total attempt(s) including the first run; auto reruns used ${rerunsUsed}/${maxReruns}.`
               );
 
-              if (rerunsUsed >= limit) {
-                exhaustedJob = { name: jobName, failedAttempts, rerunsUsed, limit };
+              if (failedAttempts >= limit) {
+                exhaustedJob = { name: jobName, failedAttempts, rerunsUsed, limit, maxReruns };
                 break;
               }
             }
 
             if (exhaustedJob) {
               core.notice(
-                `Job "${exhaustedJob.name}" has exhausted its auto reruns (${exhaustedJob.rerunsUsed}/${exhaustedJob.limit}); leave final failure as-is after ${exhaustedJob.failedAttempts} failed attempt(s).`
+                `Job "${exhaustedJob.name}" reached the total-attempt limit ${exhaustedJob.failedAttempts}/${exhaustedJob.limit} (including the first run); auto reruns used ${exhaustedJob.rerunsUsed}/${exhaustedJob.maxReruns}.`
               );
               return;
             }
@@ -135,5 +155,5 @@ jobs:
             );
 
             core.notice(
-              `Triggered auto rerun for failed jobs of run ${runId} (Attempt ${attempt + 1}).`
+              `Triggered auto rerun for failed jobs of run ${runId}; latest completed workflow attempt ${attempt}, current failed jobs: ${[...currentlyFailedJobs].sort().join(", ")}.`
             );
