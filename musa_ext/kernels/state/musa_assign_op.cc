@@ -1,6 +1,5 @@
 // musa_assign_op.cc
 #include "../utils_op.h"
-#include "mu/device/musa_device.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -58,7 +57,7 @@ class MusaAssignOp : public MusaOpKernel {
     const int64_t n = value.NumElements();
     if (n == 0) return;
 
-    musaStream_t stream = GetDeviceByCtx(ctx)->GetStream();
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
 
     const T* src = value.flat<T>().data();
     T* dst = ref_tensor.flat<T>().data();

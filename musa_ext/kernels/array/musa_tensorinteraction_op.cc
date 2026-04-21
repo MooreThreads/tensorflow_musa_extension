@@ -1,10 +1,10 @@
 #include <mublas.h>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bounds_check.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor_shape.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -31,9 +31,7 @@ class MusaInteractOp : public OpKernel {
 
     if (input.NumElements() == 0) return;
 
-    auto* device = GetDeviceByCtx(ctx);
-
-    mublasHandle_t blas_handle = device->mublas_handle();
+    mublasHandle_t blas_handle = GetMublasHandleByCtx(ctx);
     int m = num_features;  // N
     int n = num_features;  // N
     int k = embed_dim;     // D
@@ -99,4 +97,4 @@ REGISTER_OP("MusaInteract")
       c->set_output(0, c->MakeShape({batch, n, n}));
       return Status::OK();
     });
-}
+}  // namespace tensorflow

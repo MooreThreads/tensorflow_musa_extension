@@ -227,8 +227,7 @@ class MusaResourceScatterAddOp : public MusaOpKernel {
 
     if (indices.NumElements() > 0) {
       auto& h = GetHandleByCtx(c);
-      auto* device = static_cast<MusaDevice*>(c->device());
-      auto maintainer = device->GetMemMaintainer(
+      auto maintainer = MakeMusaMemMaintainer(
           [](size_t s) { return ::musa::dnn::MemoryHandler(); });
 
       mScatterND op;
@@ -237,7 +236,9 @@ class MusaResourceScatterAddOp : public MusaOpKernel {
       auto params_mt = CreateMTensor(*params, format_);
       auto indices_mt = CreateMTensor(indices, format_);
       // Reshape indices for scatter-nd op.
-      indices_mt.SetNdInfo({static_cast<int64_t>(indices.shape().dim_sizes().size()), 1LL});;
+      indices_mt.SetNdInfo(
+          {static_cast<int64_t>(indices.shape().dim_sizes().size()), 1LL});
+      ;
       auto updates_mt = CreateMTensor(updates, format_);
       MTOP_CHECK_OK_RUN(
           op.Run(h, params_mt, indices_mt, updates_mt, maintainer),

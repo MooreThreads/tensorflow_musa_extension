@@ -64,25 +64,29 @@ set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=0")
 #
 # Keep NDEBUG enabled in every build to match the TensorFlow wheel, and use
 # MUSA_KERNEL_DEBUG only for plugin-local timing/debug instrumentation.
+#
+# TF_PLUGGABLE_DEVICE is defined so plugin code can cheaply gate any
+# diagnostics that only make sense in the PluggableDevice C API world.
 if(MUSA_KERNEL_DEBUG)
-    set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_KERNEL_DEBUG -DNDEBUG")
+    set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_KERNEL_DEBUG -DNDEBUG -DTF_PLUGGABLE_DEVICE")
 else()
-    set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_DISABLE_DEBUG_LOGGING -DNDEBUG -DMUSA_DISABLE_TRACE_LOGGING -DMUSA_DISABLE_AUTO_TRACE")
+    set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_DISABLE_DEBUG_LOGGING -DNDEBUG -DMUSA_DISABLE_TRACE_LOGGING -DMUSA_DISABLE_AUTO_TRACE -DTF_PLUGGABLE_DEVICE")
 endif()
 
-# Include paths
+# Include paths. The plugin now only consumes TF's public C API
+# (tensorflow/c/experimental/stream_executor) and a small set of public core
+# headers (framework, platform, stream_executor). The internal
+# common_runtime/device headers are no longer needed: device/stream/allocator
+# lifetime is owned by TF core via PluggableDevice.
 include_directories("${TF_INC}" "${MUSA_PATH}/include")
 if(EXISTS "${MUSA_PATH}/include/mudnncxx")
     include_directories("${MUSA_PATH}/include/mudnncxx")
 endif()
 
-# Include TensorFlow C++ core headers for common_runtime
-# These are required for accessing BFCAllocator and device-specific headers
-include_directories("${TF_INC}/tensorflow/core/common_runtime")
-include_directories("${TF_INC}/tensorflow/core/common_runtime/device")
-
-# TensorFlow pip headers may place farmhash in different external include layouts.
-# fingerprint.h includes <farmhash.h>, so add whichever location exists.
+# TensorFlow pip headers may place farmhash in different external include
+# layouts. Some kernels still include `fingerprint.h` (which transitively
+# depends on `<farmhash.h>`), so keep whichever directory actually ships with
+# the installed wheel.
 set(TF_FARMHASH_INC_SRC "${TF_INC}/external/farmhash_archive/src")
 set(TF_FARMHASH_INC_VIRTUAL "${TF_INC}/external/farmhash_archive/_virtual_includes/farmhash")
 if(EXISTS "${TF_FARMHASH_INC_SRC}/farmhash.h")

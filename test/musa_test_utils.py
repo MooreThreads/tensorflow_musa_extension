@@ -33,15 +33,37 @@ def _get_test_full_name(test_method):
   return f"{module_file}.{class_name}.{method_name}"
 
 
+# Idempotency guard. PluggableDevice loading is NOT safe to call twice: every
+# invocation of ``tf.load_pluggable_device_library`` re-runs ``SE_InitPlugin``,
+# which in turn tries to ``RegisterPlatform("MUSA")``. The second call fails
+# with a fatal CHECK ("platform is already registered with name: MUSA") and
+# aborts the process. Callers can freely ``load_musa_plugin()`` as many times
+# as they want; we dedupe here.
+_MUSA_PLUGIN_LOADED_PATH = None
+
+
 def load_musa_plugin():
-  """Load the MUSA plugin library with simplified path resolution.
-  With __init__.py handling path setup, we can use a simpler approach
-  focusing on the most common locations.
+  """Load the MUSA PluggableDevice plugin (idempotent).
+
+  The plugin is registered with TensorFlow via the public
+  ``SE_InitPlugin`` C API. The preferred entry point is therefore
+  ``load_library.load_pluggable_device_library``, which explicitly goes
+  through the PluggableDevice path and registers ``MUSA`` as a physical
+  device.
+
+  ``tf.load_library`` is kept as a fallback because older TF 2.6 builds do
+  not always expose ``load_pluggable_device_library``, and because some
+  deployments rely on an auto-loaded plugin placed under
+  ``<tf_install>/tensorflow-plugins/`` (TensorFlow 2.5+ auto-loads every
+  shared library found there at import time).
   """
+  global _MUSA_PLUGIN_LOADED_PATH
+  if _MUSA_PLUGIN_LOADED_PATH is not None:
+    return _MUSA_PLUGIN_LOADED_PATH
+
   plugin_path = None
   current_dir = os.path.dirname(os.path.abspath(__file__))
 
-  # Common plugin locations to try
   candidate_paths = [
     # Relative to test directory (most common case)
     os.path.join(current_dir, "..", "build", "libmusa_plugin.so"),
@@ -57,20 +79,32 @@ def load_musa_plugin():
       plugin_path = normalized_path
       break
 
-  if plugin_path and os.path.exists(plugin_path):
-    try:
-      tf.load_library(plugin_path)
-      # print(f"SUCCESS: MUSA plugin loaded from {plugin_path}!")
-    except Exception as e:
-      print(f"FAILED: Error loading plugin from {plugin_path}: {e}")
-      raise
-  else:
-    # Provide helpful error message
+  if not (plugin_path and os.path.exists(plugin_path)):
     searched_locations = [os.path.normpath(path) for path in candidate_paths]
     raise FileNotFoundError(
-        f"MUSA plugin not found. Searched locations:\n" +
+        "MUSA plugin not found. Searched locations:\n" +
         "\n".join(f"  - {loc}" for loc in searched_locations)
     )
+
+  try:
+    load_pluggable = None
+    try:
+      from tensorflow.python.framework import load_library as _ll
+      load_pluggable = getattr(_ll, "load_pluggable_device_library", None)
+    except ImportError:
+      load_pluggable = None
+    if load_pluggable is None:
+      load_pluggable = getattr(tf, "load_pluggable_device_library", None)
+
+    if load_pluggable is not None:
+      load_pluggable(plugin_path)
+    else:
+      tf.load_library(plugin_path)
+  except Exception as e:
+    print(f"FAILED: Error loading MUSA plugin from {plugin_path}: {e}")
+    raise
+
+  _MUSA_PLUGIN_LOADED_PATH = plugin_path
   return plugin_path
 
 

@@ -89,10 +89,24 @@ cd tensorflow_musa_extension
 # Build plugin
 ./build.sh release
 
-# Load plugin in Python for testing
+# Load the plugin in Python (preferred: PluggableDevice path)
 import tensorflow as tf
-tf.load_library("./build/libmusa_plugin.so")
+from tensorflow.python.framework import load_library
+load_library.load_pluggable_device_library("./build/libmusa_plugin.so")
+
+# Verify that the MUSA device is registered
+print(tf.config.list_physical_devices("MUSA"))
 ```
+
+> Note: the extension registers a physical device named `MUSA` through the
+> TensorFlow 2.6+ **PluggableDevice C API**
+> (`SE_InitPlugin` / `SP_StreamExecutor`). `tf.load_pluggable_device_library`
+> is therefore the recommended entry point. Alternatively, copy
+> `libmusa_plugin.so` into the `tensorflow-plugins/` directory of your
+> TensorFlow installation (e.g.
+> `<site-packages>/tensorflow/tensorflow-plugins/libmusa_plugin.so`) and
+> TensorFlow will auto-load every shared library found there at import
+> time — no explicit call required.
 
 ## Build Guide
 

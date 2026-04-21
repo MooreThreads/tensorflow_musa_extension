@@ -1,4 +1,3 @@
-#include "mu/device/musa_device.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -38,8 +37,7 @@ class MusaIsNanOp : public MusaOpKernel {
     const T* x_ptr = x.flat<T>().data();
     bool* y_ptr = y->flat<bool>().data();
 
-    auto* device = GetDeviceByCtx(ctx);
-    auto stream = device->GetStream();
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
 
     LaunchIsNan<T>(x_ptr, y_ptr, n, stream);
   }

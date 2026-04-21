@@ -6,7 +6,6 @@
 #include "../utils_op.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_split.h"
-#include "device/musa_device.h"
 #include "musa_reduce_functor.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/core/status.h"

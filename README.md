@@ -5,6 +5,7 @@ TensorFlow MUSA Extension 是一个高性能的 TensorFlow 插件，专为摩尔
 ## 特性
 
 - **完整的算子支持**：涵盖深度学习训练和推理所需的核心算子
+- **完整的算子支持**：涵盖深度学习训练和推理所需的核心算子
 - **高性能优化**：针对 MUSA 架构进行深度优化，包括内存访问模式和计算效率
 - **自动图优化**：支持 Layout 自动转换、算子融合和自动混合精度（AMP）
 - **无缝集成**：与 TensorFlow 生态系统完全兼容，无需修改现有代码
@@ -89,10 +90,22 @@ cd tensorflow_musa_extension
 # 构建 plugin
 ./build.sh release
 
-# 在 Python 中手动加载插件进行测试
+# 在 Python 中加载插件（PluggableDevice 方式，推荐）
 import tensorflow as tf
-tf.load_library("./build/libmusa_plugin.so")
+from tensorflow.python.framework import load_library
+load_library.load_pluggable_device_library("./build/libmusa_plugin.so")
+
+# 验证 MUSA 设备已注册
+print(tf.config.list_physical_devices("MUSA"))
 ```
+
+> 说明：本扩展通过 TensorFlow 2.6+ 的 **PluggableDevice C API**
+> (`SE_InitPlugin` / `SP_StreamExecutor`) 注册为名为 `MUSA` 的物理设备，
+> 因此应优先使用 `tf.load_pluggable_device_library`。
+> 作为替代，也可以把 `libmusa_plugin.so` 拷贝到 TensorFlow 安装目录下的
+> `tensorflow-plugins/` 子目录（例如
+> `<site-packages>/tensorflow/tensorflow-plugins/libmusa_plugin.so`），
+> TensorFlow 启动时会自动加载该目录下的所有共享库，无需任何显式调用。
 
 ## 构建指南
 

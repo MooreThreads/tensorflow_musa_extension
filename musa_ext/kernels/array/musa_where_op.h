@@ -128,7 +128,6 @@ struct Where {
     int dim = 0;
     cum_op.SetDim(dim);
 
-    auto* musa_device = static_cast<MusaDevice*>(ctx->device());
     std::list<Tensor> workspace_tensors;
     auto mem_alloc_func =
         [ctx, &workspace_tensors](size_t size) -> ::musa::dnn::MemoryHandler {
@@ -143,7 +142,7 @@ struct Where {
       return ::musa::dnn::MemoryHandler(raw_ptr, [](void* p) {});
     };
     ::musa::dnn::MemoryMaintainer maintainer =
-        musa_device->GetMemMaintainer(mem_alloc_func);
+        MakeMusaMemMaintainer(mem_alloc_func);
 
     // muDNN CumSum handles the global scan
     mStatus status = cum_op.Run(handle, t_scanned, t_marks, maintainer);
