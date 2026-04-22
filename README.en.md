@@ -51,7 +51,7 @@ tensorflow_musa_extension/
   - Default installation path: `/usr/local/musa`
 - **Python Dependencies**:
   - Python: >= 3.7
-  - TensorFlow: == 2.6.1 (required version)
+  - TensorFlow: `>= 2.6, < 2.17` (recommended / fully tested: `2.6.1`)
   - NumPy: >= 1.19.0
 - **Development Tools**:
   - pre-commit >= 3.0.0
@@ -66,7 +66,8 @@ tensorflow_musa_extension/
 git clone <repository-url>
 cd tensorflow_musa_extension
 
-# Ensure TensorFlow 2.6.1 is installed
+# Ensure a supported TensorFlow version is installed (>=2.6, <2.17).
+# 2.6.1 is the primary tested target; see docs/tf-compat-matrix.md.
 pip install tensorflow==2.6.1
 
 # Build WHL package (one-click build)
@@ -134,7 +135,7 @@ Three build modes are supported:
 ```
 
 The build script automatically:
-- Checks TensorFlow version (must be 2.6.1)
+- Checks TensorFlow version (supports `>= 2.6, < 2.17`; recommends `2.6.1`)
 - Configures CMake project
 - Compiles MUSA kernels and host code
 - Generates `libmusa_plugin.so` or WHL package
@@ -143,7 +144,7 @@ The build script automatically:
 
 WHL package build features:
 - **No auto-download TensorFlow**: Prevents pip from downloading incompatible versions
-- **Version check**: Automatically checks TensorFlow version is 2.6.1 before build
+- **Version check**: Validates TensorFlow is within the supported range (`>= 2.6, < 2.17`) before build. See `docs/tf-compat-matrix.md`.
 - **Package name mapping**: Source directory is `python/`, but pip package name is `tensorflow_musa`
 
 After installation:

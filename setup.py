@@ -35,36 +35,75 @@ LICENSE = "Apache 2.0"
 PLUGIN_LIBRARY = "libmusa_plugin.so"
 BUILD_DIR = "build"
 
-# Required TensorFlow version
-REQUIRED_TF_VERSION = "2.6.1"
+# Supported TensorFlow version range.
+#
+# The plugin talks to TF exclusively through the PluggableDevice C ABI
+# (SP_Platform / SP_StreamExecutor), which TF has kept append-only from the
+# 2.5 series onward. In practice 2.6.x -- 2.16.x all share the SE_MAJOR=0 ABI
+# that we depend on, so we validate a range instead of a single pin. The
+# extra `ALLOWED_EXACT_VERSIONS` knob lets us ship a wheel that has been
+# end-to-end tested on a known-good set while still building on others.
+MIN_TF_VERSION = "2.6"
+MAX_TF_VERSION_EXCLUSIVE = "2.17"
+RECOMMENDED_TF_VERSION = "2.6.1"
+
+
+def _parse_version(ver: str):
+    parts = []
+    for component in ver.split("+", 1)[0].split("."):
+        # Drop any non-numeric suffix like "rc0" so comparisons stay numeric.
+        digits = ""
+        for ch in component:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        parts.append(int(digits) if digits else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
 
 
 def check_tensorflow_version():
-    """Check if TensorFlow is installed with the required version.
+    """Verify that TensorFlow is installed within the supported range.
 
     Returns:
         tuple: (is_installed, version_string or None)
 
     Raises:
-        SystemExit: If TensorFlow is installed but version doesn't match.
+        SystemExit: If TensorFlow is installed but the version is not within
+            [MIN_TF_VERSION, MAX_TF_VERSION_EXCLUSIVE).
     """
     try:
         import tensorflow as tf
         version = tf.__version__
 
-        if version != REQUIRED_TF_VERSION:
-            print(f"ERROR: TensorFlow version mismatch!")
-            print(f"  Required: {REQUIRED_TF_VERSION}")
+        v = _parse_version(version)
+        v_min = _parse_version(MIN_TF_VERSION)
+        v_max_exc = _parse_version(MAX_TF_VERSION_EXCLUSIVE)
+
+        if v < v_min or v >= v_max_exc:
+            print("ERROR: TensorFlow version out of supported range!")
+            print(f"  Supported: >= {MIN_TF_VERSION}, < {MAX_TF_VERSION_EXCLUSIVE}")
             print(f"  Installed: {version}")
-            print(f"  Please install the correct version: pip install tensorflow=={REQUIRED_TF_VERSION}")
+            print(f"  Recommended (fully tested): {RECOMMENDED_TF_VERSION}")
             sys.exit(1)
 
-        print(f"TensorFlow {version} found - OK")
+        if version != RECOMMENDED_TF_VERSION:
+            print(
+                f"NOTE: TensorFlow {version} is within the supported range; "
+                f"the primary test matrix uses {RECOMMENDED_TF_VERSION}."
+            )
+        else:
+            print(f"TensorFlow {version} found - OK")
         return True, version
     except ImportError:
-        print(f"WARNING: TensorFlow not installed.")
-        print(f"  Required version: {REQUIRED_TF_VERSION}")
-        print(f"  Please install: pip install tensorflow=={REQUIRED_TF_VERSION}")
+        print("WARNING: TensorFlow not installed.")
+        print(
+            f"  Supported range: >= {MIN_TF_VERSION}, < {MAX_TF_VERSION_EXCLUSIVE} "
+            f"(recommended: {RECOMMENDED_TF_VERSION})"
+        )
+        print(f"  Please install: pip install tensorflow=={RECOMMENDED_TF_VERSION}")
         return False, None
 
 
@@ -193,9 +232,9 @@ setup(
     },
     python_requires=">=3.7",
     # NOTE: tensorflow is NOT listed in install_requires to prevent pip from
-    # downloading it during wheel build. Users must install tensorflow==2.6.1
-    # manually before installing tensorflow_musa.
-    # See README.md for installation instructions.
+    # downloading it during wheel build. Users must install a supported TF
+    # version (>= 2.6, < 2.17; recommended 2.6.1) manually before installing
+    # tensorflow_musa. See README.md for installation instructions.
     install_requires=[
         "numpy>=1.19.0",
     ],

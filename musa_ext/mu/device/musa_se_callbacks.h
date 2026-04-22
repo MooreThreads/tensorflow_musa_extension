@@ -16,7 +16,7 @@ limitations under the License.
 #ifndef TENSORFLOW_MUSA_MU_DEVICE_MUSA_SE_CALLBACKS_H_
 #define TENSORFLOW_MUSA_MU_DEVICE_MUSA_SE_CALLBACKS_H_
 
-#include "tensorflow/c/experimental/stream_executor/stream_executor.h"
+#include "mu/tf_compat.h"
 
 namespace tensorflow {
 namespace musa {

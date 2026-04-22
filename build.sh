@@ -13,23 +13,50 @@ set -e
 #   ./build.sh wheel     # Build wheel package directly (recommended for distribution)
 # ============================================================================
 
-# Required TensorFlow version
-REQUIRED_TF_VERSION="2.6.1"
+# Supported TensorFlow version range.
+# The plugin uses the PluggableDevice C ABI (SE_MAJOR=0) which has been
+# stable from TF 2.5 onward. Keep these in sync with setup.py.
+MIN_TF_VERSION="2.6"
+MAX_TF_VERSION_EXCLUSIVE="2.17"
+RECOMMENDED_TF_VERSION="2.6.1"
 
-# Function to check TensorFlow version
+# Function to validate TensorFlow is present in a supported version range.
 check_tf_version() {
     echo "Checking TensorFlow version..."
     python3 -c "
+import sys
 import tensorflow as tf
+
+def _parse(v):
+    out = []
+    for part in v.split('+', 1)[0].split('.'):
+        d = ''
+        for c in part:
+            if c.isdigit():
+                d += c
+            else:
+                break
+        out.append(int(d) if d else 0)
+    while len(out) < 3:
+        out.append(0)
+    return tuple(out)
+
 version = tf.__version__
-required = '${REQUIRED_TF_VERSION}'
-if version != required:
-    print(f'ERROR: TensorFlow version mismatch!')
-    print(f'  Required: {required}')
+v = _parse(version)
+vmin = _parse('${MIN_TF_VERSION}')
+vmax = _parse('${MAX_TF_VERSION_EXCLUSIVE}')
+rec = '${RECOMMENDED_TF_VERSION}'
+if v < vmin or v >= vmax:
+    print('ERROR: TensorFlow version out of supported range!')
+    print(f'  Supported: >= ${MIN_TF_VERSION}, < ${MAX_TF_VERSION_EXCLUSIVE}')
     print(f'  Installed: {version}')
-    print(f'  Please install: pip install tensorflow=={required}')
-    exit(1)
-print(f'TensorFlow {version} found - OK')
+    print(f'  Recommended (fully tested): {rec}')
+    sys.exit(1)
+if version != rec:
+    print(f'NOTE: TensorFlow {version} is within the supported range; '
+          f'the primary test matrix uses {rec}.')
+else:
+    print(f'TensorFlow {version} found - OK')
 " || exit 1
 }
 

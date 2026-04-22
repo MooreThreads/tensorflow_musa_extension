@@ -52,7 +52,7 @@ tensorflow_musa_extension/
   - 默认安装路径: `/usr/local/musa`
 - **Python 依赖**
   - Python: >= 3.7
-  - TensorFlow: == 2.6.1（必须使用此版本）
+  - TensorFlow: `>= 2.6, < 2.17`（推荐/主测试版本：`2.6.1`）
   - NumPy: >= 1.19.0
 - **开发工具**:
   - pre-commit >= 3.0.0
@@ -67,7 +67,8 @@ tensorflow_musa_extension/
 git clone <repository-url>
 cd tensorflow_musa_extension
 
-# 确保 TensorFlow 2.6.1 已安装
+# 确保已安装受支持的 TensorFlow 版本（>=2.6, <2.17）
+# 2.6.1 是主测试目标；完整兼容矩阵见 docs/tf-compat-matrix.md
 pip install tensorflow==2.6.1
 
 # 构建 WHL 包（一键构建）
@@ -133,7 +134,7 @@ print(tf.config.list_physical_devices("MUSA"))
 ```
 
 构建脚本将自动完成以下步骤：
-- 检查 TensorFlow 版本（必须为 2.6.1）
+- 检查 TensorFlow 版本（支持 `>=2.6, <2.17`；推荐 `2.6.1`）
 - 配置 CMake 项目
 - 编译 MUSA 内核和主机代码
 - 生成动态链接库 `libmusa_plugin.so` 或 WHL 包
@@ -142,7 +143,7 @@ print(tf.config.list_physical_devices("MUSA"))
 
 WHL 包构建特点：
 - **不自动下载 TensorFlow**：避免 pip 自动下载不兼容版本
-- **版本检查**：构建前自动检查环境中 TensorFlow 版本是否为 2.6.1
+- **版本检查**：构建前验证 TensorFlow 在支持范围内（`>=2.6, <2.17`）。详见 `docs/tf-compat-matrix.md`。
 - **包名映射**：源码目录为 `python/`，安装后包名为 `tensorflow_musa`
 
 安装后使用：

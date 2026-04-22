@@ -17,10 +17,12 @@ limitations under the License.
 //
 // This file implements the stable C API declared in
 // tensorflow/c/experimental/stream_executor/stream_executor.h. TensorFlow
-// 2.6.1 invokes `SE_InitPlugin` when the plugin .so is loaded via
-// `TF_LoadPluggableDeviceLibrary` (or auto-loaded from
+// (2.6.x through at least 2.16.x) invokes `SE_InitPlugin` when the plugin
+// .so is loaded via `TF_LoadPluggableDeviceLibrary` (or auto-loaded from
 // `$SITE_PACKAGES/tensorflow-plugins`). From there, TF calls our
 // `plugin_*` callbacks to enumerate, create, and tear down MUSA devices.
+// All TF header inclusion is centralized in mu/tf_compat.h for version
+// compatibility management; see that file for version-gated features.
 //
 // The legacy `REGISTER_LOCAL_DEVICE_FACTORY` path (which required linking
 // against internal core APIs and had ABI risk) is intentionally deleted.
@@ -35,7 +37,9 @@ limitations under the License.
 #include "mu/device/musa_resource_mgr.h"
 #include "mu/device/musa_se_callbacks.h"
 #include "mu/device/musa_telemetry.h"
-#include "tensorflow/c/tf_status.h"
+// tf_compat.h already transitively included via mu/device_register.h and
+// mu/device/musa_se_callbacks.h; re-include to keep intent explicit.
+#include "mu/tf_compat.h"
 
 namespace {
 

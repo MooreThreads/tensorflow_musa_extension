@@ -44,13 +44,14 @@ limitations under the License.
 #include <vector>
 
 #include "mu/device/musa_telemetry.h"
-#include "tensorflow/c/tf_status.h"
+#include "mu/tf_compat.h"
 
-// These callbacks mirror TensorFlow 2.6.1's CUDA StreamExecutor surface
+// These callbacks mirror TensorFlow's CUDA StreamExecutor surface
 // (tensorflow/stream_executor/cuda/cuda_gpu_executor.cc) translated to MUSA.
 // All of them return status via TF_Status* following the PluggableDevice
 // contract declared in
-// tensorflow/c/experimental/stream_executor/stream_executor.h.
+// tensorflow/c/experimental/stream_executor/stream_executor.h. Include is
+// centralized in mu/tf_compat.h so we have a single point of version control.
 
 namespace tensorflow {
 namespace musa {

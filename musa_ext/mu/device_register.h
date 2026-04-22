@@ -1,8 +1,7 @@
 #ifndef TENSORFLOW_MUSA_MU1_DEVICE_REGISTER_H_
 #define TENSORFLOW_MUSA_MU1_DEVICE_REGISTER_H_
 
-#include "tensorflow/c/experimental/stream_executor/stream_executor.h"
-#include "tensorflow/c/tf_status.h"
+#include "mu/tf_compat.h"
 
 extern const char NAME_MTGPU[];
 #define DEVICE_MTGPU "MUSA"
