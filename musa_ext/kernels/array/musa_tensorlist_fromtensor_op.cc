@@ -109,11 +109,14 @@ class MusaTensorListFromTensorOp : public MusaOpKernel {
     output_list.element_shape = element_shape;
     output_list.tensors().reserve(input_tensor.shape().dim_size(0));
 
-    auto& h = GetHandleByCtx(ctx);
-    musaStream_t stream = reinterpret_cast<musaStream_t>(h.GetStream());
-
-    OP_REQUIRES(ctx, stream != nullptr,
-                errors::Internal("Failed to get valid MUSA stream."));
+    // Fetch the raw MUSA driver stream directly. Note that in eager mode
+    // (tf.raw_ops.TensorListFromTensor called under `with tf.device('MUSA')`)
+    // the PluggableDevice CStream's GpuStreamHack() returns nullptr, which
+    // `musaMemcpyAsync` interprets as the default stream -- the same semantics
+    // any mudnn handle rebound to that stream (via MusaResourceMgr) has been
+    // using all along for these non-fast-path kernels. Accept nullptr as a
+    // valid stream rather than failing the op.
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
 
     const int64_t num_slices = input_tensor.shape().dim_size(0);
 
@@ -136,8 +139,11 @@ class MusaTensorListFromTensorOp : public MusaOpKernel {
         OP_REQUIRES(ctx, src != nullptr,
                     errors::Internal("DMAHelper::base(&tmp) is nullptr"));
 
-        auto err =
-            musaMemcpyAsync(dst, src, bytes, musaMemcpyDeviceToDevice, stream);
+        // musaMemcpyDefault lets the runtime infer direction from the
+        // pointer attributes, which tolerates callers that routed the input
+        // tensor through a host buffer (e.g. certain grappler-rewritten
+        // graphs).
+        auto err = musaMemcpyAsync(dst, src, bytes, musaMemcpyDefault, stream);
 
         OP_REQUIRES(
             ctx, err == musaSuccess,
