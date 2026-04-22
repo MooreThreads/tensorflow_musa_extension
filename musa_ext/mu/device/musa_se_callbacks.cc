@@ -462,11 +462,35 @@ void host_memory_deallocate(const SP_Device* device, void* mem) {
   HostCachingAllocator::Instance().Free(mem);
 }
 
-TF_Bool get_allocator_stats(const SP_Device* /*device*/,
-                            SP_AllocatorStats* /*stats*/) {
-  // TF's BFC wrapper populates its own stats; the underlying SubAllocator
-  // does not need to provide them.
-  return false;
+TF_Bool get_allocator_stats(const SP_Device* device, SP_AllocatorStats* stats) {
+  // When the caching allocator is active (the default) we own the pool
+  // and therefore have real numbers; fill them into the TF-owned
+  // SP_AllocatorStats so `tf.config.experimental.get_memory_info` and
+  // friends return something useful.
+  //
+  // In passthrough mode we return false and let TF's own BFC wrapper
+  // populate its stats, matching the pre-C4 behavior.
+  if (GetDeviceAllocatorBackend() != DeviceAllocatorBackend::kCaching) {
+    return false;
+  }
+  const int ordinal = DeviceOrdinal(device);
+  DeviceCachingAllocatorStats s =
+      DeviceCachingAllocator::For(ordinal).GetStats();
+  stats->struct_size = SP_ALLOCATORSTATS_STRUCT_SIZE;
+  stats->num_allocs = static_cast<int64_t>(s.alloc_requests);
+  stats->bytes_in_use = static_cast<int64_t>(s.in_use_bytes);
+  stats->peak_bytes_in_use = static_cast<int64_t>(s.peak_in_use_bytes);
+  // `largest_alloc_size` is advisory — we don't track the biggest
+  // single Allocate, so report the largest free block as a floor.
+  stats->largest_alloc_size = 0;
+  stats->has_bytes_limit = (s.limit_bytes > 0) ? 1 : 0;
+  stats->bytes_limit = static_cast<int64_t>(s.limit_bytes);
+  stats->bytes_reserved = static_cast<int64_t>(s.reserved_bytes);
+  stats->peak_bytes_reserved = static_cast<int64_t>(s.reserved_bytes);
+  stats->has_bytes_reservable_limit = 0;
+  stats->bytes_reservable_limit = 0;
+  stats->largest_free_block_bytes = 0;
+  return true;
 }
 
 TF_Bool device_memory_usage(const SP_Device* device, int64_t* free,

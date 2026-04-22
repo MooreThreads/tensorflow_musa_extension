@@ -77,6 +77,8 @@ limitations under the License.
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <vector>
 
 namespace tensorflow {
 namespace musa {
@@ -103,6 +105,30 @@ struct DeviceCachingAllocatorStats {
   uint64_t splits = 0;    // Block split into a used head + free tail.
   uint64_t merges = 0;    // Block merged with at least one neighbor.
   uint64_t segments = 0;  // Number of live segments obtained from driver.
+
+  // Hard cap imposed by SetMemoryFraction / SetMemoryLimitBytes. 0 means
+  // "no limit set", and any non-zero value bounds the sum of bytes
+  // currently obtained from `musaMalloc` — requests that would require
+  // crossing this limit fail as OOM without touching the driver.
+  uint64_t limit_bytes = 0;
+  // Cached total device memory (musaMemGetInfo.total) captured the first
+  // time the limit was queried. 0 until GetStats / SetMemoryFraction
+  // probes it.
+  uint64_t total_device_bytes = 0;
+};
+
+// One entry per live segment obtained from `musaMalloc`. Stable memory
+// layout across commits: add new fields at the end, never reorder the
+// existing ones, so the Python dict surface in `_C` keeps working.
+struct DeviceSegmentInfo {
+  int device = 0;
+  uintptr_t address = 0;  // musaMalloc-returned base pointer.
+  uint64_t size = 0;      // Segment size in bytes.
+  uint64_t in_use = 0;    // Bytes currently allocated inside this segment.
+  uint32_t num_blocks = 0;
+  uint32_t num_free_blocks = 0;
+  uint64_t largest_free_block = 0;
+  bool is_expandable = false;  // Reserved for commit C5 (VMM).
 };
 
 // Runtime policy toggles for the device allocator. Set by the env var
@@ -154,8 +180,32 @@ class DeviceCachingAllocator {
   // Snapshot the current counters.
   DeviceCachingAllocatorStats GetStats() const;
 
+  // Snapshot the segment topology (bytes per segment, how much is in
+  // use, free block counts). The allocator lock is held only for the
+  // duration of the scan; the returned vector is a copy safe to hold.
+  std::vector<DeviceSegmentInfo> GetSegmentSnapshot() const;
+
   // Reset `peak_in_use_bytes` to the current in_use_bytes value.
   void ResetPeakStats();
+
+  // Cap the total bytes the allocator is allowed to obtain from the
+  // driver. A 0 fraction clears any previously set limit; values must
+  // satisfy 0 < fraction <= 1. Returns the bytes-limit actually
+  // installed (0 when cleared), which callers can print for clarity.
+  //
+  // Implementation: resolves `fraction * musaMemGetInfo.total` to an
+  // absolute byte bound and delegates to `SetMemoryLimitBytes`.
+  uint64_t SetMemoryFraction(double fraction);
+
+  // Lower-level variant of SetMemoryFraction that takes bytes directly.
+  // Useful in tests and when a caller wants to pin a specific cap
+  // independent of the device's total physical memory.
+  void SetMemoryLimitBytes(uint64_t bytes);
+
+  // Returns the most recent OOM diagnostic produced by `Allocate`,
+  // whether from the driver returning musaErrorMemoryAllocation or from
+  // `limit_bytes` being exceeded. Empty when no OOM has occurred.
+  std::string GetLastOomMessage() const;
 
  private:
   DeviceCachingAllocator(int ordinal);

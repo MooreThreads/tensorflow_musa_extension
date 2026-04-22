@@ -28,8 +28,10 @@ limitations under the License.
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <musa_runtime.h>
 
 #include <cstdint>
+#include <vector>
 
 #include "mu/device/caching_allocator.h"
 #include "mu/device/host_caching_allocator.h"
@@ -40,6 +42,7 @@ using ::tensorflow::musa::DeviceAllocatorBackend;
 using ::tensorflow::musa::DeviceAllocatorBackendName;
 using ::tensorflow::musa::DeviceCachingAllocator;
 using ::tensorflow::musa::DeviceCachingAllocatorStats;
+using ::tensorflow::musa::DeviceSegmentInfo;
 using ::tensorflow::musa::GetDeviceAllocatorBackend;
 using ::tensorflow::musa::HostCachingAllocator;
 using ::tensorflow::musa::HostCachingAllocatorStats;
@@ -105,11 +108,122 @@ PyObject* DeviceAllocatorStats(PyObject* /*self*/, PyObject* args) {
       !put_u64("cache_hits", s.cache_hits) ||
       !put_u64("cache_misses", s.cache_misses) ||
       !put_u64("oom_events", s.oom_events) || !put_u64("splits", s.splits) ||
-      !put_u64("merges", s.merges) || !put_u64("segments", s.segments)) {
+      !put_u64("merges", s.merges) || !put_u64("segments", s.segments) ||
+      !put_u64("limit_bytes", s.limit_bytes) ||
+      !put_u64("total_device_bytes", s.total_device_bytes)) {
     Py_DECREF(d);
     return nullptr;
   }
   return d;
+}
+
+PyObject* DeviceSegmentSnapshot(PyObject* /*self*/, PyObject* args) {
+  int ordinal = 0;
+  if (!PyArg_ParseTuple(args, "|i", &ordinal)) return nullptr;
+  std::vector<DeviceSegmentInfo> segs =
+      DeviceCachingAllocator::For(ordinal).GetSegmentSnapshot();
+  PyObject* list = PyList_New(0);
+  if (list == nullptr) return nullptr;
+  for (const auto& info : segs) {
+    PyObject* d = PyDict_New();
+    if (d == nullptr) {
+      Py_DECREF(list);
+      return nullptr;
+    }
+    auto put_u64 = [&](const char* key, std::uint64_t v) -> bool {
+      PyObject* val = PyLong_FromUnsignedLongLong(v);
+      if (val == nullptr) return false;
+      int rc = PyDict_SetItemString(d, key, val);
+      Py_DECREF(val);
+      return rc == 0;
+    };
+    auto put_i = [&](const char* key, long v) -> bool {
+      PyObject* val = PyLong_FromLong(v);
+      if (val == nullptr) return false;
+      int rc = PyDict_SetItemString(d, key, val);
+      Py_DECREF(val);
+      return rc == 0;
+    };
+    auto put_bool = [&](const char* key, bool v) -> bool {
+      PyObject* val = PyBool_FromLong(v ? 1 : 0);
+      int rc = PyDict_SetItemString(d, key, val);
+      Py_DECREF(val);
+      return rc == 0;
+    };
+    if (!put_i("device", info.device) || !put_u64("address", info.address) ||
+        !put_u64("size", info.size) || !put_u64("in_use", info.in_use) ||
+        !put_i("num_blocks", info.num_blocks) ||
+        !put_i("num_free_blocks", info.num_free_blocks) ||
+        !put_u64("largest_free_block", info.largest_free_block) ||
+        !put_bool("is_expandable", info.is_expandable)) {
+      Py_DECREF(d);
+      Py_DECREF(list);
+      return nullptr;
+    }
+    if (PyList_Append(list, d) != 0) {
+      Py_DECREF(d);
+      Py_DECREF(list);
+      return nullptr;
+    }
+    Py_DECREF(d);
+  }
+  return list;
+}
+
+PyObject* DeviceSetMemoryFraction(PyObject* /*self*/, PyObject* args) {
+  double fraction = 0.0;
+  int ordinal = 0;
+  if (!PyArg_ParseTuple(args, "d|i", &fraction, &ordinal)) return nullptr;
+  uint64_t limit =
+      DeviceCachingAllocator::For(ordinal).SetMemoryFraction(fraction);
+  return PyLong_FromUnsignedLongLong(limit);
+}
+
+PyObject* DeviceSetMemoryLimitBytes(PyObject* /*self*/, PyObject* args) {
+  // Accept Python int (unsigned 64-bit); ordinal optional.
+  unsigned long long bytes = 0;
+  int ordinal = 0;
+  if (!PyArg_ParseTuple(args, "K|i", &bytes, &ordinal)) return nullptr;
+  DeviceCachingAllocator::For(ordinal).SetMemoryLimitBytes(
+      static_cast<uint64_t>(bytes));
+  Py_RETURN_NONE;
+}
+
+PyObject* DeviceResetPeakStats(PyObject* /*self*/, PyObject* args) {
+  int ordinal = 0;
+  if (!PyArg_ParseTuple(args, "|i", &ordinal)) return nullptr;
+  DeviceCachingAllocator::For(ordinal).ResetPeakStats();
+  Py_RETURN_NONE;
+}
+
+PyObject* DeviceLastOomMessage(PyObject* /*self*/, PyObject* args) {
+  int ordinal = 0;
+  if (!PyArg_ParseTuple(args, "|i", &ordinal)) return nullptr;
+  std::string msg = DeviceCachingAllocator::For(ordinal).GetLastOomMessage();
+  return PyUnicode_FromStringAndSize(msg.data(),
+                                     static_cast<Py_ssize_t>(msg.size()));
+}
+
+PyObject* DeviceMemoryUsage(PyObject* /*self*/, PyObject* args) {
+  // Returns a (free_bytes, total_bytes) tuple from musaMemGetInfo on
+  // the given ordinal. Complements the caching allocator's stats by
+  // exposing the driver's view of device memory.
+  int ordinal = 0;
+  if (!PyArg_ParseTuple(args, "|i", &ordinal)) return nullptr;
+  musaError_t e = musaSetDevice(ordinal);
+  if (e != musaSuccess) {
+    (void)musaGetLastError();
+    PyErr_Format(PyExc_RuntimeError, "musaSetDevice(%d) failed", ordinal);
+    return nullptr;
+  }
+  size_t free_b = 0, total_b = 0;
+  if (musaMemGetInfo(&free_b, &total_b) != musaSuccess) {
+    (void)musaGetLastError();
+    PyErr_SetString(PyExc_RuntimeError, "musaMemGetInfo failed");
+    return nullptr;
+  }
+  return Py_BuildValue("(KK)", static_cast<unsigned long long>(free_b),
+                       static_cast<unsigned long long>(total_b));
 }
 
 PyObject* DeviceAllocatorBackendStr(PyObject* /*self*/, PyObject* /*args*/) {
@@ -138,6 +252,24 @@ PyMethodDef kMethods[] = {
     {"_device_empty_cache", DeviceEmptyCache, METH_VARARGS,
      "Release every fully-free cached segment on the given ordinal and "
      "return the number of bytes returned to the driver."},
+    {"_device_segment_snapshot", DeviceSegmentSnapshot, METH_VARARGS,
+     "Return a list of dicts describing every live segment owned by the "
+     "DeviceCachingAllocator on the given ordinal (default 0)."},
+    {"_device_set_memory_fraction", DeviceSetMemoryFraction, METH_VARARGS,
+     "Set a hard per-process memory cap as a fraction (0 < f <= 1) of the "
+     "device's total memory. Returns the resulting byte limit (0 if the "
+     "cap was cleared)."},
+    {"_device_set_memory_limit_bytes", DeviceSetMemoryLimitBytes, METH_VARARGS,
+     "Set a hard per-process memory cap in bytes (0 clears the cap)."},
+    {"_device_reset_peak_stats", DeviceResetPeakStats, METH_VARARGS,
+     "Reset the per-device peak_in_use_bytes counter to the current "
+     "in_use_bytes value."},
+    {"_device_last_oom_message", DeviceLastOomMessage, METH_VARARGS,
+     "Return the most recent OOM diagnostic string emitted by the "
+     "DeviceCachingAllocator (empty string if no OOM has occurred)."},
+    {"_device_memory_usage", DeviceMemoryUsage, METH_VARARGS,
+     "Return (free_bytes, total_bytes) reported by musaMemGetInfo for the "
+     "given ordinal (default 0)."},
     {nullptr, nullptr, 0, nullptr},
 };
 

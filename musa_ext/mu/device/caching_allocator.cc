@@ -28,6 +28,7 @@ limitations under the License.
 #include <set>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace tensorflow {
@@ -84,6 +85,22 @@ bool EnvEquals(const char* name, const char* value) {
   const char* e = std::getenv(name);
   if (e == nullptr || *e == '\0') return false;
   return std::string(e) == value;
+}
+
+// Verbose OOM reporting is opt-in: set `TF_MUSA_ALLOC_VERBOSE_OOM=1`
+// to have the allocator mirror the diagnostic message to stderr each
+// time Allocate fails. Even when it is off we still stash the message
+// on the allocator so Python callers can retrieve it via
+// `_device_last_oom_message`. This matches torch_musa's
+// `TORCH_MUSA_OOM_VERBOSE` toggle one-for-one so ops runbooks carry
+// across.
+bool VerboseOomEnabled() {
+  static const bool kEnabled = []() {
+    const char* e = std::getenv("TF_MUSA_ALLOC_VERBOSE_OOM");
+    if (e == nullptr || *e == '\0') return false;
+    return !(e[0] == '0' || e[0] == 'f' || e[0] == 'F');
+  }();
+  return kEnabled;
 }
 
 }  // namespace
@@ -175,6 +192,25 @@ struct DeviceCachingAllocator::Impl {
   uint64_t merges = 0;
   uint64_t segments = 0;
 
+  // Set of segment-head blocks. Insert on AllocateSegmentUnlocked,
+  // erase on EmptyCache. Iterating this is cheap (O(num_segments))
+  // even when the allocator is holding many tiny free blocks.
+  std::unordered_set<Block*> segment_heads;
+
+  // Hard byte cap (0 => no cap). Requests whose cache-miss path would
+  // push reserved_bytes above this are refused as OOM without calling
+  // musaMalloc. The cap is advisory for live allocations: already-held
+  // blocks stay live even if the cap is lowered below reserved_bytes,
+  // matching torch_musa's fraction-limit semantics.
+  uint64_t limit_bytes = 0;
+  // Cached musaMemGetInfo.total for diagnostic strings; refreshed the
+  // first time GetStats / SetMemoryFraction run.
+  uint64_t total_device_bytes = 0;
+
+  // Last OOM diagnostic built by Allocate. Human-readable string
+  // suitable for logging / raising as a Python exception message.
+  std::string last_oom_message;
+
   // Returns the smallest free block with size >= `min_size`, or nullptr.
   Block* FindFitLocked(size_t min_size) {
     // Use a transient key to binary-search into the size-ordered set.
@@ -189,7 +225,9 @@ struct DeviceCachingAllocator::Impl {
   }
 
   // Allocates a fresh segment from the driver. Lock may be released
-  // across musaMalloc so we don't serialize other host threads.
+  // across musaMalloc so we don't serialize other host threads. The
+  // caller is responsible for inserting the returned block into
+  // `segment_heads` under the lock after a successful driver call.
   Block* AllocateSegmentUnlocked(size_t rounded_size) {
     const size_t seg_size = SegmentSizeFor(rounded_size);
     void* p = nullptr;
@@ -292,6 +330,48 @@ DeviceCachingAllocator::DeviceCachingAllocator(int ordinal)
 
 DeviceCachingAllocator::~DeviceCachingAllocator() { delete impl_; }
 
+namespace {
+
+// Build the canonical OOM diagnostic string. Format is multi-line so
+// debug logs remain legible; callers may strip newlines when placing
+// it into a single-line TF status message. The `impl_*` values are
+// passed in so the caller (which already holds the allocator lock)
+// decides what to snapshot without this helper needing access to the
+// private `Impl` struct.
+std::string FormatOomMessage(int device, size_t requested, size_t rounded,
+                             size_t would_need, uint64_t reserved_bytes,
+                             uint64_t in_use_bytes, uint64_t peak_in_use_bytes,
+                             uint64_t segments, uint64_t cache_hits,
+                             uint64_t cache_misses, uint64_t limit_bytes,
+                             const char* reason) {
+  size_t free_b = 0, total_b = 0;
+  if (musaMemGetInfo(&free_b, &total_b) != musaSuccess) {
+    (void)musaGetLastError();
+  }
+  char buf[1024];
+  std::snprintf(
+      buf, sizeof(buf),
+      "[MUSA OOM] device=%d requested=%zu rounded=%zu segment=%zu reason=%s\n"
+      "  caching allocator: reserved=%llu MiB in_use=%llu MiB peak=%llu MiB "
+      "segments=%llu cache_hits=%llu cache_misses=%llu\n"
+      "  limit_bytes=%llu MiB driver: free=%zu MiB total=%zu MiB\n"
+      "  hint: set TF_MUSA_ALLOC_VERBOSE_OOM=1 for repeated telemetry; call "
+      "tensorflow_musa._C._device_empty_cache(<ordinal>) to force-release "
+      "cached segments.",
+      device, requested, rounded, would_need, reason,
+      static_cast<unsigned long long>(reserved_bytes / (1024 * 1024)),
+      static_cast<unsigned long long>(in_use_bytes / (1024 * 1024)),
+      static_cast<unsigned long long>(peak_in_use_bytes / (1024 * 1024)),
+      static_cast<unsigned long long>(segments),
+      static_cast<unsigned long long>(cache_hits),
+      static_cast<unsigned long long>(cache_misses),
+      static_cast<unsigned long long>(limit_bytes / (1024 * 1024)),
+      free_b / (1024 * 1024), total_b / (1024 * 1024));
+  return std::string(buf);
+}
+
+}  // namespace
+
 void* DeviceCachingAllocator::Allocate(size_t size) {
   if (size == 0) return nullptr;
   const size_t rounded = RoundUp(size, kMinBlockSize);
@@ -307,6 +387,7 @@ void* DeviceCachingAllocator::Allocate(size_t size) {
 
   Block* block = nullptr;
   bool is_cache_hit = false;
+  size_t seg_needed = 0;
   {
     std::lock_guard<std::mutex> lk(impl_->mu);
     ++impl_->alloc_requests;
@@ -315,6 +396,25 @@ void* DeviceCachingAllocator::Allocate(size_t size) {
       impl_->free_blocks.erase(block);
       impl_->MaybeSplitLocked(block, rounded);
       is_cache_hit = true;
+    } else if (impl_->limit_bytes > 0) {
+      // Cache miss: we must grow, so check the cap while still under
+      // the lock. Rejecting here keeps total driver-owned bytes at or
+      // below the limit; draining the caches first is the caller's
+      // responsibility via EmptyCache.
+      seg_needed = SegmentSizeFor(rounded);
+      if (impl_->reserved_bytes + seg_needed > impl_->limit_bytes) {
+        ++impl_->oom_events;
+        impl_->last_oom_message = FormatOomMessage(
+            impl_->device, size, rounded, seg_needed, impl_->reserved_bytes,
+            impl_->in_use_bytes, impl_->peak_in_use_bytes, impl_->segments,
+            impl_->cache_hits, impl_->cache_misses, impl_->limit_bytes,
+            "memory fraction limit would be exceeded");
+        if (VerboseOomEnabled()) {
+          std::fprintf(stderr, "%s\n", impl_->last_oom_message.c_str());
+          std::fflush(stderr);
+        }
+        return nullptr;
+      }
     }
   }
 
@@ -325,11 +425,22 @@ void* DeviceCachingAllocator::Allocate(size_t size) {
     if (block == nullptr) {
       std::lock_guard<std::mutex> lk(impl_->mu);
       ++impl_->oom_events;
+      impl_->last_oom_message = FormatOomMessage(
+          impl_->device, size, rounded,
+          seg_needed ? seg_needed : SegmentSizeFor(rounded),
+          impl_->reserved_bytes, impl_->in_use_bytes, impl_->peak_in_use_bytes,
+          impl_->segments, impl_->cache_hits, impl_->cache_misses,
+          impl_->limit_bytes, "musaMalloc returned error / nullptr");
+      if (VerboseOomEnabled()) {
+        std::fprintf(stderr, "%s\n", impl_->last_oom_message.c_str());
+        std::fflush(stderr);
+      }
       return nullptr;
     }
     std::lock_guard<std::mutex> lk(impl_->mu);
     impl_->reserved_bytes += block->size;
     ++impl_->segments;
+    impl_->segment_heads.insert(block);
     impl_->MaybeSplitLocked(block, rounded);
     ++impl_->cache_misses;
   }
@@ -380,6 +491,7 @@ uint64_t DeviceCachingAllocator::EmptyCache() {
       if (b->is_segment_head && b->prev == nullptr && b->next == nullptr) {
         to_free.push_back(b);
         it = impl_->free_blocks.erase(it);
+        impl_->segment_heads.erase(b);
         released += b->size;
       } else {
         ++it;
@@ -417,12 +529,81 @@ DeviceCachingAllocatorStats DeviceCachingAllocator::GetStats() const {
   s.splits = impl_->splits;
   s.merges = impl_->merges;
   s.segments = impl_->segments;
+  s.limit_bytes = impl_->limit_bytes;
+  s.total_device_bytes = impl_->total_device_bytes;
   return s;
+}
+
+std::vector<DeviceSegmentInfo> DeviceCachingAllocator::GetSegmentSnapshot()
+    const {
+  std::vector<DeviceSegmentInfo> out;
+  std::lock_guard<std::mutex> lk(impl_->mu);
+  out.reserve(impl_->segment_heads.size());
+  // Each segment is a doubly-linked list rooted at a segment head.
+  // Walk forward and aggregate; free blocks contribute to the free
+  // counters, allocated blocks to `in_use`. `largest_free_block` is
+  // the max over the segment's free blocks, which is what snapshot
+  // consumers need to estimate fragmentation.
+  for (Block* head : impl_->segment_heads) {
+    DeviceSegmentInfo info;
+    info.device = impl_->device;
+    info.address = reinterpret_cast<uintptr_t>(head->ptr);
+    info.is_expandable = false;  // VMM lands in C5.
+    for (Block* b = head; b != nullptr; b = b->next) {
+      info.size += b->size;
+      ++info.num_blocks;
+      if (b->allocated) {
+        info.in_use += b->size;
+      } else {
+        ++info.num_free_blocks;
+        if (b->size > info.largest_free_block) {
+          info.largest_free_block = b->size;
+        }
+      }
+    }
+    out.push_back(info);
+  }
+  return out;
 }
 
 void DeviceCachingAllocator::ResetPeakStats() {
   std::lock_guard<std::mutex> lk(impl_->mu);
   impl_->peak_in_use_bytes = impl_->in_use_bytes;
+}
+
+void DeviceCachingAllocator::SetMemoryLimitBytes(uint64_t bytes) {
+  std::lock_guard<std::mutex> lk(impl_->mu);
+  impl_->limit_bytes = bytes;
+}
+
+uint64_t DeviceCachingAllocator::SetMemoryFraction(double fraction) {
+  if (!(fraction > 0.0) || fraction > 1.0) {
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    impl_->limit_bytes = 0;
+    return 0;
+  }
+  // Refresh total device bytes each call; musaMemGetInfo is cheap and
+  // the value may differ at the first call vs after a long run (other
+  // processes may consume memory in the meantime). Done outside the
+  // allocator lock so the driver call doesn't serialize allocate().
+  musaError_t e = musaSetDevice(impl_->device);
+  if (e != musaSuccess) (void)musaGetLastError();
+  size_t free_b = 0, total_b = 0;
+  if (musaMemGetInfo(&free_b, &total_b) != musaSuccess) {
+    (void)musaGetLastError();
+    total_b = 0;
+  }
+  const uint64_t limit =
+      static_cast<uint64_t>(static_cast<double>(total_b) * fraction);
+  std::lock_guard<std::mutex> lk(impl_->mu);
+  impl_->total_device_bytes = total_b;
+  impl_->limit_bytes = limit;
+  return limit;
+}
+
+std::string DeviceCachingAllocator::GetLastOomMessage() const {
+  std::lock_guard<std::mutex> lk(impl_->mu);
+  return impl_->last_oom_message;
 }
 
 }  // namespace musa

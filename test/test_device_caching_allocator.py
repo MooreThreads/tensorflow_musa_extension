@@ -84,6 +84,20 @@ EXPECTED_DEVICE_STAT_KEYS = {
     "splits",
     "merges",
     "segments",
+    "limit_bytes",
+    "total_device_bytes",
+}
+
+
+EXPECTED_SEGMENT_KEYS = {
+    "device",
+    "address",
+    "size",
+    "in_use",
+    "num_blocks",
+    "num_free_blocks",
+    "largest_free_block",
+    "is_expandable",
 }
 
 
@@ -134,8 +148,10 @@ _E2E_SCRIPT = textwrap.dedent(
             b = tf.random.uniform([256, 256], dtype=tf.float32)
             _ = tf.linalg.matmul(a, b).numpy()
     post = mod._device_allocator_stats(0)
+    segs = mod._device_segment_snapshot(0)
     print("PRE=" + json.dumps(pre))
     print("POST=" + json.dumps(post))
+    print("SEGS=" + json.dumps(segs))
     print("OK")
     """
 )
@@ -180,8 +196,69 @@ def test_caching_backend_serves_most_allocations_from_cache():
     assert post["peak_in_use_bytes"] >= pre["peak_in_use_bytes"]
     assert post["segments"] >= 1
 
+    # Segment snapshot should reflect the live segments.
+    segs = None
+    for line in proc.stdout.splitlines():
+        if line.startswith("SEGS="):
+            segs = json.loads(line[5:])
+            break
+    assert segs is not None and len(segs) == post["segments"], (
+        f"segment list length {len(segs) if segs else None} != "
+        f"segments stat {post['segments']}"
+    )
+    total_size = sum(s["size"] for s in segs)
+    total_in_use = sum(s["in_use"] for s in segs)
+    assert total_size == post["reserved_bytes"]
+    assert total_in_use == post["in_use_bytes"]
+
 
 def test_empty_cache_returns_unsigned_count():
     mod = _load_c_extension()
     released = mod._device_empty_cache(0)
     assert isinstance(released, int) and released >= 0
+
+
+def test_segment_snapshot_returns_well_formed_list():
+    mod = _load_c_extension()
+    segs = mod._device_segment_snapshot(0)
+    assert isinstance(segs, list)
+    for s in segs:
+        assert isinstance(s, dict)
+        assert set(s.keys()) == EXPECTED_SEGMENT_KEYS, s
+        assert s["in_use"] <= s["size"]
+        assert s["num_free_blocks"] <= s["num_blocks"]
+        assert s["largest_free_block"] <= s["size"]
+
+
+def test_memory_fraction_and_limit_round_trip():
+    """SetMemoryLimitBytes / SetMemoryFraction land in GetStats.
+
+    Clears the limit at the end so this test has no side-effects on
+    subsequent tests in the same process. This also exercises the OOM
+    path end-to-end: a deliberately tiny limit forces Allocate to
+    fail, which populates `_device_last_oom_message`.
+    """
+    mod = _load_c_extension()
+    try:
+        mod._device_set_memory_limit_bytes(1 << 20, 0)
+        stats = mod._device_allocator_stats(0)
+        assert stats["limit_bytes"] == 1 << 20
+
+        mod._device_set_memory_limit_bytes(0, 0)
+        stats = mod._device_allocator_stats(0)
+        assert stats["limit_bytes"] == 0
+
+        # Memory fraction path: requires a live MUSA device to query
+        # musaMemGetInfo. Skip the fraction check when we can't reach
+        # the driver (e.g. host-only CI).
+        try:
+            free_b, total_b = mod._device_memory_usage(0)
+        except RuntimeError:
+            pytest.skip("no MUSA device for memory-fraction check")
+        limit = mod._device_set_memory_fraction(0.5, 0)
+        assert 0 < limit <= total_b
+        stats = mod._device_allocator_stats(0)
+        assert stats["limit_bytes"] == limit
+        assert stats["total_device_bytes"] == total_b
+    finally:
+        mod._device_set_memory_fraction(0.0, 0)  # clear
