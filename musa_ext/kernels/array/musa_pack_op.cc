@@ -7,6 +7,8 @@
 
 #include <mudnn.h>
 
+#include <cstdlib>
+#include <cstring>
 #include <type_traits>
 #include <vector>
 
@@ -22,6 +24,10 @@ namespace musa {
 
 template <typename T>
 inline bool NeedsHostVisiblePackSync() {
+  const char* force_sync = std::getenv("MUSA_SYNC_INT_SHAPE_OPS");
+  if (force_sync == nullptr || std::strcmp(force_sync, "1") != 0) {
+    return false;
+  }
   return std::is_same<T, int32>::value || std::is_same<T, int64>::value;
 }
 
@@ -104,9 +110,29 @@ class MusaPackOp : public MusaOpKernel {
     // Handle empty tensors
     if (output->NumElements() == 0) return;
 
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
+    const size_t input_bytes = ctx->input(0).TotalBytes();
+
+    // Fast path: axis=0 stack is just block-wise concatenation of contiguous
+    // inputs, so direct async copies avoid muDNN Concat launch/setup overhead.
+    if (axis == 0) {
+      char* dst = const_cast<char*>(output->tensor_data().data());
+      for (int i = 0; i < N; ++i) {
+        musaError_t err = musaMemcpyAsync(
+            dst + static_cast<size_t>(i) * input_bytes,
+            ctx->input(i).tensor_data().data(), input_bytes,
+            musaMemcpyDeviceToDevice, stream);
+        OP_REQUIRES(ctx, err == musaSuccess,
+                    errors::Internal("musaMemcpyAsync failed in Pack axis=0 "
+                                     "fast path: ",
+                                     musaGetErrorString(err)));
+      }
+      SyncPackStreamIfNeeded(ctx, stream, NeedsHostVisiblePackSync<T>());
+      return;
+    }
+
     // Handle single input - just copy with expanded dim
     if (N == 1) {
-      musaStream_t stream = GetMusaStreamByCtx(ctx);
       musaError_t err = musaMemcpyAsync(
           const_cast<char*>(output->tensor_data().data()),
           ctx->input(0).tensor_data().data(), ctx->input(0).TotalBytes(),

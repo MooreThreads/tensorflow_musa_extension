@@ -1,3 +1,5 @@
+#include <cstdlib>
+
 #include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -6,12 +8,27 @@
 namespace tensorflow {
 namespace musa {
 
+namespace {
+
+inline bool ResolveTF32Enabled() {
+  const char* tf32_env = std::getenv("MUSA_ENABLE_TF32");
+  if (tf32_env == nullptr) {
+    return true;
+  }
+  return std::atoi(tf32_env) != 0;
+}
+
+}  // namespace
+
 template <typename T>
 class MusaMatMulBiasAddOp : public MusaOpKernel {
  public:
   explicit MusaMatMulBiasAddOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("transpose_a", &transpose_a_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("transpose_b", &transpose_b_));
+
+    static const bool tf32_enabled_global = ResolveTF32Enabled();
+    tf32_enabled_ = tf32_enabled_global;
   }
 
   bool IsExpensive() override { return true; }
@@ -71,6 +88,7 @@ class MusaMatMulBiasAddOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, out_shape, &output));
 
     auto& handle = GetHandleByCtx(ctx);
+    handle.SetAllowTF32(tf32_enabled_);
 
     mTensor mt_a = CreateMTensor(a, format_);
     mTensor mt_b = CreateMTensor(b, format_);
@@ -132,6 +150,7 @@ class MusaMatMulBiasAddOp : public MusaOpKernel {
  private:
   bool transpose_a_;
   bool transpose_b_;
+  bool tf32_enabled_ = false;
 };
 
 #define REGISTER_MUSA_MATMUL_BIASADD(TYPE)                                \
