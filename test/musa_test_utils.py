@@ -40,24 +40,29 @@ def _get_test_full_name(test_method):
 # aborts the process. Callers can freely ``load_musa_plugin()`` as many times
 # as they want; we dedupe here.
 _MUSA_PLUGIN_LOADED_PATH = None
+# Module returned by ``tf.load_op_library``. Exposes Python wrappers for every
+# op whose C++ registration lives in ``libmusa_plugin.so`` (MusaInteract,
+# MusaLayerNorm, ResourceApplyNadam, ...). This module only gets populated when
+# ``load_op_library`` runs *before* ``load_pluggable_device_library`` -- if the
+# pluggable-device path dlopens the .so first, TF tags the library as "already
+# loaded" and returns an empty module from any subsequent ``load_op_library``
+# call. We therefore load in the order: ops-first, device-second.
+_MUSA_OPS_MODULE = None
 
 
 def load_musa_plugin():
   """Load the MUSA PluggableDevice plugin (idempotent).
 
   The plugin is registered with TensorFlow via the public
-  ``SE_InitPlugin`` C API. The preferred entry point is therefore
-  ``load_library.load_pluggable_device_library``, which explicitly goes
-  through the PluggableDevice path and registers ``MUSA`` as a physical
-  device.
-
-  ``tf.load_library`` is kept as a fallback because older TF 2.6 builds do
-  not always expose ``load_pluggable_device_library``, and because some
-  deployments rely on an auto-loaded plugin placed under
-  ``<tf_install>/tensorflow-plugins/`` (TensorFlow 2.5+ auto-loads every
-  shared library found there at import time).
+  ``SE_InitPlugin`` C API, which is only invoked through
+  ``load_library.load_pluggable_device_library``. We additionally call
+  ``tf.load_op_library`` first so tests can reach custom ops
+  (``MusaInteract``, ``MusaLayerNorm``, ``ResourceApplyNadam``, ...) via
+  a returned module. ``tf.raw_ops`` is populated at TF build time and does
+  not expose dynamically-loaded custom ops, so a fresh op_library module is
+  the only portable entry point for them in eager mode.
   """
-  global _MUSA_PLUGIN_LOADED_PATH
+  global _MUSA_PLUGIN_LOADED_PATH, _MUSA_OPS_MODULE
   if _MUSA_PLUGIN_LOADED_PATH is not None:
     return _MUSA_PLUGIN_LOADED_PATH
 
@@ -87,6 +92,18 @@ def load_musa_plugin():
     )
 
   try:
+    # Step 1: load ops. This dlopens the .so (firing C++ static initializers
+    # -- REGISTER_OP, REGISTER_KERNEL_BUILDER -- into the op registry) and
+    # returns a Python module exposing wrappers for every newly-registered op.
+    # Must run before the pluggable-device path, which marks the library as
+    # already-loaded and makes the follow-up load_op_library return an empty
+    # module.
+    try:
+      _MUSA_OPS_MODULE = tf.load_op_library(plugin_path)
+    except Exception:
+      _MUSA_OPS_MODULE = None
+
+    # Step 2: register the device platform via the pluggable-device C API.
     load_pluggable = None
     try:
       from tensorflow.python.framework import load_library as _ll
@@ -98,7 +115,8 @@ def load_musa_plugin():
 
     if load_pluggable is not None:
       load_pluggable(plugin_path)
-    else:
+    elif _MUSA_OPS_MODULE is None:
+      # No pluggable-device entry point and load_op_library failed too.
       tf.load_library(plugin_path)
   except Exception as e:
     print(f"FAILED: Error loading MUSA plugin from {plugin_path}: {e}")
@@ -106,6 +124,19 @@ def load_musa_plugin():
 
   _MUSA_PLUGIN_LOADED_PATH = plugin_path
   return plugin_path
+
+
+def get_musa_ops():
+  """Return the module exposing this plugin's custom op wrappers.
+
+  The module's attributes map to the ``REGISTER_OP(Name)`` declarations in
+  ``libmusa_plugin.so`` -- e.g. ``get_musa_ops().musa_interact(...)``.
+  Returns ``None`` if the plugin hasn't been loaded or if load_op_library
+  couldn't resolve it (older TF builds).
+  """
+  if _MUSA_PLUGIN_LOADED_PATH is None:
+    load_musa_plugin()
+  return _MUSA_OPS_MODULE
 
 
 # Import tensorflow first (load_musa_plugin needs it)

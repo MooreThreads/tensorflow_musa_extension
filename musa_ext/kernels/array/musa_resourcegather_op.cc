@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "../utils_op.h"
+#include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/resource_mgr.h"
 #include "tensorflow/core/framework/resource_var.h"
@@ -235,10 +236,11 @@ class MusaResourceScatterAddOp : public MusaOpKernel {
 
       auto params_mt = CreateMTensor(*params, format_);
       auto indices_mt = CreateMTensor(indices, format_);
-      // Reshape indices for scatter-nd op.
-      indices_mt.SetNdInfo(
-          {static_cast<int64_t>(indices.shape().dim_sizes().size()), 1LL});
-      ;
+      // Reshape indices for scatter-nd op. Each index is a rank-1 vector
+      // pointing at a row in `params`, so the layout mudnn expects is
+      // [num_indices, 1] -- not [rank_of_indices_shape, 1], which was the
+      // previous (buggy) formulation and silently dropped all but one index.
+      indices_mt.SetNdInfo({static_cast<int64_t>(indices.NumElements()), 1LL});
       auto updates_mt = CreateMTensor(updates, format_);
       MTOP_CHECK_OK_RUN(
           op.Run(h, params_mt, indices_mt, updates_mt, maintainer),
@@ -349,6 +351,19 @@ REGISTER_MUSA_KERNELS(Eigen::half);
 REGISTER_MUSA_KERNELS(double);
 REGISTER_MUSA_KERNELS(int32);
 REGISTER_MUSA_KERNELS(int64);
+
+// bfloat16 is only supported for the Assign{Add,Sub}VariableOp paths --
+// ResourceGather / ResourceScatterAdd don't have custom kernels for it --
+// so register those two directly instead of widening REGISTER_MUSA_KERNELS.
+#define REGISTER_MUSA_ASSIGN_UPDATE_BF16(op_name, bmode)          \
+  REGISTER_KERNEL_BUILDER(Name(op_name)                           \
+                              .Device(DEVICE_MTGPU)               \
+                              .HostMemory("resource")             \
+                              .TypeConstraint<bfloat16>("dtype"), \
+                          MusaAssignUpdateVariableOp<bfloat16, bmode>)
+REGISTER_MUSA_ASSIGN_UPDATE_BF16("AssignAddVariableOp", mBinary::Mode::ADD);
+REGISTER_MUSA_ASSIGN_UPDATE_BF16("AssignSubVariableOp", mBinary::Mode::SUB);
+#undef REGISTER_MUSA_ASSIGN_UPDATE_BF16
 
 REGISTER_KERNEL_BUILDER(Name("VariableShape")
                             .Device(DEVICE_MTGPU)

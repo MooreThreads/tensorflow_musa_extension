@@ -124,11 +124,11 @@ class MusaTensorListStackOp : public MusaOpKernel {
       return;
     }
 
-    auto& h = GetHandleByCtx(ctx);
-    musaStream_t stream = reinterpret_cast<musaStream_t>(h.GetStream());
-
-    OP_REQUIRES(ctx, stream != nullptr,
-                errors::Internal("Failed to get valid MUSA stream."));
+    // See the comment in musa_tensorlist_fromtensor_op.cc: fetch the raw
+    // driver stream directly instead of going through
+    // mudnn::Handle::GetStream(). A nullptr return is legal in eager mode -- it
+    // maps to the default MUSA stream for musaMemcpyAsync / musaMemsetAsync.
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
 
     Tensor zeros;
     bool has_zeros = false;
@@ -168,8 +168,16 @@ class MusaTensorListStackOp : public MusaOpKernel {
       const T* src_base = src_tensor->flat<T>().data();
       const size_t bytes = src_tensor->TotalBytes();
 
+      // Use `musaMemcpyDefault` so the runtime infers the direction from
+      // the pointer attributes. The list's element tensors are normally
+      // device-resident (allocate_temp on MUSA), but when the list was
+      // produced via `TensorListReserve` + TF's fallback CPU
+      // `TensorListSetItem`, individual elements may live in host memory.
+      // `musaMemcpyDeviceToDevice` would reject the host pointer with
+      // `musaErrorInvalidValue` (error code 1); `musaMemcpyDefault` handles
+      // both layouts uniformly.
       auto err = musaMemcpyAsync(output_base + offset_elems, src_base, bytes,
-                                 musaMemcpyHostToDevice, stream);
+                                 musaMemcpyDefault, stream);
       OP_REQUIRES(
           ctx, err == musaSuccess,
           errors::Internal("musaMemcpyAsync failed in TensorListStack, error "

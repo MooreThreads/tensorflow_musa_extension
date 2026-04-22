@@ -17,30 +17,19 @@
 
 import numpy as np
 import tensorflow as tf
-from musa_test_utils import MUSATestCase, load_musa_plugin
-from tensorflow.python.ops import gen_training_ops
+from musa_test_utils import MUSATestCase, get_musa_ops
 
-musa_ops = tf.load_op_library(load_musa_plugin())
+# The plugin's REGISTER_OP("ResourceApplyNadam") + MUSA kernel binding run
+# at module import via musa_test_utils. The op is custom-registered by this
+# plugin (TF 2.6 does not ship a native ResourceApplyNadam), so
+# ``tf.raw_ops.ResourceApplyNadam`` is NOT populated -- we dispatch through
+# the module returned by tf.load_op_library, exposed as
+# ``get_musa_ops().resource_apply_nadam``.
+_musa_ops = get_musa_ops()
+
 
 class ResourceApplyNadamOpTest(MUSATestCase):
     """Tests for MUSA ResourceApplyNadam operator."""
-
-    def _get_nadam_op(self):
-        if hasattr(tf.raw_ops, "ResourceApplyNadam"):
-            return tf.raw_ops.ResourceApplyNadam
-        try:
-            from musa_test_utils import musa_ops
-            if hasattr(musa_ops, "ResourceApplyNadam"):
-                return musa_ops.ResourceApplyNadam
-        except ImportError:
-            pass
-        try:
-            from tensorflow.python.ops import gen_training_ops
-            if hasattr(gen_training_ops, "resource_apply_nadam"):
-                return gen_training_ops.resource_apply_nadam
-        except ImportError:
-            pass
-        return None
 
     def _test_resource_apply_nadam(self, shape, dtype, rtol=1e-5, atol=1e-5):
         np_dtype = np.float32 if dtype in [tf.bfloat16, tf.half] else dtype.as_numpy_dtype
@@ -90,8 +79,9 @@ class ResourceApplyNadamOpTest(MUSATestCase):
                     m.assign(m_new)
                     v.assign(v_new)
                 else:
-                    op_func = musa_ops.ResourceApplyNadam
-                    op_func(
+                    if _musa_ops is None:
+                        self.skipTest("MUSA ResourceApplyNadam op module not available")
+                    _musa_ops.resource_apply_nadam(
                         var=var.handle, m=m.handle, v=v.handle,
                         beta1_power=beta1_power, beta2_power=beta2_power,
                         lr=lr, beta1=beta1, beta2=beta2, epsilon=epsilon, grad=grad

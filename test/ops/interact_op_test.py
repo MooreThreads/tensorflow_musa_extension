@@ -18,7 +18,9 @@
 import os
 import numpy as np
 import tensorflow as tf
-from musa_test_utils import MUSATestCase
+from musa_test_utils import MUSATestCase, get_musa_ops
+
+_musa_ops = get_musa_ops()
 
 
 def interact_ref(input_tensor):
@@ -30,52 +32,15 @@ def interact_ref(input_tensor):
 class InteractOpTest(MUSATestCase):
     """Tests for MUSA Interact operator."""
 
-    @classmethod
-    def setUpClass(cls):
-        """Set up the test class by loading the MUSA plugin using load_op_library."""
-        super(InteractOpTest, cls).setUpClass()
-
-        # Use the same path resolution logic as in musa_test_utils
-        plugin_path = None
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-
-        # Common plugin locations to try
-        candidate_paths = [
-            # Relative to test directory (most common case)
-            os.path.join(current_dir, "..", "..", "build", "libmusa_plugin.so"),
-            # Relative to project root (when running from project root)
-            os.path.join(os.path.dirname(current_dir), "..", "build", "libmusa_plugin.so"),
-            # Current working directory build
-            os.path.join(os.getcwd(), "..", "build", "libmusa_plugin.so"),
-        ]
-
-        for path in candidate_paths:
-            normalized_path = os.path.normpath(path)
-            if os.path.exists(normalized_path):
-                plugin_path = normalized_path
-                break
-
-        if plugin_path and os.path.exists(plugin_path):
-            try:
-                # Use tf.load_op_library instead of tf.load_library
-                cls._musa_ops = tf.load_op_library(plugin_path)
-                # print(f"SUCCESS: MUSA Interact ops loaded from {plugin_path}!")
-            except Exception as e:
-                print(f"FAILED: Error loading MUSA ops from {plugin_path}: {e}")
-                cls._musa_ops = None
-        else:
-            # Provide helpful error message
-            searched_locations = [os.path.normpath(path) for path in candidate_paths]
-            print(f"MUSA plugin not found. Searched locations:\n" +
-                  "\n".join(f"  - {loc}" for loc in searched_locations))
-            cls._musa_ops = None
+    # MUSATestCase's module import already loaded the plugin via
+    # load_musa_plugin() which runs load_op_library first so that the
+    # MusaInteract wrapper is reachable as ``get_musa_ops().musa_interact``.
+    # ``tf.raw_ops.MusaInteract`` is NOT available because tf.raw_ops is
+    # populated from the op registry snapshot taken at TF build time, which
+    # does not include plugin-registered custom ops.
 
     def _test_interact(self, input_shape, dtype):
         """Test Interact operation with given shape and dtype."""
-        # Skip if MUSA ops are not available
-        if self._musa_ops is None:
-            self.skipTest("MUSA Interact ops module not available")
-
         # Handle numpy dtype compatibility
         if dtype == tf.bfloat16:
             np_dtype = np.float32
@@ -92,9 +57,12 @@ class InteractOpTest(MUSATestCase):
         with tf.device('/CPU:0'):
             cpu_result = interact_ref(input_tensor)
 
+        if _musa_ops is None:
+            self.skipTest("MUSA Interact ops module not available")
+
         # Test on MUSA using custom op
         with tf.device('/device:MUSA:0'):
-            musa_result = self._musa_ops.musa_interact(input=input_tensor)
+            musa_result = _musa_ops.musa_interact(input=input_tensor)
 
         # Compare results
         if dtype in [tf.float16, tf.bfloat16]:
