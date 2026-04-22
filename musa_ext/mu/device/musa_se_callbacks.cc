@@ -1219,7 +1219,28 @@ class PinnedStagingPool {
 
     size_t NumThreads() const { return workers_.size() + 1; }
 
+    // Run(): serialized across concurrent callers.
+    //
+    // The worker pool keeps only a single job slot (`job_dst_`, `job_src_`,
+    // `job_chunk_`, `job_size_`, `pending_`, `generation_`). If two threads
+    // were allowed to enter Run() simultaneously, the second would overwrite
+    // the slot and reset `pending_` before the first run's workers have
+    // picked up the job from `mu_`, causing them to all process the second
+    // job and decrement the second run's pending_. The first Run() would
+    // then observe `pending_ == 0` on `done_cv_` and return with most
+    // chunks of its buffer NEVER copied -- the caller then proceeds to
+    // `musaMemcpyAsync` a partially-initialized pinned staging buffer into
+    // GPU memory. Downstream kernels consume the garbage, triggering a
+    // driver fault and a "force destroy app memory context" in dmesg, which
+    // manifests as a silent hang (host threads wait forever on events that
+    // will never complete).
+    //
+    // The fix is an outer mutex that guards the entire Run() body so only
+    // one job at a time can touch the shared slot. The intra-Run
+    // parallelism (chunks spread across workers) is preserved.
     void Run(void* dst, const void* src, size_t size) {
+      std::lock_guard<std::mutex> run_lk(run_mu_);
+
       const size_t nt = NumThreads();
       const size_t chunk = (size + nt - 1) / nt;
 
@@ -1296,6 +1317,9 @@ class PinnedStagingPool {
       }
     }
 
+    // Outer lock: serializes concurrent Run() callers. See the long comment
+    // on Run() for why single-slot job state would otherwise be corrupted.
+    std::mutex run_mu_;
     std::mutex mu_;
     std::condition_variable start_cv_;
     std::condition_variable done_cv_;
@@ -1378,26 +1402,33 @@ class PinnedStagingPool {
 
   // Sweeps completed in-flight entries into the free list. Must be
   // called under `mu_`.
+  //
+  // `in_flight_` intermixes events recorded on multiple streams (and
+  // potentially multiple devices), so there is no global completion
+  // ordering: a later-inserted entry can finish before an earlier one.
+  // We therefore scan the whole deque and only retain entries whose
+  // events are still pending. Completed entries are destroyed and
+  // their pinned buffers are returned to the pool (or freed if the
+  // per-class free-list is full).
   void DrainInFlightLocked() {
-    while (!in_flight_.empty()) {
-      InFlight& f = in_flight_.front();
-      musaError_t e = musaEventQuery(f.ev);
+    auto it = in_flight_.begin();
+    while (it != in_flight_.end()) {
+      musaError_t e = musaEventQuery(it->ev);
       if (e != musaSuccess) {
+        // Not ready yet -- leave this entry in place; the buffer is
+        // still live from the GPU's point of view.
         (void)musaGetLastError();
-        // Event not complete yet. Since in-flight is inserted in
-        // stream order and our events are all recorded on the same
-        // H2D stream in practice, once we hit a not-done event all
-        // later ones are also not done.
-        break;
+        ++it;
+        continue;
       }
-      musaEventDestroy(f.ev);
-      if (free_[f.cls].size() < kMaxFreePerClass) {
-        free_[f.cls].push_back(f.buf);
+      musaEventDestroy(it->ev);
+      if (free_[it->cls].size() < kMaxFreePerClass) {
+        free_[it->cls].push_back(it->buf);
       } else {
-        musaFreeHost(f.buf);
-        total_allocated_ -= f.cls;
+        musaFreeHost(it->buf);
+        total_allocated_ -= it->cls;
       }
-      in_flight_.pop_front();
+      it = in_flight_.erase(it);
     }
   }
 
