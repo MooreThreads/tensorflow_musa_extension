@@ -120,6 +120,7 @@ link_directories("${MUSA_PATH}/lib" "${MUSA_PATH}/lib64" "${TF_LIB_DIR}")
 set(MUSA_CORE_SOURCES
     "${SRC_ROOT}/mu/device/event_pool.cc"
     "${SRC_ROOT}/mu/device/host_caching_allocator.cc"
+    "${SRC_ROOT}/mu/device/caching_allocator.cc"
 )
 
 # -----------------------------------------------------------------------------

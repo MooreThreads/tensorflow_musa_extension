@@ -31,10 +31,16 @@ limitations under the License.
 
 #include <cstdint>
 
+#include "mu/device/caching_allocator.h"
 #include "mu/device/host_caching_allocator.h"
 
 namespace {
 
+using ::tensorflow::musa::DeviceAllocatorBackend;
+using ::tensorflow::musa::DeviceAllocatorBackendName;
+using ::tensorflow::musa::DeviceCachingAllocator;
+using ::tensorflow::musa::DeviceCachingAllocatorStats;
+using ::tensorflow::musa::GetDeviceAllocatorBackend;
 using ::tensorflow::musa::HostCachingAllocator;
 using ::tensorflow::musa::HostCachingAllocatorStats;
 
@@ -77,11 +83,61 @@ PyObject* HostAllocatorStats(PyObject* /*self*/, PyObject* /*args*/) {
   return BuildStatsDict(s);
 }
 
+PyObject* DeviceAllocatorStats(PyObject* /*self*/, PyObject* args) {
+  int ordinal = 0;
+  if (!PyArg_ParseTuple(args, "|i", &ordinal)) return nullptr;
+  DeviceCachingAllocatorStats s =
+      DeviceCachingAllocator::For(ordinal).GetStats();
+  PyObject* d = PyDict_New();
+  if (d == nullptr) return nullptr;
+  auto put_u64 = [&](const char* key, std::uint64_t v) -> bool {
+    PyObject* val = PyLong_FromUnsignedLongLong(v);
+    if (val == nullptr) return false;
+    int rc = PyDict_SetItemString(d, key, val);
+    Py_DECREF(val);
+    return rc == 0;
+  };
+  if (!put_u64("in_use_bytes", s.in_use_bytes) ||
+      !put_u64("reserved_bytes", s.reserved_bytes) ||
+      !put_u64("cached_bytes", s.cached_bytes) ||
+      !put_u64("peak_in_use_bytes", s.peak_in_use_bytes) ||
+      !put_u64("alloc_requests", s.alloc_requests) ||
+      !put_u64("cache_hits", s.cache_hits) ||
+      !put_u64("cache_misses", s.cache_misses) ||
+      !put_u64("oom_events", s.oom_events) || !put_u64("splits", s.splits) ||
+      !put_u64("merges", s.merges) || !put_u64("segments", s.segments)) {
+    Py_DECREF(d);
+    return nullptr;
+  }
+  return d;
+}
+
+PyObject* DeviceAllocatorBackendStr(PyObject* /*self*/, PyObject* /*args*/) {
+  return PyUnicode_FromString(
+      DeviceAllocatorBackendName(GetDeviceAllocatorBackend()));
+}
+
+PyObject* DeviceEmptyCache(PyObject* /*self*/, PyObject* args) {
+  int ordinal = 0;
+  if (!PyArg_ParseTuple(args, "|i", &ordinal)) return nullptr;
+  uint64_t released = DeviceCachingAllocator::For(ordinal).EmptyCache();
+  return PyLong_FromUnsignedLongLong(released);
+}
+
 PyMethodDef kMethods[] = {
     {"_is_loaded", IsLoaded, METH_NOARGS,
      "Return True iff the native _C module loaded successfully."},
     {"_host_allocator_stats", HostAllocatorStats, METH_NOARGS,
      "Return a dict snapshot of HostCachingAllocator statistics."},
+    {"_device_allocator_stats", DeviceAllocatorStats, METH_VARARGS,
+     "Return a dict snapshot of the DeviceCachingAllocator for the given "
+     "device ordinal (default 0)."},
+    {"_device_allocator_backend", DeviceAllocatorBackendStr, METH_NOARGS,
+     "Return the active device allocator backend name: 'caching' or "
+     "'passthrough'."},
+    {"_device_empty_cache", DeviceEmptyCache, METH_VARARGS,
+     "Release every fully-free cached segment on the given ordinal and "
+     "return the number of bytes returned to the driver."},
     {nullptr, nullptr, 0, nullptr},
 };
 

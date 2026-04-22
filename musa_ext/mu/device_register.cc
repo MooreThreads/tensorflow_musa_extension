@@ -32,8 +32,10 @@ limitations under the License.
 #include <musa_runtime.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
+#include "mu/device/caching_allocator.h"
 #include "mu/device/musa_resource_mgr.h"
 #include "mu/device/musa_se_callbacks.h"
 #include "mu/device/musa_telemetry.h"
@@ -145,11 +147,21 @@ void SE_InitPlugin(SE_PlatformRegistrationParams* const params,
   platform->name = kMusaPlatformName;
   platform->type = kMusaDeviceType;
   platform->supports_unified_memory = 0;
-  // Delegate BFC pooling to TF core's PluggableDeviceBFCAllocator, matching
-  // tensorflow/core/common_runtime/gpu/gpu_bfc_allocator.cc behavior. Our
-  // raw allocate/deallocate just wraps musaMalloc/musaFree, and TF grows the
-  // pool on demand the same way it does for CUDA.
-  platform->use_bfc_allocator = 1;
+  // BFC interoperability: commit C3 introduces a native DeviceCachingAllocator
+  // that subsumes what PluggableDeviceBFC was doing on top of raw musaMalloc.
+  // When the caching backend is active we ask TF to NOT wrap our allocate
+  // callback with its own BFC (else we'd cache twice and double-count
+  // reserved memory); when the backend is in passthrough mode we keep
+  // TF's BFC so behavior matches the pre-C3 build exactly.
+  const tensorflow::musa::DeviceAllocatorBackend backend =
+      tensorflow::musa::GetDeviceAllocatorBackend();
+  platform->use_bfc_allocator =
+      (backend == tensorflow::musa::DeviceAllocatorBackend::kPassthrough) ? 1
+                                                                          : 0;
+  std::fprintf(stderr,
+               "[MUSA] device allocator backend=%s, use_bfc_allocator=%d\n",
+               tensorflow::musa::DeviceAllocatorBackendName(backend),
+               platform->use_bfc_allocator);
 
   SP_PlatformFns* pfns = params->platform_fns;
   std::memset(pfns, 0, sizeof(*pfns));

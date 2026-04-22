@@ -43,6 +43,7 @@ limitations under the License.
 #include <unordered_set>
 #include <vector>
 
+#include "mu/device/caching_allocator.h"
 #include "mu/device/event_pool.h"
 #include "mu/device/host_caching_allocator.h"
 #include "mu/device/musa_telemetry.h"
@@ -381,6 +382,19 @@ void allocate(const SP_Device* device, uint64_t size, int64_t /*memory_space*/,
     return;
   }
 
+  // Dispatch to the caching allocator by default; env-driven
+  // passthrough mode bypasses it and goes direct to the driver so that
+  // TF's own BFC (if still enabled) handles pooling — useful when
+  // bisecting correctness issues to our cache.
+  if (GetDeviceAllocatorBackend() == DeviceAllocatorBackend::kCaching) {
+    ptr = DeviceCachingAllocator::For(ordinal).Allocate(size);
+    // nullptr → OOM. TF's allocate callback contract: leave opaque=null
+    // on failure, caller (SP_StreamExecutor wrapper) turns it into a
+    // ResourceExhausted status.
+    mem->opaque = ptr;
+    return;
+  }
+
   musaError_t err = musaMalloc(&ptr, size);
   if (err != musaSuccess) {
     // Leave opaque=nullptr; TF's BFC wrapper treats this as allocator failure.
@@ -399,6 +413,8 @@ void deallocate(const SP_Device* device, SP_DeviceMemoryBase* mem) {
   // and must be released via musaFreeAsync.
   if (AsyncDeviceAllocator::Instance().IsEnabled(ordinal)) {
     AsyncDeviceAllocator::Instance().Deallocate(ordinal, mem->opaque);
+  } else if (GetDeviceAllocatorBackend() == DeviceAllocatorBackend::kCaching) {
+    DeviceCachingAllocator::For(ordinal).Free(mem->opaque);
   } else {
     musaError_t err = musaFree(mem->opaque);
     (void)err;  // BFC's caller expects this to be best-effort.
