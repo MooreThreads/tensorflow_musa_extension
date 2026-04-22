@@ -29,10 +29,11 @@ limitations under the License.
 //     `#ifdef` instead of hard-coding TF version checks.
 //
 // Important: the PluggableDevice C API contract is struct-size-versioned.
-// TF fills `params->struct_size` with `SE_PLATFORM_REGISTRATION_PARAMS_STRUCT_SIZE`
-// and checks ours when it reads us back. New fields are append-only, so an
-// older plugin still runs against a newer TF (TF only looks at the fields it
-// announced via struct_size). This shim documents which fields we rely on.
+// TF fills `params->struct_size` with
+// `SE_PLATFORM_REGISTRATION_PARAMS_STRUCT_SIZE` and checks ours when it reads
+// us back. New fields are append-only, so an older plugin still runs against a
+// newer TF (TF only looks at the fields it announced via struct_size). This
+// shim documents which fields we rely on.
 
 #ifndef TENSORFLOW_MUSA_MU_TF_COMPAT_H_
 #define TENSORFLOW_MUSA_MU_TF_COMPAT_H_
@@ -49,7 +50,8 @@ limitations under the License.
 // TF 2.5 through at least 2.16). If TF ever bumps SE_MAJOR, we need to audit
 // the whole SE callback table, so surface that as a hard error.
 #ifndef SE_MAJOR
-#error "tf_compat.h: SE_MAJOR not defined by TF's stream_executor.h; \
+#error \
+    "tf_compat.h: SE_MAJOR not defined by TF's stream_executor.h; \
 cannot determine PluggableDevice ABI version."
 #endif
 

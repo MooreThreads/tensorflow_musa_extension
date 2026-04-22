@@ -43,6 +43,8 @@ limitations under the License.
 #include <unordered_set>
 #include <vector>
 
+#include "mu/device/event_pool.h"
+#include "mu/device/host_caching_allocator.h"
 #include "mu/device/musa_telemetry.h"
 #include "mu/tf_compat.h"
 
@@ -344,141 +346,9 @@ class AsyncDeviceAllocator {
   std::unordered_map<int, std::unique_ptr<PerDevice>> per_device_;
 };
 
-// --- Per-device event pool for create_event / destroy_event ---
-//
-// TF's EventMgr creates and destroys hundreds of events per session step: one
-// each time a tensor's lifetime needs to be tied to GPU completion. On a
-// 2500+-node inference graph, `musaEventCreateWithFlags` / `musaEventDestroy`
-// round-trips to the driver add up to non-trivial per-step CPU overhead and
-// show up directly as gaps between kernel launches in `musaEventSync`-dense
-// regions of the timeline.
-//
-// Correctness contract: re-recording a pooled `musaEvent_t` silently
-// overwrites any prior record. That is ONLY safe if every wait (host-side
-// `musaEventSynchronize` or stream-side `musaStreamWaitEvent`) tied to the
-// previous record has already been RELEASED by the driver, not just
-// enqueued. Unlike `create_stream_dependency`, where we can't prove that
-// property at destroy time, events handed to us via `destroy_event` are
-// observable: we query them before pooling and only re-use handles for
-// which `musaEventQuery == musaSuccess`. That means the record has been
-// reached, which in turn means any `musaStreamWaitEvent` referring to it
-// has been signalled and any host `musaEventSynchronize` has returned.
-// Incomplete events fall through to plain `musaEventDestroy` -- a perfectly
-// safe release path since the driver refcounts the handle internally, so
-// we never let a pending wait race against a re-record.
-//
-// The pool is per-device because events are device-scoped in the MUSA
-// runtime: an event created on device A cannot be recorded on a stream of
-// device B. A small per-device cap keeps memory bounded if EventMgr ever
-// builds a pathological backlog.
-class EventPool {
- public:
-  static EventPool& Instance() {
-    static EventPool inst;
-    return inst;
-  }
-
-  // Returns a ready-to-record event for `ordinal`. On cache hit the pooled
-  // handle is returned directly; on miss we fall back to the driver. Either
-  // way the returned handle is created with `musaEventDisableTiming` so
-  // record/wait are both lightweight.
-  musaError_t Acquire(int ordinal, musaEvent_t* out_event) {
-    if (!Enabled()) {
-      musaEvent_t ev = nullptr;
-      musaError_t err = musaEventCreateWithFlags(&ev, musaEventDisableTiming);
-      if (err != musaSuccess) return err;
-      *out_event = ev;
-      return musaSuccess;
-    }
-    PerDevice& pd = GetPerDevice(ordinal);
-    {
-      std::lock_guard<std::mutex> lk(pd.mu);
-      if (!pd.free.empty()) {
-        *out_event = pd.free.back();
-        pd.free.pop_back();
-        return musaSuccess;
-      }
-    }
-    musaEvent_t ev = nullptr;
-    musaError_t err = musaEventCreateWithFlags(&ev, musaEventDisableTiming);
-    if (err != musaSuccess) return err;
-    *out_event = ev;
-    return musaSuccess;
-  }
-
-  // Returns an event to the pool, or destroys it if the pool is full.
-  //
-  // Historically this path also called `musaEventQuery(ev)` and only pooled
-  // completed events, out of concern that recycling a handle whose record
-  // is still in flight could race a pending `musaStreamWaitEvent`. That
-  // concern is unfounded: per the CUDA/MUSA programming model,
-  // `musaStreamWaitEvent` captures a reference to the event's record state
-  // at the time of the call, and that reference is unaffected by
-  // subsequent `musaEventRecord` calls on the same handle. Pooling
-  // unconditionally is therefore safe.
-  //
-  // In addition, by the time TF's EventMgr calls `destroy_event` the
-  // record has already been polled to SE_EVENT_COMPLETE, so the query was
-  // already redundant in practice. Eliding it saves one driver round-trip
-  // per destroy -- on the prunedGraph inference workload there are 100+
-  // destroys per step, which is 0.3-0.5 ms of recovered time.
-  void Release(int ordinal, musaEvent_t ev) {
-    if (ev == nullptr) return;
-    if (!Enabled()) {
-      musaEventDestroy(ev);
-      return;
-    }
-    PerDevice& pd = GetPerDevice(ordinal);
-    {
-      std::lock_guard<std::mutex> lk(pd.mu);
-      if (pd.free.size() < kMaxPerDevice) {
-        pd.free.push_back(ev);
-        return;
-      }
-    }
-    musaEventDestroy(ev);
-  }
-
- private:
-  // Empirically EventMgr's in-flight set on TF 2.6 inference sits in the
-  // low hundreds; 256 is a comfortable ceiling that still bounds memory.
-  static constexpr size_t kMaxPerDevice = 256;
-
-  // Opt-out: if `TF_MUSA_DISABLE_EVENT_POOL=1` is set we fall back to plain
-  // create/destroy for every event. Useful for A/B testing correctness.
-  static bool Enabled() {
-    static const bool kEnabled = []() {
-      const char* e = std::getenv("TF_MUSA_DISABLE_EVENT_POOL");
-      if (e == nullptr || *e == '\0') return true;
-      const std::string v(e);
-      return !(v == "1" || v == "true" || v == "TRUE" || v == "yes" ||
-               v == "YES" || v == "on" || v == "ON");
-    }();
-    return kEnabled;
-  }
-
-  struct PerDevice {
-    std::mutex mu;
-    std::vector<musaEvent_t> free;
-  };
-
-  PerDevice& GetPerDevice(int ordinal) {
-    // First try a lock-free read: per_device_ stabilizes after the first
-    // access for each ordinal, and subsequent lookups should not contend.
-    {
-      std::lock_guard<std::mutex> lk(mu_);
-      auto it = per_device_.find(ordinal);
-      if (it != per_device_.end()) return *it->second;
-      auto pd = std::unique_ptr<PerDevice>(new PerDevice);
-      PerDevice* raw = pd.get();
-      per_device_.emplace(ordinal, std::move(pd));
-      return *raw;
-    }
-  }
-
-  std::mutex mu_;
-  std::unordered_map<int, std::unique_ptr<PerDevice>> per_device_;
-};
+// EventPool has been extracted to mu/device/event_pool.h so it can be
+// shared with the caching allocators; all code in this TU references
+// tensorflow::musa::EventPool via that header.
 
 /*** Allocation callbacks ***/
 
@@ -537,19 +407,43 @@ void deallocate(const SP_Device* device, SP_DeviceMemoryBase* mem) {
   mem->size = 0;
 }
 
+// host_memory_allocate / host_memory_deallocate now route through
+// HostCachingAllocator. TF calls these paths frequently (BFC sub-allocator
+// for HostMemory tensors, H2D staging, etc.) and each syscall-grade
+// musaHostAlloc/musaFreeHost pair was dominating certain inference step
+// times. The caching allocator returns pinned buffers rounded to size
+// classes, so most calls after the first step are served from the
+// per-class free list.
+//
+// Fallback behavior: if the caching layer is disabled (env
+// TF_MUSA_DISABLE_HOST_CACHING=1) or the cache hits its pool cap, we fall
+// back to a one-shot musaHostAlloc/musaFreeHost so the request is still
+// served. The allocator tracks ownership via an internal pointer map, so
+// host_memory_deallocate can safely delegate in both modes: if the
+// pointer is tracked it goes back to the cache; if not it is released
+// directly via musaFreeHost. That keeps the two sides in sync without
+// requiring host_memory_allocate to annotate its return value.
 void* host_memory_allocate(const SP_Device* device, uint64_t size) {
   if (size == 0) return nullptr;
   CachedSetDevice(DeviceOrdinal(device));
-  void* ptr = nullptr;
-  musaError_t err = musaHostAlloc(&ptr, size, musaHostAllocDefault);
-  if (err != musaSuccess) return nullptr;
-  return ptr;
+  void* ptr = HostCachingAllocator::Instance().Allocate(size);
+  if (ptr != nullptr) return ptr;
+  // Cache refused the request (cap or OOM). Fall back to a direct
+  // allocation so TF still gets a pinned buffer; it will be released via
+  // the passthrough branch of HostCachingAllocator::Free.
+  void* direct = nullptr;
+  musaError_t err = musaHostAlloc(&direct, size, musaHostAllocPortable);
+  if (err != musaSuccess) {
+    (void)musaGetLastError();
+    return nullptr;
+  }
+  return direct;
 }
 
 void host_memory_deallocate(const SP_Device* device, void* mem) {
   if (!mem) return;
   CachedSetDevice(DeviceOrdinal(device));
-  musaFreeHost(mem);
+  HostCachingAllocator::Instance().Free(mem);
 }
 
 TF_Bool get_allocator_stats(const SP_Device* /*device*/,
@@ -1123,8 +1017,11 @@ class PinnedStagingPool {
   // staging path was used (whether the copy itself succeeded or not --
   // `*out_err` carries that). When false, the caller must fall back to
   // the usual pageable `musaMemcpyAsync`.
+  //
+  // `ordinal` is the device ordinal used to key per-device events in
+  // HostCachingAllocator::RecordStream.
   bool TryStagingCopy(void* device_dst, const void* host_src, uint64_t size,
-                      musaStream_t stream, musaError_t* out_err) {
+                      int ordinal, musaStream_t stream, musaError_t* out_err) {
     if (!Enabled() || size < threshold_ || host_src == nullptr ||
         device_dst == nullptr) {
       return false;
@@ -1140,19 +1037,29 @@ class PinnedStagingPool {
     }
     (void)musaGetLastError();
 
-    const size_t cls = SizeClass(size);
-    void* stage = nullptr;
-    {
-      std::lock_guard<std::mutex> lk(mu_);
-      DrainInFlightLocked();
-      stage = AcquireFromPoolLocked(cls);
-    }
+    // Pinned buffer now comes from the shared HostCachingAllocator so
+    // that the staging path and TF's own host_memory_allocate /
+    // host_memory_deallocate calls draw from the same cached pool. The
+    // allocator rounds up to its own size class (>= 64 KiB, pow-of-two),
+    // so we just ask for exactly `size` bytes and let it do the
+    // bucketing.
+    void* stage = HostCachingAllocator::Instance().Allocate(size);
     if (stage == nullptr) {
-      // Try to grow the pool. This has to happen outside the lock
-      // because musaHostAlloc is slow and contended.
-      stage = AllocateNew(cls);
-      if (stage == nullptr) return false;  // over cap or alloc failed
-      stat_pool_alloc_.fetch_add(1, std::memory_order_relaxed);
+      // Allocator hit its cap or the runtime refused the pin. Let the
+      // caller fall back to the pageable async path; worst case we
+      // get the MUSA runtime's in-driver sync stage.
+      return false;
+    }
+    // Track whether this was a fresh allocation vs a cache hit for
+    // back-compat with the old `stat_pool_alloc_` counter.
+    {
+      const auto s = HostCachingAllocator::Instance().GetStats();
+      const uint64_t prev_miss =
+          last_seen_cache_misses_.load(std::memory_order_relaxed);
+      last_seen_cache_misses_.store(s.cache_misses, std::memory_order_relaxed);
+      if (s.cache_misses > prev_miss) {
+        stat_pool_alloc_.fetch_add(1, std::memory_order_relaxed);
+      }
     }
 
     stat_staged_count_.fetch_add(1, std::memory_order_relaxed);
@@ -1181,67 +1088,59 @@ class PinnedStagingPool {
     if (e != musaSuccess) {
       // H2D never got enqueued -- return the buffer to the pool
       // immediately; no event needed.
-      ReturnToPool(stage, cls);
+      HostCachingAllocator::Instance().Free(stage);
       *out_err = e;
       return true;
     }
 
-    // Step 3: record an event so we know when we can reuse the buffer.
-    musaEvent_t ev = nullptr;
-    if (musaEventCreateWithFlags(&ev, musaEventDisableTiming) != musaSuccess) {
-      // Couldn't create the event -- safest fallback is to wait for
-      // the stream to drain so we can reclaim now.
-      (void)musaGetLastError();
-      musaStreamSynchronize(stream);
-      ReturnToPool(stage, cls);
-      *out_err = musaSuccess;
-      return true;
-    }
-    if (musaEventRecord(ev, stream) != musaSuccess) {
-      (void)musaGetLastError();
-      musaEventDestroy(ev);
-      musaStreamSynchronize(stream);
-      ReturnToPool(stage, cls);
-      *out_err = musaSuccess;
-      return true;
-    }
-
-    {
-      std::lock_guard<std::mutex> lk(mu_);
-      in_flight_.push_back({ev, stage, cls});
-    }
+    // Step 3: defer buffer reuse until the async H2D completes. The
+    // caching allocator records an event on `stream` and parks the
+    // buffer on its in-flight list when we Free() below, draining it
+    // back to the free list on a future Allocate(). This replaces the
+    // pool's own `in_flight_` deque and its per-copy
+    // musaEventCreateWithFlags/musaEventDestroy pair with the shared
+    // EventPool.
+    HostCachingAllocator::Instance().RecordStream(stage, ordinal, stream);
+    HostCachingAllocator::Instance().Free(stage);
     *out_err = musaSuccess;
     return true;
   }
 
  private:
-  struct InFlight {
-    musaEvent_t ev;
-    void* buf;
-    size_t cls;
-  };
-
   PinnedStagingPool() {
     const char* e = std::getenv("TF_MUSA_H2D_STAGING_THRESHOLD_BYTES");
     if (e != nullptr && *e != '\0') {
       long long v = std::atoll(e);
       if (v > 0) threshold_ = static_cast<size_t>(v);
     }
-    max_pool_bytes_ = 1024ULL * 1024ULL * 1024ULL;  // 1 GiB default
+    // `TF_MUSA_H2D_STAGING_MAX_POOL_MB` is now a no-op (the pool is
+    // unified under the host caching allocator whose cap is controlled
+    // by `TF_MUSA_HOST_ALLOC_MAX_POOL_MB`). Log a one-line deprecation
+    // if the legacy var is set so operators know.
     const char* m = std::getenv("TF_MUSA_H2D_STAGING_MAX_POOL_MB");
     if (m != nullptr && *m != '\0') {
-      long long mb = std::atoll(m);
-      if (mb > 0) max_pool_bytes_ = static_cast<size_t>(mb) * 1024ULL * 1024ULL;
+      std::fprintf(stderr,
+                   "[MUSA] warning: TF_MUSA_H2D_STAGING_MAX_POOL_MB is "
+                   "deprecated; the staging pool now shares the host "
+                   "caching allocator. Use "
+                   "TF_MUSA_HOST_ALLOC_MAX_POOL_MB to control the global "
+                   "pinned cap.\n");
+      std::fflush(stderr);
     }
     if (threshold_ > 0) {
       std::fprintf(stderr,
                    "[MUSA] H2D staging pool enabled: threshold=%zu bytes, "
-                   "max_pool=%zu bytes\n",
-                   threshold_, max_pool_bytes_);
+                   "pinned buffers served by HostCachingAllocator\n",
+                   threshold_);
       std::fflush(stderr);
       std::atexit(&PinnedStagingPool::PrintStatsAtExit);
     }
   }
+
+  // Snapshot of `HostCachingAllocator::cache_misses` observed at the
+  // last staging allocation. Used to approximate the old
+  // `stat_pool_alloc_` counter which tallied fresh pinned allocations.
+  std::atomic<uint64_t> last_seen_cache_misses_{0};
 
   // Multi-threaded memcpy: forks work to a small worker pool for
   // buffers large enough to amortize the synchronization overhead.
@@ -1399,96 +1298,7 @@ class PinnedStagingPool {
     std::fflush(stderr);
   }
 
-  // Round up to the next power of two, minimum 64 KiB. Small set of
-  // size classes keeps free-list hit rate near 100% for steady-state
-  // feed_dict workloads while bounding per-class waste to <=2x.
-  static size_t SizeClass(size_t s) {
-    size_t cls = 65536;
-    while (cls < s) cls <<= 1;
-    return cls;
-  }
-
-  void* AcquireFromPoolLocked(size_t cls) {
-    auto it = free_.find(cls);
-    if (it == free_.end() || it->second.empty()) return nullptr;
-    void* p = it->second.back();
-    it->second.pop_back();
-    return p;
-  }
-
-  // Allocates a new pinned buffer outside the lock. Respects the global
-  // cap.
-  void* AllocateNew(size_t cls) {
-    {
-      std::lock_guard<std::mutex> lk(mu_);
-      if (total_allocated_ + cls > max_pool_bytes_) {
-        return nullptr;
-      }
-      // Tentatively reserve the budget so concurrent callers see it.
-      total_allocated_ += cls;
-    }
-    void* p = nullptr;
-    musaError_t e = musaHostAlloc(&p, cls, musaHostAllocPortable);
-    if (e != musaSuccess || p == nullptr) {
-      (void)musaGetLastError();
-      std::lock_guard<std::mutex> lk(mu_);
-      total_allocated_ -= cls;
-      return nullptr;
-    }
-    return p;
-  }
-
-  void ReturnToPool(void* buf, size_t cls) {
-    std::lock_guard<std::mutex> lk(mu_);
-    if (free_[cls].size() < kMaxFreePerClass) {
-      free_[cls].push_back(buf);
-    } else {
-      // Pool at class cap -- free the buffer and shrink accounting.
-      musaFreeHost(buf);
-      total_allocated_ -= cls;
-    }
-  }
-
-  // Sweeps completed in-flight entries into the free list. Must be
-  // called under `mu_`.
-  //
-  // `in_flight_` intermixes events recorded on multiple streams (and
-  // potentially multiple devices), so there is no global completion
-  // ordering: a later-inserted entry can finish before an earlier one.
-  // We therefore scan the whole deque and only retain entries whose
-  // events are still pending. Completed entries are destroyed and
-  // their pinned buffers are returned to the pool (or freed if the
-  // per-class free-list is full).
-  void DrainInFlightLocked() {
-    auto it = in_flight_.begin();
-    while (it != in_flight_.end()) {
-      musaError_t e = musaEventQuery(it->ev);
-      if (e != musaSuccess) {
-        // Not ready yet -- leave this entry in place; the buffer is
-        // still live from the GPU's point of view.
-        (void)musaGetLastError();
-        ++it;
-        continue;
-      }
-      musaEventDestroy(it->ev);
-      if (free_[it->cls].size() < kMaxFreePerClass) {
-        free_[it->cls].push_back(it->buf);
-      } else {
-        musaFreeHost(it->buf);
-        total_allocated_ -= it->cls;
-      }
-      it = in_flight_.erase(it);
-    }
-  }
-
-  static constexpr size_t kMaxFreePerClass = 8;
-
   size_t threshold_ = 0;
-  size_t max_pool_bytes_ = 0;
-  std::mutex mu_;
-  std::unordered_map<size_t, std::vector<void*>> free_;
-  std::deque<InFlight> in_flight_;
-  size_t total_allocated_ = 0;
 };
 
 void memcpy_dtoh(const SP_Device* device, SP_Stream stream, void* host_dst,
@@ -1541,7 +1351,8 @@ void memcpy_htod(const SP_Device* device, SP_Stream stream,
   // unset / 0, or when the caller's source is already pinned.
   musaError_t err = musaSuccess;
   if (PinnedStagingPool::Instance().TryStagingCopy(
-          device_dst->opaque, host_src, size, AsMusaStream(stream), &err)) {
+          device_dst->opaque, host_src, size, ordinal, AsMusaStream(stream),
+          &err)) {
     if (err != musaSuccess) {
       SetMusaError(status, err, "musaMemcpyAsync H2D (staged)");
       return;
