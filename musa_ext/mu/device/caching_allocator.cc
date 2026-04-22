@@ -31,6 +31,10 @@ limitations under the License.
 #include <unordered_set>
 #include <vector>
 
+#include "mu/device/allocator_config.h"
+#include "mu/device/driver_api.h"
+#include "mu/device/expandable_segment.h"
+
 namespace tensorflow {
 namespace musa {
 
@@ -152,10 +156,17 @@ struct Block {
   Block* next = nullptr;
 
   // True iff this block is the head of a segment (i.e. the pointer
-  // returned by musaMalloc). Segments can only be released to the
-  // driver via `EmptyCache` when `is_segment_head && !allocated && prev
-  // == nullptr && next == nullptr`.
+  // returned by musaMalloc / ExpandableSegment::Create). Segments can
+  // only be released to the driver via `EmptyCache` when
+  // `is_segment_head && !allocated && prev == nullptr && next == nullptr`.
   bool is_segment_head = false;
+
+  // When non-null, this segment was obtained via the VMM path rather
+  // than `musaMalloc`. Ownership: the allocator owns the pointer and
+  // destroys it (unmap/release/address-free) when the segment is
+  // returned in EmptyCache. Only segment heads ever carry a non-null
+  // value; split children always inherit `nullptr`.
+  ExpandableSegment* expandable = nullptr;
 };
 
 struct BlockCmpBySize {
@@ -225,11 +236,45 @@ struct DeviceCachingAllocator::Impl {
   }
 
   // Allocates a fresh segment from the driver. Lock may be released
-  // across musaMalloc so we don't serialize other host threads. The
-  // caller is responsible for inserting the returned block into
-  // `segment_heads` under the lock after a successful driver call.
+  // across musaMalloc / VMM calls so we don't serialize other host
+  // threads. The caller is responsible for inserting the returned
+  // block into `segment_heads` under the lock after a successful
+  // driver call.
+  //
+  // When `expandable_segments:true` is set AND the driver supports
+  // VMM on this device, we route through `ExpandableSegment::Create`
+  // which internally does muMemAddressReserve + muMemCreate +
+  // muMemMap + muMemSetAccess. The resulting Block carries a non-null
+  // `expandable` pointer so EmptyCache knows to take the VMM release
+  // path (unmap / release / address-free). If the VMM path fails for
+  // any driver reason we transparently fall back to `musaMalloc` so
+  // callers never see a silently-broken allocator.
   Block* AllocateSegmentUnlocked(size_t rounded_size) {
     const size_t seg_size = SegmentSizeFor(rounded_size);
+
+    const bool want_vmm = AllocatorConfig::Instance().expandable_segments() &&
+                          IsVmmAvailable() && IsVmmSupportedForDevice(device);
+    if (want_vmm) {
+      void* p = nullptr;
+      std::size_t actual = 0;
+      ExpandableSegment* es =
+          ExpandableSegment::Create(device, seg_size, &p, &actual);
+      if (es != nullptr && p != nullptr) {
+        auto* b = new Block();
+        b->ptr = p;
+        // Granularity rounding may bump the size above what we asked
+        // for; track the real mapped size so accounting matches the
+        // bytes we actually own.
+        b->size = actual;
+        b->device = device;
+        b->allocated = false;
+        b->is_segment_head = true;
+        b->expandable = es;
+        return b;
+      }
+      // Fall through to the classic path on VMM failure.
+    }
+
     void* p = nullptr;
     musaError_t err = musaMalloc(&p, seg_size);
     if (err != musaSuccess || p == nullptr) {
@@ -242,6 +287,7 @@ struct DeviceCachingAllocator::Impl {
     b->device = device;
     b->allocated = false;
     b->is_segment_head = true;
+    b->expandable = nullptr;
     return b;
   }
 
@@ -505,8 +551,17 @@ uint64_t DeviceCachingAllocator::EmptyCache() {
   if (!to_free.empty()) {
     (void)musaSetDevice(impl_->device);
     for (Block* b : to_free) {
-      musaError_t e = musaFree(b->ptr);
-      (void)e;
+      if (b->expandable != nullptr) {
+        // VMM path: ExpandableSegment's dtor performs the full
+        // muMemUnmap / muMemRelease / muMemAddressFree sequence. The
+        // dtor swallows and logs driver errors so we don't have to
+        // special-case them here.
+        delete b->expandable;
+        b->expandable = nullptr;
+      } else {
+        musaError_t e = musaFree(b->ptr);
+        (void)e;
+      }
       delete b;
     }
   }
@@ -548,7 +603,7 @@ std::vector<DeviceSegmentInfo> DeviceCachingAllocator::GetSegmentSnapshot()
     DeviceSegmentInfo info;
     info.device = impl_->device;
     info.address = reinterpret_cast<uintptr_t>(head->ptr);
-    info.is_expandable = false;  // VMM lands in C5.
+    info.is_expandable = head->expandable != nullptr;
     for (Block* b = head; b != nullptr; b = b->next) {
       info.size += b->size;
       ++info.num_blocks;

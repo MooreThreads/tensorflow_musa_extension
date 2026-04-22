@@ -33,11 +33,15 @@ limitations under the License.
 #include <cstdint>
 #include <vector>
 
+#include "mu/device/allocator_config.h"
 #include "mu/device/caching_allocator.h"
+#include "mu/device/driver_api.h"
+#include "mu/device/expandable_segment.h"
 #include "mu/device/host_caching_allocator.h"
 
 namespace {
 
+using ::tensorflow::musa::AllocatorConfig;
 using ::tensorflow::musa::DeviceAllocatorBackend;
 using ::tensorflow::musa::DeviceAllocatorBackendName;
 using ::tensorflow::musa::DeviceCachingAllocator;
@@ -46,6 +50,9 @@ using ::tensorflow::musa::DeviceSegmentInfo;
 using ::tensorflow::musa::GetDeviceAllocatorBackend;
 using ::tensorflow::musa::HostCachingAllocator;
 using ::tensorflow::musa::HostCachingAllocatorStats;
+using ::tensorflow::musa::IsVmmAvailable;
+using ::tensorflow::musa::IsVmmSupportedForDevice;
+using ::tensorflow::musa::QueryMinAllocationGranularity;
 
 PyObject* BuildStatsDict(const HostCachingAllocatorStats& s) {
   PyObject* d = PyDict_New();
@@ -231,6 +238,85 @@ PyObject* DeviceAllocatorBackendStr(PyObject* /*self*/, PyObject* /*args*/) {
       DeviceAllocatorBackendName(GetDeviceAllocatorBackend()));
 }
 
+// VMM / expandable segments introspection. These are process-wide
+// read-only probes — they never touch the allocator's state and never
+// hold its lock, so they are safe to call from any thread at any time.
+
+PyObject* VmmAvailable(PyObject* /*self*/, PyObject* /*args*/) {
+  return PyBool_FromLong(IsVmmAvailable() ? 1 : 0);
+}
+
+PyObject* VmmSupported(PyObject* /*self*/, PyObject* args) {
+  int ordinal = 0;
+  if (!PyArg_ParseTuple(args, "|i", &ordinal)) return nullptr;
+  return PyBool_FromLong(IsVmmSupportedForDevice(ordinal) ? 1 : 0);
+}
+
+// Returns the driver-reported minimum granularity (in bytes) for
+// pinned device memory on `ordinal`, or 0 if the driver is unavailable
+// or the query fails. Useful both for runbooks ("what sizes will
+// expandable_segments round to?") and for tests.
+PyObject* VmmGranularity(PyObject* /*self*/, PyObject* args) {
+  int ordinal = 0;
+  if (!PyArg_ParseTuple(args, "|i", &ordinal)) return nullptr;
+  std::size_t g = QueryMinAllocationGranularity(ordinal);
+  return PyLong_FromUnsignedLongLong(static_cast<unsigned long long>(g));
+}
+
+// Expose the parsed TF_MUSA_ALLOC_CONF as a dict. Keeps all fields
+// present even when the env var is unset so consumers (tests, user
+// scripts) can rely on the schema.
+PyObject* AllocatorConfigDict(PyObject* /*self*/, PyObject* /*args*/) {
+  const AllocatorConfig& c = AllocatorConfig::Instance();
+  PyObject* d = PyDict_New();
+  if (d == nullptr) return nullptr;
+  auto put_bool = [&](const char* k, bool v) -> bool {
+    PyObject* o = PyBool_FromLong(v ? 1 : 0);
+    int rc = PyDict_SetItemString(d, k, o);
+    Py_DECREF(o);
+    return rc == 0;
+  };
+  auto put_u64 = [&](const char* k, std::uint64_t v) -> bool {
+    PyObject* o = PyLong_FromUnsignedLongLong(v);
+    if (o == nullptr) return false;
+    int rc = PyDict_SetItemString(d, k, o);
+    Py_DECREF(o);
+    return rc == 0;
+  };
+  auto put_int = [&](const char* k, long v) -> bool {
+    PyObject* o = PyLong_FromLong(v);
+    if (o == nullptr) return false;
+    int rc = PyDict_SetItemString(d, k, o);
+    Py_DECREF(o);
+    return rc == 0;
+  };
+  auto put_double = [&](const char* k, double v) -> bool {
+    PyObject* o = PyFloat_FromDouble(v);
+    if (o == nullptr) return false;
+    int rc = PyDict_SetItemString(d, k, o);
+    Py_DECREF(o);
+    return rc == 0;
+  };
+  auto put_str = [&](const char* k, const std::string& v) -> bool {
+    PyObject* o = PyUnicode_FromStringAndSize(
+        v.data(), static_cast<Py_ssize_t>(v.size()));
+    if (o == nullptr) return false;
+    int rc = PyDict_SetItemString(d, k, o);
+    Py_DECREF(o);
+    return rc == 0;
+  };
+  if (!put_bool("expandable_segments", c.expandable_segments()) ||
+      !put_u64("max_split_size_bytes", c.max_split_size_bytes()) ||
+      !put_int("roundup_power2_divisions", c.roundup_power2_divisions()) ||
+      !put_double("garbage_collection_threshold",
+                  c.garbage_collection_threshold()) ||
+      !put_str("raw", c.raw())) {
+    Py_DECREF(d);
+    return nullptr;
+  }
+  return d;
+}
+
 PyObject* DeviceEmptyCache(PyObject* /*self*/, PyObject* args) {
   int ordinal = 0;
   if (!PyArg_ParseTuple(args, "|i", &ordinal)) return nullptr;
@@ -270,6 +356,21 @@ PyMethodDef kMethods[] = {
     {"_device_memory_usage", DeviceMemoryUsage, METH_VARARGS,
      "Return (free_bytes, total_bytes) reported by musaMemGetInfo for the "
      "given ordinal (default 0)."},
+    {"_vmm_available", VmmAvailable, METH_NOARGS,
+     "Return True iff libmusa.so exports the full VMM API "
+     "(muMemAddressReserve / muMemCreate / muMemMap / muMemSetAccess / "
+     "muMemGetAllocationGranularity)."},
+    {"_vmm_supported", VmmSupported, METH_VARARGS,
+     "Return True iff the given device ordinal advertises "
+     "MU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED. Implies "
+     "_vmm_available()."},
+    {"_vmm_granularity", VmmGranularity, METH_VARARGS,
+     "Return the driver-reported minimum allocation granularity (in "
+     "bytes) for pinned device memory on the given ordinal; 0 when "
+     "unavailable."},
+    {"_allocator_config", AllocatorConfigDict, METH_NOARGS,
+     "Return a dict snapshot of the parsed TF_MUSA_ALLOC_CONF env "
+     "variable (expandable_segments, max_split_size_bytes, ...)."},
     {nullptr, nullptr, 0, nullptr},
 };
 

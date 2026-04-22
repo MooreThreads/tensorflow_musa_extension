@@ -121,6 +121,9 @@ set(MUSA_CORE_SOURCES
     "${SRC_ROOT}/mu/device/event_pool.cc"
     "${SRC_ROOT}/mu/device/host_caching_allocator.cc"
     "${SRC_ROOT}/mu/device/caching_allocator.cc"
+    "${SRC_ROOT}/mu/device/driver_api.cc"
+    "${SRC_ROOT}/mu/device/allocator_config.cc"
+    "${SRC_ROOT}/mu/device/expandable_segment.cc"
 )
 
 # -----------------------------------------------------------------------------
@@ -197,7 +200,7 @@ set_target_properties(musa_core PROPERTIES
 # existing musa_plugin target used to pick it up transitively through
 # mudnn/mublas, but musa_core links no such higher-level libs, so we depend
 # on musart directly here.
-target_link_libraries(musa_core PUBLIC musart)
+target_link_libraries(musa_core PUBLIC musart ${CMAKE_DL_LIBS})
 
 # -----------------------------------------------------------------------------
 # Target: musa_plugin (SHARED) — TF PluggableDevice entry point

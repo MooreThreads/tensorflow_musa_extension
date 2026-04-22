@@ -46,6 +46,22 @@ limitations under the License.
 // ``nullptr``; callers (TF's SP_StreamExecutor.allocate via
 // ``use_bfc_allocator=0``) treat that as a normal allocator failure.
 //
+// Expandable (VMM) segments
+// -------------------------
+// When `TF_MUSA_ALLOC_CONF=expandable_segments:true` is set AND the
+// driver exposes the VMM API AND the device reports
+// `MU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED`, the
+// cache-miss path allocates segments through `ExpandableSegment`
+// (muMemAddressReserve + muMemCreate + muMemMap + muMemSetAccess)
+// instead of calling `musaMalloc`. The resulting segment is released
+// through the inverse VMM sequence in `EmptyCache`. Opt-in is
+// process-wide and decided once at startup via the
+// `tensorflow::musa::AllocatorConfig` singleton. Blocks produced by
+// either code path live side-by-side; the release dispatch is selected
+// by `Block::is_expandable_head`. Any driver failure downgrades that
+// specific request to the classic `musaMalloc` path so callers never
+// observe a silently-broken allocator.
+//
 // What is NOT in scope here (future work)
 // ---------------------------------------
 //   * Stream-ordered reuse (``stream_uses`` / ``record_stream`` +
@@ -53,7 +69,11 @@ limitations under the License.
 //     deallocate is called only after the tensor is no longer in-flight,
 //     so the MVP does not need per-stream event tracking. A future
 //     commit adds it to support external ``RecordStream`` APIs.
-//   * Expandable VMM segments (commit C5).
+//   * VA-preserving growth (one giant per-device reservation with
+//     handles chained over it). Commit C5 ships the plumbing on a
+//     one-VA-reservation-per-segment basis; a follow-up can upgrade
+//     `ExpandableSegment` to hold many handles without touching the
+//     allocator's outer loop.
 //   * Memory fraction, snapshot, OOM observer (commit C4).
 //   * Small/large pool split. The MVP keeps a single pool per device;
 //     if profiling shows churn near the 1 MiB boundary we can revisit.
