@@ -18,6 +18,17 @@ limitations under the License.
 #include <musa_runtime.h>
 #include <unistd.h>
 
+// MUSA 4.x does not expose the mempool / async-alloc runtime API surface
+// (musaMemPoolCreate, musaFreeAsync, musaMallocFromPoolAsync, etc.).
+// Gate AsyncDeviceAllocator's use of those symbols so this file still
+// compiles on 4.3.5; the allocator becomes a no-op there and the
+// legacy musaMalloc / musaFree path (below) is used for every device.
+#if defined(MUSART_VERSION) && (MUSART_VERSION >= 50000)
+#define TF_MUSA_HAS_MEMPOOL_API 1
+#else
+#define TF_MUSA_HAS_MEMPOOL_API 0
+#endif
+
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -177,8 +188,23 @@ class AsyncDeviceAllocator {
                env[0] == 'F');
     }();
     if (!kGloballyEnabled) return false;
+#if TF_MUSA_HAS_MEMPOOL_API
     PerDevice* pd = Acquire(ordinal);
     return pd != nullptr && pd->enabled;
+#else
+    (void)ordinal;
+    static std::once_flag warn_once;
+    std::call_once(warn_once, [] {
+      std::fprintf(stderr,
+                   "[MUSA] TF_MUSA_ENABLE_ASYNC_ALLOC=1 requested but the "
+                   "MUSA runtime in use (MUSART_VERSION=%d) does not expose "
+                   "the mempool / async-alloc APIs; falling back to the "
+                   "legacy musaMalloc / musaFree path.\n",
+                   static_cast<int>(MUSART_VERSION));
+      std::fflush(stderr);
+    });
+    return false;
+#endif
   }
 
   // Returns true iff the pool-based async path is usable on `ordinal`
@@ -186,6 +212,7 @@ class AsyncDeviceAllocator {
   // untouched on any failure; the caller is expected to treat that as
   // OOM (IsEnabled already gates the hot path).
   bool Allocate(int ordinal, uint64_t size, void** out_ptr) {
+#if TF_MUSA_HAS_MEMPOOL_API
     PerDevice* pd = Acquire(ordinal);
     if (pd == nullptr || !pd->enabled) return false;
 
@@ -203,11 +230,18 @@ class AsyncDeviceAllocator {
     }
     *out_ptr = ptr;
     return true;
+#else
+    (void)ordinal;
+    (void)size;
+    (void)out_ptr;
+    return false;
+#endif
   }
 
   // Returns true iff the deallocation was handed off to the async free
   // path (no synchronization is performed).
   bool Deallocate(int ordinal, void* ptr) {
+#if TF_MUSA_HAS_MEMPOOL_API
     PerDevice* pd = Acquire(ordinal);
     if (pd == nullptr || !pd->enabled) return false;
     // Fire-and-forget: the driver will park this region back into our
@@ -215,6 +249,11 @@ class AsyncDeviceAllocator {
     // frees that we enqueued ourselves) completes.
     musaError_t err = musaFreeAsync(ptr, pd->stream);
     return err == musaSuccess;
+#else
+    (void)ordinal;
+    (void)ptr;
+    return false;
+#endif
   }
 
  private:
@@ -225,6 +264,7 @@ class AsyncDeviceAllocator {
   };
 
   PerDevice* Acquire(int ordinal) {
+#if TF_MUSA_HAS_MEMPOOL_API
     {
       std::lock_guard<std::mutex> lk(mu_);
       auto it = per_device_.find(ordinal);
@@ -243,6 +283,10 @@ class AsyncDeviceAllocator {
     PerDevice* raw = pd.get();
     per_device_.emplace(ordinal, std::move(pd));
     return raw;
+#else
+    (void)ordinal;
+    return nullptr;
+#endif
   }
 
   void InitPerDevice(int ordinal, PerDevice* pd) {
@@ -250,6 +294,7 @@ class AsyncDeviceAllocator {
     pd->stream = nullptr;
     pd->pool = nullptr;
 
+#if TF_MUSA_HAS_MEMPOOL_API
     if (musaSetDevice(ordinal) != musaSuccess) return;
 
     int supported = 0;
@@ -289,6 +334,9 @@ class AsyncDeviceAllocator {
     pd->pool = pool;
     pd->stream = s;
     pd->enabled = true;
+#else
+    (void)ordinal;
+#endif
   }
 
   std::mutex mu_;
