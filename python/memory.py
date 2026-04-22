@@ -33,6 +33,7 @@ values printed by external tooling like ``nvidia-smi``.
 from typing import Dict, Optional, Tuple
 
 from ._ext import _C
+from .snapshot import _dump_snapshot, _record_memory_history, memory_snapshot
 
 __all__ = [
     "empty_cache",
@@ -44,6 +45,10 @@ __all__ = [
     "set_per_process_memory_fraction",
     "mem_get_info",
     "get_allocator_backend",
+    # Snapshot / history — optional diagnostic tier (plan §6.3).
+    "memory_snapshot",
+    "_dump_snapshot",
+    "_record_memory_history",
 ]
 
 
