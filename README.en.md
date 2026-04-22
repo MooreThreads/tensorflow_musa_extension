@@ -10,7 +10,7 @@ TensorFlow MUSA Extension is a high-performance TensorFlow plugin specifically d
 - **Seamless Integration**: Fully compatible with TensorFlow ecosystem without requiring code modifications
 - **Device Management**: Complete MUSA device registration, memory management, and stream processing support
 - **Kernel Debugging Support**: Built-in kernel execution time statistics for performance analysis
-- **Python Package Support**: Provides `tensorflow_musa` Python package with pip installation and optimizer interface
+- **Python Package Support**: Provides the `tensorflow_musa` Python package with pip installation, plugin loading, and device query interfaces
 
 ## Quick Start
 
@@ -26,11 +26,8 @@ tensorflow_musa_extension/
 ├── .github/                # CI/CD configuration
 ├── python/                 # Python package source directory (pip name: tensorflow_musa)
 │   ├── __init__.py         # Package entry, auto-loads plugin
-│   ├── _loader.py          # Plugin loading utilities
-│   ├── _patch.py           # tf.keras.optimizers.Adam monkey patch
-│   └── optimizer/          # Optimizer module
-│       ├── __init__.py
-│       └── adam.py         # MUSA Adam optimizer (supports sparse update)
+│   ├── _loader.py          # Plugin loading and device query utilities
+│   └── libmusa_plugin.so   # MUSA plugin shared library packaged into the wheel
 ├── musa_ext/               # Core source directory
 │   ├── kernels/            # MUSA kernel implementations (.mu files)
 │   ├── mu/                 # MUSA device and optimizer implementations
@@ -246,63 +243,6 @@ devices = tf_musa.get_musa_devices()
 print(f"Available MUSA devices: {devices}")
 ```
 
-### Auto Patch tf.keras.optimizers.Adam (Recommended)
-
-After importing `tensorflow_musa`, `tf.keras.optimizers.Adam` is automatically patched to use MUSA fused kernels. No code changes needed:
-
-```python
-import tensorflow as tf
-import tensorflow_musa as tf_musa  # Auto patches Adam
-
-# Create model
-model = tf.keras.Sequential([
-    tf.keras.layers.Dense(128, activation='relu', input_shape=(784,)),
-    tf.keras.layers.Dense(10, activation='softmax')
-])
-
-# Use standard tf.keras.optimizers.Adam (auto patched)
-optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
-
-# Compile model
-model.compile(
-    optimizer=optimizer,
-    loss='sparse_categorical_crossentropy',
-    metrics=['accuracy']
-)
-
-# Embedding sparse gradients automatically use MusaResourceSparseApplyAdam kernel
-```
-
-### Explicitly Use MUSA Adam Optimizer
-
-If you want to explicitly specify MUSA optimizer:
-
-```python
-import tensorflow as tf
-import tensorflow_musa as tf_musa
-
-# Create model
-model = tf.keras.Sequential([
-    tf.keras.layers.Dense(128, activation='relu', input_shape=(784,)),
-    tf.keras.layers.Dense(10, activation='softmax')
-])
-
-# Explicitly use MUSA fused Adam optimizer
-optimizer = tf_musa.optimizer.Adam(
-    learning_rate=0.001,
-    beta_1=0.9,
-    beta_2=0.999,
-    epsilon=1e-7
-)
-
-# Compile model
-model.compile(
-    optimizer=optimizer,
-    loss='sparse_categorical_crossentropy',
-    metrics=['accuracy']
-)
-```
-
 ### Device Management
 
 ```python
@@ -316,32 +256,6 @@ with tf.device('/device:MUSA:0'):
     b = tf.constant([[5.0, 6.0], [7.0, 8.0]])
     c = tf.matmul(a, b)
     print(c)
-```
-
-### Embedding Sparse Update Example
-
-MUSA Adam optimizer supports sparse gradient updates for embedding scenarios:
-
-```python
-import tensorflow as tf
-import tensorflow_musa as tf_musa
-
-# Create embedding variable
-vocab_size = 10000
-embedding_dim = 128
-with tf.device('/device:MUSA:0'):
-    embedding = tf.Variable(tf.zeros([vocab_size, embedding_dim]))
-
-# Use patched Adam
-optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
-
-# Simulate embedding lookup sparse gradient
-indices = tf.constant([0, 5, 10, 15])  # Word IDs in batch
-values = tf.random.normal([4, embedding_dim])  # Corresponding gradients
-sparse_grad = tf.IndexedSlices(values, indices)
-
-# Apply sparse gradient update (auto uses MusaResourceSparseApplyAdam kernel)
-optimizer.apply_gradients([(sparse_grad, embedding)])
 ```
 
 ## Contribution Guidelines

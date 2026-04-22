@@ -10,7 +10,7 @@ TensorFlow MUSA Extension 是一个高性能的 TensorFlow 插件，专为摩尔
 - **无缝集成**：与 TensorFlow 生态系统完全兼容，无需修改现有代码
 - **设备管理**：完整的 MUSA 设备注册、内存管理和流式处理支持
 - **Kernel 调试支持**：内置 Kernel 执行时间统计功能，便于性能分析
-- **Python 包支持**：提供 `tensorflow_musa` Python 包，支持 pip 安装和优化器接口
+- **Python 包支持**：提供 `tensorflow_musa` Python 包，支持 pip 安装、插件加载与设备查询接口
 
 ## 快速开始
 
@@ -224,6 +224,7 @@ python test_runner.py --quiet
 - **数据操作**：Reshape, Concat, Gather, StridedSlice, ExpandDims
 - **归一化**：LayerNorm, FusedBatchNorm
 - **特殊算子**：TensorInteraction, BiasAdd, Assign
+- **优化器**：ResourceApplyAdam, MusaResourceSparseApplyAdam（支持 embedding 稀疏更新）
 
 ## 使用示例
 
