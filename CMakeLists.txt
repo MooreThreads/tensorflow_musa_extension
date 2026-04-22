@@ -108,15 +108,37 @@ endif()
 # Link paths
 link_directories("${MUSA_PATH}/lib" "${MUSA_PATH}/lib64" "${TF_LIB_DIR}")
 
-# Automatically collect source files
-file(GLOB_RECURSE CPP_SOURCES
+# -----------------------------------------------------------------------------
+# libmusa_core.so — shared state that must live in exactly one place
+# -----------------------------------------------------------------------------
+#
+# Any TU that defines a process-singleton must be listed here. Both
+# libmusa_plugin.so and tensorflow_musa._C.so link against libmusa_core.so
+# at runtime so they observe the same HostCachingAllocator / EventPool
+# instances. Adding a new singleton (device caching allocator, telemetry
+# snapshot, VMM reservations) means adding its .cc here — never in plugin.
+set(MUSA_CORE_SOURCES
+    "${SRC_ROOT}/mu/device/event_pool.cc"
+    "${SRC_ROOT}/mu/device/host_caching_allocator.cc"
+)
+
+# -----------------------------------------------------------------------------
+# libmusa_plugin.so — everything else in musa_ext/ minus core / python
+# -----------------------------------------------------------------------------
+file(GLOB_RECURSE ALL_CPP_SOURCES
     "${SRC_ROOT}/*.cc"
     "${SRC_ROOT}/mu/*.cc"
     "${SRC_ROOT}/kernels/*.cc"
 )
+# Exclude core sources (compiled into libmusa_core.so) and the Python
+# extension entry point (compiled into tensorflow_musa._C.so).
+list(REMOVE_ITEM ALL_CPP_SOURCES ${MUSA_CORE_SOURCES})
+set(PYEXT_SOURCES "${SRC_ROOT}/python/_C.cpp")
+foreach(exclude_file ${PYEXT_SOURCES})
+    list(REMOVE_ITEM ALL_CPP_SOURCES ${exclude_file})
+endforeach()
+set(PLUGIN_SOURCES ${ALL_CPP_SOURCES})
 
-# filter out disabled kernels (if any)
-# list(FILTER CPP_SOURCES EXCLUDE REGEX ".*test.*|.*disabled.*")
 # Automatically collect MUSA Kernel files
 file(GLOB_RECURSE MU_SOURCES "${SRC_ROOT}/kernels/*.mu")
 
@@ -154,43 +176,105 @@ foreach(mu_file ${MU_SOURCES})
     endif()
 endforeach()
 
-# Generate plugin library
-add_library(musa_plugin SHARED ${CPP_SOURCES} ${MU_OBJECTS})
-
-# Apply TF compile flags (ensure strict ABI consistency)
-set_target_properties(musa_plugin PROPERTIES COMPILE_FLAGS "${TF_COMPILE_FLAGS}")
-
-# Set RPATH to ensure runtime library search
-set_target_properties(musa_plugin PROPERTIES
+# -----------------------------------------------------------------------------
+# Target: musa_core (SHARED) — singleton state
+# -----------------------------------------------------------------------------
+add_library(musa_core SHARED ${MUSA_CORE_SOURCES})
+set_target_properties(musa_core PROPERTIES
+    COMPILE_FLAGS "${TF_COMPILE_FLAGS}"
+    PREFIX "lib"
+    SUFFIX ".so"
+    OUTPUT_NAME "musa_core"
     SKIP_BUILD_RPATH FALSE
     BUILD_WITH_INSTALL_RPATH TRUE
-    INSTALL_RPATH "${TF_LIB_DIR};${MUSA_PATH}/lib;${MUSA_PATH}/lib64"
+    # $ORIGIN lets downstream .so files find core regardless of install path.
+    INSTALL_RPATH "$ORIGIN;${MUSA_PATH}/lib;${MUSA_PATH}/lib64"
+    # Position-independent code so both plugin and pybind ext can link.
+    POSITION_INDEPENDENT_CODE ON
 )
+# Note: the MUSA runtime library is `libmusart.so` (not `libmusa.so`). The
+# existing musa_plugin target used to pick it up transitively through
+# mudnn/mublas, but musa_core links no such higher-level libs, so we depend
+# on musart directly here.
+target_link_libraries(musa_core PUBLIC musart)
 
-# Link
-target_link_libraries(musa_plugin PRIVATE ${TF_LINK_FLAGS} musa mublas ${MUSA_DNN_LIBRARY} rt)
-
-# Output configuration
+# -----------------------------------------------------------------------------
+# Target: musa_plugin (SHARED) — TF PluggableDevice entry point
+# -----------------------------------------------------------------------------
+add_library(musa_plugin SHARED ${PLUGIN_SOURCES} ${MU_OBJECTS})
 set_target_properties(musa_plugin PROPERTIES
+    COMPILE_FLAGS "${TF_COMPILE_FLAGS}"
     PREFIX "lib"
     SUFFIX ".so"
     OUTPUT_NAME "musa_plugin"
+    SKIP_BUILD_RPATH FALSE
+    BUILD_WITH_INSTALL_RPATH TRUE
+    # Locate libmusa_core.so next to the plugin at runtime.
+    INSTALL_RPATH "$ORIGIN;${TF_LIB_DIR};${MUSA_PATH}/lib;${MUSA_PATH}/lib64"
+)
+target_link_libraries(musa_plugin PRIVATE
+    musa_core
+    ${TF_LINK_FLAGS}
+    musa
+    mublas
+    ${MUSA_DNN_LIBRARY}
+    rt
 )
 
-# Build completion message
+# -----------------------------------------------------------------------------
+# Target: tensorflow_musa__C — Python extension module
+# -----------------------------------------------------------------------------
+#
+# Named `tensorflow_musa__C` inside CMake (target namespace uses no dots) but
+# the produced shared object is `_C.<ext-suffix>.so` so that Python resolves
+# it as `tensorflow_musa._C` after wheel install.
+execute_process(COMMAND python3 -c "from sysconfig import get_paths; print(get_paths()['include'])"
+    OUTPUT_VARIABLE PY_INC OUTPUT_STRIP_TRAILING_WHITESPACE)
+execute_process(COMMAND python3 -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX') or '.so')"
+    OUTPUT_VARIABLE PY_EXT_SUFFIX OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(NOT PY_INC)
+    message(FATAL_ERROR "Failed to locate Python include dir via sysconfig.")
+endif()
+if(NOT PY_EXT_SUFFIX OR PY_EXT_SUFFIX STREQUAL "None")
+    # Fallback for old sysconfig layouts that return None.
+    set(PY_EXT_SUFFIX ".so")
+endif()
+
+add_library(tensorflow_musa__C MODULE ${PYEXT_SOURCES})
+target_include_directories(tensorflow_musa__C PRIVATE "${PY_INC}")
+set_target_properties(tensorflow_musa__C PROPERTIES
+    COMPILE_FLAGS "${TF_COMPILE_FLAGS}"
+    PREFIX ""
+    OUTPUT_NAME "_C"
+    SUFFIX "${PY_EXT_SUFFIX}"
+    SKIP_BUILD_RPATH FALSE
+    BUILD_WITH_INSTALL_RPATH TRUE
+    INSTALL_RPATH "$ORIGIN;${MUSA_PATH}/lib;${MUSA_PATH}/lib64"
+)
+target_link_libraries(tensorflow_musa__C PRIVATE musa_core)
+
+# -----------------------------------------------------------------------------
+# Build summary and post-build message
+# -----------------------------------------------------------------------------
 add_custom_command(TARGET musa_plugin POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E echo "Build completed successfully!"
     COMMENT "Plugin is located at: $<TARGET_FILE:musa_plugin>"
 )
 
-# Print build summary
-list(LENGTH CPP_SOURCES CPP_SOURCES_COUNT)
+list(LENGTH PLUGIN_SOURCES PLUGIN_SOURCES_COUNT)
+list(LENGTH MUSA_CORE_SOURCES CORE_SOURCES_COUNT)
 list(LENGTH MU_SOURCES MU_SOURCES_COUNT)
 
 message(STATUS "TensorFlow MUSA Plugin Configuration:")
 message(STATUS "  MUSA Path: ${MUSA_PATH}")
 message(STATUS "  MuDNN Library: ${MUSA_DNN_LIBRARY}")
 message(STATUS "  TensorFlow Include: ${TF_INC}")
-message(STATUS "  MUSA Kernel Debug: ${MUSA_KERNEL_DEBUG}")
-message(STATUS "  Source Files: ${CPP_SOURCES_COUNT} C++ files, ${MU_SOURCES_COUNT} MUSA kernels")
-message(STATUS "  Output: ${CMAKE_CURRENT_BINARY_DIR}/libmusa_plugin.so")
+message(STATUS "  Python Include:     ${PY_INC}")
+message(STATUS "  Python EXT_SUFFIX:  ${PY_EXT_SUFFIX}")
+message(STATUS "  MUSA Kernel Debug:  ${MUSA_KERNEL_DEBUG}")
+message(STATUS "  Core Sources:       ${CORE_SOURCES_COUNT}")
+message(STATUS "  Plugin Sources:     ${PLUGIN_SOURCES_COUNT} C++ files, ${MU_SOURCES_COUNT} MUSA kernels")
+message(STATUS "  Outputs:")
+message(STATUS "    ${CMAKE_CURRENT_BINARY_DIR}/libmusa_core.so")
+message(STATUS "    ${CMAKE_CURRENT_BINARY_DIR}/libmusa_plugin.so")
+message(STATUS "    ${CMAKE_CURRENT_BINARY_DIR}/_C${PY_EXT_SUFFIX}")

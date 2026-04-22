@@ -32,8 +32,35 @@ AUTHOR = "TensorFlow MUSA Authors"
 LICENSE = "Apache 2.0"
 
 # Build configuration
+#
+# Starting with commit C2 the MUSA backend is shipped as three cooperating
+# shared objects (see `CMakeLists.txt` for the split rationale):
+#
+#   * libmusa_core.so     — allocator / EventPool / telemetry singletons
+#   * libmusa_plugin.so   — TensorFlow PluggableDevice entry point
+#   * _C.<extsuffix>.so   — Python extension (tensorflow_musa._C)
+#
+# All three must land inside the installed package directory so that the
+# plugin's `$ORIGIN` RPATH resolves `libmusa_core.so` and the Python
+# extension imports as `tensorflow_musa._C`.
 PLUGIN_LIBRARY = "libmusa_plugin.so"
+CORE_LIBRARY = "libmusa_core.so"
 BUILD_DIR = "build"
+
+
+def _python_ext_suffix() -> str:
+    """Return the CPython EXT_SUFFIX (e.g. '.cpython-38-x86_64-linux-gnu.so')."""
+    import sysconfig
+
+    ext = sysconfig.get_config_var("EXT_SUFFIX")
+    return ext if ext else ".so"
+
+
+PYEXT_LIBRARY = "_C" + _python_ext_suffix()
+
+# Files that must be copied from build/ into the wheel payload (all live
+# alongside each other under `site-packages/tensorflow_musa/`).
+PACKAGED_ARTIFACTS = [PLUGIN_LIBRARY, CORE_LIBRARY, PYEXT_LIBRARY]
 
 # Supported TensorFlow version range.
 #
@@ -151,16 +178,16 @@ class BuildPluginCommand(Command):
             print("Make failed.")
             sys.exit(1)
 
-        # Verify the library was built
-        plugin_path = os.path.join(build_dir, PLUGIN_LIBRARY)
-        if not os.path.exists(plugin_path):
-            print(f"Error: {PLUGIN_LIBRARY} not found after build.")
-            sys.exit(1)
-
-        # Copy to package directory (source dir is python, but package name is tensorflow_musa)
-        package_lib_path = os.path.join(project_root, SOURCE_DIR, PLUGIN_LIBRARY)
-        shutil.copy2(plugin_path, package_lib_path)
-        print(f"Successfully built and copied to: {package_lib_path}")
+        # Verify every artifact produced by the split build was built and
+        # copy each one next to the Python package sources.
+        for artifact in PACKAGED_ARTIFACTS:
+            src = os.path.join(build_dir, artifact)
+            if not os.path.exists(src):
+                print(f"Error: {artifact} not found after build at {src}.")
+                sys.exit(1)
+            dst = os.path.join(project_root, SOURCE_DIR, artifact)
+            shutil.copy2(src, dst)
+            print(f"  packaged: {dst}")
 
 
 class BdistWheelCommand(bdist_wheel):
@@ -177,7 +204,7 @@ class BdistWheelCommand(bdist_wheel):
 
         # Force only the tensorflow_musa package (source is in python directory)
         self.distribution.packages = ["tensorflow_musa"]
-        self.distribution.package_data = {PACKAGE_NAME: [PLUGIN_LIBRARY]}
+        self.distribution.package_data = {PACKAGE_NAME: list(PACKAGED_ARTIFACTS)}
         self.distribution.py_modules = None
         # Map tensorflow_musa package name to python source directory
         self.distribution.package_dir = {"tensorflow_musa": SOURCE_DIR}
@@ -228,7 +255,7 @@ setup(
     # Package name (pip install tensorflow_musa)
     packages=["tensorflow_musa"],
     package_data={
-        PACKAGE_NAME: [PLUGIN_LIBRARY],
+        PACKAGE_NAME: list(PACKAGED_ARTIFACTS),
     },
     python_requires=">=3.7",
     # NOTE: tensorflow is NOT listed in install_requires to prevent pip from

@@ -185,8 +185,14 @@ struct HostCachingAllocator::Impl {
 
 // static
 HostCachingAllocator& HostCachingAllocator::Instance() {
-  static HostCachingAllocator inst;
-  return inst;
+  // Intentionally never destroyed. When the plugin is split across multiple
+  // shared libraries, static-local destructors at process exit fire after
+  // some dependent libraries (libmusart, libtensorflow_framework) may have
+  // been unloaded, which turned `musaFreeHost`/`musaEventDestroy` calls
+  // during teardown into SIGSEGV. Leaking the instance costs nothing at
+  // exit and avoids that class of bug.
+  static HostCachingAllocator* kInst = new HostCachingAllocator();
+  return *kInst;
 }
 
 HostCachingAllocator::HostCachingAllocator() : impl_(new Impl()) {}

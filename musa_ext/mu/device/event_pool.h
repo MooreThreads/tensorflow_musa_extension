@@ -48,10 +48,11 @@ namespace musa {
 
 class EventPool {
  public:
-  static EventPool& Instance() {
-    static EventPool inst;
-    return inst;
-  }
+  // Defined in event_pool.cc so that only one copy of the singleton storage
+  // exists even when the plugin is split into multiple shared libraries
+  // (libmusa_core.so, libmusa_plugin.so, tensorflow_musa._C.*.so). Every
+  // dependent library must resolve `Instance` through core's export.
+  static EventPool& Instance();
 
   // Returns a ready-to-record event for `ordinal`. On cache hit the pooled
   // handle is returned directly; on miss we fall back to the driver.
