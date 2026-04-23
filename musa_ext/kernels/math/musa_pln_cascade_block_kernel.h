@@ -9,6 +9,12 @@ namespace musa {
 constexpr int kPlnCascadeBlockMaxDims = 8;
 constexpr int kPlnCascadeBlockMaxSteps = 16;
 
+enum PlnCascadeBlockGateMode {
+  kPlnCascadeBlockGateModeGeneric = 0,
+  kPlnCascadeBlockGateModeScalar = 1,
+  kPlnCascadeBlockGateModeBatchAligned = 2,
+};
+
 struct PlnCascadeBlockShape {
   int rank;
   int dims[kPlnCascadeBlockMaxDims];
@@ -26,9 +32,13 @@ struct PlnCascadeBlockMeta {
   int num_steps;
   int table_rows;
   int table_width;
+  int norm_is_contiguous;
+  int output_inner_stride;
+  int use_fast_path;
   int table_indices[kPlnCascadeBlockMaxSteps];
   int table_base_offsets[kPlnCascadeBlockMaxSteps];
   int select_on_true[kPlnCascadeBlockMaxSteps];
+  int gate_modes[kPlnCascadeBlockMaxSteps];
   PlnCascadeBlockStrides gate_strides[kPlnCascadeBlockMaxSteps];
 };
 

@@ -23,6 +23,7 @@ limitations under the License.
 #include "tensorflow/core/framework/attr_value.pb.h"
 #include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/lib/core/status.h"
+#include "utils/logging.h"
 
 namespace tensorflow {
 namespace grappler {
@@ -466,6 +467,11 @@ FusionMatchResult MusaPlnCascadeBlockFusion::Match(const GraphDef& graph,
   result.captured_attrs["table_indices"] = JoinInts(table_indices);
   result.captured_attrs["select_on_true"] = JoinInts(select_on_true);
 
+  VLOG(1) << "[PlnCascadeBlock][Match] matched chain head="
+          << chain_names.front() << ", tail=" << chain_names.back()
+          << ", chain_size=" << chain_names.size()
+          << ", num_steps=" << total_steps;
+
   return result;
 }
 
@@ -567,6 +573,12 @@ Status MusaPlnCascadeBlockFusion::Apply(
   for (const int flag : select_on_true) {
     select_attr->add_b(flag != 0);
   }
+
+  VLOG(1) << "[PlnCascadeBlock][Apply] fused tail=" << output_name
+          << ", chain_size=" << chain_names.size()
+          << ", num_steps=" << num_steps
+          << ", add_input=" << add_it->second
+          << ", bias_input=" << bias_it->second;
 
   return Status::OK();
 }

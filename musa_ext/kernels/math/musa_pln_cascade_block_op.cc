@@ -14,6 +14,7 @@ limitations under the License.
 ==============================================================================*/
 
 #include <algorithm>
+#include <atomic>
 #include <limits>
 #include <vector>
 
@@ -98,6 +99,29 @@ PlnCascadeBlockStrides BuildLeftAligned1DStrides(
     strides.values[0] = 1;
   }
   return strides;
+}
+
+bool HasIdenticalDenseLayout(const TensorShape& input_shape,
+                             const TensorShape& output_shape) {
+  if (input_shape.dims() != output_shape.dims()) {
+    return false;
+  }
+  for (int i = 0; i < input_shape.dims(); ++i) {
+    if (input_shape.dim_size(i) != output_shape.dim_size(i)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool IsScalarBroadcast(const Tensor& input) { return input.NumElements() == 1; }
+
+int ComputeInnerStride(const TensorShape& output_shape) {
+  int64_t inner_stride = 1;
+  for (int i = 1; i < output_shape.dims(); ++i) {
+    inner_stride *= output_shape.dim_size(i);
+  }
+  return static_cast<int>(inner_stride);
 }
 
 }  // namespace
@@ -323,12 +347,17 @@ class MusaPlnCascadeBlockOp : public MusaOpKernel {
     meta.num_steps = num_steps;
     meta.table_rows = table_rows;
     meta.table_width = table_width;
+    meta.norm_is_contiguous =
+        HasIdenticalDenseLayout(norm_out.shape(), output_shape) ? 1 : 0;
+    meta.output_inner_stride = ComputeInnerStride(output_shape);
+    meta.use_fast_path = meta.norm_is_contiguous;
 
     for (int step = 0; step < kPlnCascadeBlockMaxSteps; ++step) {
       gate_ptrs.values[step] = nullptr;
       meta.table_indices[step] = 0;
       meta.table_base_offsets[step] = 0;
       meta.select_on_true[step] = 1;
+      meta.gate_modes[step] = kPlnCascadeBlockGateModeGeneric;
       for (int dim = 0; dim < kPlnCascadeBlockMaxDims; ++dim) {
         meta.gate_strides[step].values[dim] = 0;
       }
@@ -342,12 +371,28 @@ class MusaPlnCascadeBlockOp : public MusaOpKernel {
 
       const TensorShape& gate_shape = gates[step].shape();
       if (gate_left_aligned[step]) {
+        meta.gate_modes[step] = kPlnCascadeBlockGateModeBatchAligned;
         meta.gate_strides[step] =
             BuildLeftAligned1DStrides(gate_shape, output_shape);
+      } else if (IsScalarBroadcast(gates[step])) {
+        meta.gate_modes[step] = kPlnCascadeBlockGateModeScalar;
+        meta.gate_strides[step] = BuildBroadcastStrides(gate_shape, output_shape);
       } else {
+        meta.use_fast_path = 0;
         meta.gate_strides[step] =
             BuildBroadcastStrides(gate_shape, output_shape);
       }
+    }
+
+    static std::atomic<int> launch_log_budget{0};
+    const int launch_log_index =
+        launch_log_budget.fetch_add(1, std::memory_order_relaxed);
+    if (launch_log_index < 8) {
+      VLOG(1) << "[PlnCascadeBlock][Kernel] launch output="
+              << output_shape.DebugString() << ", num_steps=" << num_steps
+              << ", fast_path=" << meta.use_fast_path
+              << ", norm_contiguous=" << meta.norm_is_contiguous
+              << ", table_width=" << table_width;
     }
 
     musaStream_t stream = GetMusaStreamByCtx(ctx);

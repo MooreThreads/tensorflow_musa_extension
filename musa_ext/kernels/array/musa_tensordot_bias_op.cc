@@ -48,6 +48,7 @@ REGISTER_OP("MusaTensorDotBias")
     .Attr("T: {float, double, half, bfloat16}")
     .Attr("axes_a: list(int)")
     .Attr("axes_b: list(int)")
+    .Attr("fused_relu: bool = false")
     .SetShapeFn([](shape_inference::InferenceContext* c) {
       shape_inference::ShapeHandle a_shape = c->input(0);
       shape_inference::ShapeHandle b_shape = c->input(1);
@@ -224,6 +225,8 @@ class MusaTensorDotBiasOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("axes_a", &axes_a_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("axes_b", &axes_b_));
 
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("fused_relu", &fused_relu_));
+
     // TF32 加速控制
     static bool tf32_enabled_global = []() {
       const char* tf32_env = std::getenv("MUSA_ENABLE_TF32");
@@ -291,6 +294,14 @@ class MusaTensorDotBiasOp : public MusaOpKernel {
     // 执行计算
     OP_REQUIRES_OK(ctx, DoTensorDotBias(ctx, a, b, bias, dims, output));
 
+    if (fused_relu_) {
+      auto& handle = GetHandleByCtx(ctx);
+      mTensor mt_out = CreateMTensor(*output);
+      mUnary unary_op;
+      MTOP_CHECK_OK(unary_op.SetMode(::musa::dnn::Unary::Mode::RELU), "Set Relu Mode", ctx);
+      MTOP_CHECK_OK_RUN(unary_op.Run(handle, mt_out, mt_out), "TensorDotBias Relu Run", ctx);
+    }
+
     VLOG(2) << "MusaTensorDotBias: output shape = "
             << output->shape().DebugString();
   }
@@ -299,6 +310,7 @@ class MusaTensorDotBiasOp : public MusaOpKernel {
   std::vector<int> axes_a_;
   std::vector<int> axes_b_;
   bool tf32_enabled_;
+  bool fused_relu_ = false;
 
   // 执行 Transpose 操作
   Status DoTranspose(OpKernelContext* ctx, const Tensor& input,

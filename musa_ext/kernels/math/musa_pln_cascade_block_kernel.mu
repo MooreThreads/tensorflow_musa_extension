@@ -22,6 +22,45 @@ __global__ void PlnCascadeBlockKernelImpl(
     return;
   }
 
+  if (meta.use_fast_path) {
+    const int channel_idx = idx % meta.table_width;
+    const int batch_idx =
+        (shape.rank > 1 && meta.output_inner_stride > 0)
+            ? (idx / meta.output_inner_stride)
+            : 0;
+
+    float value = norm_out[idx];
+
+#pragma unroll
+    for (int step = 0; step < kStaticSteps; ++step) {
+      if (kUseDynamicSteps && step >= active_steps) {
+        break;
+      }
+
+      const bool* gate_ptr = gate_ptrs.values[step];
+      if (gate_ptr == nullptr) {
+        continue;
+      }
+
+      int gate_offset = 0;
+      if (meta.gate_modes[step] == kPlnCascadeBlockGateModeBatchAligned) {
+        gate_offset = batch_idx;
+      }
+
+      const bool gate = gate_ptr[gate_offset];
+      const int table_offset = meta.table_base_offsets[step] + channel_idx;
+      const float add_v = add_table[table_offset];
+      const float bias_v = bias_table[table_offset];
+      const float candidate = value * add_v + bias_v;
+
+      const bool take_candidate = (gate == (meta.select_on_true[step] != 0));
+      value = take_candidate ? candidate : value;
+    }
+
+    output[idx] = value;
+    return;
+  }
+
   int gate_offsets[kStaticSteps];
 #pragma unroll
   for (int step = 0; step < kStaticSteps; ++step) {

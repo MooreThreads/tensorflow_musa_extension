@@ -70,13 +70,44 @@ int CountConsumers(const GraphDef& graph, const std::string& node_name) {
   return count;
 }
 
-bool IsConstRank1Vector(const NodeDef* node) {
-  if (!node || !IsOp(*node, "Const")) {
+const NodeDef* FindSingleConsumer(const GraphDef& graph,
+                                  const std::string& node_name) {
+  const NodeDef* consumer = nullptr;
+  for (const auto& node : graph.node()) {
+    for (int i = 0; i < node.input_size(); ++i) {
+      if (GetProducerName(node.input(i)) == node_name) {
+        if (consumer != nullptr) {
+          return nullptr;
+        }
+        consumer = &node;
+      }
+    }
+  }
+  return consumer;
+}
+
+bool TryGetStaticRank1Size(const NodeDef& node, int64_t* size) {
+  auto output_shapes_it = node.attr().find("_output_shapes");
+  if (output_shapes_it != node.attr().end()) {
+    const auto& shape_list = output_shapes_it->second.list().shape();
+    if (shape_list.size() > 0) {
+      const auto& shape = shape_list.Get(0);
+      if (!shape.unknown_rank() && shape.dim_size() == 1) {
+        const auto& dim = shape.dim(0);
+        if (dim.size() > 0) {
+          *size = dim.size();
+          return true;
+        }
+      }
+    }
+  }
+
+  if (!IsOp(node, "Const")) {
     return false;
   }
 
-  auto value_it = node->attr().find("value");
-  if (value_it == node->attr().end()) {
+  auto value_it = node.attr().find("value");
+  if (value_it == node.attr().end()) {
     return false;
   }
 
@@ -84,7 +115,20 @@ bool IsConstRank1Vector(const NodeDef* node) {
   if (tensor.tensor_shape().dim_size() != 1) {
     return false;
   }
-  return tensor.tensor_shape().dim(0).size() > 0;
+  const auto dim_size = tensor.tensor_shape().dim(0).size();
+  if (dim_size <= 0) {
+    return false;
+  }
+  *size = dim_size;
+  return true;
+}
+
+bool IsStaticRank1Bias(const NodeDef* node) {
+  if (!node) {
+    return false;
+  }
+  int64_t ignored = 0;
+  return TryGetStaticRank1Size(*node, &ignored);
 }
 
 }  // namespace
@@ -106,13 +150,28 @@ FusionMatchResult MatMulBiasFusion::Match(const GraphDef& graph,
   }
 
   const NodeDef& bias_add = graph.node(start_node_idx);
-  if (!IsOp(bias_add, "BiasAdd") || bias_add.input_size() != 2) {
+  if (!(IsOp(bias_add, "BiasAdd") || IsOp(bias_add, "Add") || IsOp(bias_add, "AddV2")) ||
+      bias_add.input_size() != 2) {
     return FusionMatchResult{};
   }
 
-  const NodeDef* matmul_node = FindProducer(graph, bias_add.input(0));
-  if (!matmul_node || !IsOp(*matmul_node, "MatMul") ||
-      matmul_node->input_size() != 2) {
+  const NodeDef* input0 = FindProducer(graph, bias_add.input(0));
+  const NodeDef* input1 = FindProducer(graph, bias_add.input(1));
+  const NodeDef* matmul_node = nullptr;
+  const NodeDef* bias_node = nullptr;
+  std::string bias_input = bias_add.input(1);
+
+  if (input0 && IsOp(*input0, "MatMul") && input0->input_size() == 2) {
+    matmul_node = input0;
+    bias_node = input1;
+    bias_input = bias_add.input(1);
+  } else if (input1 && IsOp(*input1, "MatMul") && input1->input_size() == 2) {
+    matmul_node = input1;
+    bias_node = input0;
+    bias_input = bias_add.input(0);
+  }
+
+  if (!matmul_node) {
     return FusionMatchResult{};
   }
 
@@ -121,9 +180,7 @@ FusionMatchResult MatMulBiasFusion::Match(const GraphDef& graph,
     return FusionMatchResult{};
   }
 
-  const NodeDef* bias_node =
-      ResolveIdentity(graph, FindProducer(graph, bias_add.input(1)));
-  if (!IsConstRank1Vector(bias_node)) {
+  if (!IsStaticRank1Bias(bias_node)) {
     return FusionMatchResult{};
   }
 
@@ -154,7 +211,7 @@ FusionMatchResult MatMulBiasFusion::Match(const GraphDef& graph,
 
   result.captured_attrs["input_a"] = matmul_node->input(0);
   result.captured_attrs["input_b"] = matmul_node->input(1);
-  result.captured_attrs["bias_input"] = bias_add.input(1);
+  result.captured_attrs["bias_input"] = bias_input;
   result.captured_attrs["transpose_a"] = transpose_a ? "1" : "0";
   result.captured_attrs["transpose_b"] = transpose_b ? "1" : "0";
 
@@ -178,16 +235,21 @@ Status MatMulBiasFusion::Apply(GraphDef* graph,
                   "Missing captured nodes for MatMulBias fusion");
   }
 
-  const std::string output_name = bias_add_it->second->name();
+  const std::string bias_add_name = bias_add_it->second->name();
   const std::string matmul_name = matmul_it->second->name();
 
-  const NodeDef* bias_add_node = FindNode(*graph, output_name);
+  const NodeDef* bias_add_node = FindNode(*graph, bias_add_name);
   const NodeDef* matmul_node = FindNode(*graph, matmul_name);
-  if (!bias_add_node || !matmul_node || !IsOp(*bias_add_node, "BiasAdd") ||
+  if (!bias_add_node || !matmul_node ||
+      !(IsOp(*bias_add_node, "BiasAdd") || IsOp(*bias_add_node, "Add") ||
+        IsOp(*bias_add_node, "AddV2")) ||
       !IsOp(*matmul_node, "MatMul") || bias_add_node->input_size() != 2 ||
       matmul_node->input_size() != 2) {
     return Status::OK();
   }
+
+  const bool fuse_relu = false;
+  const std::string output_name = bias_add_name;
 
   // Re-validate single consumer for safety.
   if (CountConsumers(*graph, matmul_name) != 1) {
@@ -238,7 +300,7 @@ Status MatMulBiasFusion::Apply(GraphDef* graph,
     bias_input = bias_input_it->second;
   }
 
-  const int bias_add_idx = FusionGraphUtils::FindNodeIndex(*graph, output_name);
+  const int bias_add_idx = FusionGraphUtils::FindNodeIndex(*graph, bias_add_name);
   if (bias_add_idx < 0) {
     return Status::OK();
   }
