@@ -658,6 +658,7 @@ jobs:
               cd "$MODEL_ROOT/inference/prunedGraph"
               timeout 20m python run_inference.py \
                 --device musa \
+                --batch-size 100 \
                 --musa-plugin "$BASELINE_PLUGIN" \
                 --infer-iters 1000 2>&1 | tee "$BASELINE_LOG"
             ' || baseline_exit=$?
@@ -667,6 +668,7 @@ jobs:
               cd "$MODEL_ROOT/inference/prunedGraph"
               timeout 20m python run_inference.py \
                 --device musa \
+                --batch-size 100 \
                 --musa-plugin "$CURRENT_PLUGIN" \
                 --infer-iters 1000 2>&1 | tee "$CURRENT_LOG"
             ' || current_exit=$?
@@ -871,6 +873,7 @@ jobs:
               cd "$MODEL_ROOT/inference/prunedGraph"
               timeout 20m python run_inference.py \
                 --device musa \
+                --batch-size 100 \
                 --musa-plugin "$CURRENT_PLUGIN" \
                 --check-acc \
                 --rtol 1e-2 \
@@ -1060,6 +1063,7 @@ jobs:
               timeout 30m python musa_run_pb_graph.py \
                 --spec "$SPEC_PATH" \
                 --bs 32,128,256,1024 \
+                --run_iters 30 \
                 --out_root "$JOB_LOG_DIR/baseline-out" \
                 --musa-plugin "$BASELINE_PLUGIN" 2>&1 | tee "$BASELINE_LOG"
             ' || baseline_exit=$?
@@ -1073,6 +1077,7 @@ jobs:
               timeout 30m python musa_run_pb_graph.py \
                 --spec "$SPEC_PATH" \
                 --bs 32,128,256,1024 \
+                --run_iters 30 \
                 --out_root "$JOB_LOG_DIR/current-out" \
                 --musa-plugin "$CURRENT_PLUGIN" 2>&1 | tee "$CURRENT_LOG"
             ' || current_exit=$?
@@ -1447,6 +1452,7 @@ jobs:
               timeout 30m python musa_run_pb_graph.py \
                 --spec "$SPEC_PATH" \
                 --bs 32,128,256,1024 \
+                --run_iters 30 \
                 --out_root "$JOB_LOG_DIR/baseline-out" \
                 --musa-plugin "$BASELINE_PLUGIN" 2>&1 | tee "$BASELINE_LOG"
             ' || baseline_exit=$?
@@ -1460,6 +1466,7 @@ jobs:
               timeout 30m python musa_run_pb_graph.py \
                 --spec "$SPEC_PATH" \
                 --bs 32,128,256,1024 \
+                --run_iters 30 \
                 --out_root "$JOB_LOG_DIR/current-out" \
                 --musa-plugin "$CURRENT_PLUGIN" 2>&1 | tee "$CURRENT_LOG"
             ' || current_exit=$?
@@ -1834,6 +1841,7 @@ jobs:
               timeout 30m python musa_run_pb_graph.py \
                 --spec "$SPEC_PATH" \
                 --bs 32,128,256,1024 \
+                --run_iters 30 \
                 --out_root "$JOB_LOG_DIR/baseline-out" \
                 --musa-plugin "$BASELINE_PLUGIN" 2>&1 | tee "$BASELINE_LOG"
             ' || baseline_exit=$?
@@ -1847,6 +1855,7 @@ jobs:
               timeout 30m python musa_run_pb_graph.py \
                 --spec "$SPEC_PATH" \
                 --bs 32,128,256,1024 \
+                --run_iters 30 \
                 --out_root "$JOB_LOG_DIR/current-out" \
                 --musa-plugin "$CURRENT_PLUGIN" 2>&1 | tee "$CURRENT_LOG"
             ' || current_exit=$?
