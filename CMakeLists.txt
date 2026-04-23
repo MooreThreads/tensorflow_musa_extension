@@ -124,6 +124,7 @@ set(MUSA_CORE_SOURCES
     "${SRC_ROOT}/mu/device/driver_api.cc"
     "${SRC_ROOT}/mu/device/allocator_config.cc"
     "${SRC_ROOT}/mu/device/expandable_segment.cc"
+    "${SRC_ROOT}/mu/device/peer_access.cc"
 )
 
 # -----------------------------------------------------------------------------

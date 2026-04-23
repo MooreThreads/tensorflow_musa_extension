@@ -30,13 +30,19 @@ does not; mirroring TF's view keeps the Python API honest about what
 the framework will actually schedule on.
 """
 
-from typing import Optional
+from typing import List, Optional
+
+from ._ext import _C
 
 __all__ = [
     "device_count",
     "current_device",
     "get_device_name",
     "is_available",
+    # Multi-device peer access (optional tier, plan §3.8).
+    "can_access_peer",
+    "enable_peer_access",
+    "peer_access_snapshot",
 ]
 
 
@@ -127,3 +133,66 @@ def is_available() -> bool:
     better (``if tensorflow_musa.is_available(): ...``).
     """
     return device_count() > 0
+
+
+# ---------------------------------------------------------------------------
+# Peer-to-peer access (plan §3.8). Thin pass-throughs over the _C cache;
+# documented here rather than in memory.py because they are about which
+# *devices* can talk to each other, not about memory state.
+# ---------------------------------------------------------------------------
+
+
+def _check_ordinals(*values: int) -> None:
+    for v in values:
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise TypeError(
+                f"device ordinal must be int, got {type(v).__name__}"
+            )
+        if v < 0:
+            raise ValueError(f"device ordinal must be >= 0, got {v}")
+
+
+def can_access_peer(from_device: int, to_device: int) -> bool:
+    """Return ``True`` iff ``from_device`` can DMA into ``to_device``.
+
+    Result is cached after the first call per ordered pair, so this
+    is cheap to call in a hot loop. Self-access (``from == to``) is
+    always ``True``. Out-of-range ordinals return ``False`` rather
+    than raising, matching the underlying MUSA runtime behavior.
+
+    Asymmetric by definition: ``can_access_peer(0, 1)`` may differ
+    from ``can_access_peer(1, 0)`` on topologies where only one
+    direction is wired (e.g. asymmetric PCIe root complexes).
+    """
+    _check_ordinals(from_device, to_device)
+    return bool(_C._peer_can_access(int(from_device), int(to_device)))
+
+
+def enable_peer_access(from_device: int, to_device: int) -> bool:
+    """Enable ``from_device → to_device`` peer access (idempotent).
+
+    Returns ``True`` when access is live after the call (already-
+    enabled pairs count as success). Returns ``False`` when the pair
+    isn't supported by the hardware. Does not raise on already-enabled
+    pairs — that's the common case when a training harness calls this
+    in a preamble that may already have been run.
+
+    Note: the plugin's built-in ``memcpy_dtod`` path does *not* yet
+    auto-dispatch peer copies. Enabling peer access is still useful
+    for user code that issues ``musaMemcpyPeerAsync`` directly (or
+    that will, once the plugin picks up peer-aware dispatch in a
+    follow-up commit).
+    """
+    _check_ordinals(from_device, to_device)
+    return bool(_C._peer_enable_access(int(from_device), int(to_device)))
+
+
+def peer_access_snapshot() -> List[dict]:
+    """Return the cached peer-access table.
+
+    Each entry is ``{"from": int, "to": int, "can_access": int,
+    "enabled": bool}`` where ``can_access`` is -1 / 0 / 1 (unknown /
+    no / yes). Only pairs that have been queried or enabled appear —
+    the snapshot stays small on large clusters.
+    """
+    return [dict(e) for e in _C._peer_access_snapshot()]

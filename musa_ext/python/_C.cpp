@@ -38,6 +38,7 @@ limitations under the License.
 #include "mu/device/driver_api.h"
 #include "mu/device/expandable_segment.h"
 #include "mu/device/host_caching_allocator.h"
+#include "mu/device/peer_access.h"
 
 namespace {
 
@@ -52,6 +53,8 @@ using ::tensorflow::musa::HostCachingAllocator;
 using ::tensorflow::musa::HostCachingAllocatorStats;
 using ::tensorflow::musa::IsVmmAvailable;
 using ::tensorflow::musa::IsVmmSupportedForDevice;
+using ::tensorflow::musa::PeerAccess;
+using ::tensorflow::musa::PeerAccessEntry;
 using ::tensorflow::musa::QueryMinAllocationGranularity;
 
 PyObject* BuildStatsDict(const HostCachingAllocatorStats& s) {
@@ -324,6 +327,71 @@ PyObject* DeviceEmptyCache(PyObject* /*self*/, PyObject* args) {
   return PyLong_FromUnsignedLongLong(released);
 }
 
+// Peer-to-peer access probes (plan §3.8). These mirror
+// `musaDeviceCanAccessPeer` / `musaDeviceEnablePeerAccess` with a
+// process-wide cache so repeated calls stay cheap. The plugin's
+// `memcpy_dtod` does *not* (yet) auto-dispatch peer copies; these
+// entry points give multi-GPU users a way to enable access manually
+// when they know two devices should talk directly.
+
+PyObject* PeerCanAccess(PyObject* /*self*/, PyObject* args) {
+  int from = 0, to = 0;
+  if (!PyArg_ParseTuple(args, "ii", &from, &to)) return nullptr;
+  return PyBool_FromLong(PeerAccess::Instance().CanAccessPeer(from, to) ? 1
+                                                                        : 0);
+}
+
+PyObject* PeerEnableAccess(PyObject* /*self*/, PyObject* args) {
+  int from = 0, to = 0;
+  if (!PyArg_ParseTuple(args, "ii", &from, &to)) return nullptr;
+  return PyBool_FromLong(PeerAccess::Instance().EnablePeerAccess(from, to) ? 1
+                                                                           : 0);
+}
+
+PyObject* PeerAccessSnapshot(PyObject* /*self*/, PyObject* /*args*/) {
+  std::vector<PeerAccessEntry> entries = PeerAccess::Instance().Snapshot();
+  PyObject* list = PyList_New(0);
+  if (list == nullptr) return nullptr;
+  for (const auto& e : entries) {
+    PyObject* d = PyDict_New();
+    if (d == nullptr) {
+      Py_DECREF(list);
+      return nullptr;
+    }
+    auto put_int = [&](const char* k, long v) -> bool {
+      PyObject* o = PyLong_FromLong(v);
+      if (o == nullptr) return false;
+      int rc = PyDict_SetItemString(d, k, o);
+      Py_DECREF(o);
+      return rc == 0;
+    };
+    auto put_bool = [&](const char* k, bool v) -> bool {
+      PyObject* o = PyBool_FromLong(v ? 1 : 0);
+      int rc = PyDict_SetItemString(d, k, o);
+      Py_DECREF(o);
+      return rc == 0;
+    };
+    if (!put_int("from", e.from) || !put_int("to", e.to) ||
+        !put_int("can_access", e.can_access) ||
+        !put_bool("enabled", e.enabled)) {
+      Py_DECREF(d);
+      Py_DECREF(list);
+      return nullptr;
+    }
+    if (PyList_Append(list, d) != 0) {
+      Py_DECREF(d);
+      Py_DECREF(list);
+      return nullptr;
+    }
+    Py_DECREF(d);
+  }
+  return list;
+}
+
+PyObject* PeerDeviceCount(PyObject* /*self*/, PyObject* /*args*/) {
+  return PyLong_FromLong(PeerAccess::Instance().device_count());
+}
+
 PyMethodDef kMethods[] = {
     {"_is_loaded", IsLoaded, METH_NOARGS,
      "Return True iff the native _C module loaded successfully."},
@@ -371,6 +439,18 @@ PyMethodDef kMethods[] = {
     {"_allocator_config", AllocatorConfigDict, METH_NOARGS,
      "Return a dict snapshot of the parsed TF_MUSA_ALLOC_CONF env "
      "variable (expandable_segments, max_split_size_bytes, ...)."},
+    {"_peer_device_count", PeerDeviceCount, METH_NOARGS,
+     "Return the number of MUSA devices the runtime sees (0 if the "
+     "driver failed to initialize)."},
+    {"_peer_can_access", PeerCanAccess, METH_VARARGS,
+     "Return True iff device `from` can DMA into device `to` directly "
+     "via musaDeviceCanAccessPeer. Cached per ordered pair."},
+    {"_peer_enable_access", PeerEnableAccess, METH_VARARGS,
+     "Enable peer access from `from` to `to` (idempotent). Returns "
+     "True on success or if already enabled."},
+    {"_peer_access_snapshot", PeerAccessSnapshot, METH_NOARGS,
+     "Return the list of (from, to, can_access, enabled) entries "
+     "the PeerAccess cache has observed so far."},
     {nullptr, nullptr, 0, nullptr},
 };
 
