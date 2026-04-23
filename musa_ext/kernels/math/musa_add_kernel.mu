@@ -44,24 +44,25 @@ __global__ void AddContiguousKernelFloat4(const float4* lhs, const float4* rhs,
   }
 }
 
-__global__ void AddScalarKernelFloat(const float* dense, const float scalar,
+__global__ void AddScalarKernelFloat(const float* dense, const float* scalar,
                                      float* output, int64_t size) {
   const int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < size) {
-    output[idx] = dense[idx] + scalar;
+    output[idx] = dense[idx] + scalar[0];
   }
 }
 
-__global__ void AddScalarKernelFloat4(const float4* dense, const float4 scalar4,
+__global__ void AddScalarKernelFloat4(const float4* dense, const float* scalar,
                                       float4* output, int64_t vec_size) {
   const int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < vec_size) {
+    const float scalar_value = scalar[0];
     const float4 d = dense[idx];
     float4 out;
-    out.x = d.x + scalar4.x;
-    out.y = d.y + scalar4.y;
-    out.z = d.z + scalar4.z;
-    out.w = d.w + scalar4.w;
+    out.x = d.x + scalar_value;
+    out.y = d.y + scalar_value;
+    out.z = d.z + scalar_value;
+    out.w = d.w + scalar_value;
     output[idx] = out;
   }
 }
@@ -112,33 +113,26 @@ void LaunchMusaAddScalarFloat(const float* dense, const float* scalar,
   if (size <= 0) {
     return;
   }
-  const float scalar_value = scalar[0];
 
   if (size >= 4 && IsAligned16(dense) && IsAligned16(output)) {
-    float4 scalar4;
-    scalar4.x = scalar_value;
-    scalar4.y = scalar_value;
-    scalar4.z = scalar_value;
-    scalar4.w = scalar_value;
-
     const int64_t vec_size = size / 4;
     const int64_t vec_blocks = CeilDiv(vec_size, kThreadsPerBlock);
     AddScalarKernelFloat4<<<vec_blocks, kThreadsPerBlock, 0, stream>>>(
-        reinterpret_cast<const float4*>(dense), scalar4,
+        reinterpret_cast<const float4*>(dense), scalar,
         reinterpret_cast<float4*>(output), vec_size);
 
     const int64_t tail = size - vec_size * 4;
     if (tail > 0) {
       const int64_t tail_blocks = CeilDiv(tail, kThreadsPerBlock);
       AddScalarKernelFloat<<<tail_blocks, kThreadsPerBlock, 0, stream>>>(
-          dense + vec_size * 4, scalar_value, output + vec_size * 4, tail);
+          dense + vec_size * 4, scalar, output + vec_size * 4, tail);
     }
     return;
   }
 
   const int64_t blocks = CeilDiv(size, kThreadsPerBlock);
   AddScalarKernelFloat<<<blocks, kThreadsPerBlock, 0, stream>>>(
-      dense, scalar_value, output, size);
+      dense, scalar, output, size);
 }
 
 void LaunchMusaAddTailVectorFloat(const float* dense, const float* tail_vector,

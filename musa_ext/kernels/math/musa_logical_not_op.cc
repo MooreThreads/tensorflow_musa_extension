@@ -1,4 +1,5 @@
 #include "../utils_op.h"
+#include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/lib/core/errors.h"
@@ -29,7 +30,12 @@ class MusaLogicalNotOp : public MusaOpKernel {
     Tensor true_tensor;
     OP_REQUIRES_OK(ctx,
                    ctx->allocate_temp(DT_BOOL, TensorShape({}), &true_tensor));
-    true_tensor.scalar<bool>()() = true;
+    const bool true_host = true;
+    mStatus copy_status = MusaMemcpyH2D(
+        const_cast<bool*>(true_tensor.flat<bool>().data()), &true_host,
+        sizeof(true_host));
+    OP_REQUIRES(ctx, copy_status == mStatus::SUCCESS,
+                errors::Internal("MUSA H2D copy failed for LogicalNot true"));
     auto true_mt = CreateMTensor(true_tensor, format_);
 
     ::musa::dnn::Binary op;
