@@ -8,10 +8,6 @@ set(CMAKE_CXX_COMPILER g++)
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Kernel debug/timing instrumentation switch.
-# OFF by default to keep production performance unchanged.
-option(MUSA_KERNEL_DEBUG "Enable MUSA kernel compute timing instrumentation" OFF)
-
 # Set MUSA path
 set(MUSA_PATH "/usr/local/musa" CACHE STRING "Path to MUSA installation")
 set(MCC_EXECUTABLE "${MUSA_PATH}/bin/mcc")
@@ -53,25 +49,19 @@ string(REPLACE "-D_GLIBCXX_USE_CXX11_ABI=1" "" TF_COMPILE_FLAGS "${TF_COMPILE_FL
 # Re-add the safest definition
 set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=0")
 
-# Configure debug/logging-related compile definitions.
+# Configure logging-related compile definitions.
 #
 # Important: this plugin links against the pip TensorFlow wheel, which is built
 # in release mode. Some TensorFlow headers (for example refcount.h) contain
 # inline DCHECK-dependent side effects. If the plugin is compiled without
 # NDEBUG while libtensorflow_framework is compiled with NDEBUG, the plugin and
 # framework can disagree on RefCounted teardown semantics and trigger false
-# refcount aborts during session/resource destruction.
-#
-# Keep NDEBUG enabled in every build to match the TensorFlow wheel, and use
-# MUSA_KERNEL_DEBUG only for plugin-local timing/debug instrumentation.
+# refcount aborts during session/resource destruction. Keep NDEBUG enabled in
+# every build to match the TensorFlow wheel.
 #
 # TF_PLUGGABLE_DEVICE is defined so plugin code can cheaply gate any
 # diagnostics that only make sense in the PluggableDevice C API world.
-if(MUSA_KERNEL_DEBUG)
-    set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_KERNEL_DEBUG -DNDEBUG -DTF_PLUGGABLE_DEVICE")
-else()
-    set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_DISABLE_DEBUG_LOGGING -DNDEBUG -DMUSA_DISABLE_TRACE_LOGGING -DMUSA_DISABLE_AUTO_TRACE -DTF_PLUGGABLE_DEVICE")
-endif()
+set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_DISABLE_DEBUG_LOGGING -DNDEBUG -DMUSA_DISABLE_TRACE_LOGGING -DMUSA_DISABLE_AUTO_TRACE -DTF_PLUGGABLE_DEVICE")
 
 # Include paths. The plugin now only consumes TF's public C API
 # (tensorflow/c/experimental/stream_executor) and a small set of public core
@@ -276,7 +266,6 @@ message(STATUS "  MuDNN Library: ${MUSA_DNN_LIBRARY}")
 message(STATUS "  TensorFlow Include: ${TF_INC}")
 message(STATUS "  Python Include:     ${PY_INC}")
 message(STATUS "  Python EXT_SUFFIX:  ${PY_EXT_SUFFIX}")
-message(STATUS "  MUSA Kernel Debug:  ${MUSA_KERNEL_DEBUG}")
 message(STATUS "  Core Sources:       ${CORE_SOURCES_COUNT}")
 message(STATUS "  Plugin Sources:     ${PLUGIN_SOURCES_COUNT} C++ files, ${MU_SOURCES_COUNT} MUSA kernels")
 message(STATUS "  Outputs:")

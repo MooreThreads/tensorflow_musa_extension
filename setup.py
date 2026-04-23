@@ -161,7 +161,6 @@ class BuildPluginCommand(Command):
             "cmake",
             "..",
             "-DCMAKE_BUILD_TYPE=Release",
-            "-DMUSA_KERNEL_DEBUG=OFF",
         ]
 
         print(f"Running CMake configuration: {cmake_cmd}")

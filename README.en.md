@@ -52,7 +52,7 @@ Alternatively, copy `libmusa_plugin.so` into `<site-packages>/tensorflow/tensorf
 | Mode | Command | Description |
 |------|---------|-------------|
 | Release | `./build.sh` or `./build.sh release` | produces `build/libmusa_plugin.so` |
-| Debug | `./build.sh debug` | enables `MUSA_KERNEL_DEBUG` and kernel timing |
+| Debug | `./build.sh debug` | unoptimized build with debug symbols (`-g -O0`) |
 | Wheel | `./build.sh wheel` | produces `dist/tensorflow_musa-*.whl` |
 
 The build script automatically validates the TensorFlow version, configures CMake, and compiles MUSA kernels along with host code.

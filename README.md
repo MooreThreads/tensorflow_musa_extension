@@ -52,7 +52,7 @@ print(tf.config.list_physical_devices('MUSA'))
 | 模式 | 命令 | 说明 |
 |------|------|------|
 | Release | `./build.sh` 或 `./build.sh release` | 生成 `build/libmusa_plugin.so` |
-| Debug | `./build.sh debug` | 启用 `MUSA_KERNEL_DEBUG` 与 kernel 计时 |
+| Debug | `./build.sh debug` | 未优化构建，保留调试符号（`-g -O0`） |
 | Wheel | `./build.sh wheel` | 生成 `dist/tensorflow_musa-*.whl` |
 
 构建脚本会自动检查 TensorFlow 版本、配置 CMake、编译 MUSA kernel 与主机代码。

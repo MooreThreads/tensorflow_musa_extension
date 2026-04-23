@@ -9,7 +9,7 @@ set -e
 # Examples:
 #   ./build.sh           # Default: release mode (build .so only)
 #   ./build.sh release   # Release mode (optimized)
-#   ./build.sh debug     # Debug mode (kernel timing enabled)
+#   ./build.sh debug     # Debug mode (-g -O0, symbols retained for gdb)
 #   ./build.sh wheel     # Build wheel package directly (recommended for distribution)
 # ============================================================================
 
@@ -67,7 +67,6 @@ BUILD_TYPE=$(echo "$BUILD_TYPE" | tr '[:upper:]' '[:lower:]')
 case "$BUILD_TYPE" in
     release)
         CMAKE_BUILD_TYPE="Release"
-        MUSA_KERNEL_DEBUG="OFF"
         echo "=========================================="
         echo "Building MUSA Plugin - RELEASE Mode"
         echo "=========================================="
@@ -78,14 +77,12 @@ case "$BUILD_TYPE" in
         ;;
     debug)
         CMAKE_BUILD_TYPE="Debug"
-        MUSA_KERNEL_DEBUG="ON"
         echo "=========================================="
         echo "Building MUSA Plugin - DEBUG Mode"
         echo "=========================================="
         echo "Features:"
-        echo "  • Kernel timing instrumentation enabled"
+        echo "  • Unoptimized build with debug symbols (-g -O0)"
         echo "  • TensorFlow ABI/DCHECK compatibility preserved (-DNDEBUG)"
-        echo "  • Use env vars MUSA_TIMING_KERNEL_* to control output"
         echo ""
         ;;
     wheel)
@@ -128,7 +125,7 @@ case "$BUILD_TYPE" in
         echo ""
         echo "Options:"
         echo "  release  - Optimized release build (default)"
-        echo "  debug    - Enable MUSA kernel debug/timing macros"
+        echo "  debug    - Unoptimized build with debug symbols (-g -O0)"
         echo "  wheel    - Build wheel package for distribution"
         exit 1
         ;;
@@ -149,7 +146,6 @@ echo ""
 
 cmake .. \
     -DCMAKE_BUILD_TYPE=$CMAKE_BUILD_TYPE \
-    -DMUSA_KERNEL_DEBUG=$MUSA_KERNEL_DEBUG \
     -DPYTHON_EXECUTABLE=$(which python3) 2>&1 | tee cmake_output.log
 
 echo ""
