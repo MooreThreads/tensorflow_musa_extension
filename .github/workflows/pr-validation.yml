@@ -658,6 +658,7 @@ jobs:
               cd "$MODEL_ROOT/inference/prunedGraph"
               timeout 20m python run_inference.py \
                 --device musa \
+                --batch-size 100 \
                 --musa-plugin "$BASELINE_PLUGIN" \
                 --infer-iters 1000 2>&1 | tee "$BASELINE_LOG"
             ' || baseline_exit=$?
@@ -667,6 +668,7 @@ jobs:
               cd "$MODEL_ROOT/inference/prunedGraph"
               timeout 20m python run_inference.py \
                 --device musa \
+                --batch-size 100 \
                 --musa-plugin "$CURRENT_PLUGIN" \
                 --infer-iters 1000 2>&1 | tee "$CURRENT_LOG"
             ' || current_exit=$?
@@ -871,6 +873,7 @@ jobs:
               cd "$MODEL_ROOT/inference/prunedGraph"
               timeout 20m python run_inference.py \
                 --device musa \
+                --batch-size 100 \
                 --musa-plugin "$CURRENT_PLUGIN" \
                 --check-acc \
                 --rtol 1e-2 \
