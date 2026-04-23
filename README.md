@@ -1,297 +1,147 @@
 # TensorFlow MUSA Extension
 
-TensorFlow MUSA Extension 是一个高性能的 TensorFlow 插件，专为摩尔线程（Moore Threads）MUSA GPU 架构设计。该扩展通过原生 MUSA 内核实现，为 TensorFlow 提供完整的 GPU 加速支持，充分发挥摩尔线程全功能 GPU 的计算性能。
+[English](README.en.md) | 中文
+
+TensorFlow MUSA Extension 是摩尔线程（Moore Threads）MUSA GPU 的 TensorFlow 插件，通过 **PluggableDevice C API** 把 MUSA 设备注册为 TensorFlow 的物理设备，并提供原生 kernel、图优化与自研内存分配器实现。
 
 ## 特性
 
-- **完整的算子支持**：涵盖深度学习训练和推理所需的核心算子
-- **完整的算子支持**：涵盖深度学习训练和推理所需的核心算子
-- **高性能优化**：针对 MUSA 架构进行深度优化，包括内存访问模式和计算效率
-- **自动图优化**：支持 Layout 自动转换、算子融合和自动混合精度（AMP）
-- **无缝集成**：与 TensorFlow 生态系统完全兼容，无需修改现有代码
-- **设备管理**：完整的 MUSA 设备注册、内存管理和流式处理支持
-- **Kernel 调试支持**：内置 Kernel 执行时间统计功能，便于性能分析
-- **Python 包支持**：提供 `tensorflow_musa` Python 包，支持 pip 安装、插件加载与设备查询接口
+- **PluggableDevice 集成** — 兼容 `tensorflow>=2.6, <2.17`，无需改动业务代码即可使用 MUSA 设备。
+- **完整算子与图优化** — 训练 / 推理常见算子，支持 Layout 自动转换、算子融合与 AMP。
+- **自研内存分配器** — Host / Device 双路缓存分配器，可选 VMM Expandable Segments；提供 OOM 结构化诊断、per-process 内存上限、H2D staging 池等运行时控制。
+- **Python 诊断接口** — `tensorflow_musa.memory` / `tensorflow_musa.device` 暴露 `memory_stats`、`memory_snapshot`、`empty_cache`、Peer-Access 等 API 用于线上监控与排障。
 
-## 快速开始
-
-### 目录结构
-
-```
-tensorflow_musa_extension/
-├── CMakeLists.txt          # CMake 构建配置
-├── build.sh                # 构建脚本（支持 release/debug/wheel）
-├── setup.py                # Python 包构建配置
-├── .clang-format           # 代码格式化配置
-├── .pre-commit-config.yaml # pre-commit 钩子配置
-├── .github/                # CI/CD 配置
-├── python/                 # Python 包源码目录（pip 安装名为 tensorflow_musa）
-│   ├── __init__.py         # 包入口，自动加载插件
-│   ├── _loader.py          # 插件加载与设备查询工具
-│   └── libmusa_plugin.so   # 打包进 wheel 的 MUSA 插件动态库
-├── musa_ext/               # 核心源码目录
-│   ├── kernels/            # MUSA 内核实现（.mu 文件）
-│   ├── mu/                 # MUSA 设备和优化器实现
-│   └── utils/              # 工具函数
-└── test/                   # 测试用例
-    ├── musa_test_utils.py  # 测试工具基类
-    ├── test_runner.py      # 测试运行器
-    ├── ops/                # 算子测试
-    └── fusion/             # 融合测试（e2e）
-```
+## 安装
 
 ### 环境要求
 
-- **构建工具**:
-  - CMake (版本 >= 3.10)
-  - Make
-- **MUSA SDK**:
-  - MUSA Runtime (>= 1.0)
-  - muBLAS 库
-  - muDNN 库
-  - 默认安装路径: `/usr/local/musa`
-- **Python 依赖**
-  - Python: >= 3.7
-  - TensorFlow: `>= 2.6, < 2.17`（推荐/主测试版本：`2.6.1`）
-  - NumPy: >= 1.19.0
-- **开发工具**:
-  - pre-commit >= 3.0.0
-  - pytest >= 6.0.0
+| 组件 | 版本 |
+|------|------|
+| Python | ≥ 3.7 |
+| TensorFlow | ≥ 2.6，< 2.17（主测试：`2.6.1`） |
+| NumPy | ≥ 1.19 |
+| CMake | ≥ 3.10 |
+| MUSA SDK | Runtime ≥ 1.0，含 muBLAS / muDNN；默认路径 `/usr/local/musa` |
 
-### 安装方式
-
-#### 方式一：安装 WHL 包（推荐）
+### 安装 wheel（推荐）
 
 ```bash
-# 克隆仓库
-git clone <repository-url>
-cd tensorflow_musa_extension
-
-# 确保已安装受支持的 TensorFlow 版本（>=2.6, <2.17）
-# 2.6.1 是主测试目标；完整兼容矩阵见 docs/tf-compat-matrix.md
 pip install tensorflow==2.6.1
-
-# 构建 WHL 包（一键构建）
 ./build.sh wheel
-
-# 安装 WHL 包
 pip install dist/tensorflow_musa-0.1.0-py3-none-any.whl --no-deps
-
-# 重新构建后安装 WHL 包
-pip install dist/tensorflow_musa-0.1.0-py3-none-any.whl --no-deps --force-reinstall
 ```
 
-#### 方式二：开发模式
+### 开发模式
 
 ```bash
-# 克隆仓库
-git clone <repository-url>
-cd tensorflow_musa_extension
-
-# 构建 plugin
 ./build.sh release
 
-# 在 Python 中加载插件（PluggableDevice 方式，推荐）
+# 在 Python 里加载插件
+python -c "
 import tensorflow as tf
 from tensorflow.python.framework import load_library
-load_library.load_pluggable_device_library("./build/libmusa_plugin.so")
-
-# 验证 MUSA 设备已注册
-print(tf.config.list_physical_devices("MUSA"))
+load_library.load_pluggable_device_library('./build/libmusa_plugin.so')
+print(tf.config.list_physical_devices('MUSA'))
+"
 ```
 
-> 说明：本扩展通过 TensorFlow 2.6+ 的 **PluggableDevice C API**
-> (`SE_InitPlugin` / `SP_StreamExecutor`) 注册为名为 `MUSA` 的物理设备，
-> 因此应优先使用 `tf.load_pluggable_device_library`。
-> 作为替代，也可以把 `libmusa_plugin.so` 拷贝到 TensorFlow 安装目录下的
-> `tensorflow-plugins/` 子目录（例如
-> `<site-packages>/tensorflow/tensorflow-plugins/libmusa_plugin.so`），
-> TensorFlow 启动时会自动加载该目录下的所有共享库，无需任何显式调用。
+也可将 `libmusa_plugin.so` 放入 `<site-packages>/tensorflow/tensorflow-plugins/`，TensorFlow 启动时自动加载，无需显式调用。
 
-## 构建指南
-
-### 1. 编译模式
-
-支持三种构建模式：
+## 构建
 
 | 模式 | 命令 | 说明 |
 |------|------|------|
-| **Release** | `./build.sh` 或 `./build.sh release` | 优化性能，生成 `build/libmusa_plugin.so` |
-| **Debug** | `./build.sh debug` | 开启 `MUSA_KERNEL_DEBUG`，启用 kernel timing 宏 |
-| **Wheel** | `./build.sh wheel` | 一键构建 WHL 包，生成 `dist/tensorflow_musa-*.whl` |
+| Release | `./build.sh` 或 `./build.sh release` | 生成 `build/libmusa_plugin.so` |
+| Debug | `./build.sh debug` | 启用 `MUSA_KERNEL_DEBUG` 与 kernel 计时 |
+| Wheel | `./build.sh wheel` | 生成 `dist/tensorflow_musa-*.whl` |
 
-### 2. 编译流程
+构建脚本会自动检查 TensorFlow 版本、配置 CMake、编译 MUSA kernel 与主机代码。
 
-```bash
-# Release（默认）- 仅构建 plugin
-./build.sh
-
-# Debug（计时调试）
-./build.sh debug
-
-# Wheel（构建发布包）
-./build.sh wheel
-```
-
-构建脚本将自动完成以下步骤：
-- 检查 TensorFlow 版本（支持 `>=2.6, <2.17`；推荐 `2.6.1`）
-- 配置 CMake 项目
-- 编译 MUSA 内核和主机代码
-- 生成动态链接库 `libmusa_plugin.so` 或 WHL 包
-
-### 3. WHL 包说明
-
-WHL 包构建特点：
-- **不自动下载 TensorFlow**：避免 pip 自动下载不兼容版本
-- **版本检查**：构建前验证 TensorFlow 在支持范围内（`>=2.6, <2.17`）。详见 `docs/tf-compat-matrix.md`。
-- **包名映射**：源码目录为 `python/`，安装后包名为 `tensorflow_musa`
-
-安装后使用：
-```python
-import tensorflow_musa as tf_musa  # 包名仍然是 tensorflow_musa
-```
-
-### 4. 调试与诊断
-
-详细的调试指南请参阅 [docs/DEBUG_GUIDE.md](docs/DEBUG_GUIDE.md)，包含：
-
-- **Kernel 计时**：Debug 模式下的性能分析方法
-- **遥测系统（Telemetry）**：全链路追踪和脏数据诊断
-- **内存诊断**：Use-After-Free 检测和内存染色
-- **环境变量**：完整的环境变量配置表
-
-快速启用遥测系统进行诊断：
-
-```bash
-export MUSA_TELEMETRY_ENABLED=1
-export MUSA_TELEMETRY_LOG_PATH=/tmp/telemetry.json
-python test_runner.py
-```
-
-快速启用 Kernel 计时分析：
-
-```bash
-./build.sh debug
-export MUSA_TIMING_KERNEL_LEVEL=2
-export MUSA_TIMING_KERNEL_NAME=ALL
-export MUSA_TIMING_KERNEL_STATS=1
-python test_runner.py
-```
-
-## 测试
-
-构建完成后，运行测试套件验证功能正确性。测试分为**算子测试**（`test/ops/`）和**融合测试**（`test/fusion/`）两类。
-
-### 运行单个测试
-
-```bash
-cd test
-
-# 运行特定算子测试
-python -m ops.add_op_test
-python -m ops.matmul_op_test
-
-# 运行融合测试
-python -m fusion.layernorm_gelu_fusion_test
-```
-
-### 使用测试运行器
-
-```bash
-cd test
-
-# 运行所有算子测试（默认）
-python test_runner.py
-
-# 运行所有融合测试
-python test_runner.py --fusion
-
-# 运行单个测试文件
-python test_runner.py --single ops/matmul_op_test.py
-python test_runner.py --single fusion/layernorm_gelu_fusion_test.py
-
-# 详细模式（显示每个测试的详细输出）
-python test_runner.py --detail
-
-# 安静模式（只显示进度条和摘要）
-python test_runner.py --quiet
-```
-
-### 测试文件命名规范
-
-**算子测试**（`test/ops/`）：
-- 使用 `op_name_op_test.py` 格式
-- 继承自 `MUSATestCase`（封装了插件加载）
-- 测试方法以 `test_` 开头
-
-**融合测试**（`test/fusion/`）：
-- 使用 `*_fusion_test.py` 格式
-- 继承自 `MUSATestCase`
-- 测试端到端的图优化和算子融合
-
-## 支持的算子
-
-当前版本支持以下核心算子：
-- **基础运算**：Add, Sub, Multiply, RealDiv, Maximum, Minimum
-- **激活函数**：Relu, Sigmoid, Softmax, Erf
-- **矩阵运算**：MatMul, FusedMatMul, Transpose
-- **数据操作**：Reshape, Concat, Gather, StridedSlice, ExpandDims
-- **归一化**：LayerNorm, FusedBatchNorm
-- **特殊算子**：TensorInteraction, BiasAdd, Assign
-- **优化器**：ResourceApplyAdam, MusaResourceSparseApplyAdam（支持 embedding 稀疏更新）
-
-## 使用示例
-
-### 基本用法
-
-安装 `tensorflow_musa` 包后，导入时插件会自动加载：
-
-```python
-import tensorflow_musa as tf_musa
-
-# 查看版本
-print(f"TensorFlow MUSA 版本: {tf_musa.__version__}")
-
-# 查看可用的 MUSA 设备
-devices = tf_musa.get_musa_devices()
-print(f"可用 MUSA 设备: {devices}")
-```
-
-### 设备管理
+## 快速开始
 
 ```python
 import tensorflow as tf
 import tensorflow_musa as tf_musa
 
-# 设置使用特定 MUSA 设备
-with tf.device('/device:MUSA:0'):
-    # 在 MUSA 设备上创建张量和计算
+print(tf_musa.__version__)
+print(tf_musa.get_musa_devices())
+
+with tf.device("/device:MUSA:0"):
     a = tf.constant([[1.0, 2.0], [3.0, 4.0]])
     b = tf.constant([[5.0, 6.0], [7.0, 8.0]])
-    c = tf.matmul(a, b)
-    print(c)
+    print(tf.matmul(a, b))
 ```
 
-### 更多示例
+## 内存管理与诊断
 
-详细使用示例见：
+```python
+import tensorflow_musa as tf_musa
+
+tf_musa.memory.memory_allocated()     # 当前使用字节
+tf_musa.memory.memory_reserved()      # reserved（含缓存）
+tf_musa.memory.memory_stats()         # 完整计数器
+tf_musa.memory.memory_snapshot()      # 合成快照（stats + segments + driver + config）
+tf_musa.memory.empty_cache()          # 释放空闲段回驱动
+tf_musa.memory.set_per_process_memory_fraction(0.5)
+
+if tf_musa.device.can_access_peer(0, 1):
+    tf_musa.device.enable_peer_access(0, 1)
+```
+
+运行时行为（分配器后端、staging 池、VMM 扩展段、OOM 诊断等）通过环境变量控制，完整清单见 [`docs/environment-variables.md`](docs/environment-variables.md)。
+
+## 测试
+
+```bash
+cd test
+python test_runner.py                       # 所有算子测试
+python test_runner.py --fusion              # 融合测试
+python test_runner.py --single ops/matmul_op_test.py
+```
+
+测试按类别组织在 `test/ops/`（算子级）与 `test/fusion/`（端到端）下，用例继承 `MUSATestCase` 自动完成插件加载。
+
+## 基准
+
+```bash
+python benchmark/bench_h2d.py                # H2D / D2H 吞吐扫频
+python benchmark/bench_resnet.py             # ResNet 类训练步
+python benchmark/bench_alloc_churn.py        # 分配器压力 + 不变量断言
+```
+
+## 支持的算子
+
+- 基础：Add / Sub / Multiply / RealDiv / Maximum / Minimum
+- 激活：Relu / Sigmoid / Softmax / Erf
+- 矩阵：MatMul / FusedMatMul / Transpose
+- 数据：Reshape / Concat / Gather / StridedSlice / ExpandDims
+- 归一化：LayerNorm / FusedBatchNorm
+- 其他：TensorInteraction / BiasAdd / Assign
+- 优化器：ResourceApplyAdam / MusaResourceSparseApplyAdam（支持 embedding 稀疏更新）
+
+## 目录结构
+
+```
+tensorflow_musa_extension/
+├── build.sh / CMakeLists.txt / setup.py    构建入口
+├── python/                                 Python 包（pip 名：tensorflow_musa）
+├── musa_ext/
+│   ├── kernels/                            MUSA kernel 实现
+│   ├── mu/                                 设备注册、分配器、优化器
+│   └── python/                             _C 扩展源码
+├── benchmark/                              端到端基准
+├── docs/                                   面向用户的文档
+└── test/                                   测试用例
+```
+
+## 更多示例
 
 [![MUSA Playground](https://img.shields.io/badge/Gitee-TensorFlow_MUSA_Playground-C71D23?style=for-the-badge&logo=gitee&logoColor=white)](https://gitee.com/mthreadsacademy/tensorflow_musa_playground)
 
-## 贡献指南
+## 贡献
 
-欢迎贡献新的算子实现或优化！贡献流程：
-
-1. Fork 仓库并创建特性分支
-2. 实现算子或优化功能
-3. 添加相应的测试用例
-4. 更新文档（如需要）
-5. 提交 Pull Request
+欢迎提交新算子实现或性能优化：Fork → feature 分支 → 添加测试 → 提交 Pull Request。
 
 ## 许可证
 
-本项目遵循 Apache 2.0 开源协议。
-
-## 技术支持
-
-如遇问题，请提交 Issue 或联系项目维护者。
+本项目遵循 Apache License 2.0。
