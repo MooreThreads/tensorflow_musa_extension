@@ -230,6 +230,117 @@ def test_segment_snapshot_returns_well_formed_list():
         assert s["largest_free_block"] <= s["size"]
 
 
+_CONCURRENCY_SCRIPT = textwrap.dedent(
+    """
+    # Regression for the "cache-hit merge race" bug: Allocate() used to
+    # release the allocator mutex between the free-list erase+split
+    # step and the active_blocks emplace + allocated=true step. In that
+    # window a concurrent Free() on an address-adjacent block would see
+    # !block->allocated via MergeNeighborsLocked and `delete` the Block
+    # we were about to return, leaving a dangling pointer in
+    # free_blocks and returning garbage device addresses on a later
+    # cache hit. The workload below runs many host threads doing tight
+    # matmul loops with differently-shaped tensors so TF drives
+    # concurrent allocate/deallocate into the same per-device allocator.
+    # Before the fix this reliably reproduces:
+    #   - `free(): double free detected in tcache 2`, or
+    #   - `Check failed: IsAligned() ptr = 0x...<non-16B-aligned>`.
+    # After the fix it completes cleanly and in_use_bytes returns to 0.
+    import importlib.util, json, os, sys, sysconfig, threading, gc
+    build = os.path.abspath("build")
+    ext = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
+    spec = importlib.util.spec_from_file_location(
+        "tensorflow_musa._C", os.path.join(build, "_C" + ext))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    if mod._device_allocator_backend() != "caching":
+        print("SKIP backend=" + mod._device_allocator_backend()); sys.exit(0)
+    try:
+        import tensorflow as tf
+        from tensorflow.python.framework import load_library
+    except Exception as e:
+        print("SKIP tf-import:" + repr(e)); sys.exit(0)
+    plugin = os.path.join(build, "libmusa_plugin.so")
+    try:
+        load_library.load_pluggable_device_library(plugin)
+    except Exception as e:
+        print("SKIP plugin-load:" + repr(e)); sys.exit(0)
+    if not tf.config.list_physical_devices("MUSA"):
+        print("SKIP no-musa"); sys.exit(0)
+
+    SHAPES = [(128, 128), (256, 256), (384, 384), (64, 512), (512, 64)]
+    ITERS_PER_THREAD = 80
+    NUM_THREADS = 4
+    barrier = threading.Barrier(NUM_THREADS)
+    errors = []
+
+    def worker(tid):
+        try:
+            barrier.wait(timeout=30)
+            with tf.device("/MUSA:0"):
+                for i in range(ITERS_PER_THREAD):
+                    h, w = SHAPES[(tid + i) % len(SHAPES)]
+                    a = tf.random.uniform([h, w], dtype=tf.float32)
+                    b = tf.random.uniform([w, h], dtype=tf.float32)
+                    _ = tf.linalg.matmul(a, b).numpy()
+        except Exception as e:
+            errors.append(repr(e))
+
+    pre = mod._device_allocator_stats(0)
+    threads = [threading.Thread(target=worker, args=(i,))
+               for i in range(NUM_THREADS)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    gc.collect()
+    post = mod._device_allocator_stats(0)
+    print("PRE=" + json.dumps(pre))
+    print("POST=" + json.dumps(post))
+    print("ERRORS=" + json.dumps(errors))
+    print("OK")
+    """
+)
+
+
+def test_concurrent_allocate_free_does_not_corrupt_blocks():
+    """Regression: Allocate/Free must serialize the 'just taken from
+    free_blocks, not yet in active_blocks' window against concurrent
+    merges. See the comment at the top of the inline script for the
+    failure mode this guards against.
+    """
+    os.environ["TF_MUSA_DEVICE_ALLOCATOR"] = "caching"
+    proc = _run_in_subprocess(_CONCURRENCY_SCRIPT)
+    out = proc.stdout + proc.stderr
+    if any(line.startswith("SKIP") for line in proc.stdout.splitlines()):
+        pytest.skip(proc.stdout.strip())
+    assert proc.returncode == 0, (
+        "concurrent allocator stress crashed:\n"
+        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+    import json
+    pre = post = None
+    errors = None
+    for line in proc.stdout.splitlines():
+        if line.startswith("PRE="):
+            pre = json.loads(line[4:])
+        elif line.startswith("POST="):
+            post = json.loads(line[5:])
+        elif line.startswith("ERRORS="):
+            errors = json.loads(line[7:])
+    assert pre is not None and post is not None, out
+    assert errors == [], f"worker exceptions: {errors}"
+    # Every block must have been returned: if the bug were still
+    # present we'd leak Block* entries whose size/ptr were overwritten
+    # after delete, yielding a non-zero residual in_use on post-stats.
+    assert post["in_use_bytes"] == 0, (
+        f"residual in_use={post['in_use_bytes']} after workload "
+        f"(pre={pre['in_use_bytes']}); likely allocator corruption"
+    )
+    # Sanity: we actually drove traffic through the allocator.
+    assert post["alloc_requests"] - pre["alloc_requests"] >= 100, post
+
+
 def test_memory_fraction_and_limit_round_trip():
     """SetMemoryLimitBytes / SetMemoryFraction land in GetStats.
 

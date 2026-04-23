@@ -432,16 +432,28 @@ void* DeviceCachingAllocator::Allocate(size_t size) {
   }
 
   Block* block = nullptr;
-  bool is_cache_hit = false;
   size_t seg_needed = 0;
   {
     std::lock_guard<std::mutex> lk(impl_->mu);
     ++impl_->alloc_requests;
     block = impl_->FindFitLocked(rounded);
     if (block != nullptr) {
+      // Cache hit. Commit the block to active_blocks BEFORE releasing
+      // the lock. If we released the lock with `allocated == false`
+      // and the block still linked into the segment chain, a
+      // concurrent Free() on an address-adjacent block could observe
+      // `!block->allocated`, absorb us inside MergeNeighborsLocked
+      // and `delete` the Block — leaving a dangling pointer in
+      // free_blocks and a use-after-free once we resumed here.
       impl_->free_blocks.erase(block);
       impl_->MaybeSplitLocked(block, rounded);
-      is_cache_hit = true;
+      block->allocated = true;
+      impl_->active_blocks.emplace(block->ptr, block);
+      impl_->in_use_bytes += block->size;
+      if (impl_->in_use_bytes > impl_->peak_in_use_bytes) {
+        impl_->peak_in_use_bytes = impl_->in_use_bytes;
+      }
+      ++impl_->cache_hits;
     } else if (impl_->limit_bytes > 0) {
       // Cache miss: we must grow, so check the cap while still under
       // the lock. Rejecting here keeps total driver-owned bytes at or
@@ -483,23 +495,22 @@ void* DeviceCachingAllocator::Allocate(size_t size) {
       }
       return nullptr;
     }
+    // A fresh segment is not yet linked into any data structure visible
+    // to other threads, so there is no merge race to worry about.
+    // Everything still happens in a single critical section to keep the
+    // stats snapshot consistent.
     std::lock_guard<std::mutex> lk(impl_->mu);
     impl_->reserved_bytes += block->size;
     ++impl_->segments;
     impl_->segment_heads.insert(block);
     impl_->MaybeSplitLocked(block, rounded);
-    ++impl_->cache_misses;
-  }
-
-  {
-    std::lock_guard<std::mutex> lk(impl_->mu);
     block->allocated = true;
     impl_->active_blocks.emplace(block->ptr, block);
     impl_->in_use_bytes += block->size;
     if (impl_->in_use_bytes > impl_->peak_in_use_bytes) {
       impl_->peak_in_use_bytes = impl_->in_use_bytes;
     }
-    if (is_cache_hit) ++impl_->cache_hits;
+    ++impl_->cache_misses;
   }
 
   // Respect the safety cap in a best-effort way: if we blew past it
