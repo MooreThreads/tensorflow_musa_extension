@@ -36,7 +36,6 @@ defaults:
     shell: bash
 
 env:
-  COMMIT_ID: ${{ github.event.pull_request.head.sha || github.sha }}
   LOG_BASE: /home/runner/ci_logs
   MODEL_ROOT: /home/runner/tf_test_model-master
   BASELINE_WORKSPACE: /home/runner/baseline/tensorflow_musa_extension
@@ -77,7 +76,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             RUN_KIND="pr"
             RUN_ID="${{ github.event.pull_request.head.sha }}"
-            EFFECTIVE_COMMIT_ID="${{ github.event.pull_request.head.sha }}"
+            EFFECTIVE_COMMIT_ID="${{ github.sha }}"
           elif [[ "${{ github.event_name }}" == "schedule" ]]; then
             RUN_KIND="daily"
             RUN_ID="$(date +%F)"
