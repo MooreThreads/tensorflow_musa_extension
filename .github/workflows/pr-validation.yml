@@ -581,7 +581,7 @@ jobs:
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
 
-  tencent_perf:
+  t_perf:
     name: T Performance
     needs: [prepare_metadata, build_current, build_baseline]
     if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
@@ -613,9 +613,9 @@ jobs:
         run: |
           set +e
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/tencent-perf"
-          BASELINE_LOG="$JOB_LOG_DIR/tencent_perf_baseline.log"
-          CURRENT_LOG="$JOB_LOG_DIR/tencent_perf_current.log"
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/t-perf"
+          BASELINE_LOG="$JOB_LOG_DIR/t_perf_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/t_perf_current.log"
           BASELINE_PLUGIN="$RUNNER_TEMP/baseline-plugin/libmusa_plugin.so"
           CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
           mkdir -p "$JOB_LOG_DIR"
@@ -686,10 +686,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/tencent-perf"
-          BASELINE_LOG="$JOB_LOG_DIR/tencent_perf_baseline.log"
-          CURRENT_LOG="$JOB_LOG_DIR/tencent_perf_current.log"
-          SUMMARY_FILE="$RUNNER_TEMP/tencent-perf.md"
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/t-perf"
+          BASELINE_LOG="$JOB_LOG_DIR/t_perf_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/t_perf_current.log"
+          SUMMARY_FILE="$RUNNER_TEMP/t-perf.md"
           STATUS="success"
           BASELINE_MS=""
           CURRENT_MS=""
@@ -799,8 +799,8 @@ jobs:
         with:
           name: logs-t-perf
           path: |
-            ${{ needs.prepare_metadata.outputs.log_root }}/tencent-perf/tencent_perf_baseline.log
-            ${{ needs.prepare_metadata.outputs.log_root }}/tencent-perf/tencent_perf_current.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/t-perf/t_perf_baseline.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/t-perf/t_perf_current.log
           if-no-files-found: warn
           retention-days: 7
 
@@ -808,7 +808,7 @@ jobs:
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
 
-  tencent_accuracy:
+  t_accuracy:
     name: T Accuracy
     needs: [prepare_metadata, build_current]
     if: needs.build_current.result == 'success'
@@ -831,8 +831,8 @@ jobs:
         run: |
           set +e
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/tencent-accuracy"
-          CURRENT_LOG="$JOB_LOG_DIR/tencent_accuracy_current.log"
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/t-accuracy"
+          CURRENT_LOG="$JOB_LOG_DIR/t_accuracy_current.log"
           CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
           mkdir -p "$JOB_LOG_DIR"
           rm -f "$CURRENT_LOG"
@@ -871,6 +871,7 @@ jobs:
             bash -l -c '
               set -o pipefail
               cd "$MODEL_ROOT/inference/prunedGraph"
+              MUSA_ENABLE_TF32=0 \
               timeout 20m python run_inference.py \
                 --device musa \
                 --batch-size 100 \
@@ -891,9 +892,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/tencent-accuracy"
-          CURRENT_LOG="$JOB_LOG_DIR/tencent_accuracy_current.log"
-          SUMMARY_FILE="$RUNNER_TEMP/tencent-accuracy.md"
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/t-accuracy"
+          CURRENT_LOG="$JOB_LOG_DIR/t_accuracy_current.log"
+          SUMMARY_FILE="$RUNNER_TEMP/t-accuracy.md"
           STATUS="success"
           CURRENT_ACC="$(grep -E "整体状态:.*(PASSED|FAILED)" "$CURRENT_LOG" | tail -1 | grep -oE "PASSED|FAILED" || echo "n/a")"
           METRICS_JSON=""
@@ -972,7 +973,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: logs-t-accuracy
-          path: ${{ needs.prepare_metadata.outputs.log_root }}/tencent-accuracy/tencent_accuracy_current.log
+          path: ${{ needs.prepare_metadata.outputs.log_root }}/t-accuracy/t_accuracy_current.log
           if-no-files-found: warn
           retention-days: 7
 
@@ -980,7 +981,7 @@ jobs:
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
 
-  bytedance_model1:
+  bd_model1:
     name: BD Model 1
     needs: [prepare_metadata, build_current, build_baseline]
     if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
@@ -1012,9 +1013,9 @@ jobs:
         run: |
           set +e
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model1"
-          BASELINE_LOG="$JOB_LOG_DIR/bytedance_model1_baseline.log"
-          CURRENT_LOG="$JOB_LOG_DIR/bytedance_model1_current.log"
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model1"
+          BASELINE_LOG="$JOB_LOG_DIR/bd_model1_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bd_model1_current.log"
           BASELINE_PLUGIN="$RUNNER_TEMP/baseline-plugin/libmusa_plugin.so"
           CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
           SPEC_PATH="$MODEL_ROOT/inference/metaGraph/meta_graph/meta_graph_1.spec"
@@ -1095,12 +1096,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model1"
-          BASELINE_LOG="$JOB_LOG_DIR/bytedance_model1_baseline.log"
-          CURRENT_LOG="$JOB_LOG_DIR/bytedance_model1_current.log"
-          SUMMARY_FILE="$RUNNER_TEMP/bytedance-model1.md"
-          COMPARE_JSON="$RUNNER_TEMP/bytedance-model1-compare.json"
-          DETAIL_FILE="$RUNNER_TEMP/bytedance-model1-details.md"
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model1"
+          BASELINE_LOG="$JOB_LOG_DIR/bd_model1_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bd_model1_current.log"
+          SUMMARY_FILE="$RUNNER_TEMP/bd-model1.md"
+          COMPARE_JSON="$RUNNER_TEMP/bd-model1-compare.json"
+          DETAIL_FILE="$RUNNER_TEMP/bd-model1-details.md"
           STATUS="success"
           BASELINE_MS=""
           CURRENT_MS=""
@@ -1356,12 +1357,12 @@ jobs:
         with:
           name: logs-bd-model1
           path: |
-            ${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model1/bytedance_model1_baseline.log
-            ${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model1/bytedance_model1_current.log
-            ${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model1/baseline-out
-            ${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model1/current-out
-            ${{ runner.temp }}/bytedance-model1-details.md
-            ${{ runner.temp }}/bytedance-model1-compare.json
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model1/bd_model1_baseline.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model1/bd_model1_current.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model1/baseline-out
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model1/current-out
+            ${{ runner.temp }}/bd-model1-details.md
+            ${{ runner.temp }}/bd-model1-compare.json
           if-no-files-found: warn
           retention-days: 7
 
@@ -1369,7 +1370,7 @@ jobs:
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
 
-  bytedance_model2:
+  bd_model2:
     name: BD Model 2
     needs: [prepare_metadata, build_current, build_baseline]
     if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
@@ -1401,9 +1402,9 @@ jobs:
         run: |
           set +e
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model2"
-          BASELINE_LOG="$JOB_LOG_DIR/bytedance_model2_baseline.log"
-          CURRENT_LOG="$JOB_LOG_DIR/bytedance_model2_current.log"
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model2"
+          BASELINE_LOG="$JOB_LOG_DIR/bd_model2_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bd_model2_current.log"
           BASELINE_PLUGIN="$RUNNER_TEMP/baseline-plugin/libmusa_plugin.so"
           CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
           SPEC_PATH="$MODEL_ROOT/inference/metaGraph/meta_graph/meta_graph_2.spec"
@@ -1484,12 +1485,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model2"
-          BASELINE_LOG="$JOB_LOG_DIR/bytedance_model2_baseline.log"
-          CURRENT_LOG="$JOB_LOG_DIR/bytedance_model2_current.log"
-          SUMMARY_FILE="$RUNNER_TEMP/bytedance-model2.md"
-          COMPARE_JSON="$RUNNER_TEMP/bytedance-model2-compare.json"
-          DETAIL_FILE="$RUNNER_TEMP/bytedance-model2-details.md"
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model2"
+          BASELINE_LOG="$JOB_LOG_DIR/bd_model2_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bd_model2_current.log"
+          SUMMARY_FILE="$RUNNER_TEMP/bd-model2.md"
+          COMPARE_JSON="$RUNNER_TEMP/bd-model2-compare.json"
+          DETAIL_FILE="$RUNNER_TEMP/bd-model2-details.md"
           STATUS="success"
           BASELINE_MS=""
           CURRENT_MS=""
@@ -1745,12 +1746,12 @@ jobs:
         with:
           name: logs-bd-model2
           path: |
-            ${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model2/bytedance_model2_baseline.log
-            ${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model2/bytedance_model2_current.log
-            ${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model2/baseline-out
-            ${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model2/current-out
-            ${{ runner.temp }}/bytedance-model2-details.md
-            ${{ runner.temp }}/bytedance-model2-compare.json
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model2/bd_model2_baseline.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model2/bd_model2_current.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model2/baseline-out
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model2/current-out
+            ${{ runner.temp }}/bd-model2-details.md
+            ${{ runner.temp }}/bd-model2-compare.json
           if-no-files-found: warn
           retention-days: 7
 
@@ -1758,7 +1759,7 @@ jobs:
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
 
-  bytedance_model3:
+  bd_model3:
     name: BD Model 3
     needs: [prepare_metadata, build_current, build_baseline]
     if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
@@ -1790,9 +1791,9 @@ jobs:
         run: |
           set +e
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model3"
-          BASELINE_LOG="$JOB_LOG_DIR/bytedance_model3_baseline.log"
-          CURRENT_LOG="$JOB_LOG_DIR/bytedance_model3_current.log"
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model3"
+          BASELINE_LOG="$JOB_LOG_DIR/bd_model3_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bd_model3_current.log"
           BASELINE_PLUGIN="$RUNNER_TEMP/baseline-plugin/libmusa_plugin.so"
           CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
           SPEC_PATH="$MODEL_ROOT/inference/metaGraph/meta_graph/meta_graph_3.spec"
@@ -1873,12 +1874,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model3"
-          BASELINE_LOG="$JOB_LOG_DIR/bytedance_model3_baseline.log"
-          CURRENT_LOG="$JOB_LOG_DIR/bytedance_model3_current.log"
-          SUMMARY_FILE="$RUNNER_TEMP/bytedance-model3.md"
-          COMPARE_JSON="$RUNNER_TEMP/bytedance-model3-compare.json"
-          DETAIL_FILE="$RUNNER_TEMP/bytedance-model3-details.md"
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model3"
+          BASELINE_LOG="$JOB_LOG_DIR/bd_model3_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bd_model3_current.log"
+          SUMMARY_FILE="$RUNNER_TEMP/bd-model3.md"
+          COMPARE_JSON="$RUNNER_TEMP/bd-model3-compare.json"
+          DETAIL_FILE="$RUNNER_TEMP/bd-model3-details.md"
           STATUS="success"
           BASELINE_MS=""
           CURRENT_MS=""
@@ -2134,12 +2135,12 @@ jobs:
         with:
           name: logs-bd-model3
           path: |
-            ${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model3/bytedance_model3_baseline.log
-            ${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model3/bytedance_model3_current.log
-            ${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model3/baseline-out
-            ${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model3/current-out
-            ${{ runner.temp }}/bytedance-model3-details.md
-            ${{ runner.temp }}/bytedance-model3-compare.json
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model3/bd_model3_baseline.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model3/bd_model3_current.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model3/baseline-out
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model3/current-out
+            ${{ runner.temp }}/bd-model3-details.md
+            ${{ runner.temp }}/bd-model3-compare.json
           if-no-files-found: warn
           retention-days: 7
 
@@ -2285,21 +2286,21 @@ jobs:
       - build_current
       - integration
       - build_baseline
-      - tencent_perf
-      - tencent_accuracy
-      - bytedance_model1
-      - bytedance_model2
-      - bytedance_model3
+      - t_perf
+      - t_accuracy
+      - bd_model1
+      - bd_model2
+      - bd_model3
       - training
     if: ${{ always() && !cancelled() }}
     runs-on: [self-hosted, musa-gpu]
     timeout-minutes: 10
     env:
-      TENCENT_PERF_JSON: ${{ needs.tencent_perf.outputs.metrics_json || '' }}
-      TENCENT_ACC_JSON: ${{ needs.tencent_accuracy.outputs.metrics_json || '' }}
-      BYTE1_JSON: ${{ needs.bytedance_model1.outputs.metrics_json || '' }}
-      BYTE2_JSON: ${{ needs.bytedance_model2.outputs.metrics_json || '' }}
-      BYTE3_JSON: ${{ needs.bytedance_model3.outputs.metrics_json || '' }}
+      T_PERF_JSON: ${{ needs.t_perf.outputs.metrics_json || '' }}
+      T_ACC_JSON: ${{ needs.t_accuracy.outputs.metrics_json || '' }}
+      BD1_JSON: ${{ needs.bd_model1.outputs.metrics_json || '' }}
+      BD2_JSON: ${{ needs.bd_model2.outputs.metrics_json || '' }}
+      BD3_JSON: ${{ needs.bd_model3.outputs.metrics_json || '' }}
     steps:
       - name: Download summary artifacts
         uses: actions/download-artifact@v4
@@ -2324,11 +2325,11 @@ jobs:
           BUILD_CURRENT_STATUS: ${{ needs.build_current.outputs.status || 'skipped' }}
           INTEGRATION_STATUS: ${{ needs.integration.outputs.status || 'skipped' }}
           BUILD_BASELINE_STATUS: ${{ needs.build_baseline.outputs.status || 'skipped' }}
-          TENCENT_PERF_STATUS: ${{ needs.tencent_perf.outputs.status || 'skipped' }}
-          TENCENT_ACC_STATUS: ${{ needs.tencent_accuracy.outputs.status || 'skipped' }}
-          BYTE1_STATUS: ${{ needs.bytedance_model1.outputs.status || 'skipped' }}
-          BYTE2_STATUS: ${{ needs.bytedance_model2.outputs.status || 'skipped' }}
-          BYTE3_STATUS: ${{ needs.bytedance_model3.outputs.status || 'skipped' }}
+          T_PERF_STATUS: ${{ needs.t_perf.outputs.status || 'skipped' }}
+          T_ACC_STATUS: ${{ needs.t_accuracy.outputs.status || 'skipped' }}
+          BD1_STATUS: ${{ needs.bd_model1.outputs.status || 'skipped' }}
+          BD2_STATUS: ${{ needs.bd_model2.outputs.status || 'skipped' }}
+          BD3_STATUS: ${{ needs.bd_model3.outputs.status || 'skipped' }}
           TRAINING_STATUS: ${{ needs.training.outputs.status || 'skipped' }}
         run: |
           set -euo pipefail
@@ -2346,16 +2347,16 @@ jobs:
           INTEGRATION_RESULT="${{ needs.integration.result }}"
           BUILD_BASELINE_STATUS="${{ needs.build_baseline.outputs.status || 'skipped' }}"
           BUILD_BASELINE_RESULT="${{ needs.build_baseline.result }}"
-          TENCENT_PERF_STATUS="${{ needs.tencent_perf.outputs.status || 'skipped' }}"
-          TENCENT_PERF_RESULT="${{ needs.tencent_perf.result }}"
-          TENCENT_ACC_STATUS="${{ needs.tencent_accuracy.outputs.status || 'skipped' }}"
-          TENCENT_ACC_RESULT="${{ needs.tencent_accuracy.result }}"
-          BYTE1_STATUS="${{ needs.bytedance_model1.outputs.status || 'skipped' }}"
-          BYTE1_RESULT="${{ needs.bytedance_model1.result }}"
-          BYTE2_STATUS="${{ needs.bytedance_model2.outputs.status || 'skipped' }}"
-          BYTE2_RESULT="${{ needs.bytedance_model2.result }}"
-          BYTE3_STATUS="${{ needs.bytedance_model3.outputs.status || 'skipped' }}"
-          BYTE3_RESULT="${{ needs.bytedance_model3.result }}"
+          T_PERF_STATUS="${{ needs.t_perf.outputs.status || 'skipped' }}"
+          T_PERF_RESULT="${{ needs.t_perf.result }}"
+          T_ACC_STATUS="${{ needs.t_accuracy.outputs.status || 'skipped' }}"
+          T_ACC_RESULT="${{ needs.t_accuracy.result }}"
+          BD1_STATUS="${{ needs.bd_model1.outputs.status || 'skipped' }}"
+          BD1_RESULT="${{ needs.bd_model1.result }}"
+          BD2_STATUS="${{ needs.bd_model2.outputs.status || 'skipped' }}"
+          BD2_RESULT="${{ needs.bd_model2.result }}"
+          BD3_STATUS="${{ needs.bd_model3.outputs.status || 'skipped' }}"
+          BD3_RESULT="${{ needs.bd_model3.result }}"
           TRAINING_STATUS="${{ needs.training.outputs.status || 'skipped' }}"
           TRAINING_RESULT="${{ needs.training.result }}"
           BASELINE_SHA="${{ needs.build_baseline.outputs.baseline_sha || 'unavailable' }}"
@@ -2402,20 +2403,20 @@ jobs:
               {"name": "Build Current", "result": os.environ["BUILD_CURRENT_STATUS"], "blocking": "yes"},
               {"name": "Integration", "result": os.environ["INTEGRATION_STATUS"], "blocking": "yes"},
               {"name": "Build Baseline", "result": os.environ["BUILD_BASELINE_STATUS"], "blocking": "yes"},
-              {"name": "T Performance", "result": os.environ["TENCENT_PERF_STATUS"], "blocking": "yes"},
-              {"name": "T Accuracy", "result": os.environ["TENCENT_ACC_STATUS"], "blocking": "yes"},
-              {"name": "BD Model 1", "result": os.environ["BYTE1_STATUS"], "blocking": "yes"},
-              {"name": "BD Model 2", "result": os.environ["BYTE2_STATUS"], "blocking": "yes"},
-              {"name": "BD Model 3", "result": os.environ["BYTE3_STATUS"], "blocking": "yes"},
+              {"name": "T Performance", "result": os.environ["T_PERF_STATUS"], "blocking": "yes"},
+              {"name": "T Accuracy", "result": os.environ["T_ACC_STATUS"], "blocking": "yes"},
+              {"name": "BD Model 1", "result": os.environ["BD1_STATUS"], "blocking": "yes"},
+              {"name": "BD Model 2", "result": os.environ["BD2_STATUS"], "blocking": "yes"},
+              {"name": "BD Model 3", "result": os.environ["BD3_STATUS"], "blocking": "yes"},
               {"name": "Training", "result": os.environ["TRAINING_STATUS"], "blocking": "no"},
           ]
 
           metrics = [
-              load_json_env("TENCENT_PERF_JSON"),
-              load_json_env("BYTE1_JSON"),
-              load_json_env("BYTE2_JSON"),
-              load_json_env("BYTE3_JSON"),
-              load_json_env("TENCENT_ACC_JSON"),
+              load_json_env("T_PERF_JSON"),
+              load_json_env("BD1_JSON"),
+              load_json_env("BD2_JSON"),
+              load_json_env("BD3_JSON"),
+              load_json_env("T_ACC_JSON"),
           ]
           metrics = [item for item in metrics if item]
 
@@ -2501,11 +2502,11 @@ jobs:
             "$RUNNER_TEMP/ci-summary/build-current.md" \
             "$RUNNER_TEMP/ci-summary/integration.md" \
             "$RUNNER_TEMP/ci-summary/build-baseline.md" \
-            "$RUNNER_TEMP/ci-summary/tencent-perf.md" \
-            "$RUNNER_TEMP/ci-summary/tencent-accuracy.md" \
-            "$RUNNER_TEMP/ci-summary/bytedance-model1.md" \
-            "$RUNNER_TEMP/ci-summary/bytedance-model2.md" \
-            "$RUNNER_TEMP/ci-summary/bytedance-model3.md" \
+            "$RUNNER_TEMP/ci-summary/t-perf.md" \
+            "$RUNNER_TEMP/ci-summary/t-accuracy.md" \
+            "$RUNNER_TEMP/ci-summary/bd-model1.md" \
+            "$RUNNER_TEMP/ci-summary/bd-model2.md" \
+            "$RUNNER_TEMP/ci-summary/bd-model3.md" \
             "$RUNNER_TEMP/ci-summary/training.md"; do
             if [[ -f "$file" ]]; then
               echo >> "$SUMMARY_FILE"
@@ -2521,11 +2522,11 @@ jobs:
           if [[ "$BUILD_CURRENT_STATUS" == "failure" || "$BUILD_CURRENT_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
           if [[ "$INTEGRATION_STATUS" == "failure" || "$INTEGRATION_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
           if [[ "$BUILD_BASELINE_STATUS" == "failure" || "$BUILD_BASELINE_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$TENCENT_PERF_STATUS" == "failure" || "$TENCENT_PERF_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$TENCENT_ACC_STATUS" == "failure" || "$TENCENT_ACC_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$BYTE1_STATUS" == "failure" || "$BYTE1_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$BYTE2_STATUS" == "failure" || "$BYTE2_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$BYTE3_STATUS" == "failure" || "$BYTE3_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$T_PERF_STATUS" == "failure" || "$T_PERF_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$T_ACC_STATUS" == "failure" || "$T_ACC_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BD1_STATUS" == "failure" || "$BD1_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BD2_STATUS" == "failure" || "$BD2_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BD3_STATUS" == "failure" || "$BD3_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
 
           if [[ "$BLOCKING_FAILURE" -ne 0 ]]; then
             FINAL_STATUS="failure"

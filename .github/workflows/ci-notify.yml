@@ -560,8 +560,8 @@ jobs:
           host = summary_json_payload.get("host", {})
           host_name = host.get("name") or find_value(summary_lines, "- Host name: ", "unavailable")
           host_ip = host.get("ip") or find_value(summary_lines, "- Host IP: ", "unavailable")
-          host_sn = host.get("sn") or find_value(summary_lines, "- Host SN: ", "unavailable")
           baseline_commit = summary_json_payload.get("baseline_commit") or find_value(summary_lines, "- Baseline commit: ", "unavailable")
+          baseline_commit_short = baseline_commit[:6] if baseline_commit not in {"", "unavailable"} else baseline_commit
           metrics = summary_json_payload.get("metrics", [])
 
           jobs_payload = {}
@@ -616,18 +616,17 @@ jobs:
               duration = (completed - started).total_seconds() if started and completed else None
               duration_text = format_duration(duration)
 
-              retry_info = retry_payload.get(name, {})
-              attempts = retry_info.get("attempts", 0)
-              reruns_used = retry_info.get("reruns_used", 0)
-              max_reruns = retry_info.get("max_reruns")
-              limit = retry_info.get("limit")
-              retry_text = ""
-              if limit is not None and attempts > 0:
-                  retry_text = f", 尝试 {attempts}/{limit}"
-                  if max_reruns is not None and max_reruns > 0 and reruns_used > 0:
-                      retry_text += f", 自动重跑 {reruns_used}/{max_reruns}"
-
-              display_jobs.append(f"- {name}: {conclusion.upper()} ({duration_text}{retry_text})")
+              status_map = {
+                  "success": "成功",
+                  "failure": "失败",
+                  "cancelled": "取消",
+                  "skipped": "跳过",
+                  "queued": "排队中",
+                  "pending": "等待中",
+                  "in_progress": "运行中",
+                  "action_required": "需处理",
+              }
+              display_jobs.append(f"- {name}: {status_map.get(conclusion, conclusion.upper())}")
               if conclusion not in {"success", "skipped"}:
                   failed_jobs.append(name)
 
@@ -663,24 +662,20 @@ jobs:
 
           if run_conclusion == "success":
               status_text = "成功"
-              status_icon = "SUCCESS"
           else:
               status_text = "失败"
-              status_icon = "FAILURE"
 
           common_lines = [
               f"- 分支: {head_branch}",
               f"- Commit: `{short_sha}`",
               f"- 主机名: {host_name}",
               f"- 主机IP: {host_ip}",
-              f"- 主机SN: {host_sn}",
-              f"- Baseline commit: `{baseline_commit}`",
-              "- 重试说明: `尝试 x/y` 的 y 包含首次运行；如有自动重跑，会额外显示 `自动重跑 x/y`",
+              f"- Baseline commit: `{baseline_commit_short}`",
               f"- 运行详情: [GitHub Actions]({run_url})",
           ]
 
           if run_style == "daily":
-              title = f"Daily CI {status_icon}: {repo}@{head_branch}"
+              title = f"Daily CI {status_text}"
               lines = [
                   "### CI通知: Daily 回归",
                   f"- 总体状态: {status_text}",
@@ -688,15 +683,15 @@ jobs:
               ]
               lines.extend(common_lines)
           elif run_style == "pr":
-              title = f"PR CI {status_icon}: {repo}#{pr_number or 'n/a'}"
+              title = f"PR CI {status_text}"
               lines = [
                   f"### CI通知: PR {status_text}",
                   f"- 仓库: {repo}",
-                  f"- PR: #{pr_number} {pr_url}" if pr_number else "- PR: n/a",
+                  f"- PR: [#{pr_number}]({pr_url})" if pr_number else "- PR: n/a",
               ]
               lines.extend(common_lines)
           else:
-              title = f"Manual CI {status_icon}: {repo}@{head_branch}"
+              title = f"Manual CI {status_text}"
               lines = [
                   f"### CI通知: 手动执行{status_text}",
                   f"- 仓库: {repo}",
