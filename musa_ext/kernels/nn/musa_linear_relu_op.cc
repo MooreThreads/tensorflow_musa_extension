@@ -45,7 +45,6 @@ class MusaLinearReluOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
-    MUSA_KERNEL_TIMING_GUARD(ctx);
     const Tensor& in0 = ctx->input(0);
     const Tensor& in1 = ctx->input(1);
     const Tensor& bias_input = ctx->input(2);
@@ -75,13 +74,14 @@ class MusaLinearReluOp : public MusaOpKernel {
     output_shape.AddDim(n);
 
     const int channel_dim = output_shape.dims() - 1;
-    OP_REQUIRES(ctx,
-                bias_input.dims() == 1 &&
-                    bias_input.dim_size(0) == output_shape.dim_size(channel_dim),
-                errors::InvalidArgument(
-                    "Dimension mismatch in BiasAdd of LinearRelu. bias=",
-                    bias_input.shape().DebugString(), ", matmul_out=",
-                    output_shape.DebugString()));
+    OP_REQUIRES(
+        ctx,
+        bias_input.dims() == 1 &&
+            bias_input.dim_size(0) == output_shape.dim_size(channel_dim),
+        errors::InvalidArgument(
+            "Dimension mismatch in BiasAdd of LinearRelu. bias=",
+            bias_input.shape().DebugString(),
+            ", matmul_out=", output_shape.DebugString()));
 
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
@@ -134,10 +134,8 @@ class MusaLinearReluOp : public MusaOpKernel {
     const T* bias_ptr = bias_input.flat<T>().data();
     T* out_ptr = output->flat<T>().data();
     musaStream_t stream = GetMusaStreamByCtx(ctx);
-    MUSA_KERNEL_TRACE_START("BiasAddReluKernel");
     LaunchBiasAddReluKernel(out_ptr, bias_ptr, out_ptr, output->NumElements(),
                             output_shape.dim_size(channel_dim), stream);
-    MUSA_KERNEL_TRACE_END("BiasAddReluKernel");
 
     const musaError_t launch_status = musaGetLastError();
     OP_REQUIRES(ctx, launch_status == musaSuccess,
