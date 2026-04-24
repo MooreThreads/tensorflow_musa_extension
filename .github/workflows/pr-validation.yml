@@ -42,7 +42,7 @@ env:
   BASELINE_REPO_URL: https://github.com/MooreThreads/tensorflow_musa_extension.git
   CURRENT_PLUGIN_ARTIFACT: current-plugin
   BASELINE_PLUGIN_ARTIFACT: baseline-plugin
-  GPU_GUARD_PATTERN: '[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py'
+  GPU_GUARD_PATTERN: '[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_tf_musa_extension.py|[t]est_runner.py'
   GPU_GUARD_TIMEOUT_SECONDS: 180
   GPU_LOCK_FILE: /tmp/tensorflow_musa_ci_gpu.lock
 
@@ -2200,19 +2200,95 @@ jobs:
             sleep 15
           done
 
-          export LOG_FILE ERROR_LOG_DIR CURRENT_PLUGIN
+          LIVE_TRAINING_WRAPPER="$RUNNER_TEMP/run_training_live.py"
+          cat > "$LIVE_TRAINING_WRAPPER" <<'PY'
+          import os
+          import subprocess
+          import selectors
+          import sys
+          import time
+
+          sys.path.insert(0, os.getcwd())
+          import run_all_training_tests as runner
+
+          _real_run = subprocess.run
+
+
+          def run_live(cmd, capture_output=False, text=False, cwd=None, env=None, timeout=None, **kwargs):
+              if not capture_output:
+                  return _real_run(cmd, capture_output=capture_output, text=text, cwd=cwd, env=env, timeout=timeout, **kwargs)
+
+              effective_timeout = int(env.get("TRAINING_MODEL_TIMEOUT_SECONDS", "3600")) if env else 3600
+              cmd = ["--musa-plugin" if arg == "--musa_plugin" else arg for arg in cmd]
+              proc = subprocess.Popen(
+                  cmd,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+                  text=True,
+                  bufsize=1,
+                  cwd=cwd,
+                  env=env,
+              )
+
+              lines = []
+              start = time.monotonic()
+              selector = selectors.DefaultSelector()
+              selector.register(proc.stdout, selectors.EVENT_READ)
+
+              try:
+                  while True:
+                      for key, _ in selector.select(timeout=0.2):
+                          line = key.fileobj.readline()
+                          if line:
+                              lines.append(line)
+                              sys.stdout.write(line)
+                              sys.stdout.flush()
+
+                      if proc.poll() is not None:
+                          rest = proc.stdout.read()
+                          if rest:
+                              lines.append(rest)
+                              sys.stdout.write(rest)
+                              sys.stdout.flush()
+                          break
+
+                      if effective_timeout > 0 and time.monotonic() - start > effective_timeout:
+                          proc.kill()
+                          proc.wait()
+                          timeout_msg = f"\n[ERROR] Model command timeout (>{effective_timeout}s)\n"
+                          lines.append(timeout_msg)
+                          sys.stdout.write(timeout_msg)
+                          sys.stdout.flush()
+                          return subprocess.CompletedProcess(cmd, 124, stdout="".join(lines), stderr="")
+              finally:
+                  selector.close()
+                  if proc.stdout:
+                      proc.stdout.close()
+
+              return subprocess.CompletedProcess(cmd, proc.returncode, stdout="".join(lines), stderr="")
+
+
+          runner.subprocess.run = run_live
+          sys.exit(runner.main())
+          PY
+
+          export MODEL_ROOT LOG_FILE ERROR_LOG_DIR CURRENT_PLUGIN LIVE_TRAINING_WRAPPER
           if [[ "$guard_failed" == "0" ]]; then
             exec 9>"$lock_file"
             flock 9
             echo "Acquired GPU test lock: $lock_file" | tee -a "$LOG_FILE"
 
-            bash -l -c '
+            timeout 180m bash -l -c '
               set -o pipefail
               cd "$MODEL_ROOT/training"
-              timeout 180m python run_all_training_tests.py \
-                --epochs 100 \
-                --log-dir "$ERROR_LOG_DIR" \
-                --musa-plugin "$CURRENT_PLUGIN" 2>&1 | tee "$LOG_FILE"
+              mkdir -p "$ERROR_LOG_DIR"
+
+              TRAINING_MODEL_TIMEOUT_SECONDS="${TRAINING_MODEL_TIMEOUT_SECONDS:-3600}" \
+                PYTHONUNBUFFERED=1 \
+                python -u "$LIVE_TRAINING_WRAPPER" \
+                  --epochs 100 \
+                  --log-dir "$ERROR_LOG_DIR" \
+                  --musa-plugin "$CURRENT_PLUGIN" 2>&1 | tee "$LOG_FILE"
             ' || training_exit=$?
           else
             training_exit=1
