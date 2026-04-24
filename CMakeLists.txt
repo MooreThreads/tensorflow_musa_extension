@@ -118,6 +118,25 @@ file(GLOB_RECURSE MU_SOURCES "${SRC_ROOT}/kernels/*.mu")
 
 # TensorFlow headers pulled into `.mu` compilation require C++17, and mcc's
 # aarch64 host predefines can incorrectly trigger NEON-only host headers.
+# IMPORTANT: compile MUSA kernels with an explicit offload arch. Without this,
+# mcc may emit kernels for a default arch that does not match the runtime card,
+# causing runtime invaliddevicefunction (err=98) on launch.
+set(MUSA_TARGET_ARCH $ENV{MUSA_TARGET_ARCH})
+if(NOT MUSA_TARGET_ARCH)
+    set(MUSA_TARGET_ARCH 21)
+endif()
+
+if(MUSA_TARGET_ARCH STREQUAL native)
+    set(MUSA_OFFLOAD_ARCH_FLAG --offload-arch=native)
+elseif(MUSA_TARGET_ARCH MATCHES ^mp_[0-9]+)
+    set(MUSA_OFFLOAD_ARCH_FLAG --offload-arch=${MUSA_TARGET_ARCH})
+else()
+    set(MUSA_OFFLOAD_ARCH_FLAG --offload-arch=mp_${MUSA_TARGET_ARCH})
+endif()
+
+message(STATUS  MUSA Target Arch: ${MUSA_TARGET_ARCH})
+message(STATUS  MCC Offload Flag: ${MUSA_OFFLOAD_ARCH_FLAG})
+
 set(MCC_COMMON_FLAGS
     -O3
     -fPIC
@@ -125,6 +144,7 @@ set(MCC_COMMON_FLAGS
     -DEIGEN_DONT_VECTORIZE
     -U__ARM_NEON
     -U__ARM_NEON__
+    ${MUSA_OFFLOAD_ARCH_FLAG}
     -I${MUSA_PATH}/include
     -I${TF_INC}
 )
@@ -188,5 +208,6 @@ message(STATUS "  MUSA Path: ${MUSA_PATH}")
 message(STATUS "  MuDNN Library: ${MUSA_DNN_LIBRARY}")
 message(STATUS "  TensorFlow Include: ${TF_INC}")
 message(STATUS "  MUSA Kernel Debug: ${MUSA_KERNEL_DEBUG}")
+message(STATUS MUSATargetArchFlag:)
 message(STATUS "  Source Files: ${CPP_SOURCES_COUNT} C++ files, ${MU_SOURCES_COUNT} MUSA kernels")
 message(STATUS "  Output: ${CMAKE_CURRENT_BINARY_DIR}/libmusa_plugin.so")
