@@ -151,9 +151,8 @@ class MusaAssignVariableOp : public OpKernel {
     } else {
       *var->tensor() = value;
     }
-    MusaDeviceContext* musa_device_context =
-        static_cast<MusaDeviceContext*>(ctx->op_device_context());
-    musa_device_context->ThenExecute(GetMusaStreamByCtx(ctx), [value]() {});
+    // The pluggable-device build no longer exposes MusaDeviceContext internals.
+    // Rely on TensorFlow stream semantics for lifetime ordering here.
 
     var->is_initialized = true;
   }
@@ -209,9 +208,9 @@ class MusaReadVariableOp : public OpKernel {
       musaStream_t stream = GetMusaStreamByCtx(ctx);
       MusaMemcpyAsyncD2D(const_cast<char*>(out->tensor_data().data()),
                          t.tensor_data().data(), t.TotalBytes(), stream);
-      MusaDeviceContext* musa_device_context =
-          static_cast<MusaDeviceContext*>(ctx->op_device_context());
-      musa_device_context->ThenExecute(stream, [t]() {});
+      // The pluggable-device build no longer exposes MusaDeviceContext
+      // internals. Rely on TensorFlow stream semantics for lifetime ordering
+      // here.
     }
   }
 
