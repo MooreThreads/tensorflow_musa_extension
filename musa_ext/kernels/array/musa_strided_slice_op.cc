@@ -1,5 +1,7 @@
 #include <mudnn.h>
 
+#include <cstdlib>
+#include <cstring>
 #include <type_traits>
 
 #include "../utils_op.h"
@@ -16,7 +18,35 @@ namespace {
 
 template <typename T>
 inline bool NeedsHostVisibleSliceSync() {
+  const char* force_sync = std::getenv("MUSA_SYNC_INT_SHAPE_OPS");
+  if (force_sync == nullptr || std::strcmp(force_sync, "1") != 0) {
+    return false;
+  }
   return std::is_same<T, int32>::value || std::is_same<T, int64>::value;
+}
+
+template <typename T>
+inline bool CanUseRank1MemcpySlice(const Tensor& input,
+                                   const TensorShape& output_shape,
+                                   const gtl::InlinedVector<int64_t, 4>& begin,
+                                   const gtl::InlinedVector<int64_t, 4>& strides) {
+  if (input.dims() != 1 || begin.size() != 1 || strides.size() != 1) {
+    return false;
+  }
+  if (strides[0] != 1 || output_shape.num_elements() <= 0) {
+    return false;
+  }
+
+  int64_t start = begin[0];
+  const int64_t dim_size = input.dim_size(0);
+  if (start < 0) {
+    start += dim_size;
+  }
+  if (start < 0 || start > dim_size) {
+    return false;
+  }
+
+  return start + output_shape.num_elements() <= dim_size;
 }
 
 inline void SyncSliceStreamIfNeeded(OpKernelContext* context, mHandle& handle,
@@ -90,6 +120,25 @@ class MusaStridedSliceOp : public OpKernel {
 
     if (result->NumElements() == 0 || input.NumElements() == 0) return;
 
+    if (CanUseRank1MemcpySlice<T>(input, final_tensor_shape, begin, strides)) {
+      int64_t start = begin[0];
+      if (start < 0) {
+        start += input.dim_size(0);
+      }
+      auto& h = GetHandleByCtx(context);
+      const T* src_ptr = input.flat<T>().data() + start;
+      T* dst_ptr = result->flat<T>().data();
+      musaError_t err =
+          musaMemcpyAsync(dst_ptr, src_ptr, result->TotalBytes(),
+                          musaMemcpyDeviceToDevice,
+                          reinterpret_cast<musaStream_t>(h.GetStream()));
+      OP_REQUIRES(context, err == musaSuccess,
+                  errors::Internal("MUSA StridedSlice fast memcpy failed: ",
+                                   musaGetErrorString(err)));
+      SyncSliceStreamIfNeeded(context, h, NeedsHostVisibleSliceSync<T>());
+      return;
+    }
+
     auto in_mt = CreateMTensor(input);
     auto out_mt = CreateMTensor(*result);
 
@@ -157,6 +206,7 @@ REGISTER_STRIDED_SLICE_MUSA(int64);
 REGISTER_STRIDED_SLICE_MUSA(Eigen::half);
 REGISTER_STRIDED_SLICE_MUSA(Eigen::bfloat16);
 REGISTER_STRIDED_SLICE_MUSA(bool);
+
 #undef REGISTER_STRIDED_SLICE_MUSA
 
 }  // namespace

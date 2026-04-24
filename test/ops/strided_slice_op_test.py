@@ -142,6 +142,12 @@ class StridedSliceOpTest(MUSATestCase):
     for dtype in [tf.float32, tf.int32, tf.int64, tf.bool, tf.bfloat16]:
       self._test_slice((slice(0, 2), slice(1, 3)), dtype=dtype)
 
+  def testSliceRank1ShapeLike(self):
+    """Test rank-1 contiguous slices used by Shape->StridedSlice helpers."""
+    for dtype in [tf.int32, tf.int64]:
+      self._test_slice(slice(0, 1), input_data=np.array([7, 13, 29], dtype=dtype.as_numpy_dtype), dtype=dtype)
+      self._test_slice(slice(1, 3), input_data=np.array([7, 13, 29], dtype=dtype.as_numpy_dtype), dtype=dtype)
+
   def testValidateEquivalent_BasicStride(self):
     """Ref: ValidateStridedSliceOpTest.BasicStride
     input_shape={10, 10}, begin=[1, 1], end=[7, 7], strides=[2, 2], begin_mask=0x2, end_mask=0x1
