@@ -143,7 +143,6 @@ class MusaLinearReluOp : public MusaOpKernel {
                 errors::Internal("MUSA BiasAddRelu kernel launch failed in "
                                  "LinearRelu: ",
                    musaGetErrorString(launch_status)));
->>>>>>> main
   }
 
   bool IsExpensive() override { return true; }
