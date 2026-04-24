@@ -2172,6 +2172,8 @@ jobs:
           LOG_FILE="$JOB_LOG_DIR/training_tests.log"
           ERROR_LOG_DIR="$JOB_LOG_DIR/error_logs"
           CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
+          pr_training_models=(onetrans rankmixer tokenmixer-large)
+          daily_training_models=(deepfm dien din dsin esmm fgcnn flen fwfm mmoe ple wukong xdeepfm)
           mkdir -p "$JOB_LOG_DIR"
           rm -f "$LOG_FILE"
           rm -rf "$ERROR_LOG_DIR"
@@ -2181,6 +2183,17 @@ jobs:
           guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
           guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
           lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
+
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            selected_training_models=("${daily_training_models[@]}")
+            training_mode="daily-remainder"
+          else
+            selected_training_models=("${pr_training_models[@]}")
+            training_mode="pr-smoke"
+          fi
+          TRAINING_MODELS="${selected_training_models[*]}"
+          printf 'Training mode: %s\n' "$training_mode" | tee -a "$LOG_FILE"
+          printf 'Selected models (%d): %s\n' "${#selected_training_models[@]}" "$TRAINING_MODELS" | tee -a "$LOG_FILE"
 
           start_ts="$(date +%s)"
           while true; do
@@ -2272,7 +2285,7 @@ jobs:
           sys.exit(runner.main())
           PY
 
-          export MODEL_ROOT LOG_FILE ERROR_LOG_DIR CURRENT_PLUGIN LIVE_TRAINING_WRAPPER
+          export MODEL_ROOT LOG_FILE ERROR_LOG_DIR CURRENT_PLUGIN LIVE_TRAINING_WRAPPER TRAINING_MODELS
           if [[ "$guard_failed" == "0" ]]; then
             exec 9>"$lock_file"
             flock 9
@@ -2282,12 +2295,14 @@ jobs:
               set -o pipefail
               cd "$MODEL_ROOT/training"
               mkdir -p "$ERROR_LOG_DIR"
+              read -r -a training_models <<< "$TRAINING_MODELS"
 
               TRAINING_MODEL_TIMEOUT_SECONDS="${TRAINING_MODEL_TIMEOUT_SECONDS:-3600}" \
                 PYTHONUNBUFFERED=1 \
                 python -u "$LIVE_TRAINING_WRAPPER" \
                   --epochs 100 \
                   --log-dir "$ERROR_LOG_DIR" \
+                  --models "${training_models[@]}" \
                   --musa-plugin "$CURRENT_PLUGIN" 2>&1 | tee "$LOG_FILE"
             ' || training_exit=$?
           else
