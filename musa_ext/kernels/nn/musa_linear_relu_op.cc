@@ -130,10 +130,6 @@ class MusaLinearReluOp : public MusaOpKernel {
                 errors::Internal(
                     "MUSA MatMul/BatchMatMul execution failed in LinearRelu."));
 
-<<<<<<< dev
-    // 2. BiasAdd + Relu
-    UseMudnn(ctx, bias_input, mm_out_shape, mt_mm_out);
-=======
     const T* bias_ptr = bias_input.flat<T>().data();
     T* out_ptr = output->flat<T>().data();
     musaStream_t stream = GetMusaStreamByCtx(ctx);
@@ -146,7 +142,7 @@ class MusaLinearReluOp : public MusaOpKernel {
     OP_REQUIRES(ctx, launch_status == musaSuccess,
                 errors::Internal("MUSA BiasAddRelu kernel launch failed in "
                                  "LinearRelu: ",
-                                 musaGetErrorString(launch_status)));
+                   musaGetErrorString(launch_status)));
 >>>>>>> main
   }
 
