@@ -79,8 +79,7 @@ REGISTER_OP("MusaReshapeMatMul")
 template <typename T>
 class MusaReshapeMatMulOp : public MusaOpKernel {
  public:
-  explicit MusaReshapeMatMulOp(OpKernelConstruction* ctx)
-      : MusaOpKernel(ctx) {
+  explicit MusaReshapeMatMulOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("transpose_b", &transpose_b_));
 
     static const bool tf32_enabled_global = ResolveTF32Enabled();
@@ -90,19 +89,17 @@ class MusaReshapeMatMulOp : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
-    MUSA_KERNEL_TIMING_GUARD(ctx);
-
     const Tensor& x = ctx->input(0);
     const Tensor& w = ctx->input(1);
 
-    OP_REQUIRES(ctx, x.dims() >= 2,
-                errors::InvalidArgument(
-                    "MusaReshapeMatMul requires x rank >= 2, got ",
-                    x.shape().DebugString()));
-    OP_REQUIRES(ctx, w.dims() == 2,
-                errors::InvalidArgument(
-                    "MusaReshapeMatMul requires 2D weight, got ",
-                    w.shape().DebugString()));
+    OP_REQUIRES(
+        ctx, x.dims() >= 2,
+        errors::InvalidArgument("MusaReshapeMatMul requires x rank >= 2, got ",
+                                x.shape().DebugString()));
+    OP_REQUIRES(
+        ctx, w.dims() == 2,
+        errors::InvalidArgument("MusaReshapeMatMul requires 2D weight, got ",
+                                w.shape().DebugString()));
 
     const int64_t k = x.dim_size(x.dims() - 1);
     const int64_t w_k = transpose_b_ ? w.dim_size(1) : w.dim_size(0);
@@ -162,9 +159,9 @@ class MusaReshapeMatMulOp : public MusaOpKernel {
   bool tf32_enabled_ = false;
 };
 
-#define REGISTER_MUSA_RESHAPE_MATMUL(TYPE)                                  \
-  REGISTER_KERNEL_BUILDER(                                                  \
-      Name("MusaReshapeMatMul").Device("MUSA").TypeConstraint<TYPE>("T"),   \
+#define REGISTER_MUSA_RESHAPE_MATMUL(TYPE)                                \
+  REGISTER_KERNEL_BUILDER(                                                \
+      Name("MusaReshapeMatMul").Device("MUSA").TypeConstraint<TYPE>("T"), \
       MusaReshapeMatMulOp<TYPE>);
 
 REGISTER_MUSA_RESHAPE_MATMUL(float);
