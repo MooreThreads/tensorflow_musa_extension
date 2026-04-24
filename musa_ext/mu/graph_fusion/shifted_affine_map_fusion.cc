@@ -91,6 +91,9 @@ const NodeDef* FindResolvedProducer(const GraphDef& graph,
 MusaShiftedAffineMapFusion::MusaShiftedAffineMapFusion() = default;
 
 bool MusaShiftedAffineMapFusion::IsKernelAvailable() const {
+  if (IsDisabledByEnv()) {
+    return false;
+  }
   if (!kernel_checked_) {
     kernel_available_ = true;
     kernel_checked_ = true;

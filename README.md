@@ -4,12 +4,13 @@ TensorFlow MUSA Extension 是一个高性能的 TensorFlow 插件，专为摩尔
 
 ## 特性
 
-- **完整的算子支持**：涵盖深度学习训练和推理所需的核心算子 
+- **完整的算子支持**：涵盖深度学习训练和推理所需的核心算子
 - **高性能优化**：针对 MUSA 架构进行深度优化，包括内存访问模式和计算效率
 - **自动图优化**：支持 Layout 自动转换、算子融合和自动混合精度（AMP）
 - **无缝集成**：与 TensorFlow 生态系统完全兼容，无需修改现有代码
 - **设备管理**：完整的 MUSA 设备注册、内存管理和流式处理支持
 - **Kernel 调试支持**：内置 Kernel 执行时间统计功能，便于性能分析
+- **Python 包支持**：提供 `tensorflow_musa` Python 包，支持 pip 安装、插件加载与设备查询接口
 
 ## 快速开始
 
@@ -18,12 +19,17 @@ TensorFlow MUSA Extension 是一个高性能的 TensorFlow 插件，专为摩尔
 ```
 tensorflow_musa_extension/
 ├── CMakeLists.txt          # CMake 构建配置
-├── build.sh                # 构建脚本
+├── build.sh                # 构建脚本（支持 release/debug/wheel）
+├── setup.py                # Python 包构建配置
 ├── .clang-format           # 代码格式化配置
 ├── .pre-commit-config.yaml # pre-commit 钩子配置
-├── .gitlab-ci.yml          # CI/CD 配置
+├── .github/                # CI/CD 配置
+├── python/                 # Python 包源码目录（pip 安装名为 tensorflow_musa）
+│   ├── __init__.py         # 包入口，自动加载插件
+│   ├── _loader.py          # 插件加载与设备查询工具
+│   └── libmusa_plugin.so   # 打包进 wheel 的 MUSA 插件动态库
 ├── musa_ext/               # 核心源码目录
-│   ├── kernels/            # MUSA 内核实现
+│   ├── kernels/            # MUSA 内核实现（.mu 文件）
 │   ├── mu/                 # MUSA 设备和优化器实现
 │   └── utils/              # 工具函数
 └── test/                   # 测试用例
@@ -45,25 +51,45 @@ tensorflow_musa_extension/
   - 默认安装路径: `/usr/local/musa`
 - **Python 依赖**
   - Python: >= 3.7
-  - TensorFlow: == 2.6.1
-  - protobuf: == 3.20.3
+  - TensorFlow: == 2.6.1（必须使用此版本）
   - NumPy: >= 1.19.0
-  - pettytable: >= 3.0.0
 - **开发工具**:
   - pre-commit >= 3.0.0
   - pytest >= 6.0.0
 
-### 安装
+### 安装方式
+
+#### 方式一：安装 WHL 包（推荐）
 
 ```bash
 # 克隆仓库
 git clone <repository-url>
 cd tensorflow_musa_extension
 
-# 构建插件
-./build.sh
+# 确保 TensorFlow 2.6.1 已安装
+pip install tensorflow==2.6.1
 
-# 在 Python 中加载插件
+# 构建 WHL 包（一键构建）
+./build.sh wheel
+
+# 安装 WHL 包
+pip install dist/tensorflow_musa-0.1.0-py3-none-any.whl --no-deps
+
+# 重新构建后安装 WHL 包
+pip install dist/tensorflow_musa-0.1.0-py3-none-any.whl --no-deps --force-reinstall
+```
+
+#### 方式二：开发模式
+
+```bash
+# 克隆仓库
+git clone <repository-url>
+cd tensorflow_musa_extension
+
+# 构建 plugin
+./build.sh release
+
+# 在 Python 中手动加载插件进行测试
 import tensorflow as tf
 tf.load_library("./build/libmusa_plugin.so")
 ```
@@ -72,34 +98,46 @@ tf.load_library("./build/libmusa_plugin.so")
 
 ### 1. 编译模式
 
-支持 Release 与 Debug 两种模式：
+支持三种构建模式：
 
 | 模式 | 命令 | 说明 |
 |------|------|------|
-| **Release** | `./build.sh` 或 `./build.sh release` | 优化性能，无调试开销 |
+| **Release** | `./build.sh` 或 `./build.sh release` | 优化性能，生成 `build/libmusa_plugin.so` |
 | **Debug** | `./build.sh debug` | 开启 `MUSA_KERNEL_DEBUG`，启用 kernel timing 宏 |
+| **Wheel** | `./build.sh wheel` | 一键构建 WHL 包，生成 `dist/tensorflow_musa-*.whl` |
 
 ### 2. 编译流程
 
-执行自动化构建脚本：
-
 ```bash
-# Release（默认）
+# Release（默认）- 仅构建 plugin
 ./build.sh
-
-# Release（显式）
-./build.sh release
 
 # Debug（计时调试）
 ./build.sh debug
+
+# Wheel（构建发布包）
+./build.sh wheel
 ```
 
 构建脚本将自动完成以下步骤：
+- 检查 TensorFlow 版本（必须为 2.6.1）
 - 配置 CMake 项目
 - 编译 MUSA 内核和主机代码
-- 生成动态链接库 `libmusa_plugin.so`
+- 生成动态链接库 `libmusa_plugin.so` 或 WHL 包
 
-### 3. 调试与诊断
+### 3. WHL 包说明
+
+WHL 包构建特点：
+- **不自动下载 TensorFlow**：避免 pip 自动下载不兼容版本
+- **版本检查**：构建前自动检查环境中 TensorFlow 版本是否为 2.6.1
+- **包名映射**：源码目录为 `python/`，安装后包名为 `tensorflow_musa`
+
+安装后使用：
+```python
+import tensorflow_musa as tf_musa  # 包名仍然是 tensorflow_musa
+```
+
+### 4. 调试与诊断
 
 详细的调试指南请参阅 [docs/DEBUG_GUIDE.md](docs/DEBUG_GUIDE.md)，包含：
 
@@ -186,8 +224,41 @@ python test_runner.py --quiet
 - **数据操作**：Reshape, Concat, Gather, StridedSlice, ExpandDims
 - **归一化**：LayerNorm, FusedBatchNorm
 - **特殊算子**：TensorInteraction, BiasAdd, Assign
+- **优化器**：ResourceApplyAdam, MusaResourceSparseApplyAdam（支持 embedding 稀疏更新）
 
 ## 使用示例
+
+### 基本用法
+
+安装 `tensorflow_musa` 包后，导入时插件会自动加载：
+
+```python
+import tensorflow_musa as tf_musa
+
+# 查看版本
+print(f"TensorFlow MUSA 版本: {tf_musa.__version__}")
+
+# 查看可用的 MUSA 设备
+devices = tf_musa.get_musa_devices()
+print(f"可用 MUSA 设备: {devices}")
+```
+
+### 设备管理
+
+```python
+import tensorflow as tf
+import tensorflow_musa as tf_musa
+
+# 设置使用特定 MUSA 设备
+with tf.device('/device:MUSA:0'):
+    # 在 MUSA 设备上创建张量和计算
+    a = tf.constant([[1.0, 2.0], [3.0, 4.0]])
+    b = tf.constant([[5.0, 6.0], [7.0, 8.0]])
+    c = tf.matmul(a, b)
+    print(c)
+```
+
+### 更多示例
 
 详细使用示例见：
 

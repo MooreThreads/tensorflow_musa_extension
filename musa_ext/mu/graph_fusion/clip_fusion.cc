@@ -58,6 +58,9 @@ int CountConsumersExcluding(const GraphDef& graph, const std::string& node_name,
 MusaClipFusion::MusaClipFusion() = default;
 
 bool MusaClipFusion::IsKernelAvailable() const {
+  if (IsDisabledByEnv()) {
+    return false;
+  }
   if (!kernel_checked_) {
     kernel_available_ = true;
     kernel_checked_ = true;

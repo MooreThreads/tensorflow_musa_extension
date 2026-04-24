@@ -152,6 +152,9 @@ class MusaAssignVariableOp : public OpKernel {
     } else {
       *var->tensor() = value;
     }
+    MusaDeviceContext* musa_device_context =
+        static_cast<MusaDeviceContext*>(ctx->op_device_context());
+    musa_device_context->ThenExecute(GetMusaStreamByCtx(ctx), [value]() {});
 
     var->is_initialized = true;
   }
@@ -207,6 +210,9 @@ class MusaReadVariableOp : public OpKernel {
       musaStream_t stream = GetMusaStreamByCtx(ctx);
       MusaMemcpyAsyncD2D(const_cast<char*>(out->tensor_data().data()),
                          t.tensor_data().data(), t.TotalBytes(), stream);
+      MusaDeviceContext* musa_device_context =
+          static_cast<MusaDeviceContext*>(ctx->op_device_context());
+      musa_device_context->ThenExecute(stream, [t]() {});
     }
   }
 
@@ -275,6 +281,7 @@ class MusaDestroyResourceOp : public OpKernel {
 REGISTER_MUSA_VAR_MANAGEMENT(float);
 REGISTER_MUSA_VAR_MANAGEMENT(double);
 REGISTER_MUSA_VAR_MANAGEMENT(Eigen::half);
+REGISTER_MUSA_VAR_MANAGEMENT(Eigen::bfloat16);
 REGISTER_MUSA_VAR_MANAGEMENT(int32);
 REGISTER_MUSA_VAR_MANAGEMENT(int64);
 

@@ -71,6 +71,7 @@ def load_musa_plugin():
         f"MUSA plugin not found. Searched locations:\n" +
         "\n".join(f"  - {loc}" for loc in searched_locations)
     )
+  return plugin_path
 
 
 # Import tensorflow first (load_musa_plugin needs it)

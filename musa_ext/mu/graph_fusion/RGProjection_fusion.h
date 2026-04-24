@@ -1,3 +1,5 @@
+#pragma once
+
 #include <string>
 #include <vector>
 
@@ -7,12 +9,13 @@ namespace tensorflow {
 namespace grappler {
 namespace musa_fusion {
 
-// Computes: MatMul + BiasAdd + Relu
+// Computes: MatMul(Relu(BiasAdd(x, b)), w)
+// Actual dataflow order: BiasAdd -> Relu -> MatMul
 
-class LinearReluFusion : public FusionPattern {
+class BiasAddReluMatMulFusion : public FusionPattern {
  public:
-  LinearReluFusion() = default;
-  ~LinearReluFusion() override = default;
+  BiasAddReluMatMulFusion() = default;
+  ~BiasAddReluMatMulFusion() override = default;
 
   FusionMatchResult Match(const GraphDef& graph,
                           int start_node_idx) const override;
@@ -20,21 +23,20 @@ class LinearReluFusion : public FusionPattern {
   Status Apply(GraphDef* graph,
                const FusionMatchResult& match_result) const override;
 
-  int GetPriority() const override { return 120; }
+  int GetPriority() const override { return 60; }
 
   bool IsKernelAvailable() const override;
 
-  std::string GetName() const override { return "LinearReluFusion"; }
+  std::string GetName() const override { return "BiasAddReluMatMulFusion"; }
 
   std::string GetFallbackReason() const override {
     if (!kernel_available_) {
-      return "LinearReluFusion kernel not available on this device";
+      return "BiasAddReluMatMulFusion kernel not available on this device";
     }
     return "";
   }
 
  private:
-  // Kernel availability flag
   mutable bool kernel_available_ = true;
   mutable bool kernel_checked_ = false;
 };

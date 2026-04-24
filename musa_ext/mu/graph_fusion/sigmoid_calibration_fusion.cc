@@ -83,6 +83,9 @@ bool HasFloatValue(const NodeDef& node, float expected_val,
 MusaSigmoidCalibrationFusion::MusaSigmoidCalibrationFusion() = default;
 
 bool MusaSigmoidCalibrationFusion::IsKernelAvailable() const {
+  if (IsDisabledByEnv()) {
+    return false;
+  }
   return false;  // Placeholder: Update this when the kernel is implemented
 }
 

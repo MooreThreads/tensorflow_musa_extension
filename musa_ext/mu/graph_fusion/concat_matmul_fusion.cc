@@ -48,6 +48,9 @@ bool HasOriginalSuffix(const std::string& node_name) {
 }  // namespace
 
 bool ConcatMatMulFusion::IsKernelAvailable() const {
+  if (IsDisabledByEnv()) {
+    return false;
+  }
   if (!kernel_checked_) {
     // Check if MusaConcatMatMul op is registered
     kernel_available_ = true;  // Simplified for now
@@ -127,6 +130,7 @@ Status ConcatMatMulFusion::Apply(GraphDef* graph,
 
   const std::string original_name = matmul_node->name();
   const std::string original_matmul_name = original_name + "_original";
+  const std::string concat_name = concat_node->name();
 
   // Check if this node has already been fused
   for (const auto& node : graph->node()) {
@@ -153,6 +157,13 @@ Status ConcatMatMulFusion::Apply(GraphDef* graph,
 
   NodeDef* matmul_node_mutable = graph->mutable_node(matmul_node_idx);
   const std::string device = matmul_node_mutable->device();
+  const std::vector<std::string> matmul_inputs(matmul_node->input().begin(),
+                                               matmul_node->input().end());
+  const std::vector<std::string> concat_inputs(concat_node->input().begin(),
+                                               concat_node->input().end());
+  const AttrValue attr_t = matmul_node->attr().at("T");
+  const AttrValue attr_transpose_a = matmul_node->attr().at("transpose_a");
+  const AttrValue attr_transpose_b = matmul_node->attr().at("transpose_b");
 
   matmul_node_mutable->set_name(original_matmul_name);
 
@@ -162,35 +173,45 @@ Status ConcatMatMulFusion::Apply(GraphDef* graph,
   fused_node->set_device(device);
 
   // MusaConcatMatMul inputs: Concat inputs..., axis, Other MatMul input
-  int num_concat_inputs = concat_node->input_size() - 1;
+  int num_concat_inputs = concat_inputs.size() - 1;
   for (int i = 0; i < num_concat_inputs; ++i) {
-    fused_node->add_input(concat_node->input(i));
+    fused_node->add_input(concat_inputs[i]);
   }
   // axis
-  fused_node->add_input(concat_node->input(num_concat_inputs));
+  fused_node->add_input(concat_inputs[num_concat_inputs]);
 
   // other matmul input
   int concat_in_matmul_idx = -1;
   for (int i = 0; i < 2; ++i) {
-    if (FindProducer(*graph, matmul_node->input(i)) == concat_node) {
+    if (FusionGraphUtils::GetProducerNodeName(matmul_inputs[i]) == concat_name) {
       concat_in_matmul_idx = i;
       break;
     }
   }
-  fused_node->add_input(matmul_node->input(1 - concat_in_matmul_idx));
+  if (concat_in_matmul_idx < 0) {
+    return Status(error::INVALID_ARGUMENT,
+                  "Failed to determine ConcatV2 input position for MatMul: " +
+                      original_name);
+  }
+  fused_node->add_input(matmul_inputs[1 - concat_in_matmul_idx]);
 
   // Attributes
-  (*fused_node->mutable_attr())["T"] = matmul_node->attr().at("T");
-  (*fused_node->mutable_attr())["transpose_a"] =
-      matmul_node->attr().at("transpose_a");
-  (*fused_node->mutable_attr())["transpose_b"] =
-      matmul_node->attr().at("transpose_b");
+  (*fused_node->mutable_attr())["T"] = attr_t;
+  (*fused_node->mutable_attr())["transpose_a"] = attr_transpose_a;
+  (*fused_node->mutable_attr())["transpose_b"] = attr_transpose_b;
   (*fused_node->mutable_attr())["num_concat"] = AttrValue();
   fused_node->mutable_attr()->at("num_concat").set_i(num_concat_inputs);
   (*fused_node->mutable_attr())["concat_input_idx"] = AttrValue();
   fused_node->mutable_attr()
       ->at("concat_input_idx")
       .set_i(concat_in_matmul_idx);
+
+  const int removed_count = FusionGraphUtils::RemoveNodesIfUnused(
+      graph, {original_matmul_name, concat_name}, {original_name});
+
+  VLOG(1) << "ConcatMatMulFusion: Successfully replaced '" << original_name
+          << "' with MusaConcatMatMul and removed " << removed_count
+          << " obsolete node(s)";
 
   return Status::OK();
 }

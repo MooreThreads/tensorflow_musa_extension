@@ -46,8 +46,17 @@ class MusaVariableV2Op : public OpKernel {
     {
       mutex_lock lock(*var->mu());
 
+      // Var(dtype) starts as a 1-D, 0-element tensor with the requested dtype.
+      // Treat that sentinel state as "unallocated" for VariableV2 so the first
+      // execution can materialize the requested shape instead of spuriously
+      // failing with "Existing: [0]".
+      const bool has_placeholder_shape =
+          var->tensor()->dtype() == dtype &&
+          var->tensor()->shape().dims() == 1 &&
+          var->tensor()->dim_size(0) == 0 && !var->is_initialized;
+
       // If first time, allocate storage tensor with required shape.
-      if (var->tensor()->dtype() == DT_INVALID) {
+      if (var->tensor()->dtype() == DT_INVALID || has_placeholder_shape) {
         *var->tensor() = Tensor(dtype, shape_);
         var->is_initialized = false;  // VariableV2 itself does not initialize.
       } else {

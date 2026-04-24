@@ -1,0 +1,159 @@
+name: CI Auto Rerun
+
+on:
+  workflow_run:
+    workflows: ["CI Validation (MUSA GPU)"]
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.id }}
+  cancel-in-progress: true
+
+env:
+  MAX_AUTO_RERUNS: 5
+  MAX_RERUNS_PREPARE_METADATA: 5
+  MAX_RERUNS_FORMAT_CHECK: 5
+  MAX_RERUNS_BUILD_CURRENT: 5
+  MAX_RERUNS_INTEGRATION_TEST: 5
+  MAX_RERUNS_BUILD_BASELINE: 5
+  MAX_RERUNS_T_PERFORMANCE: 5
+  MAX_RERUNS_T_ACCURACY: 5
+  MAX_RERUNS_BD_MODEL_1: 5
+  MAX_RERUNS_BD_MODEL_2: 5
+  MAX_RERUNS_BD_MODEL_3: 5
+  MAX_RERUNS_TRAINING: 5
+  MAX_RERUNS_FINAL_SUMMARY: 5
+
+jobs:
+  rerun_failed_jobs:
+    name: Auto Rerun Failed Jobs
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Re-run failed jobs when retry budget remains
+        uses: actions/github-script@v7
+        env:
+          EVENT_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt || 1 }}
+          MAX_AUTO_RERUNS: ${{ env.MAX_AUTO_RERUNS }}
+          MAX_RERUNS_PREPARE_METADATA: ${{ env.MAX_RERUNS_PREPARE_METADATA }}
+          MAX_RERUNS_FORMAT_CHECK: ${{ env.MAX_RERUNS_FORMAT_CHECK }}
+          MAX_RERUNS_BUILD_CURRENT: ${{ env.MAX_RERUNS_BUILD_CURRENT }}
+          MAX_RERUNS_INTEGRATION_TEST: ${{ env.MAX_RERUNS_INTEGRATION_TEST }}
+          MAX_RERUNS_BUILD_BASELINE: ${{ env.MAX_RERUNS_BUILD_BASELINE }}
+          MAX_RERUNS_T_PERFORMANCE: ${{ env.MAX_RERUNS_T_PERFORMANCE }}
+          MAX_RERUNS_T_ACCURACY: ${{ env.MAX_RERUNS_T_ACCURACY }}
+          MAX_RERUNS_BD_MODEL_1: ${{ env.MAX_RERUNS_BD_MODEL_1 }}
+          MAX_RERUNS_BD_MODEL_2: ${{ env.MAX_RERUNS_BD_MODEL_2 }}
+          MAX_RERUNS_BD_MODEL_3: ${{ env.MAX_RERUNS_BD_MODEL_3 }}
+          MAX_RERUNS_TRAINING: ${{ env.MAX_RERUNS_TRAINING }}
+          MAX_RERUNS_FINAL_SUMMARY: ${{ env.MAX_RERUNS_FINAL_SUMMARY }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const runId = context.payload.workflow_run.id;
+            const defaultLimit = Number(process.env.MAX_AUTO_RERUNS || "5");
+            const eventAttempt = Number(process.env.EVENT_RUN_ATTEMPT || "1");
+
+            const { data: run } = await github.rest.actions.getWorkflowRun({
+              owner,
+              repo,
+              run_id: runId,
+            });
+
+            if (run.status !== "completed") {
+              core.info(`Run ${runId} is currently ${run.status}; skip auto rerun.`);
+              return;
+            }
+
+            if (run.conclusion !== "failure") {
+              core.info("Run is not failed; skip auto rerun.");
+              return;
+            }
+
+            const attempt = Number(run.run_attempt || 1);
+
+            if (attempt > eventAttempt) {
+              core.info(
+                `Skip stale workflow_run event for attempt ${eventAttempt}; latest completed attempt is ${attempt}.`
+              );
+              return;
+            }
+
+            const failedJobCounts = {};
+            const currentlyFailedJobs = new Set();
+
+            const getJobLimit = (jobName) => {
+              const envVarName = `MAX_RERUNS_${jobName
+                .replace(/[^a-zA-Z0-9_]/g, "_")
+                .toUpperCase()}`;
+              return Number(process.env[envVarName] || defaultLimit || "5");
+            };
+
+            for (let i = 1; i <= attempt; i++) {
+              const jobs = await github.paginate(
+                github.rest.actions.listJobsForWorkflowRunAttempt,
+                {
+                  owner,
+                  repo,
+                  run_id: runId,
+                  attempt_number: i,
+                  per_page: 100,
+                }
+              );
+
+              for (const job of jobs) {
+                if (job.conclusion === "failure") {
+                  failedJobCounts[job.name] = (failedJobCounts[job.name] || 0) + 1;
+                  if (i === attempt) {
+                    currentlyFailedJobs.add(job.name);
+                  }
+                }
+              }
+            }
+
+            if (currentlyFailedJobs.size === 0) {
+              core.info(`Run ${runId} failed but no currently failed jobs were found.`);
+              return;
+            }
+
+            let exhaustedJob = null;
+            for (const jobName of currentlyFailedJobs) {
+              const limit = getJobLimit(jobName);
+              const failedAttempts = failedJobCounts[jobName] || 1;
+              const rerunsUsed = Math.max(0, failedAttempts - 1);
+              const maxReruns = Math.max(0, limit - 1);
+
+              core.info(
+                `Job "${jobName}" used ${failedAttempts}/${limit} total attempt(s) including the first run; auto reruns used ${rerunsUsed}/${maxReruns}.`
+              );
+
+              if (failedAttempts >= limit) {
+                exhaustedJob = { name: jobName, failedAttempts, rerunsUsed, limit, maxReruns };
+                break;
+              }
+            }
+
+            if (exhaustedJob) {
+              core.notice(
+                `Job "${exhaustedJob.name}" reached the total-attempt limit ${exhaustedJob.failedAttempts}/${exhaustedJob.limit} (including the first run); auto reruns used ${exhaustedJob.rerunsUsed}/${exhaustedJob.maxReruns}.`
+              );
+              return;
+            }
+
+            await github.request(
+              "POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs",
+              {
+                owner,
+                repo,
+                run_id: runId,
+              }
+            );
+
+            core.notice(
+              `Triggered auto rerun for failed jobs of run ${runId}; latest completed workflow attempt ${attempt}, current failed jobs: ${[...currentlyFailedJobs].sort().join(", ")}.`
+            );

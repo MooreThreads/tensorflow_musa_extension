@@ -2,287 +2,2552 @@ name: CI Validation (MUSA GPU)
 
 on:
   pull_request:
-    branches: [ main, develop ]
-    types: [ opened, synchronize, reopened ]
+    branches: [main, develop]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
     inputs:
       target_branch:
-        description: 'Target branch to check rebase against (for manual run)'
+        description: "Target branch to check rebase against (for manual run)"
         required: false
-        default: 'main'
+        default: "main"
+        type: string
+      commit_sha:
+        description: "Optional commit SHA to test instead of the workflow SHA"
+        required: false
+        default: ""
+        type: string
+      baseline_sha:
+        description: "Optional baseline commit SHA; leave empty to use latest upstream/main"
+        required: false
+        default: ""
         type: string
   schedule:
-    - cron: '0 0 * * *'
+    - cron: "0 0 * * *"
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  LOG_BASE: /home/runner/ci_logs
+  MODEL_ROOT: /home/runner/tf_test_model-master
+  BASELINE_WORKSPACE: /home/runner/baseline/tensorflow_musa_extension
+  BASELINE_REPO_URL: https://github.com/MooreThreads/tensorflow_musa_extension.git
+  CURRENT_PLUGIN_ARTIFACT: current-plugin
+  BASELINE_PLUGIN_ARTIFACT: baseline-plugin
+  GPU_GUARD_PATTERN: '[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py'
+  GPU_GUARD_TIMEOUT_SECONDS: 180
+  GPU_LOCK_FILE: /tmp/tensorflow_musa_ci_gpu.lock
+
 jobs:
-  validate:
+  prepare_metadata:
+    name: Prepare Metadata
     runs-on: [self-hosted, musa-gpu]
-
-    env:
-      COMMIT_ID: ${{ github.event.pull_request.head.sha || github.sha }}
-      LOG_BASE: /home/runner/ci_logs
-      WORKSPACE: /home/runner/action-runner/_work/${{ github.event.repository.name }}/${{ github.event.repository.name }}
-
+    timeout-minutes: 10
+    outputs:
+      commit_id: ${{ steps.collect.outputs.commit_id }}
+      requested_commit_id: ${{ steps.collect.outputs.requested_commit_id }}
+      requested_baseline_id: ${{ steps.collect.outputs.requested_baseline_id }}
+      run_kind: ${{ steps.collect.outputs.run_kind }}
+      run_id: ${{ steps.collect.outputs.run_id }}
+      workflow_run_id: ${{ steps.collect.outputs.workflow_run_id }}
+      workflow_run_attempt: ${{ steps.collect.outputs.workflow_run_attempt }}
+      log_root: ${{ steps.collect.outputs.log_root }}
+      host_name: ${{ steps.collect.outputs.host_name }}
+      host_ip: ${{ steps.collect.outputs.host_ip }}
+      host_sn: ${{ steps.collect.outputs.host_sn }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
-      - name: Check who am I
+      - name: Prepare metadata
+        id: collect
         run: |
-          echo "我是用户: $(whoami)"
-          echo "我当前所在的家目录是: $HOME"
+          set -euo pipefail
 
-      # ==============================
-      # Checkout
-      # ==============================
+          REQUESTED_COMMIT_ID="${{ github.event.inputs.commit_sha || '' }}"
+          REQUESTED_BASELINE_ID="${{ github.event.inputs.baseline_sha || '' }}"
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            RUN_KIND="pr"
+            RUN_ID="${{ github.event.pull_request.head.sha }}"
+            EFFECTIVE_COMMIT_ID="${{ github.sha }}"
+          elif [[ "${{ github.event_name }}" == "schedule" ]]; then
+            RUN_KIND="daily"
+            RUN_ID="$(date +%F)"
+            EFFECTIVE_COMMIT_ID="${{ github.sha }}"
+          else
+            RUN_KIND="manual"
+            EFFECTIVE_COMMIT_ID="${REQUESTED_COMMIT_ID:-${{ github.sha }}}"
+            if [[ -n "$REQUESTED_COMMIT_ID" ]]; then
+              RUN_ID="$REQUESTED_COMMIT_ID"
+            else
+              RUN_ID="${{ github.run_id }}"
+            fi
+          fi
+
+          WORKFLOW_RUN_ID="${{ github.run_id }}"
+          WORKFLOW_RUN_ATTEMPT="${{ github.run_attempt }}"
+          LOG_ROOT="$LOG_BASE/$RUN_KIND/$RUN_ID/run-$WORKFLOW_RUN_ID/attempt-$WORKFLOW_RUN_ATTEMPT"
+          JOB_LOG_DIR="$LOG_ROOT/prepare-metadata"
+          SUMMARY_FILE="$RUNNER_TEMP/prepare-metadata.md"
+          HOST_NAME="$(hostname)"
+          HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+          if [[ -z "$HOST_IP" ]]; then
+            HOST_IP="$(hostname -i 2>/dev/null || true)"
+          fi
+          HOST_IP="${HOST_IP:-unavailable}"
+          HOST_SN="$(cat /sys/class/dmi/id/product_serial 2>/dev/null || true)"
+          HOST_SN="${HOST_SN:-unavailable}"
+
+          mkdir -p "$JOB_LOG_DIR"
+
+          {
+            echo "## Prepare Metadata"
+            echo
+            echo "- Commit: $EFFECTIVE_COMMIT_ID"
+            echo "- Requested commit override: ${REQUESTED_COMMIT_ID:-none}"
+            echo "- Requested baseline override: ${REQUESTED_BASELINE_ID:-none}"
+            echo "- Run kind: $RUN_KIND"
+            echo "- Run id: $RUN_ID"
+            echo "- Workflow run id: $WORKFLOW_RUN_ID"
+            echo "- Workflow run attempt: $WORKFLOW_RUN_ATTEMPT"
+            echo "- Log root: $LOG_ROOT"
+            echo "- Runner: $HOST_NAME"
+            echo "- Host IP: $HOST_IP"
+            echo "- Host SN: $HOST_SN"
+          } | tee "$SUMMARY_FILE"
+
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "commit_id=$EFFECTIVE_COMMIT_ID" >> "$GITHUB_OUTPUT"
+          echo "requested_commit_id=$REQUESTED_COMMIT_ID" >> "$GITHUB_OUTPUT"
+          echo "requested_baseline_id=$REQUESTED_BASELINE_ID" >> "$GITHUB_OUTPUT"
+          echo "run_kind=$RUN_KIND" >> "$GITHUB_OUTPUT"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "workflow_run_id=$WORKFLOW_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "workflow_run_attempt=$WORKFLOW_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          echo "log_root=$LOG_ROOT" >> "$GITHUB_OUTPUT"
+          echo "host_name=$HOST_NAME" >> "$GITHUB_OUTPUT"
+          echo "host_ip=$HOST_IP" >> "$GITHUB_OUTPUT"
+          echo "host_sn=$HOST_SN" >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload summary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-prepare-metadata
+          path: ${{ steps.collect.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+  format:
+    name: Format Check
+    needs: prepare_metadata
+    runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 20
+    outputs:
+      status: ${{ steps.collect.outputs.status }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
+    steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ env.COMMIT_ID }}
+          ref: ${{ needs.prepare_metadata.outputs.commit_id }}
 
-      # ==============================
-      # 创建日志目录
-      # ==============================
-      - name: Prepare log directory
-        run: |
-          if [ "${{ github.event_name }}" == "pull_request" ]; then
-            TYPE="pr"
-            ID="${{ github.event.pull_request.head.sha }}"
-          elif [ "${{ github.event_name }}" == "schedule" ]; then
-            TYPE="daily"
-            ID=$(date +%F)
-          else
-            TYPE="manual"
-            ID="${{ github.run_id }}"
-          fi
-
-          LOG_DIR="$LOG_BASE/$TYPE/$ID"
-
-          mkdir -p "$LOG_DIR"
-
-          echo "LOG_DIR=$LOG_DIR" >> $GITHUB_ENV
-          echo "TYPE=$TYPE" >> $GITHUB_ENV
-
-          echo "✅ Log dir: $LOG_DIR"
-
-      # ==============================
-      # Rebase 检查（仅 PR）
-      # ==============================
-      # - name: Check Rebase Status
-      #   if: github.event_name == 'pull_request'
-      #   run: |
-      #     TARGET_BRANCH="${{ github.base_ref }}"
-      #     git fetch origin $TARGET_BRANCH
-      #     if ! git merge-base --is-ancestor origin/$TARGET_BRANCH HEAD; then
-      #       echo "❌ NOT rebased"
-      #       exit 1
-      #     fi
-
-      # ==============================
-      # Format
-      # ==============================
-      - name: Check code formatting
-        id: run-format
+      - name: Run format check
+        id: run_check
         run: |
           set +e
 
-          exit_code=0
-          # 使用 bash -l -c 模拟登录，自动激活 Conda 环境
-          bash -l -c "
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/format"
+          LOG_FILE="$JOB_LOG_DIR/format_check.log"
+          mkdir -p "$JOB_LOG_DIR"
+
+          format_exit=0
+          export JOB_LOG_DIR LOG_FILE
+          bash -l -c '
             set -o pipefail
-            cd $WORKSPACE &&
-            LOG_FILE='$LOG_DIR/format.log' &&
-            FILE_LIST=\$(mktemp) &&
-            if [ '${{ github.event_name }}' = 'pull_request' ]; then
-              TARGET_BRANCH='${{ github.base_ref }}' &&
-              git fetch origin \$TARGET_BRANCH &&
-              git diff -z --diff-filter=ACMRTUXB --name-only origin/\$TARGET_BRANCH...HEAD -- \
-                '*.c' '*.cc' '*.cpp' '*.cu' '*.h' '*.hpp' > \$FILE_LIST
+            cd "$GITHUB_WORKSPACE"
+            FILE_LIST=$(mktemp)
+            find . \( -path ./build -o -path ./.git \) -prune -o \
+              -regex ".*\.\(cc\|cpp\|hpp\|c\|h\|cu\)" -print0 > "$FILE_LIST"
+            if [[ ! -s "$FILE_LIST" ]]; then
+              echo "No C/C++ files to format-check." | tee "$LOG_FILE"
             else
-              find . \( -path ./build -o -path ./.git \) -prune -o \
-                -regex '.*\.\(cc\|cpp\|hpp\|c\|h\|cu\)' -print0 > \$FILE_LIST
-            fi &&
-            if [ ! -s \$FILE_LIST ]; then
-              echo 'No C/C++ files to format-check.' > \$LOG_FILE
-            else
-              xargs -0 clang-format --Werror --dry-run < \$FILE_LIST > \$LOG_FILE 2>&1
+              xargs -0 clang-format --Werror --dry-run < "$FILE_LIST" 2>&1 | tee "$LOG_FILE"
             fi
-          " || exit_code=$?
+          ' || format_exit=$?
 
-          if [ $exit_code -eq 0 ]; then
-            echo "status=success" >> $GITHUB_OUTPUT
-          else
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-        continue-on-error: true
+          echo "format_exit=$format_exit" >> "$GITHUB_OUTPUT"
 
-      # ==============================
-      # Build
-      # ==============================
-      - name: Build
-        id: run-build
-        run: |
-          set +e
-
-          exit_code=0
-          bash -l -c "
-            export CPLUS_INCLUDE_PATH=/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:\$CPLUS_INCLUDE_PATH &&
-            cd $WORKSPACE &&
-            cp -r /home/runner/tensorflow_musa_extension/CMakeLists.txt ./ &&
-            LOG_FILE='$LOG_DIR/build.log' &&
-            rm -rf ./build &&
-            ./build.sh > \$LOG_FILE 2>&1
-          " || exit_code=$?
-
-          if [ $exit_code -eq 0 ]; then
-            echo "status=success" >> $GITHUB_OUTPUT
-          else
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-        continue-on-error: true
-
-      # ==============================
-      # Test
-      # ==============================
-      - name: Integration Test
-        id: run-integration
-        run: |
-          set +e
-
-          exit_code=0
-          bash -l -c "
-            cd $WORKSPACE/test &&
-            LOG_FILE='$LOG_DIR/test.log' &&
-            timeout 30m python test_runner.py --fusion > \$LOG_FILE 2>&1
-          " || exit_code=$?
-
-          if [ $exit_code -eq 0 ]; then
-            echo "status=success" >> $GITHUB_OUTPUT
-          else
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-        continue-on-error: true
-
-      # ==============================
-      # 测试整网性能 part1
-      # ==============================
-      - name: Check Performance part1
-        id: run-performance-part1
+      - name: Collect format summary
+        id: collect
+        if: always()
         run: |
           set -euo pipefail
 
-          exit_code=0
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/format"
+          LOG_FILE="$JOB_LOG_DIR/format_check.log"
+          SUMMARY_FILE="$RUNNER_TEMP/format.md"
+          STATUS="success"
+          JOB_RESULT="success (non-blocking)"
 
-          bash -l -c "
-            cd /home/runner/tf_test_model/prunedGraph &&
-            LOG_FILE='$LOG_DIR/performance-part1.log' &&
-            timeout 20m python run_graph_tf_musa.py --inference-only --inference-rounds 1000 > \$LOG_FILE 2>&1
-          " || exit_code=$?
-
-          if [ $exit_code -ne 0 ]; then
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
+          if [[ "${{ steps.run_check.outputs.format_exit }}" != "0" ]]; then
+            STATUS="failure"
+            echo "::warning::Format check failed. This job remains non-blocking."
           fi
 
-          CURRENT_TIME=$(grep "Average Time (s)" "$LOG_DIR/performance-part1.log" | tail -1 | awk -F'|' '{print $3}' | tr -d ' ')
+          {
+            echo "## Format Check"
+            echo
+            echo "- Job result: $JOB_RESULT"
+            echo "- Format check result: $STATUS"
+            echo "- Non-blocking: yes"
+            echo "- Log file: $LOG_FILE"
+            echo
+            echo '```text'
+            if [[ -f "$LOG_FILE" ]]; then
+              tail -50 "$LOG_FILE" || true
+            else
+              echo "format log not found"
+            fi
+            echo '```'
+          } | tee "$SUMMARY_FILE"
 
-          if [ -z "$CURRENT_TIME" ]; then
-            echo "❌ 无法解析性能结果"
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          fi
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
-          BASELINE=0.038332
-          THRESHOLD=$(awk -v base="$BASELINE" 'BEGIN {printf "%.6f", base * 1.05}')
+      - name: Upload format artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-format
+          path: ${{ steps.collect.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
 
-          echo "Baseline : $BASELINE"
-          echo "Threshold: $THRESHOLD"
-          echo "Current  : $CURRENT_TIME"
+      - name: Upload format logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-format
+          path: ${{ needs.prepare_metadata.outputs.log_root }}/format/format_check.log
+          if-no-files-found: warn
+          retention-days: 7
 
-          if awk -v cur="$CURRENT_TIME" -v thr="$THRESHOLD" 'BEGIN {exit !(cur > thr)}'; then
-            echo "❌ 性能退化"
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
-          else
-            echo "✅ 性能正常"
-            echo "status=success" >> $GITHUB_OUTPUT
-          fi
-        continue-on-error: true
+  build_current:
+    name: Build Current
+    needs: prepare_metadata
+    runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 120
+    outputs:
+      status: ${{ steps.collect.outputs.status }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare_metadata.outputs.commit_id }}
 
-      # ==============================
-      # 测试整网性能 part2
-      # ==============================
-      - name: Check Performance part2
-        id: run-performance-part2
+      - name: Build current plugin
+        id: run_build
+        run: |
+          set +e
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/build-current"
+          LOG_FILE="$JOB_LOG_DIR/build_current.log"
+          mkdir -p "$JOB_LOG_DIR"
+
+          build_exit=0
+          export LOG_FILE
+          bash -l -c '
+            set -o pipefail
+            export CPLUS_INCLUDE_PATH="/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:${CPLUS_INCLUDE_PATH:-}"
+            cd "$GITHUB_WORKSPACE"
+            rm -rf ./build
+            ./build.sh 2>&1 | tee "$LOG_FILE"
+          ' || build_exit=$?
+
+          echo "build_exit=$build_exit" >> "$GITHUB_OUTPUT"
+
+      - name: Collect build summary
+        id: collect
+        if: always()
         run: |
           set -euo pipefail
 
-          exit_code=0
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/build-current"
+          LOG_FILE="$JOB_LOG_DIR/build_current.log"
+          SUMMARY_FILE="$RUNNER_TEMP/build-current.md"
+          PLUGIN_PATH="$GITHUB_WORKSPACE/build/libmusa_plugin.so"
+          STATUS="success"
 
-          bash -l -c "
-            cd /home/runner/tf_test_model/prunedGraph &&
-            LOG_FILE='$LOG_DIR/performance-part2.log' &&
-            timeout 20m python run_graph_tf_musa.py --compare-accuracy --rtol 1e-2 --atol 1e-2 > \$LOG_FILE 2>&1
-          " || exit_code=$?
-
-          if [ $exit_code -ne 0 ]; then
-            echo "❌ 精度测试脚本执行失败"
-            echo "status=failure" >> $GITHUB_OUTPUT
-            exit 1
+          if [[ "${{ steps.run_build.outputs.build_exit }}" != "0" || ! -f "$PLUGIN_PATH" ]]; then
+            STATUS="failure"
           fi
 
-          if grep -q "精度对比通过！CPU 与 MUSA 结果一致" "$LOG_DIR/performance-part2.log"; then
-            echo "✅ 精度对比通过"
-            echo "status=success" >> $GITHUB_OUTPUT
+          PLUGIN_SIZE="$(stat -c%s "$PLUGIN_PATH" 2>/dev/null || echo "n/a")"
+
+          {
+            echo "## Build Current"
+            echo
+            echo "- Status: $STATUS"
+            echo "- Plugin path: $PLUGIN_PATH"
+            echo "- Plugin size: $PLUGIN_SIZE"
+            echo "- Log file: $LOG_FILE"
+            echo
+            echo '```text'
+            if [[ -f "$LOG_FILE" ]]; then
+              tail -50 "$LOG_FILE" || true
+            else
+              echo "build log not found"
+            fi
+            echo '```'
+          } | tee "$SUMMARY_FILE"
+
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload current plugin artifact
+        if: steps.collect.outputs.status == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
+          path: ${{ github.workspace }}/build/libmusa_plugin.so
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload build summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-build-current
+          path: ${{ steps.collect.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload build current logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-build-current
+          path: ${{ needs.prepare_metadata.outputs.log_root }}/build-current/build_current.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Fail job if build failed
+        if: always() && steps.collect.outputs.status == 'failure'
+        run: exit 1
+
+  integration:
+    name: Integration Test
+    needs: [prepare_metadata, build_current]
+    if: needs.build_current.result == 'success'
+    runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 45
+    outputs:
+      status: ${{ steps.collect.outputs.status }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare_metadata.outputs.commit_id }}
+
+      - name: Download current plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
+          path: ${{ github.workspace }}/build
+
+      - name: Run integration tests
+        id: run_test
+        run: |
+          set +e
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/integration"
+          LOG_FILE="$JOB_LOG_DIR/integration_fusion_tests.log"
+          mkdir -p "$JOB_LOG_DIR"
+
+          test_exit=0
+          export LOG_FILE
+          bash -l -c '
+            set -o pipefail
+            cd "$GITHUB_WORKSPACE/test"
+            timeout 30m python test_runner.py --fusion 2>&1 | tee "$LOG_FILE"
+          ' || test_exit=$?
+
+          echo "test_exit=$test_exit" >> "$GITHUB_OUTPUT"
+
+      - name: Collect integration summary
+        id: collect
+        if: always()
+        run: |
+          set -euo pipefail
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/integration"
+          LOG_FILE="$JOB_LOG_DIR/integration_fusion_tests.log"
+          SUMMARY_FILE="$RUNNER_TEMP/integration.md"
+          STATUS="success"
+
+          if [[ "${{ steps.run_test.outputs.test_exit }}" != "0" ]]; then
+            STATUS="failure"
+          fi
+
+          {
+            echo "## Integration Test"
+            echo
+            echo "- Status: $STATUS"
+            echo "- Log file: $LOG_FILE"
+            echo
+            echo '```text'
+            if [[ -f "$LOG_FILE" ]]; then
+              grep -E "Total Tests|Passed|Failed|Errors|Skipped|Pass Rate|Execution Time" "$LOG_FILE" || tail -80 "$LOG_FILE" || true
+            else
+              echo "integration log not found"
+            fi
+            echo '```'
+          } | tee "$SUMMARY_FILE"
+
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload integration summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-integration
+          path: ${{ steps.collect.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload integration logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-integration
+          path: ${{ needs.prepare_metadata.outputs.log_root }}/integration/integration_fusion_tests.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Fail job if integration failed
+        if: always() && steps.collect.outputs.status == 'failure'
+        run: exit 1
+
+  build_baseline:
+    name: Build Baseline
+    needs: prepare_metadata
+    runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 120
+    outputs:
+      status: ${{ steps.collect.outputs.status }}
+      baseline_sha: ${{ steps.collect.outputs.baseline_sha }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
+    steps:
+      - name: Sync and build baseline
+        id: run_build
+        run: |
+          set +e
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/build-baseline"
+          LOG_FILE="$JOB_LOG_DIR/build_baseline.log"
+          mkdir -p "$JOB_LOG_DIR"
+
+          sync_exit=0
+          build_exit=0
+          baseline_sha=""
+
+          export LOG_FILE BASELINE_WORKSPACE BASELINE_REPO_URL
+          bash -l -c '
+            BASELINE_PARENT=$(dirname "$BASELINE_WORKSPACE")
+            mkdir -p "$BASELINE_PARENT"
+            if [[ ! -d "$BASELINE_WORKSPACE/.git" ]]; then
+              git clone "$BASELINE_REPO_URL" "$BASELINE_WORKSPACE"
+            fi
+            cd "$BASELINE_WORKSPACE"
+            if git remote get-url upstream >/dev/null 2>&1; then
+              git remote set-url upstream "$BASELINE_REPO_URL"
+            else
+              git remote add upstream "$BASELINE_REPO_URL"
+            fi
+            git fetch upstream
+            if [[ -n "${{ needs.prepare_metadata.outputs.requested_baseline_id }}" ]]; then
+              git reset --hard "${{ needs.prepare_metadata.outputs.requested_baseline_id }}"
+            else
+              git reset --hard upstream/main
+            fi
+            git clean -fdx
+          ' || sync_exit=$?
+
+          if [[ "$sync_exit" == "0" ]]; then
+            baseline_sha="$(git -C "$BASELINE_WORKSPACE" rev-parse HEAD 2>/dev/null || true)"
+            export LOG_FILE BASELINE_WORKSPACE
+            bash -l -c '
+            set -o pipefail
+            export CPLUS_INCLUDE_PATH="/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:${CPLUS_INCLUDE_PATH:-}"
+            cd "$BASELINE_WORKSPACE"
+            rm -rf ./build
+            ./build.sh 2>&1 | tee "$LOG_FILE"
+          ' || build_exit=$?
+          fi
+
+          echo "sync_exit=$sync_exit" >> "$GITHUB_OUTPUT"
+          echo "build_exit=$build_exit" >> "$GITHUB_OUTPUT"
+          echo "baseline_sha=$baseline_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Collect baseline summary
+        id: collect
+        if: always()
+        run: |
+          set -euo pipefail
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/build-baseline"
+          LOG_FILE="$JOB_LOG_DIR/build_baseline.log"
+          SUMMARY_FILE="$RUNNER_TEMP/build-baseline.md"
+          PLUGIN_PATH="$BASELINE_WORKSPACE/build/libmusa_plugin.so"
+          STATUS="success"
+
+          if [[ "${{ steps.run_build.outputs.sync_exit }}" != "0" || "${{ steps.run_build.outputs.build_exit }}" != "0" || ! -f "$PLUGIN_PATH" ]]; then
+            STATUS="failure"
+          fi
+
+          PLUGIN_SIZE="$(stat -c%s "$PLUGIN_PATH" 2>/dev/null || echo "n/a")"
+          BASELINE_SHA="${{ steps.run_build.outputs.baseline_sha }}"
+
+          {
+            echo "## Build Baseline"
+            echo
+            echo "- Status: $STATUS"
+            echo "- Baseline commit: ${BASELINE_SHA:-unavailable}"
+            echo "- Plugin path: $PLUGIN_PATH"
+            echo "- Plugin size: $PLUGIN_SIZE"
+            echo "- Log file: $LOG_FILE"
+            echo
+            echo '```text'
+            if [[ -f "$LOG_FILE" ]]; then
+              tail -50 "$LOG_FILE" || true
+            else
+              echo "baseline build log not found"
+            fi
+            echo '```'
+          } | tee "$SUMMARY_FILE"
+
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "baseline_sha=${BASELINE_SHA}" >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload baseline plugin artifact
+        if: steps.collect.outputs.status == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BASELINE_PLUGIN_ARTIFACT }}
+          path: ${{ env.BASELINE_WORKSPACE }}/build/libmusa_plugin.so
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload baseline summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-build-baseline
+          path: ${{ steps.collect.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload baseline logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-build-baseline
+          path: ${{ needs.prepare_metadata.outputs.log_root }}/build-baseline/build_baseline.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Fail job if baseline build failed
+        if: always() && steps.collect.outputs.status == 'failure'
+        run: exit 1
+
+  t_perf:
+    name: T Performance
+    needs: [prepare_metadata, build_current, build_baseline]
+    if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
+    runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 60
+    outputs:
+      status: ${{ steps.collect.outputs.status }}
+      baseline_ms: ${{ steps.collect.outputs.baseline_ms }}
+      current_ms: ${{ steps.collect.outputs.current_ms }}
+      threshold_ms: ${{ steps.collect.outputs.threshold_ms }}
+      metrics_summary: ${{ steps.collect.outputs.metrics_summary }}
+      metrics_json: ${{ steps.collect.outputs.metrics_json }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
+    steps:
+      - name: Download current plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
+          path: ${{ runner.temp }}/current-plugin
+
+      - name: Download baseline plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.BASELINE_PLUGIN_ARTIFACT }}
+          path: ${{ runner.temp }}/baseline-plugin
+
+      - name: Run T performance baseline/current
+        id: run_perf
+        run: |
+          set +e
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/t-perf"
+          BASELINE_LOG="$JOB_LOG_DIR/t_perf_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/t_perf_current.log"
+          BASELINE_PLUGIN="$RUNNER_TEMP/baseline-plugin/libmusa_plugin.so"
+          CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
+          mkdir -p "$JOB_LOG_DIR"
+          rm -f "$BASELINE_LOG" "$CURRENT_LOG"
+
+          baseline_exit=0
+          current_exit=0
+          guard_failed=0
+          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
+          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
+          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
+
+          start_ts="$(date +%s)"
+          while true; do
+            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
+            if [[ -z "$active_procs" ]]; then
+              break
+            fi
+            now_ts="$(date +%s)"
+            if (( now_ts - start_ts >= guard_timeout )); then
+              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$BASELINE_LOG"
+              echo "$active_procs" | tee -a "$BASELINE_LOG"
+              guard_failed=1
+              break
+            fi
+            echo "Waiting for previous GPU test processes to exit before starting T performance:" | tee -a "$BASELINE_LOG"
+            echo "$active_procs" | tee -a "$BASELINE_LOG"
+            sleep 15
+          done
+
+          export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG BASELINE_PLUGIN CURRENT_PLUGIN
+
+          if [[ "$guard_failed" == "0" ]]; then
+            exec 9>"$lock_file"
+            flock 9
+            echo "Acquired GPU test lock: $lock_file" | tee -a "$BASELINE_LOG"
+
+            bash -l -c '
+              set -o pipefail
+              cd "$MODEL_ROOT/inference/prunedGraph"
+              timeout 20m python run_inference.py \
+                --device musa \
+                --batch-size 100 \
+                --musa-plugin "$BASELINE_PLUGIN" \
+                --infer-iters 1000 2>&1 | tee "$BASELINE_LOG"
+            ' || baseline_exit=$?
+
+            bash -l -c '
+              set -o pipefail
+              cd "$MODEL_ROOT/inference/prunedGraph"
+              timeout 20m python run_inference.py \
+                --device musa \
+                --batch-size 100 \
+                --musa-plugin "$CURRENT_PLUGIN" \
+                --infer-iters 1000 2>&1 | tee "$CURRENT_LOG"
+            ' || current_exit=$?
           else
-            echo "❌ 精度对比失败"
-            echo "status=failure" >> $GITHUB_OUTPUT
-
-            echo "===== 日志最后50行 ====="
-            tail -50 "$LOG_DIR/performance-part2.log"
-
-            exit 1
+            baseline_exit=1
+            current_exit=1
           fi
-        continue-on-error: true
 
-      # ==============================
-      # Summary（写入日志目录）
-      # ==============================
-      - name: Save Summary
+          echo "baseline_exit=$baseline_exit" >> "$GITHUB_OUTPUT"
+          echo "current_exit=$current_exit" >> "$GITHUB_OUTPUT"
+
+      - name: Collect T performance summary
+        id: collect
         if: always()
         run: |
-          SUMMARY="$LOG_DIR/summary.md"
-          echo '# CI Report - $COMMIT_ID' > "$SUMMARY"
-          echo "- Format: ${{ steps.run-format.outputs.status || 'skipped' }}" >> "$SUMMARY"
-          echo "- Build: ${{ steps.run-build.outputs.status || 'skipped' }}" >> "$SUMMARY"
-          echo "- Test: ${{ steps.run-integration.outputs.status || 'skipped' }}" >> "$SUMMARY"
-          echo "- Performance: ${{ steps.run-performance-part1.outputs.status || 'skipped' }}" >> "$SUMMARY"
-          echo "- Performance: ${{ steps.run-performance-part2.outputs.status || 'skipped' }}" >> "$SUMMARY"
+          set -euo pipefail
 
-      # ==============================
-      # CI Summary（GitHub UI）
-      # ==============================
-      - name: CI Summary
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/t-perf"
+          BASELINE_LOG="$JOB_LOG_DIR/t_perf_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/t_perf_current.log"
+          SUMMARY_FILE="$RUNNER_TEMP/t-perf.md"
+          STATUS="success"
+          BASELINE_MS=""
+          CURRENT_MS=""
+          THRESHOLD_MS=""
+          METRICS_SUMMARY=""
+          METRICS_JSON=""
+          RUNNER_NAME="${RUNNER_NAME:-unknown}"
+          HOST_NAME="$(hostname)"
+          HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+          HOST_SN="$(cat /sys/class/dmi/id/product_serial 2>/dev/null || true)"
+
+          HOST_IP="${HOST_IP:-unavailable}"
+          HOST_SN="${HOST_SN:-unavailable}"
+
+          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" == "0" && -f "$BASELINE_LOG" ]]; then
+            BASELINE_MS="$(python3 -c 'import pathlib,re,sys; text=pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="ignore"); matches=re.findall(r"平均:\s*([0-9]+(?:\.[0-9]+)?)\s*ms", text); print(matches[-1] if matches else "")' "$BASELINE_LOG" || true)"
+          fi
+          if [[ "${{ steps.run_perf.outputs.current_exit }}" == "0" && -f "$CURRENT_LOG" ]]; then
+            CURRENT_MS="$(python3 -c 'import pathlib,re,sys; text=pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="ignore"); matches=re.findall(r"平均:\s*([0-9]+(?:\.[0-9]+)?)\s*ms", text); print(matches[-1] if matches else "")' "$CURRENT_LOG" || true)"
+          fi
+
+          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" != "0" || "${{ steps.run_perf.outputs.current_exit }}" != "0" || -z "$BASELINE_MS" || -z "$CURRENT_MS" ]]; then
+            STATUS="failure"
+          else
+            THRESHOLD_MS="$(awk -v base="$BASELINE_MS" 'BEGIN {printf "%.4f", base * 1.05}')"
+            if awk -v cur="$CURRENT_MS" -v thr="$THRESHOLD_MS" 'BEGIN {exit !(cur > thr)}'; then
+              STATUS="failure"
+            fi
+          fi
+
+          METRICS_SUMMARY="baseline=${BASELINE_MS:-n/a} ms, current=${CURRENT_MS:-n/a} ms, threshold=${THRESHOLD_MS:-n/a} ms, result=${STATUS}"
+          METRICS_JSON="$(python3 - "$STATUS" "$BASELINE_MS" "$CURRENT_MS" "$THRESHOLD_MS" <<'PY'
+          import json
+          import sys
+
+          status, baseline_ms, current_ms, threshold_ms = sys.argv[1:5]
+          payload = {
+              "name": "T Performance",
+              "kind": "single",
+              "status": status,
+              "baseline_ms": baseline_ms or "n/a",
+              "current_ms": current_ms or "n/a",
+              "threshold_ms": threshold_ms or "n/a",
+          }
+          print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+          PY
+          )"
+
+          {
+            echo "## T Performance"
+            echo
+            echo "- Status: $STATUS"
+            echo "- Baseline commit: ${{ needs.build_baseline.outputs.baseline_sha }}"
+            echo "- Runner name: $RUNNER_NAME"
+            echo "- Host name: $HOST_NAME"
+            echo "- Host IP: $HOST_IP"
+            echo "- Host SN: $HOST_SN"
+            echo "- Log artifact: logs-t-perf"
+            echo "- Baseline: ${BASELINE_MS:-n/a} ms"
+            echo "- Current: ${CURRENT_MS:-n/a} ms"
+            echo "- Threshold: ${THRESHOLD_MS:-n/a} ms"
+            echo
+            echo "### Baseline log tail"
+            echo '```text'
+            if [[ -f "$BASELINE_LOG" ]]; then
+              tail -20 "$BASELINE_LOG" || true
+            else
+              echo "baseline log not found"
+            fi
+            echo '```'
+            echo
+            echo "### Current log tail"
+            echo '```text'
+            if [[ -f "$CURRENT_LOG" ]]; then
+              tail -20 "$CURRENT_LOG" || true
+            else
+              echo "current log not found"
+            fi
+            echo '```'
+          } | tee "$SUMMARY_FILE"
+
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "baseline_ms=$BASELINE_MS" >> "$GITHUB_OUTPUT"
+          echo "current_ms=$CURRENT_MS" >> "$GITHUB_OUTPUT"
+          echo "threshold_ms=$THRESHOLD_MS" >> "$GITHUB_OUTPUT"
+          echo "metrics_summary=$METRICS_SUMMARY" >> "$GITHUB_OUTPUT"
+          {
+            echo "metrics_json<<EOF"
+            echo "$METRICS_JSON"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload T performance summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-t-perf
+          path: ${{ steps.collect.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload T performance logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-t-perf
+          path: |
+            ${{ needs.prepare_metadata.outputs.log_root }}/t-perf/t_perf_baseline.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/t-perf/t_perf_current.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Fail job if T performance regressed
+        if: always() && steps.collect.outputs.status == 'failure'
+        run: exit 1
+
+  t_accuracy:
+    name: T Accuracy
+    needs: [prepare_metadata, build_current]
+    if: needs.build_current.result == 'success'
+    runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 30
+    outputs:
+      status: ${{ steps.collect.outputs.status }}
+      current_acc: ${{ steps.collect.outputs.current_acc }}
+      metrics_json: ${{ steps.collect.outputs.metrics_json }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
+    steps:
+      - name: Download current plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
+          path: ${{ runner.temp }}/current-plugin
+
+      - name: Run T accuracy current only
+        id: run_acc
+        run: |
+          set +e
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/t-accuracy"
+          CURRENT_LOG="$JOB_LOG_DIR/t_accuracy_current.log"
+          CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
+          mkdir -p "$JOB_LOG_DIR"
+          rm -f "$CURRENT_LOG"
+
+          current_exit=0
+          guard_failed=0
+          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
+          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
+          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
+
+          start_ts="$(date +%s)"
+          while true; do
+            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
+            if [[ -z "$active_procs" ]]; then
+              break
+            fi
+            now_ts="$(date +%s)"
+            if (( now_ts - start_ts >= guard_timeout )); then
+              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$CURRENT_LOG"
+              echo "$active_procs" | tee -a "$CURRENT_LOG"
+              guard_failed=1
+              break
+            fi
+            echo "Waiting for previous GPU test processes to exit before starting T accuracy:" | tee -a "$CURRENT_LOG"
+            echo "$active_procs" | tee -a "$CURRENT_LOG"
+            sleep 15
+          done
+
+          export MODEL_ROOT JOB_LOG_DIR CURRENT_LOG CURRENT_PLUGIN
+
+          if [[ "$guard_failed" == "0" ]]; then
+            exec 9>"$lock_file"
+            flock 9
+            echo "Acquired GPU test lock: $lock_file" | tee -a "$CURRENT_LOG"
+
+            bash -l -c '
+              set -o pipefail
+              cd "$MODEL_ROOT/inference/prunedGraph"
+              MUSA_ENABLE_TF32=0 \
+              timeout 20m python run_inference.py \
+                --device musa \
+                --batch-size 100 \
+                --musa-plugin "$CURRENT_PLUGIN" \
+                --check-acc \
+                --rtol 1e-2 \
+                --atol 1e-2 2>&1 | tee "$CURRENT_LOG"
+            ' || current_exit=$?
+          else
+            current_exit=1
+          fi
+
+          echo "current_exit=$current_exit" >> "$GITHUB_OUTPUT"
+
+      - name: Collect T accuracy summary
+        id: collect
         if: always()
         run: |
-          echo "## CI Result" >> $GITHUB_STEP_SUMMARY
-          echo "Commit: $COMMIT_ID" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Step | Result |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Format | ${{ steps.run-format.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Build | ${{ steps.run-build.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Test | ${{ steps.run-integration.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Performance | ${{ steps.run-performance-part1.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Performance | ${{ steps.run-performance-part2.outputs.status || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          set -euo pipefail
 
-          if [ "${{ steps.run-build.outputs.status }}" == "failure" ] || \
-             [ "${{ steps.run-integration.outputs.status }}" == "failure" ] || \
-             [ "${{ steps.run-performance-part1.outputs.status }}" == "failure" ] || \
-             [ "${{ steps.run-performance-part2.outputs.status }}" == "failure" ]; then
-            exit 1
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/t-accuracy"
+          CURRENT_LOG="$JOB_LOG_DIR/t_accuracy_current.log"
+          SUMMARY_FILE="$RUNNER_TEMP/t-accuracy.md"
+          STATUS="success"
+          CURRENT_ACC="$(grep -E "整体状态:.*(PASSED|FAILED)" "$CURRENT_LOG" | tail -1 | grep -oE "PASSED|FAILED" || echo "n/a")"
+          METRICS_JSON=""
+          RUNNER_NAME="${RUNNER_NAME:-unknown}"
+          HOST_NAME="$(hostname)"
+          HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+          HOST_SN="$(cat /sys/class/dmi/id/product_serial 2>/dev/null || true)"
+
+          HOST_IP="${HOST_IP:-unavailable}"
+          HOST_SN="${HOST_SN:-unavailable}"
+
+          if [[ "${{ steps.run_acc.outputs.current_exit }}" != "0" ]]; then
+            STATUS="failure"
           fi
+          if [[ "$CURRENT_ACC" != *"PASSED"* ]]; then
+            STATUS="failure"
+          fi
+
+          METRICS_JSON="$(python3 - "$STATUS" "$CURRENT_ACC" <<'PY'
+          import json
+          import sys
+
+          status, current_acc = sys.argv[1:3]
+          payload = {
+              "name": "T Accuracy",
+              "kind": "accuracy",
+              "status": status,
+              "current": current_acc or "n/a",
+          }
+          print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+          PY
+          )"
+
+          {
+            echo "## T Accuracy"
+            echo
+            echo "- Status: $STATUS"
+            echo "- Runner name: $RUNNER_NAME"
+            echo "- Host name: $HOST_NAME"
+            echo "- Host IP: $HOST_IP"
+            echo "- Host SN: $HOST_SN"
+            echo "- Log artifact: logs-t-accuracy"
+            echo "- Current: ${CURRENT_ACC:-unavailable}"
+            echo
+            echo "### Current highlights"
+            echo '```text'
+            if [[ -f "$CURRENT_LOG" ]]; then
+              grep -E '整体状态:|PASSED|FAILED|rtol|atol|误差|差异' "$CURRENT_LOG" | tail -20 || true
+            else
+              echo "current log not found"
+            fi
+            echo '```'
+          } | tee "$SUMMARY_FILE"
+
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "current_acc=$CURRENT_ACC" >> "$GITHUB_OUTPUT"
+          {
+            echo "metrics_json<<EOF"
+            echo "$METRICS_JSON"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload T accuracy summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-t-accuracy
+          path: ${{ steps.collect.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload T accuracy logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-t-accuracy
+          path: ${{ needs.prepare_metadata.outputs.log_root }}/t-accuracy/t_accuracy_current.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Fail job if T accuracy failed
+        if: always() && steps.collect.outputs.status == 'failure'
+        run: exit 1
+
+  bd_model1:
+    name: BD Model 1
+    needs: [prepare_metadata, build_current, build_baseline]
+    if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
+    runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 75
+    outputs:
+      status: ${{ steps.collect.outputs.status }}
+      baseline_ms: ${{ steps.collect.outputs.baseline_ms }}
+      current_ms: ${{ steps.collect.outputs.current_ms }}
+      threshold_ms: ${{ steps.collect.outputs.threshold_ms }}
+      metrics_summary: ${{ steps.collect.outputs.metrics_summary }}
+      metrics_json: ${{ steps.collect.outputs.metrics_json }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
+    steps:
+      - name: Download current plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
+          path: ${{ runner.temp }}/current-plugin
+
+      - name: Download baseline plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.BASELINE_PLUGIN_ARTIFACT }}
+          path: ${{ runner.temp }}/baseline-plugin
+
+      - name: Run model 1 baseline/current
+        id: run_perf
+        run: |
+          set +e
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model1"
+          BASELINE_LOG="$JOB_LOG_DIR/bd_model1_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bd_model1_current.log"
+          BASELINE_PLUGIN="$RUNNER_TEMP/baseline-plugin/libmusa_plugin.so"
+          CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
+          SPEC_PATH="$MODEL_ROOT/inference/metaGraph/meta_graph/meta_graph_1.spec"
+          mkdir -p "$JOB_LOG_DIR"
+          rm -f "$BASELINE_LOG" "$CURRENT_LOG"
+          rm -rf "$JOB_LOG_DIR/baseline-out" "$JOB_LOG_DIR/current-out"
+
+          baseline_exit=0
+          current_exit=0
+          guard_failed=0
+          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
+          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
+          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
+
+          start_ts="$(date +%s)"
+          while true; do
+            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
+            if [[ -z "$active_procs" ]]; then
+              break
+            fi
+            now_ts="$(date +%s)"
+            if (( now_ts - start_ts >= guard_timeout )); then
+              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$BASELINE_LOG"
+              echo "$active_procs" | tee -a "$BASELINE_LOG"
+              guard_failed=1
+              break
+            fi
+            echo "Waiting for previous GPU test processes to exit before starting BD Model 1:" | tee -a "$BASELINE_LOG"
+            echo "$active_procs" | tee -a "$BASELINE_LOG"
+            sleep 15
+          done
+
+          export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG BASELINE_PLUGIN CURRENT_PLUGIN SPEC_PATH
+
+          if [[ "$guard_failed" == "0" ]]; then
+            exec 9>"$lock_file"
+            flock 9
+            echo "Acquired GPU test lock: $lock_file" | tee -a "$BASELINE_LOG"
+
+            bash -l -c '
+              set -o pipefail
+              [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
+              cd "$MODEL_ROOT/inference/metaGraph"
+              MUSA_PINNED_FEED=1 \
+              MUSA_PINNED_H2D_ON_COMPUTE_STREAM=1 \
+              timeout 30m python musa_run_pb_graph.py \
+                --spec "$SPEC_PATH" \
+                --bs 32,128,256,1024 \
+                --run_iters 30 \
+                --out_root "$JOB_LOG_DIR/baseline-out" \
+                --musa-plugin "$BASELINE_PLUGIN" 2>&1 | tee "$BASELINE_LOG"
+            ' || baseline_exit=$?
+
+            bash -l -c '
+              set -o pipefail
+              [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
+              cd "$MODEL_ROOT/inference/metaGraph"
+              MUSA_PINNED_FEED=1 \
+              MUSA_PINNED_H2D_ON_COMPUTE_STREAM=1 \
+              timeout 30m python musa_run_pb_graph.py \
+                --spec "$SPEC_PATH" \
+                --bs 32,128,256,1024 \
+                --run_iters 30 \
+                --out_root "$JOB_LOG_DIR/current-out" \
+                --musa-plugin "$CURRENT_PLUGIN" 2>&1 | tee "$CURRENT_LOG"
+            ' || current_exit=$?
+          else
+            baseline_exit=1
+            current_exit=1
+          fi
+
+          echo "baseline_exit=$baseline_exit" >> "$GITHUB_OUTPUT"
+          echo "current_exit=$current_exit" >> "$GITHUB_OUTPUT"
+
+      - name: Collect model 1 summary
+        id: collect
+        if: always()
+        run: |
+          set -euo pipefail
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model1"
+          BASELINE_LOG="$JOB_LOG_DIR/bd_model1_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bd_model1_current.log"
+          SUMMARY_FILE="$RUNNER_TEMP/bd-model1.md"
+          COMPARE_JSON="$RUNNER_TEMP/bd-model1-compare.json"
+          DETAIL_FILE="$RUNNER_TEMP/bd-model1-details.md"
+          STATUS="success"
+          BASELINE_MS=""
+          CURRENT_MS=""
+          THRESHOLD_MS=""
+          METRICS_SUMMARY=""
+          METRICS_JSON=""
+          BASELINE_REPORT=""
+          CURRENT_REPORT=""
+          RUNNER_NAME="${RUNNER_NAME:-unknown}"
+          HOST_NAME="$(hostname)"
+          HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+          HOST_SN="$(cat /sys/class/dmi/id/product_serial 2>/dev/null || true)"
+
+          HOST_IP="${HOST_IP:-unavailable}"
+          HOST_SN="${HOST_SN:-unavailable}"
+
+          if [[ -f "$BASELINE_LOG" ]]; then
+            REPORT_PATH="$(grep '^\[OK\] report=' "$BASELINE_LOG" | tail -1 | sed 's/^\[OK\] report=//' || true)"
+            if [[ -n "$REPORT_PATH" && -f "$REPORT_PATH" ]]; then
+              BASELINE_REPORT="$REPORT_PATH"
+            fi
+          fi
+
+          if [[ -f "$CURRENT_LOG" ]]; then
+            REPORT_PATH="$(grep '^\[OK\] report=' "$CURRENT_LOG" | tail -1 | sed 's/^\[OK\] report=//' || true)"
+            if [[ -n "$REPORT_PATH" && -f "$REPORT_PATH" ]]; then
+              CURRENT_REPORT="$REPORT_PATH"
+            fi
+          fi
+
+          python3 - "$BASELINE_REPORT" "$CURRENT_REPORT" "$COMPARE_JSON" "$DETAIL_FILE" <<'PY'
+          import json
+          import os
+          import sys
+
+          baseline_report, current_report, compare_json, detail_file = sys.argv[1:5]
+          THRESHOLD_RATIO = 1.05
+
+          def load_report(path, label):
+              if not path:
+                  return None, [f"{label} report path missing"]
+              if not os.path.isfile(path):
+                  return None, [f"{label} report not found: {path}"]
+              try:
+                  with open(path, "r", encoding="utf-8") as f:
+                      return json.load(f), []
+              except Exception as exc:
+                  return None, [f"failed to load {label} report {path}: {exc}"]
+
+          def collect_rows(report, label):
+              rows = {}
+              errors = []
+              if report is None:
+                  return rows, errors
+              for item in report.get("average_time_summary", []):
+                  bs = str(item.get("batch_size"))
+                  if not bs or bs == "None":
+                      errors.append(f"{label} report contains empty batch_size entry")
+                      continue
+                  if bs in rows:
+                      errors.append(f"{label} report contains duplicate batch_size={bs}")
+                      continue
+                  rows[bs] = {
+                      "status": item.get("status"),
+                      "average_time_ms": item.get("trimmed_avg_ms")
+                      if item.get("trimmed_avg_ms") is not None
+                      else item.get("average_time_ms"),
+                      "error_core": item.get("error_core"),
+                  }
+              if not rows:
+                  errors.append(f"{label} report has no average_time_summary entries")
+              return rows, errors
+
+          baseline_data, errors = load_report(baseline_report, "baseline")
+          current_data, cur_errors = load_report(current_report, "current")
+          errors.extend(cur_errors)
+
+          baseline_rows, cur_errors = collect_rows(baseline_data, "baseline")
+          errors.extend(cur_errors)
+          current_rows, cur_errors = collect_rows(current_data, "current")
+          errors.extend(cur_errors)
+
+          def sort_key(bs):
+              try:
+                  return (0, int(bs))
+              except Exception:
+                  return (1, str(bs))
+
+          all_bs = sorted(set(baseline_rows) | set(current_rows), key=sort_key)
+          result_rows = []
+          baseline_parts = []
+          current_parts = []
+          threshold_parts = []
+          metrics_parts = []
+          overall_status = "success"
+
+          for bs in all_bs:
+              base = baseline_rows.get(bs)
+              cur = current_rows.get(bs)
+              row = {
+                  "batch_size": bs,
+                  "baseline_ms": None,
+                  "current_ms": None,
+                  "threshold_ms": None,
+                  "result": "ok",
+                  "detail": "",
+              }
+
+              if base is None:
+                  row["result"] = "missing-baseline"
+                  row["detail"] = "baseline report missing this batch size"
+              elif cur is None:
+                  row["result"] = "missing-current"
+                  row["detail"] = "current report missing this batch size"
+              elif base.get("status") != "ok" or base.get("average_time_ms") is None:
+                  row["result"] = "baseline-failed"
+                  row["detail"] = base.get("error_core") or f"baseline status={base.get('status')}"
+              elif cur.get("status") != "ok" or cur.get("average_time_ms") is None:
+                  row["result"] = "current-failed"
+                  row["detail"] = cur.get("error_core") or f"current status={cur.get('status')}"
+              else:
+                  row["baseline_ms"] = float(base["average_time_ms"])
+                  row["current_ms"] = float(cur["average_time_ms"])
+                  row["threshold_ms"] = float(base["average_time_ms"]) * THRESHOLD_RATIO
+                  if row["current_ms"] > row["threshold_ms"]:
+                      row["result"] = "regressed"
+                      row["detail"] = "current > baseline * 1.05"
+
+              if row["result"] != "ok":
+                  overall_status = "failure"
+
+              result_rows.append(row)
+              baseline_parts.append(f"bs{bs}={'%.4f' % row['baseline_ms'] if row['baseline_ms'] is not None else 'n/a'}")
+              current_parts.append(f"bs{bs}={'%.4f' % row['current_ms'] if row['current_ms'] is not None else 'n/a'}")
+              threshold_parts.append(f"bs{bs}={'%.4f' % row['threshold_ms'] if row['threshold_ms'] is not None else 'n/a'}")
+              metrics_parts.append(
+                  "bs{bs}: baseline={base}, current={cur}, threshold={thr}, result={result}".format(
+                      bs=bs,
+                      base="%.4f" % row["baseline_ms"] if row["baseline_ms"] is not None else "n/a",
+                      cur="%.4f" % row["current_ms"] if row["current_ms"] is not None else "n/a",
+                      thr="%.4f" % row["threshold_ms"] if row["threshold_ms"] is not None else "n/a",
+                      result=row["result"],
+                  )
+              )
+
+          if errors:
+              overall_status = "failure"
+
+          with open(detail_file, "w", encoding="utf-8") as f:
+              f.write("| BS | Baseline (ms) | Current (ms) | Threshold (ms) | Result | Detail |\n")
+              f.write("|----|---------------|--------------|----------------|--------|--------|\n")
+              for row in result_rows:
+                  f.write(
+                      "| {bs} | {base} | {cur} | {thr} | {result} | {detail} |\n".format(
+                          bs=row["batch_size"],
+                          base="%.4f" % row["baseline_ms"] if row["baseline_ms"] is not None else "n/a",
+                          cur="%.4f" % row["current_ms"] if row["current_ms"] is not None else "n/a",
+                          thr="%.4f" % row["threshold_ms"] if row["threshold_ms"] is not None else "n/a",
+                          result=row["result"],
+                          detail=(row["detail"] or "").replace("|", "/"),
+                      )
+                  )
+              if errors:
+                  f.write("\nAdditional errors:\n")
+                  for err in errors:
+                      f.write(f"- {err}\n")
+
+          payload = {
+              "name": "BD Model 1",
+              "kind": "batch_compare",
+              "status": overall_status,
+              "baseline_ms": ", ".join(baseline_parts) if baseline_parts else "",
+              "current_ms": ", ".join(current_parts) if current_parts else "",
+              "threshold_ms": ", ".join(threshold_parts) if threshold_parts else "",
+              "metrics_summary": " ; ".join(metrics_parts) if metrics_parts else "",
+              "rows": result_rows,
+          }
+          with open(compare_json, "w", encoding="utf-8") as f:
+              json.dump(payload, f, ensure_ascii=False, indent=2)
+          PY
+
+          STATUS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("status","failure"))' "$COMPARE_JSON")"
+          BASELINE_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("baseline_ms",""))' "$COMPARE_JSON")"
+          CURRENT_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("current_ms",""))' "$COMPARE_JSON")"
+          THRESHOLD_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("threshold_ms",""))' "$COMPARE_JSON")"
+          METRICS_SUMMARY="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("metrics_summary",""))' "$COMPARE_JSON")"
+          METRICS_JSON="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(json.dumps(data, ensure_ascii=False, separators=(",", ":")))' "$COMPARE_JSON")"
+
+          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" != "0" || "${{ steps.run_perf.outputs.current_exit }}" != "0" ]]; then
+            STATUS="failure"
+          fi
+
+          {
+            echo "## BD Model 1"
+            echo
+            echo "- Status: $STATUS"
+            echo "- Runner name: $RUNNER_NAME"
+            echo "- Host name: $HOST_NAME"
+            echo "- Host IP: $HOST_IP"
+            echo "- Host SN: $HOST_SN"
+            echo "- Log artifact: logs-bd-model1"
+            echo "- Baseline: ${BASELINE_MS:-n/a}"
+            echo "- Current: ${CURRENT_MS:-n/a}"
+            echo "- Threshold: ${THRESHOLD_MS:-n/a}"
+            echo
+            echo "### Batch Size Comparison"
+            cat "$DETAIL_FILE"
+            echo
+            echo "### Baseline log tail"
+            echo '```text'
+            if [[ -f "$BASELINE_LOG" ]]; then
+              tail -20 "$BASELINE_LOG" || true
+            else
+              echo "baseline log not found"
+            fi
+            echo '```'
+            echo
+            echo "### Current log tail"
+            echo '```text'
+            if [[ -f "$CURRENT_LOG" ]]; then
+              tail -20 "$CURRENT_LOG" || true
+            else
+              echo "current log not found"
+            fi
+            echo '```'
+          } | tee "$SUMMARY_FILE"
+
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "baseline_ms=$BASELINE_MS" >> "$GITHUB_OUTPUT"
+          echo "current_ms=$CURRENT_MS" >> "$GITHUB_OUTPUT"
+          echo "threshold_ms=$THRESHOLD_MS" >> "$GITHUB_OUTPUT"
+          echo "metrics_summary=$METRICS_SUMMARY" >> "$GITHUB_OUTPUT"
+          {
+            echo "metrics_json<<EOF"
+            echo "$METRICS_JSON"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload model 1 summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-bd-model1
+          path: ${{ steps.collect.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload model 1 logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-bd-model1
+          path: |
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model1/bd_model1_baseline.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model1/bd_model1_current.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model1/baseline-out
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model1/current-out
+            ${{ runner.temp }}/bd-model1-details.md
+            ${{ runner.temp }}/bd-model1-compare.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Fail job if model 1 regressed
+        if: always() && steps.collect.outputs.status == 'failure'
+        run: exit 1
+
+  bd_model2:
+    name: BD Model 2
+    needs: [prepare_metadata, build_current, build_baseline]
+    if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
+    runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 75
+    outputs:
+      status: ${{ steps.collect.outputs.status }}
+      baseline_ms: ${{ steps.collect.outputs.baseline_ms }}
+      current_ms: ${{ steps.collect.outputs.current_ms }}
+      threshold_ms: ${{ steps.collect.outputs.threshold_ms }}
+      metrics_summary: ${{ steps.collect.outputs.metrics_summary }}
+      metrics_json: ${{ steps.collect.outputs.metrics_json }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
+    steps:
+      - name: Download current plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
+          path: ${{ runner.temp }}/current-plugin
+
+      - name: Download baseline plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.BASELINE_PLUGIN_ARTIFACT }}
+          path: ${{ runner.temp }}/baseline-plugin
+
+      - name: Run model 2 baseline/current
+        id: run_perf
+        run: |
+          set +e
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model2"
+          BASELINE_LOG="$JOB_LOG_DIR/bd_model2_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bd_model2_current.log"
+          BASELINE_PLUGIN="$RUNNER_TEMP/baseline-plugin/libmusa_plugin.so"
+          CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
+          SPEC_PATH="$MODEL_ROOT/inference/metaGraph/meta_graph/meta_graph_2.spec"
+          mkdir -p "$JOB_LOG_DIR"
+          rm -f "$BASELINE_LOG" "$CURRENT_LOG"
+          rm -rf "$JOB_LOG_DIR/baseline-out" "$JOB_LOG_DIR/current-out"
+
+          baseline_exit=0
+          current_exit=0
+          guard_failed=0
+          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
+          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
+          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
+
+          start_ts="$(date +%s)"
+          while true; do
+            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
+            if [[ -z "$active_procs" ]]; then
+              break
+            fi
+            now_ts="$(date +%s)"
+            if (( now_ts - start_ts >= guard_timeout )); then
+              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$BASELINE_LOG"
+              echo "$active_procs" | tee -a "$BASELINE_LOG"
+              guard_failed=1
+              break
+            fi
+            echo "Waiting for previous GPU test processes to exit before starting BD Model 2:" | tee -a "$BASELINE_LOG"
+            echo "$active_procs" | tee -a "$BASELINE_LOG"
+            sleep 15
+          done
+
+          export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG BASELINE_PLUGIN CURRENT_PLUGIN SPEC_PATH
+
+          if [[ "$guard_failed" == "0" ]]; then
+            exec 9>"$lock_file"
+            flock 9
+            echo "Acquired GPU test lock: $lock_file" | tee -a "$BASELINE_LOG"
+
+            bash -l -c '
+              set -o pipefail
+              [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
+              cd "$MODEL_ROOT/inference/metaGraph"
+              MUSA_PINNED_FEED=1 \
+              MUSA_PINNED_H2D_ON_COMPUTE_STREAM=1 \
+              timeout 30m python musa_run_pb_graph.py \
+                --spec "$SPEC_PATH" \
+                --bs 32,128,256,1024 \
+                --run_iters 30 \
+                --out_root "$JOB_LOG_DIR/baseline-out" \
+                --musa-plugin "$BASELINE_PLUGIN" 2>&1 | tee "$BASELINE_LOG"
+            ' || baseline_exit=$?
+
+            bash -l -c '
+              set -o pipefail
+              [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
+              cd "$MODEL_ROOT/inference/metaGraph"
+              MUSA_PINNED_FEED=1 \
+              MUSA_PINNED_H2D_ON_COMPUTE_STREAM=1 \
+              timeout 30m python musa_run_pb_graph.py \
+                --spec "$SPEC_PATH" \
+                --bs 32,128,256,1024 \
+                --run_iters 30 \
+                --out_root "$JOB_LOG_DIR/current-out" \
+                --musa-plugin "$CURRENT_PLUGIN" 2>&1 | tee "$CURRENT_LOG"
+            ' || current_exit=$?
+          else
+            baseline_exit=1
+            current_exit=1
+          fi
+
+          echo "baseline_exit=$baseline_exit" >> "$GITHUB_OUTPUT"
+          echo "current_exit=$current_exit" >> "$GITHUB_OUTPUT"
+
+      - name: Collect model 2 summary
+        id: collect
+        if: always()
+        run: |
+          set -euo pipefail
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model2"
+          BASELINE_LOG="$JOB_LOG_DIR/bd_model2_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bd_model2_current.log"
+          SUMMARY_FILE="$RUNNER_TEMP/bd-model2.md"
+          COMPARE_JSON="$RUNNER_TEMP/bd-model2-compare.json"
+          DETAIL_FILE="$RUNNER_TEMP/bd-model2-details.md"
+          STATUS="success"
+          BASELINE_MS=""
+          CURRENT_MS=""
+          THRESHOLD_MS=""
+          METRICS_SUMMARY=""
+          METRICS_JSON=""
+          BASELINE_REPORT=""
+          CURRENT_REPORT=""
+          RUNNER_NAME="${RUNNER_NAME:-unknown}"
+          HOST_NAME="$(hostname)"
+          HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+          HOST_SN="$(cat /sys/class/dmi/id/product_serial 2>/dev/null || true)"
+
+          HOST_IP="${HOST_IP:-unavailable}"
+          HOST_SN="${HOST_SN:-unavailable}"
+
+          if [[ -f "$BASELINE_LOG" ]]; then
+            REPORT_PATH="$(grep '^\[OK\] report=' "$BASELINE_LOG" | tail -1 | sed 's/^\[OK\] report=//' || true)"
+            if [[ -n "$REPORT_PATH" && -f "$REPORT_PATH" ]]; then
+              BASELINE_REPORT="$REPORT_PATH"
+            fi
+          fi
+
+          if [[ -f "$CURRENT_LOG" ]]; then
+            REPORT_PATH="$(grep '^\[OK\] report=' "$CURRENT_LOG" | tail -1 | sed 's/^\[OK\] report=//' || true)"
+            if [[ -n "$REPORT_PATH" && -f "$REPORT_PATH" ]]; then
+              CURRENT_REPORT="$REPORT_PATH"
+            fi
+          fi
+
+          python3 - "$BASELINE_REPORT" "$CURRENT_REPORT" "$COMPARE_JSON" "$DETAIL_FILE" <<'PY'
+          import json
+          import os
+          import sys
+
+          baseline_report, current_report, compare_json, detail_file = sys.argv[1:5]
+          THRESHOLD_RATIO = 1.05
+
+          def load_report(path, label):
+              if not path:
+                  return None, [f"{label} report path missing"]
+              if not os.path.isfile(path):
+                  return None, [f"{label} report not found: {path}"]
+              try:
+                  with open(path, "r", encoding="utf-8") as f:
+                      return json.load(f), []
+              except Exception as exc:
+                  return None, [f"failed to load {label} report {path}: {exc}"]
+
+          def collect_rows(report, label):
+              rows = {}
+              errors = []
+              if report is None:
+                  return rows, errors
+              for item in report.get("average_time_summary", []):
+                  bs = str(item.get("batch_size"))
+                  if not bs or bs == "None":
+                      errors.append(f"{label} report contains empty batch_size entry")
+                      continue
+                  if bs in rows:
+                      errors.append(f"{label} report contains duplicate batch_size={bs}")
+                      continue
+                  rows[bs] = {
+                      "status": item.get("status"),
+                      "average_time_ms": item.get("trimmed_avg_ms")
+                      if item.get("trimmed_avg_ms") is not None
+                      else item.get("average_time_ms"),
+                      "error_core": item.get("error_core"),
+                  }
+              if not rows:
+                  errors.append(f"{label} report has no average_time_summary entries")
+              return rows, errors
+
+          baseline_data, errors = load_report(baseline_report, "baseline")
+          current_data, cur_errors = load_report(current_report, "current")
+          errors.extend(cur_errors)
+
+          baseline_rows, cur_errors = collect_rows(baseline_data, "baseline")
+          errors.extend(cur_errors)
+          current_rows, cur_errors = collect_rows(current_data, "current")
+          errors.extend(cur_errors)
+
+          def sort_key(bs):
+              try:
+                  return (0, int(bs))
+              except Exception:
+                  return (1, str(bs))
+
+          all_bs = sorted(set(baseline_rows) | set(current_rows), key=sort_key)
+          result_rows = []
+          baseline_parts = []
+          current_parts = []
+          threshold_parts = []
+          metrics_parts = []
+          overall_status = "success"
+
+          for bs in all_bs:
+              base = baseline_rows.get(bs)
+              cur = current_rows.get(bs)
+              row = {
+                  "batch_size": bs,
+                  "baseline_ms": None,
+                  "current_ms": None,
+                  "threshold_ms": None,
+                  "result": "ok",
+                  "detail": "",
+              }
+
+              if base is None:
+                  row["result"] = "missing-baseline"
+                  row["detail"] = "baseline report missing this batch size"
+              elif cur is None:
+                  row["result"] = "missing-current"
+                  row["detail"] = "current report missing this batch size"
+              elif base.get("status") != "ok" or base.get("average_time_ms") is None:
+                  row["result"] = "baseline-failed"
+                  row["detail"] = base.get("error_core") or f"baseline status={base.get('status')}"
+              elif cur.get("status") != "ok" or cur.get("average_time_ms") is None:
+                  row["result"] = "current-failed"
+                  row["detail"] = cur.get("error_core") or f"current status={cur.get('status')}"
+              else:
+                  row["baseline_ms"] = float(base["average_time_ms"])
+                  row["current_ms"] = float(cur["average_time_ms"])
+                  row["threshold_ms"] = float(base["average_time_ms"]) * THRESHOLD_RATIO
+                  if row["current_ms"] > row["threshold_ms"]:
+                      row["result"] = "regressed"
+                      row["detail"] = "current > baseline * 1.05"
+
+              if row["result"] != "ok":
+                  overall_status = "failure"
+
+              result_rows.append(row)
+              baseline_parts.append(f"bs{bs}={'%.4f' % row['baseline_ms'] if row['baseline_ms'] is not None else 'n/a'}")
+              current_parts.append(f"bs{bs}={'%.4f' % row['current_ms'] if row['current_ms'] is not None else 'n/a'}")
+              threshold_parts.append(f"bs{bs}={'%.4f' % row['threshold_ms'] if row['threshold_ms'] is not None else 'n/a'}")
+              metrics_parts.append(
+                  "bs{bs}: baseline={base}, current={cur}, threshold={thr}, result={result}".format(
+                      bs=bs,
+                      base="%.4f" % row["baseline_ms"] if row["baseline_ms"] is not None else "n/a",
+                      cur="%.4f" % row["current_ms"] if row["current_ms"] is not None else "n/a",
+                      thr="%.4f" % row["threshold_ms"] if row["threshold_ms"] is not None else "n/a",
+                      result=row["result"],
+                  )
+              )
+
+          if errors:
+              overall_status = "failure"
+
+          with open(detail_file, "w", encoding="utf-8") as f:
+              f.write("| BS | Baseline (ms) | Current (ms) | Threshold (ms) | Result | Detail |\n")
+              f.write("|----|---------------|--------------|----------------|--------|--------|\n")
+              for row in result_rows:
+                  f.write(
+                      "| {bs} | {base} | {cur} | {thr} | {result} | {detail} |\n".format(
+                          bs=row["batch_size"],
+                          base="%.4f" % row["baseline_ms"] if row["baseline_ms"] is not None else "n/a",
+                          cur="%.4f" % row["current_ms"] if row["current_ms"] is not None else "n/a",
+                          thr="%.4f" % row["threshold_ms"] if row["threshold_ms"] is not None else "n/a",
+                          result=row["result"],
+                          detail=(row["detail"] or "").replace("|", "/"),
+                      )
+                  )
+              if errors:
+                  f.write("\nAdditional errors:\n")
+                  for err in errors:
+                      f.write(f"- {err}\n")
+
+          payload = {
+              "name": "BD Model 2",
+              "kind": "batch_compare",
+              "status": overall_status,
+              "baseline_ms": ", ".join(baseline_parts) if baseline_parts else "",
+              "current_ms": ", ".join(current_parts) if current_parts else "",
+              "threshold_ms": ", ".join(threshold_parts) if threshold_parts else "",
+              "metrics_summary": " ; ".join(metrics_parts) if metrics_parts else "",
+              "rows": result_rows,
+          }
+          with open(compare_json, "w", encoding="utf-8") as f:
+              json.dump(payload, f, ensure_ascii=False, indent=2)
+          PY
+
+          STATUS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("status","failure"))' "$COMPARE_JSON")"
+          BASELINE_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("baseline_ms",""))' "$COMPARE_JSON")"
+          CURRENT_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("current_ms",""))' "$COMPARE_JSON")"
+          THRESHOLD_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("threshold_ms",""))' "$COMPARE_JSON")"
+          METRICS_SUMMARY="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("metrics_summary",""))' "$COMPARE_JSON")"
+          METRICS_JSON="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(json.dumps(data, ensure_ascii=False, separators=(",", ":")))' "$COMPARE_JSON")"
+
+          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" != "0" || "${{ steps.run_perf.outputs.current_exit }}" != "0" ]]; then
+            STATUS="failure"
+          fi
+
+          {
+            echo "## BD Model 2"
+            echo
+            echo "- Status: $STATUS"
+            echo "- Runner name: $RUNNER_NAME"
+            echo "- Host name: $HOST_NAME"
+            echo "- Host IP: $HOST_IP"
+            echo "- Host SN: $HOST_SN"
+            echo "- Log artifact: logs-bd-model2"
+            echo "- Baseline: ${BASELINE_MS:-n/a}"
+            echo "- Current: ${CURRENT_MS:-n/a}"
+            echo "- Threshold: ${THRESHOLD_MS:-n/a}"
+            echo
+            echo "### Batch Size Comparison"
+            cat "$DETAIL_FILE"
+            echo
+            echo "### Baseline log tail"
+            echo '```text'
+            if [[ -f "$BASELINE_LOG" ]]; then
+              tail -20 "$BASELINE_LOG" || true
+            else
+              echo "baseline log not found"
+            fi
+            echo '```'
+            echo
+            echo "### Current log tail"
+            echo '```text'
+            if [[ -f "$CURRENT_LOG" ]]; then
+              tail -20 "$CURRENT_LOG" || true
+            else
+              echo "current log not found"
+            fi
+            echo '```'
+          } | tee "$SUMMARY_FILE"
+
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "baseline_ms=$BASELINE_MS" >> "$GITHUB_OUTPUT"
+          echo "current_ms=$CURRENT_MS" >> "$GITHUB_OUTPUT"
+          echo "threshold_ms=$THRESHOLD_MS" >> "$GITHUB_OUTPUT"
+          echo "metrics_summary=$METRICS_SUMMARY" >> "$GITHUB_OUTPUT"
+          {
+            echo "metrics_json<<EOF"
+            echo "$METRICS_JSON"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload model 2 summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-bd-model2
+          path: ${{ steps.collect.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload model 2 logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-bd-model2
+          path: |
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model2/bd_model2_baseline.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model2/bd_model2_current.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model2/baseline-out
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model2/current-out
+            ${{ runner.temp }}/bd-model2-details.md
+            ${{ runner.temp }}/bd-model2-compare.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Fail job if model 2 regressed
+        if: always() && steps.collect.outputs.status == 'failure'
+        run: exit 1
+
+  bd_model3:
+    name: BD Model 3
+    needs: [prepare_metadata, build_current, build_baseline]
+    if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
+    runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 75
+    outputs:
+      status: ${{ steps.collect.outputs.status }}
+      baseline_ms: ${{ steps.collect.outputs.baseline_ms }}
+      current_ms: ${{ steps.collect.outputs.current_ms }}
+      threshold_ms: ${{ steps.collect.outputs.threshold_ms }}
+      metrics_summary: ${{ steps.collect.outputs.metrics_summary }}
+      metrics_json: ${{ steps.collect.outputs.metrics_json }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
+    steps:
+      - name: Download current plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
+          path: ${{ runner.temp }}/current-plugin
+
+      - name: Download baseline plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.BASELINE_PLUGIN_ARTIFACT }}
+          path: ${{ runner.temp }}/baseline-plugin
+
+      - name: Run model 3 baseline/current
+        id: run_perf
+        run: |
+          set +e
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model3"
+          BASELINE_LOG="$JOB_LOG_DIR/bd_model3_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bd_model3_current.log"
+          BASELINE_PLUGIN="$RUNNER_TEMP/baseline-plugin/libmusa_plugin.so"
+          CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
+          SPEC_PATH="$MODEL_ROOT/inference/metaGraph/meta_graph/meta_graph_3.spec"
+          mkdir -p "$JOB_LOG_DIR"
+          rm -f "$BASELINE_LOG" "$CURRENT_LOG"
+          rm -rf "$JOB_LOG_DIR/baseline-out" "$JOB_LOG_DIR/current-out"
+
+          baseline_exit=0
+          current_exit=0
+          guard_failed=0
+          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
+          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
+          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
+
+          start_ts="$(date +%s)"
+          while true; do
+            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
+            if [[ -z "$active_procs" ]]; then
+              break
+            fi
+            now_ts="$(date +%s)"
+            if (( now_ts - start_ts >= guard_timeout )); then
+              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$BASELINE_LOG"
+              echo "$active_procs" | tee -a "$BASELINE_LOG"
+              guard_failed=1
+              break
+            fi
+            echo "Waiting for previous GPU test processes to exit before starting BD Model 3:" | tee -a "$BASELINE_LOG"
+            echo "$active_procs" | tee -a "$BASELINE_LOG"
+            sleep 15
+          done
+
+          export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG BASELINE_PLUGIN CURRENT_PLUGIN SPEC_PATH
+
+          if [[ "$guard_failed" == "0" ]]; then
+            exec 9>"$lock_file"
+            flock 9
+            echo "Acquired GPU test lock: $lock_file" | tee -a "$BASELINE_LOG"
+
+            bash -l -c '
+              set -o pipefail
+              [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
+              cd "$MODEL_ROOT/inference/metaGraph"
+              MUSA_PINNED_FEED=1 \
+              MUSA_PINNED_H2D_ON_COMPUTE_STREAM=1 \
+              timeout 30m python musa_run_pb_graph.py \
+                --spec "$SPEC_PATH" \
+                --bs 32,128,256,1024 \
+                --run_iters 30 \
+                --out_root "$JOB_LOG_DIR/baseline-out" \
+                --musa-plugin "$BASELINE_PLUGIN" 2>&1 | tee "$BASELINE_LOG"
+            ' || baseline_exit=$?
+
+            bash -l -c '
+              set -o pipefail
+              [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
+              cd "$MODEL_ROOT/inference/metaGraph"
+              MUSA_PINNED_FEED=1 \
+              MUSA_PINNED_H2D_ON_COMPUTE_STREAM=1 \
+              timeout 30m python musa_run_pb_graph.py \
+                --spec "$SPEC_PATH" \
+                --bs 32,128,256,1024 \
+                --run_iters 30 \
+                --out_root "$JOB_LOG_DIR/current-out" \
+                --musa-plugin "$CURRENT_PLUGIN" 2>&1 | tee "$CURRENT_LOG"
+            ' || current_exit=$?
+          else
+            baseline_exit=1
+            current_exit=1
+          fi
+
+          echo "baseline_exit=$baseline_exit" >> "$GITHUB_OUTPUT"
+          echo "current_exit=$current_exit" >> "$GITHUB_OUTPUT"
+
+      - name: Collect model 3 summary
+        id: collect
+        if: always()
+        run: |
+          set -euo pipefail
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model3"
+          BASELINE_LOG="$JOB_LOG_DIR/bd_model3_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bd_model3_current.log"
+          SUMMARY_FILE="$RUNNER_TEMP/bd-model3.md"
+          COMPARE_JSON="$RUNNER_TEMP/bd-model3-compare.json"
+          DETAIL_FILE="$RUNNER_TEMP/bd-model3-details.md"
+          STATUS="success"
+          BASELINE_MS=""
+          CURRENT_MS=""
+          THRESHOLD_MS=""
+          METRICS_SUMMARY=""
+          METRICS_JSON=""
+          BASELINE_REPORT=""
+          CURRENT_REPORT=""
+          RUNNER_NAME="${RUNNER_NAME:-unknown}"
+          HOST_NAME="$(hostname)"
+          HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+          HOST_SN="$(cat /sys/class/dmi/id/product_serial 2>/dev/null || true)"
+
+          HOST_IP="${HOST_IP:-unavailable}"
+          HOST_SN="${HOST_SN:-unavailable}"
+
+          if [[ -f "$BASELINE_LOG" ]]; then
+            REPORT_PATH="$(grep '^\[OK\] report=' "$BASELINE_LOG" | tail -1 | sed 's/^\[OK\] report=//' || true)"
+            if [[ -n "$REPORT_PATH" && -f "$REPORT_PATH" ]]; then
+              BASELINE_REPORT="$REPORT_PATH"
+            fi
+          fi
+
+          if [[ -f "$CURRENT_LOG" ]]; then
+            REPORT_PATH="$(grep '^\[OK\] report=' "$CURRENT_LOG" | tail -1 | sed 's/^\[OK\] report=//' || true)"
+            if [[ -n "$REPORT_PATH" && -f "$REPORT_PATH" ]]; then
+              CURRENT_REPORT="$REPORT_PATH"
+            fi
+          fi
+
+          python3 - "$BASELINE_REPORT" "$CURRENT_REPORT" "$COMPARE_JSON" "$DETAIL_FILE" <<'PY'
+          import json
+          import os
+          import sys
+
+          baseline_report, current_report, compare_json, detail_file = sys.argv[1:5]
+          THRESHOLD_RATIO = 1.05
+
+          def load_report(path, label):
+              if not path:
+                  return None, [f"{label} report path missing"]
+              if not os.path.isfile(path):
+                  return None, [f"{label} report not found: {path}"]
+              try:
+                  with open(path, "r", encoding="utf-8") as f:
+                      return json.load(f), []
+              except Exception as exc:
+                  return None, [f"failed to load {label} report {path}: {exc}"]
+
+          def collect_rows(report, label):
+              rows = {}
+              errors = []
+              if report is None:
+                  return rows, errors
+              for item in report.get("average_time_summary", []):
+                  bs = str(item.get("batch_size"))
+                  if not bs or bs == "None":
+                      errors.append(f"{label} report contains empty batch_size entry")
+                      continue
+                  if bs in rows:
+                      errors.append(f"{label} report contains duplicate batch_size={bs}")
+                      continue
+                  rows[bs] = {
+                      "status": item.get("status"),
+                      "average_time_ms": item.get("trimmed_avg_ms")
+                      if item.get("trimmed_avg_ms") is not None
+                      else item.get("average_time_ms"),
+                      "error_core": item.get("error_core"),
+                  }
+              if not rows:
+                  errors.append(f"{label} report has no average_time_summary entries")
+              return rows, errors
+
+          baseline_data, errors = load_report(baseline_report, "baseline")
+          current_data, cur_errors = load_report(current_report, "current")
+          errors.extend(cur_errors)
+
+          baseline_rows, cur_errors = collect_rows(baseline_data, "baseline")
+          errors.extend(cur_errors)
+          current_rows, cur_errors = collect_rows(current_data, "current")
+          errors.extend(cur_errors)
+
+          def sort_key(bs):
+              try:
+                  return (0, int(bs))
+              except Exception:
+                  return (1, str(bs))
+
+          all_bs = sorted(set(baseline_rows) | set(current_rows), key=sort_key)
+          result_rows = []
+          baseline_parts = []
+          current_parts = []
+          threshold_parts = []
+          metrics_parts = []
+          overall_status = "success"
+
+          for bs in all_bs:
+              base = baseline_rows.get(bs)
+              cur = current_rows.get(bs)
+              row = {
+                  "batch_size": bs,
+                  "baseline_ms": None,
+                  "current_ms": None,
+                  "threshold_ms": None,
+                  "result": "ok",
+                  "detail": "",
+              }
+
+              if base is None:
+                  row["result"] = "missing-baseline"
+                  row["detail"] = "baseline report missing this batch size"
+              elif cur is None:
+                  row["result"] = "missing-current"
+                  row["detail"] = "current report missing this batch size"
+              elif base.get("status") != "ok" or base.get("average_time_ms") is None:
+                  row["result"] = "baseline-failed"
+                  row["detail"] = base.get("error_core") or f"baseline status={base.get('status')}"
+              elif cur.get("status") != "ok" or cur.get("average_time_ms") is None:
+                  row["result"] = "current-failed"
+                  row["detail"] = cur.get("error_core") or f"current status={cur.get('status')}"
+              else:
+                  row["baseline_ms"] = float(base["average_time_ms"])
+                  row["current_ms"] = float(cur["average_time_ms"])
+                  row["threshold_ms"] = float(base["average_time_ms"]) * THRESHOLD_RATIO
+                  if row["current_ms"] > row["threshold_ms"]:
+                      row["result"] = "regressed"
+                      row["detail"] = "current > baseline * 1.05"
+
+              if row["result"] != "ok":
+                  overall_status = "failure"
+
+              result_rows.append(row)
+              baseline_parts.append(f"bs{bs}={'%.4f' % row['baseline_ms'] if row['baseline_ms'] is not None else 'n/a'}")
+              current_parts.append(f"bs{bs}={'%.4f' % row['current_ms'] if row['current_ms'] is not None else 'n/a'}")
+              threshold_parts.append(f"bs{bs}={'%.4f' % row['threshold_ms'] if row['threshold_ms'] is not None else 'n/a'}")
+              metrics_parts.append(
+                  "bs{bs}: baseline={base}, current={cur}, threshold={thr}, result={result}".format(
+                      bs=bs,
+                      base="%.4f" % row["baseline_ms"] if row["baseline_ms"] is not None else "n/a",
+                      cur="%.4f" % row["current_ms"] if row["current_ms"] is not None else "n/a",
+                      thr="%.4f" % row["threshold_ms"] if row["threshold_ms"] is not None else "n/a",
+                      result=row["result"],
+                  )
+              )
+
+          if errors:
+              overall_status = "failure"
+
+          with open(detail_file, "w", encoding="utf-8") as f:
+              f.write("| BS | Baseline (ms) | Current (ms) | Threshold (ms) | Result | Detail |\n")
+              f.write("|----|---------------|--------------|----------------|--------|--------|\n")
+              for row in result_rows:
+                  f.write(
+                      "| {bs} | {base} | {cur} | {thr} | {result} | {detail} |\n".format(
+                          bs=row["batch_size"],
+                          base="%.4f" % row["baseline_ms"] if row["baseline_ms"] is not None else "n/a",
+                          cur="%.4f" % row["current_ms"] if row["current_ms"] is not None else "n/a",
+                          thr="%.4f" % row["threshold_ms"] if row["threshold_ms"] is not None else "n/a",
+                          result=row["result"],
+                          detail=(row["detail"] or "").replace("|", "/"),
+                      )
+                  )
+              if errors:
+                  f.write("\nAdditional errors:\n")
+                  for err in errors:
+                      f.write(f"- {err}\n")
+
+          payload = {
+              "name": "BD Model 3",
+              "kind": "batch_compare",
+              "status": overall_status,
+              "baseline_ms": ", ".join(baseline_parts) if baseline_parts else "",
+              "current_ms": ", ".join(current_parts) if current_parts else "",
+              "threshold_ms": ", ".join(threshold_parts) if threshold_parts else "",
+              "metrics_summary": " ; ".join(metrics_parts) if metrics_parts else "",
+              "rows": result_rows,
+          }
+          with open(compare_json, "w", encoding="utf-8") as f:
+              json.dump(payload, f, ensure_ascii=False, indent=2)
+          PY
+
+          STATUS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("status","failure"))' "$COMPARE_JSON")"
+          BASELINE_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("baseline_ms",""))' "$COMPARE_JSON")"
+          CURRENT_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("current_ms",""))' "$COMPARE_JSON")"
+          THRESHOLD_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("threshold_ms",""))' "$COMPARE_JSON")"
+          METRICS_SUMMARY="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("metrics_summary",""))' "$COMPARE_JSON")"
+          METRICS_JSON="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(json.dumps(data, ensure_ascii=False, separators=(",", ":")))' "$COMPARE_JSON")"
+
+          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" != "0" || "${{ steps.run_perf.outputs.current_exit }}" != "0" ]]; then
+            STATUS="failure"
+          fi
+
+          {
+            echo "## BD Model 3"
+            echo
+            echo "- Status: $STATUS"
+            echo "- Runner name: $RUNNER_NAME"
+            echo "- Host name: $HOST_NAME"
+            echo "- Host IP: $HOST_IP"
+            echo "- Host SN: $HOST_SN"
+            echo "- Log artifact: logs-bd-model3"
+            echo "- Baseline: ${BASELINE_MS:-n/a}"
+            echo "- Current: ${CURRENT_MS:-n/a}"
+            echo "- Threshold: ${THRESHOLD_MS:-n/a}"
+            echo
+            echo "### Batch Size Comparison"
+            cat "$DETAIL_FILE"
+            echo
+            echo "### Baseline log tail"
+            echo '```text'
+            if [[ -f "$BASELINE_LOG" ]]; then
+              tail -20 "$BASELINE_LOG" || true
+            else
+              echo "baseline log not found"
+            fi
+            echo '```'
+            echo
+            echo "### Current log tail"
+            echo '```text'
+            if [[ -f "$CURRENT_LOG" ]]; then
+              tail -20 "$CURRENT_LOG" || true
+            else
+              echo "current log not found"
+            fi
+            echo '```'
+          } | tee "$SUMMARY_FILE"
+
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "baseline_ms=$BASELINE_MS" >> "$GITHUB_OUTPUT"
+          echo "current_ms=$CURRENT_MS" >> "$GITHUB_OUTPUT"
+          echo "threshold_ms=$THRESHOLD_MS" >> "$GITHUB_OUTPUT"
+          echo "metrics_summary=$METRICS_SUMMARY" >> "$GITHUB_OUTPUT"
+          {
+            echo "metrics_json<<EOF"
+            echo "$METRICS_JSON"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload model 3 summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-bd-model3
+          path: ${{ steps.collect.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload model 3 logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-bd-model3
+          path: |
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model3/bd_model3_baseline.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model3/bd_model3_current.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model3/baseline-out
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model3/current-out
+            ${{ runner.temp }}/bd-model3-details.md
+            ${{ runner.temp }}/bd-model3-compare.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Fail job if model 3 regressed
+        if: always() && steps.collect.outputs.status == 'failure'
+        run: exit 1
+
+  training:
+    name: Training
+    needs: [prepare_metadata, build_current]
+    if: needs.build_current.result == 'success'
+    runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 210
+    outputs:
+      status: ${{ steps.collect.outputs.status }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
+    steps:
+      - name: Download current plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
+          path: ${{ runner.temp }}/current-plugin
+
+      - name: Run training tests
+        id: run_training
+        run: |
+          set +e
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/training"
+          LOG_FILE="$JOB_LOG_DIR/training_tests.log"
+          ERROR_LOG_DIR="$JOB_LOG_DIR/error_logs"
+          CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
+          mkdir -p "$JOB_LOG_DIR"
+          rm -f "$LOG_FILE"
+          rm -rf "$ERROR_LOG_DIR"
+
+          training_exit=0
+          guard_failed=0
+          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
+          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
+          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
+
+          start_ts="$(date +%s)"
+          while true; do
+            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
+            if [[ -z "$active_procs" ]]; then
+              break
+            fi
+            now_ts="$(date +%s)"
+            if (( now_ts - start_ts >= guard_timeout )); then
+              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$LOG_FILE"
+              echo "$active_procs" | tee -a "$LOG_FILE"
+              guard_failed=1
+              break
+            fi
+            echo "Waiting for previous GPU test processes to exit before starting training:" | tee -a "$LOG_FILE"
+            echo "$active_procs" | tee -a "$LOG_FILE"
+            sleep 15
+          done
+
+          export LOG_FILE ERROR_LOG_DIR CURRENT_PLUGIN
+          if [[ "$guard_failed" == "0" ]]; then
+            exec 9>"$lock_file"
+            flock 9
+            echo "Acquired GPU test lock: $lock_file" | tee -a "$LOG_FILE"
+
+            bash -l -c '
+              set -o pipefail
+              cd "$MODEL_ROOT/training"
+              timeout 180m python run_all_training_tests.py \
+                --epochs 100 \
+                --log-dir "$ERROR_LOG_DIR" \
+                --musa-plugin "$CURRENT_PLUGIN" 2>&1 | tee "$LOG_FILE"
+            ' || training_exit=$?
+          else
+            training_exit=1
+          fi
+
+          echo "training_exit=$training_exit" >> "$GITHUB_OUTPUT"
+
+      - name: Collect training summary
+        id: collect
+        if: always()
+        run: |
+          set -euo pipefail
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/training"
+          LOG_FILE="$JOB_LOG_DIR/training_tests.log"
+          SUMMARY_FILE="$RUNNER_TEMP/training.md"
+          STATUS="success"
+
+          if [[ "${{ steps.run_training.outputs.training_exit }}" != "0" ]]; then
+            STATUS="failure"
+          fi
+          if [[ -f "$LOG_FILE" ]] && { grep -q '^\[FAIL\]' "$LOG_FILE" || grep -Eq '^失败:[[:space:]]*[1-9][0-9]*' "$LOG_FILE"; }; then
+            STATUS="failure"
+          fi
+
+          {
+            echo "## Training (Non-blocking)"
+            echo
+            echo "- Status: $STATUS"
+            echo "- Log file: $LOG_FILE"
+            echo
+            echo '```text'
+            if [[ -f "$LOG_FILE" ]]; then
+              grep -E '^\[OK\]|^\[FAIL\]|^总计:|^成功:|^失败:|^  - ' "$LOG_FILE" || tail -80 "$LOG_FILE" || true
+            else
+              echo "training log not found"
+            fi
+            echo '```'
+          } | tee "$SUMMARY_FILE"
+
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload training summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-training
+          path: ${{ steps.collect.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload training logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-training
+          path: |
+            ${{ needs.prepare_metadata.outputs.log_root }}/training/training_tests.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/training/error_logs
+          if-no-files-found: warn
+          retention-days: 7
+
+  summary:
+    name: Final Summary
+    needs:
+      - prepare_metadata
+      - format
+      - build_current
+      - integration
+      - build_baseline
+      - t_perf
+      - t_accuracy
+      - bd_model1
+      - bd_model2
+      - bd_model3
+      - training
+    if: ${{ always() && !cancelled() }}
+    runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 10
+    env:
+      T_PERF_JSON: ${{ needs.t_perf.outputs.metrics_json || '' }}
+      T_ACC_JSON: ${{ needs.t_accuracy.outputs.metrics_json || '' }}
+      BD1_JSON: ${{ needs.bd_model1.outputs.metrics_json || '' }}
+      BD2_JSON: ${{ needs.bd_model2.outputs.metrics_json || '' }}
+      BD3_JSON: ${{ needs.bd_model3.outputs.metrics_json || '' }}
+    steps:
+      - name: Download summary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: summary-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/ci-summary
+
+      - name: Generate final summary
+        id: final_summary
+        env:
+          COMMIT_ID: ${{ needs.prepare_metadata.outputs.commit_id }}
+          RUN_KIND: ${{ needs.prepare_metadata.outputs.run_kind }}
+          RUN_ID: ${{ needs.prepare_metadata.outputs.run_id }}
+          WORKFLOW_RUN_ID: ${{ needs.prepare_metadata.outputs.workflow_run_id || github.run_id }}
+          WORKFLOW_RUN_ATTEMPT: ${{ needs.prepare_metadata.outputs.workflow_run_attempt || github.run_attempt }}
+          HOST_NAME: ${{ needs.prepare_metadata.outputs.host_name || 'unavailable' }}
+          HOST_IP: ${{ needs.prepare_metadata.outputs.host_ip || 'unavailable' }}
+          HOST_SN: ${{ needs.prepare_metadata.outputs.host_sn || 'unavailable' }}
+          BASELINE_SHA: ${{ needs.build_baseline.outputs.baseline_sha || 'unavailable' }}
+          FORMAT_DISPLAY: ${{ needs.format.outputs.status == 'failure' && 'failure (non-blocking)' || needs.format.outputs.status || 'skipped' }}
+          BUILD_CURRENT_STATUS: ${{ needs.build_current.outputs.status || 'skipped' }}
+          INTEGRATION_STATUS: ${{ needs.integration.outputs.status || 'skipped' }}
+          BUILD_BASELINE_STATUS: ${{ needs.build_baseline.outputs.status || 'skipped' }}
+          T_PERF_STATUS: ${{ needs.t_perf.outputs.status || 'skipped' }}
+          T_ACC_STATUS: ${{ needs.t_accuracy.outputs.status || 'skipped' }}
+          BD1_STATUS: ${{ needs.bd_model1.outputs.status || 'skipped' }}
+          BD2_STATUS: ${{ needs.bd_model2.outputs.status || 'skipped' }}
+          BD3_STATUS: ${{ needs.bd_model3.outputs.status || 'skipped' }}
+          TRAINING_STATUS: ${{ needs.training.outputs.status || 'skipped' }}
+        run: |
+          set -euo pipefail
+
+          SUMMARY_DIR="$RUNNER_TEMP/final-summary"
+          SUMMARY_FILE="$SUMMARY_DIR/final-summary.md"
+          SUMMARY_JSON="$SUMMARY_DIR/final-summary.json"
+          mkdir -p "$SUMMARY_DIR"
+          FORMAT_STATUS="${{ needs.format.outputs.status || 'skipped' }}"
+          FORMAT_RESULT="${{ needs.format.result }}"
+          FORMAT_DISPLAY="$FORMAT_STATUS"
+          BUILD_CURRENT_STATUS="${{ needs.build_current.outputs.status || 'skipped' }}"
+          BUILD_CURRENT_RESULT="${{ needs.build_current.result }}"
+          INTEGRATION_STATUS="${{ needs.integration.outputs.status || 'skipped' }}"
+          INTEGRATION_RESULT="${{ needs.integration.result }}"
+          BUILD_BASELINE_STATUS="${{ needs.build_baseline.outputs.status || 'skipped' }}"
+          BUILD_BASELINE_RESULT="${{ needs.build_baseline.result }}"
+          T_PERF_STATUS="${{ needs.t_perf.outputs.status || 'skipped' }}"
+          T_PERF_RESULT="${{ needs.t_perf.result }}"
+          T_ACC_STATUS="${{ needs.t_accuracy.outputs.status || 'skipped' }}"
+          T_ACC_RESULT="${{ needs.t_accuracy.result }}"
+          BD1_STATUS="${{ needs.bd_model1.outputs.status || 'skipped' }}"
+          BD1_RESULT="${{ needs.bd_model1.result }}"
+          BD2_STATUS="${{ needs.bd_model2.outputs.status || 'skipped' }}"
+          BD2_RESULT="${{ needs.bd_model2.result }}"
+          BD3_STATUS="${{ needs.bd_model3.outputs.status || 'skipped' }}"
+          BD3_RESULT="${{ needs.bd_model3.result }}"
+          TRAINING_STATUS="${{ needs.training.outputs.status || 'skipped' }}"
+          TRAINING_RESULT="${{ needs.training.result }}"
+          BASELINE_SHA="${{ needs.build_baseline.outputs.baseline_sha || 'unavailable' }}"
+
+          if [[ "$FORMAT_STATUS" == "failure" ]]; then
+            FORMAT_DISPLAY="failure (non-blocking)"
+          fi
+
+          python3 - "$SUMMARY_FILE" "$SUMMARY_JSON" <<'PY'
+          import json
+          import os
+          import sys
+
+          summary_file, summary_json = sys.argv[1:3]
+
+          def load_json_env(name):
+              raw = (os.environ.get(name) or "").strip()
+              if not raw:
+                  return None
+              try:
+                  return json.loads(raw)
+              except json.JSONDecodeError:
+                  return None
+
+          def format_value(value):
+              if value is None:
+                  return "n/a"
+              if isinstance(value, float):
+                  return f"{value:.4f}"
+              return str(value)
+
+          commit_id = os.environ["COMMIT_ID"]
+          run_kind = os.environ["RUN_KIND"]
+          run_id = os.environ["RUN_ID"]
+          workflow_run_id = os.environ["WORKFLOW_RUN_ID"]
+          workflow_run_attempt = os.environ["WORKFLOW_RUN_ATTEMPT"]
+          host_name = os.environ["HOST_NAME"]
+          host_ip = os.environ["HOST_IP"]
+          host_sn = os.environ["HOST_SN"]
+          baseline_sha = os.environ["BASELINE_SHA"]
+
+          jobs = [
+              {"name": "Format", "result": os.environ["FORMAT_DISPLAY"], "blocking": "no"},
+              {"name": "Build Current", "result": os.environ["BUILD_CURRENT_STATUS"], "blocking": "yes"},
+              {"name": "Integration", "result": os.environ["INTEGRATION_STATUS"], "blocking": "yes"},
+              {"name": "Build Baseline", "result": os.environ["BUILD_BASELINE_STATUS"], "blocking": "yes"},
+              {"name": "T Performance", "result": os.environ["T_PERF_STATUS"], "blocking": "yes"},
+              {"name": "T Accuracy", "result": os.environ["T_ACC_STATUS"], "blocking": "yes"},
+              {"name": "BD Model 1", "result": os.environ["BD1_STATUS"], "blocking": "yes"},
+              {"name": "BD Model 2", "result": os.environ["BD2_STATUS"], "blocking": "yes"},
+              {"name": "BD Model 3", "result": os.environ["BD3_STATUS"], "blocking": "yes"},
+              {"name": "Training", "result": os.environ["TRAINING_STATUS"], "blocking": "no"},
+          ]
+
+          metrics = [
+              load_json_env("T_PERF_JSON"),
+              load_json_env("BD1_JSON"),
+              load_json_env("BD2_JSON"),
+              load_json_env("BD3_JSON"),
+              load_json_env("T_ACC_JSON"),
+          ]
+          metrics = [item for item in metrics if item]
+
+          payload = {
+              "commit": commit_id,
+              "run_kind": run_kind,
+              "run_id": run_id,
+              "workflow_run_id": workflow_run_id,
+              "workflow_run_attempt": workflow_run_attempt,
+              "host": {
+                  "name": host_name,
+                  "ip": host_ip,
+                  "sn": host_sn,
+              },
+              "baseline_commit": baseline_sha,
+              "jobs": jobs,
+              "metrics": metrics,
+          }
+
+          lines = [
+              "# CI Report",
+              "",
+              f"- Commit: {commit_id}",
+              f"- Run kind: {run_kind}",
+              f"- Run id: {run_id}",
+              f"- Workflow run id: {workflow_run_id}",
+              f"- Workflow run attempt: {workflow_run_attempt}",
+              f"- Host name: {host_name}",
+              f"- Host IP: {host_ip}",
+              f"- Host SN: {host_sn}",
+              f"- Baseline commit: {baseline_sha}",
+              "",
+              "## Job Status",
+              "| Job | Result | Blocking |",
+              "|-----|--------|----------|",
+          ]
+
+          for job in jobs:
+              lines.append(f"| {job['name']} | {job['result']} | {job['blocking']} |")
+
+          lines.extend(["", "## Key Summary"])
+
+          for metric in metrics:
+              name = metric.get("name", "Unknown Metric")
+              kind = metric.get("kind", "unknown")
+              lines.extend(["", f"### {name}"])
+
+              if kind == "single":
+                  lines.append(f"- Status: {metric.get('status', 'unknown')}")
+                  lines.append(f"- Baseline: {metric.get('baseline_ms', 'n/a')} ms")
+                  lines.append(f"- Current: {metric.get('current_ms', 'n/a')} ms")
+                  lines.append(f"- Threshold: {metric.get('threshold_ms', 'n/a')} ms")
+              elif kind == "batch_compare":
+                  lines.append(f"- Status: {metric.get('status', 'unknown')}")
+                  lines.append("| BS | Baseline (ms) | Current (ms) | Threshold (ms) | Result | Detail |")
+                  lines.append("|----|---------------|--------------|----------------|--------|--------|")
+                  for row in metric.get("rows", []):
+                      lines.append(
+                          "| {bs} | {base} | {cur} | {thr} | {result} | {detail} |".format(
+                              bs=row.get("batch_size", "n/a"),
+                              base=format_value(row.get("baseline_ms")),
+                              cur=format_value(row.get("current_ms")),
+                              thr=format_value(row.get("threshold_ms")),
+                              result=row.get("result", "unknown"),
+                              detail=str(row.get("detail", "")).replace("|", "/"),
+                          )
+                      )
+              elif kind == "accuracy":
+                  lines.append(f"- Status: {metric.get('status', 'unknown')}")
+                  lines.append(f"- Current: {metric.get('current', 'n/a')}")
+              else:
+                  lines.append(f"- Raw metric: {json.dumps(metric, ensure_ascii=False)}")
+
+          with open(summary_file, "w", encoding="utf-8") as f:
+              f.write("\n".join(lines) + "\n")
+          with open(summary_json, "w", encoding="utf-8") as f:
+              json.dump(payload, f, ensure_ascii=False, indent=2)
+          PY
+
+          for file in \
+            "$RUNNER_TEMP/ci-summary/prepare-metadata.md" \
+            "$RUNNER_TEMP/ci-summary/format.md" \
+            "$RUNNER_TEMP/ci-summary/build-current.md" \
+            "$RUNNER_TEMP/ci-summary/integration.md" \
+            "$RUNNER_TEMP/ci-summary/build-baseline.md" \
+            "$RUNNER_TEMP/ci-summary/t-perf.md" \
+            "$RUNNER_TEMP/ci-summary/t-accuracy.md" \
+            "$RUNNER_TEMP/ci-summary/bd-model1.md" \
+            "$RUNNER_TEMP/ci-summary/bd-model2.md" \
+            "$RUNNER_TEMP/ci-summary/bd-model3.md" \
+            "$RUNNER_TEMP/ci-summary/training.md"; do
+            if [[ -f "$file" ]]; then
+              echo >> "$SUMMARY_FILE"
+              cat "$file" >> "$SUMMARY_FILE"
+            fi
+          done
+
+          echo "===== Final CI Summary ====="
+          cat "$SUMMARY_FILE"
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+
+          BLOCKING_FAILURE=0
+          if [[ "$BUILD_CURRENT_STATUS" == "failure" || "$BUILD_CURRENT_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$INTEGRATION_STATUS" == "failure" || "$INTEGRATION_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BUILD_BASELINE_STATUS" == "failure" || "$BUILD_BASELINE_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$T_PERF_STATUS" == "failure" || "$T_PERF_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$T_ACC_STATUS" == "failure" || "$T_ACC_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BD1_STATUS" == "failure" || "$BD1_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BD2_STATUS" == "failure" || "$BD2_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BD3_STATUS" == "failure" || "$BD3_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+
+          if [[ "$BLOCKING_FAILURE" -ne 0 ]]; then
+            FINAL_STATUS="failure"
+          else
+            FINAL_STATUS="success"
+          fi
+
+          echo "final_status=$FINAL_STATUS" >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+          echo "summary_json=$SUMMARY_JSON" >> "$GITHUB_OUTPUT"
+
+      - name: Upload final summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-final
+          path: |
+            ${{ steps.final_summary.outputs.summary_file }}
+            ${{ steps.final_summary.outputs.summary_json }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Fail job if blocking checks failed
+        if: always() && steps.final_summary.outputs.final_status == 'failure'
+        run: exit 1

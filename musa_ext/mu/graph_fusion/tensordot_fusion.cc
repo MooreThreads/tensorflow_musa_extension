@@ -253,6 +253,9 @@ std::vector<int> StringToAxes(const std::string& s) {
 MusaTensorDotFusion::MusaTensorDotFusion() = default;
 
 bool MusaTensorDotFusion::IsKernelAvailable() const {
+  if (IsDisabledByEnv()) {
+    return false;
+  }
   if (!kernel_checked_) {
     kernel_available_ = true;
     kernel_checked_ = true;

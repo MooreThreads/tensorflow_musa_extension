@@ -16,12 +16,77 @@ limitations under the License.
 #include "mu/graph_fusion/fusion_pattern_manager.h"
 
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
 
 #include "tensorflow/core/platform/logging.h"
 
 namespace tensorflow {
 namespace grappler {
 namespace musa_fusion {
+
+namespace {
+
+constexpr char kDisableFusionPatternsEnv[] = "TF_MUSA_DISABLE_FUSION_PATTERNS";
+
+std::string NormalizeFusionPatternName(const std::string& value) {
+  size_t begin = 0;
+  size_t end = value.size();
+
+  while (begin < end &&
+         std::isspace(static_cast<unsigned char>(value[begin])) != 0) {
+    ++begin;
+  }
+  while (end > begin &&
+         std::isspace(static_cast<unsigned char>(value[end - 1])) != 0) {
+    --end;
+  }
+
+  std::string normalized = value.substr(begin, end - begin);
+  std::transform(
+      normalized.begin(), normalized.end(), normalized.begin(),
+      [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  return normalized;
+}
+
+bool IsFusionPatternDisabled(const std::string& pattern_name) {
+  const char* env_value = std::getenv(kDisableFusionPatternsEnv);
+  if (env_value == nullptr || *env_value == '\0') {
+    return false;
+  }
+
+  const std::string normalized_pattern_name =
+      NormalizeFusionPatternName(pattern_name);
+  const std::string disabled_patterns(env_value);
+
+  size_t token_begin = 0;
+  while (token_begin <= disabled_patterns.size()) {
+    const size_t token_end = disabled_patterns.find(',', token_begin);
+    const std::string token = NormalizeFusionPatternName(
+        disabled_patterns.substr(token_begin, token_end - token_begin));
+    if (!token.empty() &&
+        (token == "all" || token == normalized_pattern_name)) {
+      return true;
+    }
+    if (token_end == std::string::npos) {
+      break;
+    }
+    token_begin = token_end + 1;
+  }
+
+  return false;
+}
+
+}  // namespace
+
+bool FusionPattern::IsDisabledByEnv() const {
+  const bool disabled = IsFusionPatternDisabled(GetName());
+  if (disabled) {
+    VLOG(1) << "Fusion pattern '" << GetName() << "' disabled by "
+            << kDisableFusionPatternsEnv;
+  }
+  return disabled;
+}
 
 // =============================================================================
 // FusionKernelRegistry Implementation
@@ -43,6 +108,10 @@ void FusionKernelRegistry::RegisterKernel(const std::string& pattern_name,
 }
 
 bool FusionKernelRegistry::IsKernelAvailable(const std::string& pattern_name) const {
+  if (IsFusionPatternDisabled(pattern_name)) {
+    return false;
+  }
+
   // First check if it's in the implemented set
   if (implemented_kernels_.count(pattern_name) > 0) {
     return true;
@@ -260,19 +329,15 @@ void FusionGraphUtils::RemoveNode(GraphDef* graph, int node_idx) {
   graph->mutable_node()->RemoveLast();
 }
 
-bool FusionGraphUtils::HasExternalConsumers(
-    const GraphDef& graph, const std::string& node_name,
-    const std::unordered_set<std::string>& removable_node_names) {
+bool FusionGraphUtils::HasAnyConsumer(
+    const GraphDef& graph, const std::string& node_name) {
   for (const auto& node : graph.node()) {
     if (node.name() == node_name) {
       continue;
     }
 
     for (int i = 0; i < node.input_size(); ++i) {
-      if (GetProducerNodeName(node.input(i)) != node_name) {
-        continue;
-      }
-      if (removable_node_names.find(node.name()) == removable_node_names.end()) {
+      if (GetProducerNodeName(node.input(i)) == node_name) {
         return true;
       }
     }
@@ -313,7 +378,7 @@ int FusionGraphUtils::RemoveNodesIfUnused(
         continue;
       }
 
-      if (HasExternalConsumers(*graph, node_name, removable_node_names)) {
+      if (HasAnyConsumer(*graph, node_name)) {
         continue;
       }
 
