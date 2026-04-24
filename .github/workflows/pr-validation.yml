@@ -22,7 +22,7 @@ on:
         default: ""
         type: string
   schedule:
-    - cron: "0 0 * * *"
+    - cron: "0 14 * * *"
 
 permissions:
   contents: read
