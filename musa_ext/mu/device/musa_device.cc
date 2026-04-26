@@ -100,6 +100,13 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
       return Status::OK();
     }
 
+    // The copy policy is implemented here by the plugin, not inferred
+    // automatically by TensorFlow from the MatMul op itself:
+    //   1. Record an event on the compute stream so H2D does not overwrite a
+    //      destination buffer still referenced by earlier kernels.
+    //   2. Enqueue the H2D copy on the dedicated H2D stream after that wait.
+    //   3. Report completion through `done`, which lets TensorFlow continue
+    //      scheduling downstream work only after the copy finishes.
     musaEvent_t sync_event;
     musaError_t err =
         musaEventCreateWithFlags(&sync_event, musaEventDisableTiming);
@@ -496,6 +503,15 @@ MusaDevice::MusaDevice(Env* env, const DeviceAttributes& attributes,
           << " total_memory=" << total_memory << " free_memory=" << free_memory
           << " bfc_memory_limit=" << bfc_memory_limit;
 
+  // This device owns three streams with fixed roles:
+  //   * stream_     : compute kernels (e.g. MatMul via muDNN/muBLAS handles)
+  //   * h2d_stream_ : host-to-device copies
+  //   * d2h_stream_ : device-to-host copies
+  //
+  // TensorFlow does not automatically turn every op into a generic 3-stream
+  // pipeline. The plugin decides when copies stay on dedicated copy streams,
+  // when they fall back to synchronous musaMemcpy, and when explicit
+  // cross-stream event waits are inserted.
   // Create main compute stream
   musaError_t stream_err = musaStreamCreate(&stream_);
   if (stream_err != musaSuccess) {

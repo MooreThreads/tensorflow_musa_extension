@@ -60,7 +60,10 @@ class MusaMatMulOp : public MusaOpKernel {
   }
 
   // MatMul/BatchMatMul is computationally intensive
-  // Mark as expensive for optimal scheduling (async execution)
+  // Mark as expensive for TensorFlow's op scheduler.
+  // This affects host-side scheduling priority/costing only; the actual muDNN
+  // kernel launch still goes to the device compute stream that is bound in
+  // MusaDevice::MusaDevice via mudnn_handle_->SetStream(stream_).
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
@@ -98,6 +101,9 @@ class MusaMatMulOp : public MusaOpKernel {
       auto flat_out = out->flat<T>();
       return;
     }
+    // MatMul itself does not choose between compute/H2D/D2H streams. It always
+    // launches on the compute stream attached to the per-device muDNN handle.
+    // Host-device transfers are orchestrated separately by MusaDeviceContext.
     auto& handle = GetHandleByCtx(ctx);
     handle.SetAllowTF32(tf32_enabled_);  // Use TF32 setting from constructor
     mTensor mt_a = CreateMTensor(in0);

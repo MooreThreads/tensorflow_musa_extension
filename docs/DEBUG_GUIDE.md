@@ -165,6 +165,69 @@ with open('/tmp/musa_telemetry.json') as f:
 
 ## 3. 常用调试组合
 
+### 3.0 三条流（计算 / H2D / D2H）是怎么排的？
+
+结合 `musa_ext/kernels/math/musa_matmul_op.cc` 与
+`musa_ext/mu/device/musa_device.cc`，当前插件的行为可以概括为：
+
+- **MatMul 只负责把计算 kernel 提交到计算流**。`MusaMatMulOp::Compute()`
+  通过 `GetHandleByCtx(ctx)` 取得 per-device 的 muDNN handle；而这个 handle
+  在 `MusaDevice::MusaDevice()` 中已经通过 `mudnn_handle_->SetStream(stream_)`
+  绑定到了 `stream_`（计算流）。
+- `IsExpensive()` **只是告诉 TensorFlow 这是个重算子**，方便 host 侧调度做成本估计；
+  **它不会让 TensorFlow 自动把一个 MatMul 拆成“计算/H2D/D2H 三条流排流水”**。
+- 三条流是 **MUSA 插件自己显式创建并赋予职责** 的：
+  - `stream_`：计算流
+  - `h2d_stream_`：Host → Device 拷贝流
+  - `d2h_stream_`：Device → Host 拷贝流
+
+也就是说，**不是 TensorFlow 自动“看见 MatMul 就决定三流并行”**，而是
+`MusaDeviceContext` 这层在处理拷贝时，明确决定把哪些 memcpy 放到专用 copy
+stream、以及何时插入 event/wait。
+
+### 3.0.1 会自动排流水吗？
+
+**会有一定程度的异步排队，但不是 TensorFlow 通用地、全自动地替你规划三流流水线。**
+
+- 同一条流内部，MUSA runtime 保证 **FIFO 顺序执行**。
+- 不同流之间是否能并发，取决于：
+  1. 插件是否把工作提交到了不同的流；
+  2. 插件是否插入了 `musaEventRecord` / `musaStreamWaitEvent`；
+  3. 底层硬件是否支持计算与拷贝重叠。
+- 在本实现里：
+  - **MatMul 计算**固定进入 `stream_`
+  - **H2D 拷贝**通常进入 `h2d_stream_`
+  - **D2H 拷贝**通常进入 `d2h_stream_`
+
+因此，**如果图里本来就存在“前后独立”的计算与拷贝**，这些工作有机会在不同流上重叠；
+但**不是** TensorFlow 自动把单个 MatMul 操作改写成“三段式流水”。
+
+### 3.0.2 会自动决定同步 / 异步吗？
+
+**部分会，但“怎么同步、何时异步”主要是插件代码写死/显式决定的，不是 TensorFlow
+统一自动推断出来的。**
+
+- **MatMul kernel launch 本身是异步入队** 到计算流的；`Compute()` 返回前通常不会阻塞到
+  kernel 执行完成。
+- **H2D / D2H 拷贝** 是否走异步路径，由 `MusaDeviceContext` 决定：
+  - pinned host memory：优先 `musaMemcpyAsync(...)`
+  - pageable host memory：小拷贝或失败回退时会走同步 `musaMemcpy(...)`
+  - 环境变量
+    `MUSA_PAGEABLE_H2D_ON_COMPUTE_STREAM=1` /
+    `MUSA_PINNED_H2D_ON_COMPUTE_STREAM=1`
+    还可以把部分 H2D 直接改到计算流上
+- **跨流同步** 也是显式写出来的：
+  - H2D 前，会在计算流上 record event，再让 `h2d_stream_` wait，避免覆盖仍被旧计算使用的目标 buffer
+  - D2H 前，会在计算流上 record event，再让 `d2h_stream_` wait，保证先看到最新计算结果
+  - 拷贝完成后，再通过 `done` callback / `event_mgr_` 通知 TensorFlow 后续可以继续调度
+
+结论：
+
+- **TensorFlow 不会自动替这个 MatMul op 设计完整的三流流水策略**
+- **当前仓库确实使用了三条流**
+- **异步/同步与跨流依赖，主要由 `MusaDeviceContext` 中的 memcpy + event/wait 逻辑显式控制**
+- **MatMul 只是稳定地跑在计算流上，本身不决定 H2D/D2H 的排流水策略**
+
 ### 3.1 性能与热点（TensorFlow 侧）
 
 内核级计时宏已移除。可结合 TensorFlow 自带能力做性能分析，例如：
