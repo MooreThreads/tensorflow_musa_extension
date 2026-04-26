@@ -165,7 +165,7 @@ with open('/tmp/musa_telemetry.json') as f:
 
 ## 3. 常用调试组合
 
-### 3.1 三条流（计算/H2D/D2H）是怎么排的？
+### 3.1 三条流（计算/H2D/D2H）是怎么安排的？
 
 结合 `musa_ext/kernels/math/musa_matmul_op.cc` 和
 `musa_ext/mu/device/musa_device.cc`，当前插件的行为可以概括为：
@@ -174,7 +174,7 @@ with open('/tmp/musa_telemetry.json') as f:
   通过 `GetHandleByCtx(ctx)` 取得对应设备的 muDNN handle；该 handle
   在 `MusaDevice::MusaDevice()` 中已经通过 `mudnn_handle_->SetStream(stream_)`
   绑定到了 `stream_`（计算流）。
-- `IsExpensive()` **只是告诉 TensorFlow 这是个重算子**，方便 host 侧调度做成本估计；
+- `IsExpensive()` **只是告诉 TensorFlow 这是个计算密集型算子**，方便 host 侧调度做成本估计；
   **它不会让 TensorFlow 自动把一个 MatMul 拆成“计算/H2D/D2H 三条流排流水”**。
 - 三条流是 **MUSA 插件自己显式创建并赋予职责** 的：
   - `stream_`：计算流
