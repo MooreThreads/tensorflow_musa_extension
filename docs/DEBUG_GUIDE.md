@@ -171,7 +171,7 @@ with open('/tmp/musa_telemetry.json') as f:
 `musa_ext/mu/device/musa_device.cc`，当前插件的行为可以概括为：
 
 - **MatMul 只负责把计算 kernel 提交到计算流**。`MusaMatMulOp::Compute()`
-  通过 `GetHandleByCtx(ctx)` 取得 per-device 的 muDNN handle；而这个 handle
+  通过 `GetHandleByCtx(ctx)` 取得对应设备的 muDNN handle；该 handle
   在 `MusaDevice::MusaDevice()` 中已经通过 `mudnn_handle_->SetStream(stream_)`
   绑定到了 `stream_`（计算流）。
 - `IsExpensive()` **只是告诉 TensorFlow 这是个重算子**，方便 host 侧调度做成本估计；

@@ -101,7 +101,7 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
     }
 
     // The copy policy is implemented here by the plugin, not inferred
-    // automatically by TensorFlow from the MatMul op itself:
+    // automatically by TensorFlow from a particular op:
     //   1. Record an event on the compute stream so H2D does not overwrite a
     //      destination buffer still referenced by earlier kernels.
     //   2. Enqueue the H2D copy on the dedicated H2D stream after that wait.
