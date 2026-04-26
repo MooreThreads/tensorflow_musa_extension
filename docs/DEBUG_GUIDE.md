@@ -167,7 +167,7 @@ with open('/tmp/musa_telemetry.json') as f:
 
 ### 3.0 三条流（计算 / H2D / D2H）是怎么排的？
 
-结合 `musa_ext/kernels/math/musa_matmul_op.cc` 与
+结合 `musa_ext/kernels/math/musa_matmul_op.cc` 和
 `musa_ext/mu/device/musa_device.cc`，当前插件的行为可以概括为：
 
 - **MatMul 只负责把计算 kernel 提交到计算流**。`MusaMatMulOp::Compute()`
@@ -181,9 +181,9 @@ with open('/tmp/musa_telemetry.json') as f:
   - `h2d_stream_`：Host → Device 拷贝流
   - `d2h_stream_`：Device → Host 拷贝流
 
-也就是说，**不是 TensorFlow 自动“看见 MatMul 就决定三流并行”**，而是
-`MusaDeviceContext` 这层在处理拷贝时，明确决定把哪些 memcpy 放到专用 copy
-stream、以及何时插入 event/wait。
+也就是说，**不是 TensorFlow 会针对单个 MatMul 自动设计出一套“三流并行流水线”**，
+而是 `MusaDeviceContext` 这层在处理拷贝时，明确决定把哪些 memcpy 放到专用
+copy stream、以及何时插入 event/wait。
 
 ### 3.0.1 会自动排流水吗？
 
