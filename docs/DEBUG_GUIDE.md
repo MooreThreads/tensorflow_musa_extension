@@ -165,7 +165,7 @@ with open('/tmp/musa_telemetry.json') as f:
 
 ## 3. 常用调试组合
 
-### 3.0 三条流（计算 / H2D / D2H）是怎么排的？
+### 3.1 三条流（计算/H2D/D2H）是怎么排的？
 
 结合 `musa_ext/kernels/math/musa_matmul_op.cc` 和
 `musa_ext/mu/device/musa_device.cc`，当前插件的行为可以概括为：
@@ -185,7 +185,7 @@ with open('/tmp/musa_telemetry.json') as f:
 而是 `MusaDeviceContext` 这层在处理拷贝时，明确决定把哪些 memcpy 放到专用
 copy stream、以及何时插入 event/wait。
 
-### 3.0.1 会自动排流水吗？
+### 3.1.1 会自动排流水吗？
 
 **会有一定程度的异步排队，但不是 TensorFlow 通用地、全自动地替你规划三流流水线。**
 
@@ -202,7 +202,7 @@ copy stream、以及何时插入 event/wait。
 因此，**如果图里本来就存在“前后独立”的计算与拷贝**，这些工作有机会在不同流上重叠；
 但**不是** TensorFlow 自动把单个 MatMul 操作改写成“三段式流水”。
 
-### 3.0.2 会自动决定同步 / 异步吗？
+### 3.1.2 会自动决定同步 / 异步吗？
 
 **部分会，但“怎么同步、何时异步”主要是插件代码写死/显式决定的，不是 TensorFlow
 统一自动推断出来的。**
@@ -228,7 +228,7 @@ copy stream、以及何时插入 event/wait。
 - **异步/同步与跨流依赖，主要由 `MusaDeviceContext` 中的 memcpy + event/wait 逻辑显式控制**
 - **MatMul 只是稳定地跑在计算流上，本身不决定 H2D/D2H 的排流水策略**
 
-### 3.1 性能与热点（TensorFlow 侧）
+### 3.2 性能与热点（TensorFlow 侧）
 
 内核级计时宏已移除。可结合 TensorFlow 自带能力做性能分析，例如：
 
@@ -243,7 +243,7 @@ export TF_CPP_VMODULE="musa_graph_optimizer=1"
 python test_runner.py --single ops/matmul_op_test.py
 ```
 
-### 3.2 图优化调试
+### 3.3 图优化调试
 
 ```bash
 # 查看图优化器的详细日志
@@ -260,7 +260,7 @@ export MUSA_DUMP_GRAPHDEF_DIR=/tmp/graphs
 python test_runner.py
 ```
 
-### 3.3 脏数据诊断
+### 3.4 脏数据诊断
 
 ```bash
 # 启用遥测进行脏数据追溯
@@ -275,14 +275,14 @@ cd test && python test_runner.py
 grep "dirty_data_detected" /tmp/telemetry.json
 ```
 
-### 3.4 静音模式（仅显示错误）
+### 3.5 静音模式（仅显示错误）
 
 ```bash
 export TF_CPP_MIN_LOG_LEVEL=2
 python test_runner.py
 ```
 
-### 3.5 恢复默认配置
+### 3.6 恢复默认配置
 
 ```bash
 unset MUSA_TELEMETRY_ENABLED MUSA_TELEMETRY_LOG_PATH
