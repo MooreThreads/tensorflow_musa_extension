@@ -33,8 +33,8 @@ void plugin_destroy_timer_fns(const SP_Platform* platform,
 void plugin_destroy_platform(SP_Platform* platform);
 void plugin_destroy_platform_fns(SP_PlatformFns* platform_fns);
 
-void SE_InitPlugin(SE_PlatformRegistrationParams* const params,
-                   TF_Status* const status);
+/* `SE_InitPlugin` is declared in `tensorflow/c/experimental/stream_executor/stream_executor.h`
+ * and implemented in `musa_ext/mu/musa_se_plugin.cc`. */
 
 #ifdef __cplusplus
 }

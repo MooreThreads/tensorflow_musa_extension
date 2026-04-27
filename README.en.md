@@ -11,11 +11,15 @@ TensorFlow plugin for Moore Threads MUSA GPUs: MUSA kernels and graph optimizati
 
 ## Requirements
 
-- CMake ≥ 3.10, Make, GCC/G++ (ABI-compatible with TensorFlow 2.6.1 pip wheels)
+- CMake ≥ 3.10, Make, GCC/G++ (ABI-compatible with your target TensorFlow pip wheel; see [Compatibility](docs/COMPATIBILITY.md))
 - MUSA SDK (default `/usr/local/musa`): runtime, muBLAS, muDNN
 - Python ≥ 3.7
-- **TensorFlow == 2.6.1** (must match this version)
+- **TensorFlow**: baseline **2.6.1**; set **`TENSORFLOW_MUSA_TARGET_TF`** to a comma-separated allowlist (e.g. `2.6.1` or `2.6.1,2.8.0`). The installed `tf.__version__` must be in that set.
 - NumPy ≥ 1.19.0
+
+Build one wheel per TensorFlow version you support. Details: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
+
+**PluggableDevice / `SE_InitPlugin` (experimental)**: provides the StreamExecutor C API entry and `MUSA_ENABLE_SE_PLUGIN` gating, mutually exclusive with the default C++ `MusaDevice` path; set `MUSA_ENABLE_SE_PLUGIN=1` **before** loading `libmusa_plugin.so`. Full op coverage still targets the C++ path; see [COMPATIBILITY](docs/COMPATIBILITY.md).
 
 ## Install (recommended: wheel)
 

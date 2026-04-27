@@ -425,6 +425,8 @@ class MusaAddOp : public MusaOpKernel {
       return;
     }
 
+    MUSA_OP_REQUIRES_CPP_MUSA_DEVICE(ctx);
+
     auto& handle = GetHandleByCtx(ctx);
     mTensor t0 = CreateMTensor(in0, format_);
     mTensor t1 = CreateMTensor(in1, format_);

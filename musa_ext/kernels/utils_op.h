@@ -5,10 +5,33 @@
 
 #include <vector>
 
+#include "kernels/musa_kernel_runtime.h"
 #include "mu/device/musa_device.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/lib/core/errors.h"
 #define DEVICE_MTGPU "MUSA"
+
+namespace tensorflow {
+namespace musa {
+// Shared by kernels and GetHandleByCtx: SE-only / non-MusaDevice execution is
+// not supported for muDNN-backed ops on this code path.
+inline Status MusaCppDevicePathRequiredError() {
+  return errors::Unimplemented(
+      "MUSA op requires the C++ MusaDevice path (import tensorflow_musa or "
+      "tf.load_op_library with MUSA_ENABLE_SE_PLUGIN unset). "
+      "SE-only PluggableDevice (MUSA_ENABLE_SE_PLUGIN=1) is not supported for "
+      "this kernel; use the default C++ device path.");
+}
+}  // namespace musa
+}  // namespace tensorflow
+
+// Use after other OP_REQUIRES, before GetHandleByCtx on paths that use muDNN.
+#define MUSA_OP_REQUIRES_CPP_MUSA_DEVICE(ctx)                \
+  OP_REQUIRES((ctx),                                         \
+              ::tensorflow::musa::TryGetMusaDeviceFromContext( \
+                  (ctx)) != nullptr,                         \
+              ::tensorflow::musa::MusaCppDevicePathRequiredError())
 
 // 统一的错误处理宏
 #define MTOP_CHECK_MTDNN_STATUS_RET(status)         \
@@ -18,24 +41,31 @@
     }                                               \
   } while (0)
 
-#define MTOP_CHECK_OK(status, op_name, ctx)                                    \
-  do {                                                                         \
-    if ((status) != ::musa::dnn::Status::SUCCESS) {                            \
-      (ctx)->CtxFailure(errors::Internal(                                      \
-          "MUSA ", (op_name), " failed. Status: ", static_cast<int>(status))); \
-      return;                                                                  \
-    }                                                                          \
+#define MTOP_CHECK_OK(mudnn_call_status, op_name, mctx)                      \
+  do {                                                                       \
+    if ((mctx) != nullptr && !((mctx)->status().ok())) {                    \
+      return;                                                                \
+    }                                                                         \
+    if ((mudnn_call_status) != ::musa::dnn::Status::SUCCESS) {              \
+      (mctx)->CtxFailure(                                                   \
+          errors::Internal("MUSA ", (op_name), " failed. Status: ",        \
+                            static_cast<int>(mudnn_call_status)));         \
+      return;                                                                \
+    }                                                                         \
   } while (0)
 
-#define MTOP_CHECK_OK_RUN(status, op_name, ctx)                              \
-  do {                                                                       \
-    auto _status = (status);                                                 \
-    if (_status != ::musa::dnn::Status::SUCCESS) {                           \
-      (ctx)->CtxFailure(                                                     \
-          errors::Internal("MUSA ", (op_name),                               \
-                           " failed. Status: ", static_cast<int>(_status))); \
-      return;                                                                \
-    }                                                                        \
+#define MTOP_CHECK_OK_RUN(mudnn_call_status, op_name, mctx)                 \
+  do {                                                                      \
+    if ((mctx) != nullptr && !((mctx)->status().ok())) {                   \
+      return;                                                               \
+    }                                                                       \
+    auto _mudnn_st = (mudnn_call_status);                                 \
+    if (_mudnn_st != ::musa::dnn::Status::SUCCESS) {                     \
+      (mctx)->CtxFailure(                                                \
+          errors::Internal("MUSA ", (op_name),                          \
+                           " failed. Status: ", static_cast<int>(_mudnn_st))); \
+      return;                                                            \
+    }                                                                       \
   } while (0)
 
 namespace tensorflow {
@@ -98,10 +128,17 @@ class MusaOpKernel : public OpKernel {
 MusaDevice* GetDeviceByCtx(tensorflow::OpKernelContext* context);
 
 inline int GetMusaDeviceIdByCtx(tensorflow::OpKernelContext* context) {
-  if (context == nullptr) return -1;
-  auto* musa_device = static_cast<MusaDevice*>(context->device());
+  auto* musa_device = TryGetMusaDeviceFromContext(context);
   if (!musa_device) return -1;
   return musa_device->get_device_id();
+}
+
+// Not for real use: only returned with context already in failed state after
+// CtxFailure. Prefer MUSA_OP_REQUIRES_CPP_MUSA_DEVICE or MTOP_* after
+// GetHandleByCtx, which return early when !ctx->status().ok().
+inline ::musa::dnn::Handle& MudnnHandleOrSinkAfterCtxFailure() {
+  static ::musa::dnn::Handle* h = new ::musa::dnn::Handle();
+  return *h;
 }
 
 // Thread-local cache for current device to avoid redundant musaSetDevice calls
@@ -119,7 +156,13 @@ inline musaError_t CachedMusaSetDevice(int device_id) {
 
 inline ::musa::dnn::Handle& GetHandleByCtx(
     tensorflow::OpKernelContext* context) {
-  auto* musa_device = static_cast<MusaDevice*>(context->device());
+  auto* musa_device = TryGetMusaDeviceFromContext(context);
+  if (musa_device == nullptr) {
+    if (context != nullptr) {
+      context->CtxFailure(MusaCppDevicePathRequiredError());
+    }
+    return MudnnHandleOrSinkAfterCtxFailure();
+  }
   int device_id = GetMusaDeviceIdByCtx(context);
 
   musaError_t err = CachedMusaSetDevice(device_id);
@@ -131,7 +174,7 @@ inline ::musa::dnn::Handle& GetHandleByCtx(
 }
 
 inline musaStream_t GetMusaStreamByCtx(tensorflow::OpKernelContext* context) {
-  auto* musa_device = static_cast<MusaDevice*>(context->device());
+  auto* musa_device = TryGetMusaDeviceFromContext(context);
   if (!musa_device) return nullptr;
   return musa_device->GetStream();
 }

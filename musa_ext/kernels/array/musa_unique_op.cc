@@ -40,7 +40,8 @@ class MusaUniqueOp : public MusaOpKernel {
       workspace_tensors.emplace_back(temp);
       return ::musa::dnn::MemoryHandler(temp.flat<uint8_t>().data(), [](void*) {});
     };
-    auto* musa_device = static_cast<MusaDevice*>(ctx->device());
+    MUSA_OP_REQUIRES_CPP_MUSA_DEVICE(ctx);
+    MusaDevice* musa_device = TryGetMusaDeviceFromContext(ctx);
     auto maintainer = musa_device->GetMemMaintainer(mem_alloc_func);
 
     ::musa::dnn::Tensor t_in          = CreateMTensor(input);

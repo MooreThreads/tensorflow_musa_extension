@@ -20,6 +20,9 @@ namespace musa {
 
 template <typename T>
 inline Status MusaFillCall(mTensor* out_mt, T value, OpKernelContext* context) {
+  if (TryGetMusaDeviceFromContext(context) == nullptr) {
+    return MusaCppDevicePathRequiredError();
+  }
   mFill op;
   mHandle& h = GetHandleByCtx(context);
 

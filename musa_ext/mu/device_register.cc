@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "device/musa_device.h"
+#include "musa_plugin_env.h"
 #include "mu/device/musa_telemetry.h"
 #include "mu/runtime_config_c_api.h"
 #include "tensorflow/core/common_runtime/device_factory.h"
@@ -70,6 +71,13 @@ class MusaDeviceFactory : public DeviceFactory {
     int count = 0;
     musaError_t err = musaGetDeviceCount(&count);
     if (err != musaSuccess) {
+      if (musa::plugin_env::StrictPhysicalDeviceEnum()) {
+        return errors::FailedPrecondition(
+            strings::StrCat("musaGetDeviceCount failed: ", musaGetErrorString(err)));
+      }
+      VLOG(1) << "musaGetDeviceCount failed; returning empty physical device list "
+                 "(set MUSA_STRICT_DEVICE_ENUM=1 to treat this as an error): "
+              << musaGetErrorString(err);
       return Status::OK();
     }
 
@@ -85,7 +93,14 @@ class MusaDeviceFactory : public DeviceFactory {
     int count = 0;
     musaError_t err = musaGetDeviceCount(&count);
     if (err != musaSuccess) {
-      return errors::Internal("Failed to get MUSA device count");
+      if (musa::plugin_env::StrictPhysicalDeviceEnum()) {
+        return errors::FailedPrecondition(
+            strings::StrCat("musaGetDeviceCount failed: ", musaGetErrorString(err)));
+      }
+      VLOG(1) << "musaGetDeviceCount failed; skipping MUSA device creation "
+                 "(set MUSA_STRICT_DEVICE_ENUM=1 to treat this as an error): "
+              << musaGetErrorString(err);
+      return Status::OK();
     }
 
     auto platform_status =
@@ -127,8 +142,6 @@ class MusaDeviceFactory : public DeviceFactory {
   }
 };
 
-REGISTER_LOCAL_DEVICE_FACTORY("MUSA", MusaDeviceFactory, 210);
-
 }  // namespace musa
 }  // namespace tensorflow
 
@@ -165,6 +178,22 @@ TFMusaGetTelemetryHealthSnapshot() {
 }
 
 void __attribute__((constructor)) OnMusaPluginLoad() {
+  // Single entry point: register C++ MUSA device factory unless SE-only
+  // Pluggable path is selected (MUSA_ENABLE_SE_PLUGIN=1 before dlopen).
+  static std::once_flag k_register_musa_device_factory;
+  std::call_once(k_register_musa_device_factory, [] {
+    if (tensorflow::musa::plugin_env::PluggableSePathEnabled()) {
+      LOG(INFO) << "[MUSA] Skipping C++ DeviceFactory::Register(\"MUSA\") "
+                   "because MUSA_ENABLE_SE_PLUGIN=1 (use SE_InitPlugin path). "
+                   "Set this env before loading libmusa_plugin.so.";
+      return;
+    }
+    tensorflow::DeviceFactory::Register(
+        "MUSA", new tensorflow::musa::MusaDeviceFactory(), 210,
+        /*is_pluggable_device*/ false);
+    LOG(INFO) << "[MUSA] Registered C++ DeviceFactory for device type MUSA.";
+  });
+
   // Initialize telemetry system from environment variables
   auto config = ::tensorflow::musa::TelemetryConfig::FromEnv();
   if (config.enabled) {

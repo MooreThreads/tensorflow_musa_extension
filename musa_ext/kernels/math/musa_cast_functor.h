@@ -11,6 +11,9 @@ namespace musa {
 
 static Status CastFunctor(OpKernelContext* ctx, const mTensor& input_mt,
                           mTensor* output_mt) {
+  if (TryGetMusaDeviceFromContext(ctx) == nullptr) {
+    return MusaCppDevicePathRequiredError();
+  }
   ::musa::dnn::Unary op;
   auto status = op.SetMode(::musa::dnn::Unary::Mode::CAST);
   if (status != ::musa::dnn::Status::SUCCESS) {
