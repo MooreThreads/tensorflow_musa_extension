@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 # Plugin library name
 PLUGIN_LIBRARY = "libmusa_plugin.so"
+_plugin_path = None
+_op_module = None
 
 
 def _find_plugin_library():
@@ -82,12 +84,18 @@ def load_plugin():
         FileNotFoundError: If the plugin library cannot be found
         RuntimeError: If TensorFlow cannot load the plugin
     """
+    global _plugin_path, _op_module
+
+    if _plugin_path is not None and _op_module is not None:
+        return _plugin_path
+
     import tensorflow as tf
 
     plugin_path = _find_plugin_library()
 
     try:
-        tf.load_op_library(plugin_path)
+        _op_module = tf.load_op_library(plugin_path)
+        _plugin_path = plugin_path
         logger.info(f"MUSA plugin loaded successfully from: {plugin_path}")
         return plugin_path
     except Exception as e:
@@ -95,6 +103,18 @@ def load_plugin():
             f"Failed to load MUSA plugin from {plugin_path}: {e}\n"
             f"Please ensure TensorFlow and MUSA SDK are properly installed."
         )
+
+
+def get_musa_ops():
+    """Get the generated Python wrappers for MUSA custom ops.
+
+    Importing tensorflow_musa loads and registers the plugin. Tests that need
+    to call custom ops directly can use this helper instead of resolving and
+    loading the shared library themselves.
+    """
+    if _op_module is None:
+        load_plugin()
+    return _op_module
 
 
 def is_plugin_loaded():

@@ -54,25 +54,9 @@ def create_session(graph):
 
 
 def load_musa_plugin(project_root):
-  candidate_paths = [
-      os.path.join(project_root, "build", "libmusa_plugin.so"),
-      os.path.join(os.getcwd(), "..", "build", "libmusa_plugin.so"),
-      os.path.join(os.getcwd(), "build", "libmusa_plugin.so"),
-  ]
-
-  plugin_path = None
-  for path in candidate_paths:
-    normalized_path = os.path.normpath(path)
-    if os.path.exists(normalized_path):
-      plugin_path = normalized_path
-      break
-
-  if plugin_path is None:
-    raise FileNotFoundError(
-        "MUSA plugin not found. Searched locations: %s" %
-        ", ".join(os.path.normpath(path) for path in candidate_paths))
-
-  tf.load_library(plugin_path)
+  del project_root
+  import tensorflow_musa
+  tensorflow_musa.load_plugin()
 
 
 def input_numpy_dtype(dtype_name):

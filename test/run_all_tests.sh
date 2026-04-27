@@ -20,11 +20,8 @@ echo "Running all MUSA operator tests..."
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Build the plugin first if it doesn't exist
-if [ ! -f "$TEST_DIR/../build/libmusa_plugin.so" ]; then
-    echo "Building MUSA plugin..."
-    cd "$TEST_DIR/.." && ./build.sh
-fi
+# The plugin is expected to be installed as the tensorflow_musa wheel.
+python3 -c "import tensorflow_musa"
 
 # Run all tests using the custom test runner in quiet mode
 python3 "$TEST_DIR/test_runner.py" --quiet

@@ -1,5 +1,6 @@
 #include "musa_device.h"
 
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 
@@ -17,6 +18,27 @@
 
 namespace tensorflow {
 namespace musa {
+namespace {
+
+bool EnablePageableH2DOnComputeStream() {
+  const char* env = std::getenv("MUSA_PAGEABLE_H2D_ON_COMPUTE_STREAM");
+  if (env == nullptr || env[0] == '\0') return false;
+  return std::strcmp(env, "1") == 0 || std::strcmp(env, "true") == 0 ||
+         std::strcmp(env, "TRUE") == 0 || std::strcmp(env, "on") == 0 ||
+         std::strcmp(env, "ON") == 0 || std::strcmp(env, "yes") == 0 ||
+         std::strcmp(env, "YES") == 0;
+}
+
+bool EnablePinnedH2DOnComputeStream() {
+  const char* env = std::getenv("MUSA_PINNED_H2D_ON_COMPUTE_STREAM");
+  if (env == nullptr || env[0] == '\0') return false;
+  return std::strcmp(env, "1") == 0 || std::strcmp(env, "true") == 0 ||
+         std::strcmp(env, "TRUE") == 0 || std::strcmp(env, "on") == 0 ||
+         std::strcmp(env, "ON") == 0 || std::strcmp(env, "yes") == 0 ||
+         std::strcmp(env, "YES") == 0;
+}
+
+}  // namespace
 
 MusaDeviceContext::MusaDeviceContext(
     musaStream_t stream, musaStream_t h2d_stream, musaStream_t d2h_stream,
@@ -64,17 +86,41 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
     return;
   }
 
-  // The semantics of sync_dst_compute is that:
-  //    the current copy operation needs to wait for the computation to finish
-  //    so, when set to true, the copy stream waits for the compute stream to
-  //    complete
-  if (sync_dst_compute) {
+  if (!sync_dst_compute) {
+    // WARNING: sync_dst_compute=false can cause race conditions if not handled
+    // correctly by the caller. Log a warning in debug builds to help identify
+    // potential issues.
+    VLOG(1) << "CopyCPUTensorToDevice called with sync_dst_compute=false. "
+            << "Caller MUST ensure proper synchronization before kernel reads. "
+            << "dst=" << dst << " bytes=" << bytes;
+  }
+
+  auto wait_h2d_stream_for_compute = [&]() -> Status {
+    if (!sync_dst_compute) {
+      return Status::OK();
+    }
+
     musaEvent_t sync_event;
-    musaEventCreateWithFlags(&sync_event, musaEventDisableTiming);
-    musaEventRecord(sync_event, stream_handle_);
+    musaError_t err =
+        musaEventCreateWithFlags(&sync_event, musaEventDisableTiming);
+    if (err != musaSuccess) {
+      return errors::Internal("MUSA H2D sync event create failed");
+    }
+
+    err = musaEventRecord(sync_event, stream_handle_);
+    if (err != musaSuccess) {
+      musaEventDestroy(sync_event);
+      return errors::Internal("MUSA H2D sync event record failed");
+    }
+
     MUSA_TELEMETRY_ON_EVENT_RECORD(
         sync_event, MUSA_TELEMETRY_STREAM_ID(stream_handle_), device_id);
-    musaStreamWaitEvent(h2d_stream_, sync_event, 0);
+    err = musaStreamWaitEvent(h2d_stream_, sync_event, 0);
+    if (err != musaSuccess) {
+      musaEventDestroy(sync_event);
+      return errors::Internal("MUSA H2D stream wait compute event failed");
+    }
+
     MUSA_TELEMETRY_ON_EVENT_WAIT(
         sync_event, MUSA_TELEMETRY_STREAM_ID(h2d_stream_),
         MUSA_TELEMETRY_STREAM_ID(stream_handle_), device_id);
@@ -89,17 +135,11 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
         musaEventDestroy(sync_event);
       });
     } else {
-      musaStreamSynchronize(stream_handle_);
+      musaStreamSynchronize(h2d_stream_);
       musaEventDestroy(sync_event);
     }
-  } else {
-    // WARNING: sync_dst_compute=false can cause race conditions if not handled
-    // correctly by the caller. Log a warning in debug builds to help identify
-    // potential issues.
-    VLOG(1) << "CopyCPUTensorToDevice called with sync_dst_compute=false. "
-            << "Caller MUST ensure proper synchronization before kernel reads. "
-            << "dst=" << dst << " bytes=" << bytes;
-  }
+    return Status::OK();
+  };
 
   // Check if source memory is pinned (musaMemoryTypeHost)
   musaPointerAttributes attributes;
@@ -113,7 +153,29 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
   }
 
   if (is_pinned) {
+    if (sync_dst_compute && EnablePinnedH2DOnComputeStream()) {
+      MUSA_TELEMETRY_ON_MEMCPY(dst, const_cast<void*>(src), bytes, device_id,
+                               MUSA_TELEMETRY_STREAM_ID(stream_handle_),
+                               TelemetryEventType::kMemcpyH2D);
+      musaError_t err =
+          musaMemcpyAsync(dst, src, bytes, musaMemcpyHostToDevice,
+                          stream_handle_);
+      if (err != musaSuccess) {
+        done(errors::Internal(
+            "MUSA pinned H2D async copy on compute stream failed"));
+        return;
+      }
+      done(Status::OK());
+      return;
+    }
+
     // Fast path: pinned memory can use direct async copy
+    Status sync_status = wait_h2d_stream_for_compute();
+    if (!sync_status.ok()) {
+      done(sync_status);
+      return;
+    }
+
     MUSA_TELEMETRY_ON_MEMCPY(dst, const_cast<void*>(src), bytes, device_id,
                              MUSA_TELEMETRY_STREAM_ID(h2d_stream_),
                              TelemetryEventType::kMemcpyH2D);
@@ -138,6 +200,9 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
     // driver instability with small async transfers
     const size_t kSmallCopyThreshold = 1024;
     if (bytes <= kSmallCopyThreshold) {
+      if (sync_dst_compute) {
+        musaStreamSynchronize(stream_handle_);
+      }
       musaError_t err = musaMemcpy(dst, src, bytes, musaMemcpyHostToDevice);
       if (err != musaSuccess) {
         done(errors::Internal("MUSA H2D small sync copy failed"));
@@ -154,6 +219,9 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
     if (bounce_buffer == nullptr) {
       LOG(WARNING)
           << "PinnedMemoryPool allocation failed, falling back to sync copy";
+      if (sync_dst_compute) {
+        musaStreamSynchronize(stream_handle_);
+      }
       musaError_t err = musaMemcpy(dst, src, bytes, musaMemcpyHostToDevice);
       if (err != musaSuccess) {
         done(errors::Internal("MUSA H2D sync copy failed"));
@@ -166,7 +234,43 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
     // Stage 1: Copy from pageable to pinned (CPU-side, synchronous)
     std::memcpy(bounce_buffer, src, bytes);
 
+    // For inference graphs with hundreds of feed tensors, the default path
+    // below records one H2D-stream event and one compute-stream wait per input.
+    // Queueing the H2D copy directly on the compute stream preserves ordering
+    // for downstream kernels and removes that cross-stream event/wait storm.
+    if (sync_dst_compute && EnablePageableH2DOnComputeStream()) {
+      MUSA_TELEMETRY_ON_MEMCPY(dst, bounce_buffer, bytes, device_id,
+                               MUSA_TELEMETRY_STREAM_ID(stream_handle_),
+                               TelemetryEventType::kMemcpyH2D);
+      musaError_t err =
+          musaMemcpyAsync(dst, bounce_buffer, bytes, musaMemcpyHostToDevice,
+                          stream_handle_);
+      if (err != musaSuccess) {
+        LOG(ERROR) << "MUSA H2D async copy on compute stream failed: "
+                   << musaGetErrorString(err) << " dst=" << dst
+                   << " bounce_buffer=" << bounce_buffer << " bytes=" << bytes
+                   << " stream=" << stream_handle_;
+        musa_dev->pinned_memory_pool()->FreeAsync(bounce_buffer, bytes,
+                                                  nullptr);
+        done(errors::Internal(
+            "MUSA H2D async copy on compute stream failed"));
+        return;
+      }
+
+      musa_dev->pinned_memory_pool()->FreeAsync(bounce_buffer, bytes,
+                                                stream_handle_);
+      done(Status::OK());
+      return;
+    }
+
     // Stage 2: Async copy from pinned to GPU
+    Status sync_status = wait_h2d_stream_for_compute();
+    if (!sync_status.ok()) {
+      musa_dev->pinned_memory_pool()->FreeAsync(bounce_buffer, bytes, nullptr);
+      done(sync_status);
+      return;
+    }
+
     MUSA_TELEMETRY_ON_MEMCPY(dst, bounce_buffer, bytes, device_id,
                              MUSA_TELEMETRY_STREAM_ID(h2d_stream_),
                              TelemetryEventType::kMemcpyH2D);
@@ -229,33 +333,52 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
     musaGetLastError();
   }
 
-  // Fast path: async copy to pinned memory
-  musaEvent_t compute_done_event;
-  musaEventCreateWithFlags(&compute_done_event, musaEventDisableTiming);
-  musaEventRecord(compute_done_event, stream_handle_);
-  MUSA_TELEMETRY_ON_EVENT_RECORD(
-      compute_done_event, MUSA_TELEMETRY_STREAM_ID(stream_handle_), device_id);
-  musaStreamWaitEvent(d2h_stream_, compute_done_event, 0);
-  MUSA_TELEMETRY_ON_EVENT_WAIT(
-      compute_done_event, MUSA_TELEMETRY_STREAM_ID(d2h_stream_),
-      MUSA_TELEMETRY_STREAM_ID(stream_handle_), device_id);
-  // CRITICAL FIX: Defer event destruction until the waiting stream completes.
-  // musaStreamWaitEvent() is asynchronous - the wait command is queued but
-  // may not have executed when this function returns. Destroying the event
-  // immediately can cause the wait to be ignored, leading to race conditions
-  // and dirty data.
-  if (event_mgr_) {
-    event_mgr_->ThenExecute(d2h_stream_, [compute_done_event, device_id]() {
-      musaSetDevice(device_id);
+  auto wait_d2h_stream_for_compute = [&]() -> Status {
+    musaEvent_t compute_done_event;
+    musaError_t err =
+        musaEventCreateWithFlags(&compute_done_event, musaEventDisableTiming);
+    if (err != musaSuccess) {
+      return errors::Internal("MUSA D2H sync event create failed");
+    }
+
+    err = musaEventRecord(compute_done_event, stream_handle_);
+    if (err != musaSuccess) {
       musaEventDestroy(compute_done_event);
-    });
-  } else {
-    // Fallback: synchronize before destroy (conservative)
-    musaStreamSynchronize(d2h_stream_);
-    musaEventDestroy(compute_done_event);
-  }
+      return errors::Internal("MUSA D2H sync event record failed");
+    }
+    MUSA_TELEMETRY_ON_EVENT_RECORD(
+        compute_done_event, MUSA_TELEMETRY_STREAM_ID(stream_handle_), device_id);
+
+    err = musaStreamWaitEvent(d2h_stream_, compute_done_event, 0);
+    if (err != musaSuccess) {
+      musaEventDestroy(compute_done_event);
+      return errors::Internal("MUSA D2H stream wait compute event failed");
+    }
+    MUSA_TELEMETRY_ON_EVENT_WAIT(
+        compute_done_event, MUSA_TELEMETRY_STREAM_ID(d2h_stream_),
+        MUSA_TELEMETRY_STREAM_ID(stream_handle_), device_id);
+
+    // Keep the event alive until the queued wait has completed.
+    if (event_mgr_) {
+      event_mgr_->ThenExecute(d2h_stream_, [compute_done_event, device_id]() {
+        musaSetDevice(device_id);
+        musaEventDestroy(compute_done_event);
+      });
+    } else {
+      musaStreamSynchronize(d2h_stream_);
+      musaEventDestroy(compute_done_event);
+    }
+
+    return Status::OK();
+  };
 
   if (is_pinned) {
+    Status sync_status = wait_d2h_stream_for_compute();
+    if (!sync_status.ok()) {
+      done(sync_status);
+      return;
+    }
+
     MUSA_TELEMETRY_ON_MEMCPY(dst, const_cast<void*>(src), bytes, device_id,
                              MUSA_TELEMETRY_STREAM_ID(d2h_stream_),
                              TelemetryEventType::kMemcpyD2H);
@@ -305,6 +428,13 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
     }
 
     // Stage 1: Async copy from GPU to pinned
+    Status sync_status = wait_d2h_stream_for_compute();
+    if (!sync_status.ok()) {
+      musa_dev->pinned_memory_pool()->FreeAsync(bounce_buffer, bytes, nullptr);
+      done(sync_status);
+      return;
+    }
+
     MUSA_TELEMETRY_ON_MEMCPY(bounce_buffer, const_cast<void*>(src), bytes,
                              device_id, MUSA_TELEMETRY_STREAM_ID(d2h_stream_),
                              TelemetryEventType::kMemcpyD2H);

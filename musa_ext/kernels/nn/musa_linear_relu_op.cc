@@ -2,6 +2,8 @@
 #include <mudnn_xmma.h>
 #include <musa_runtime.h>
 
+#include <cstdlib>
+
 #include "../utils_op.h"
 #include "tensorflow/core/util/matmul_bcast.h"
 #include "utils/logging.h"
@@ -9,15 +11,27 @@
 namespace tensorflow {
 namespace musa {
 
-// The fused op for MusaLinearRelu, which computes MatMul + BiasAdd + Relu
-// Provides two types of implementations:
-// 1) A pure MUSA implementation using mudnn for MatMul and a custom kernel for
-// BiasAdd+Relu
-// 2) A fallback implementation that uses mudnn for MatMul and then a separate
-// kernel for BiasAdd+Relu (for better performance on smaller sizes)
+namespace {
+
+inline bool ResolveTF32Enabled() {
+  const char* tf32_env = std::getenv("MUSA_ENABLE_TF32");
+  if (tf32_env == nullptr) {
+    return true;
+  }
+  return std::atoi(tf32_env) != 0;
+}
+
+}  // namespace
+
+// The fused op for MusaLinearRelu, which computes MatMul + BiasAdd + Relu.
+// Write MatMul directly into the final output and then apply the fused epilogue
+// in-place to avoid an additional large temporary tensor and two extra mudnn
+// launches.
 
 template <typename T>
-void LaunchBiasAddReluKernel(const T*, const T*, T*, int, int, musaStream_t);
+void LaunchBiasAddReluKernel(const T* x, const T* bias, T* output,
+                             int64_t n_elements, int64_t n_cols,
+                             musaStream_t stream);
 
 template <typename T>
 class MusaLinearReluOp : public MusaOpKernel {
@@ -25,10 +39,12 @@ class MusaLinearReluOp : public MusaOpKernel {
   explicit MusaLinearReluOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("transpose_a", &trans_a_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("transpose_b", &trans_b_));
+
+    static const bool tf32_enabled_global = ResolveTF32Enabled();
+    tf32_enabled_ = tf32_enabled_global;
   }
 
   void Compute(OpKernelContext* ctx) override {
-    MUSA_KERNEL_TIMING_GUARD(ctx);
     const Tensor& in0 = ctx->input(0);
     const Tensor& in1 = ctx->input(1);
     const Tensor& bias_input = ctx->input(2);
@@ -39,15 +55,15 @@ class MusaLinearReluOp : public MusaOpKernel {
                     "Incompatible shapes: ", in0.shape().DebugString(), " vs ",
                     in1.shape().DebugString()));
 
-    int64 d0 = in0.dim_size(in0.dims() - 2);
-    int64 d1 = in0.dim_size(in0.dims() - 1);
-    int64 d2 = in1.dim_size(in1.dims() - 2);
-    int64 d3 = in1.dim_size(in1.dims() - 1);
+    const int64 d0 = in0.dim_size(in0.dims() - 2);
+    const int64 d1 = in0.dim_size(in0.dims() - 1);
+    const int64 d2 = in1.dim_size(in1.dims() - 2);
+    const int64 d3 = in1.dim_size(in1.dims() - 1);
 
-    int64 m = trans_a_ ? d1 : d0;
-    int64 k = trans_a_ ? d0 : d1;
-    int64 n = trans_b_ ? d2 : d3;
-    int64 k_check = trans_b_ ? d3 : d2;
+    const int64 m = trans_a_ ? d1 : d0;
+    const int64 k = trans_a_ ? d0 : d1;
+    const int64 n = trans_b_ ? d2 : d3;
+    const int64 k_check = trans_b_ ? d3 : d2;
 
     OP_REQUIRES(ctx, k == k_check,
                 errors::InvalidArgument(
@@ -90,10 +106,10 @@ class MusaLinearReluOp : public MusaOpKernel {
       int64_t out_batch = bcast.output_batch_shape().num_elements();
 
       auto ReshapeTo3D = [out_batch](mTensor& mt, const Tensor& t) {
-        int64_t dims = t.dims();
-        int64_t rows = t.dim_size(dims - 2);
-        int64_t cols = t.dim_size(dims - 1);
-        int64_t batch = t.NumElements() / (rows * cols);
+        const int64_t dims = t.dims();
+        const int64_t rows = t.dim_size(dims - 2);
+        const int64_t cols = t.dim_size(dims - 1);
+        const int64_t batch = t.NumElements() / (rows * cols);
         if (dims != 3 || (batch == 1 && out_batch > 1)) {
           mt.SetNdInfo(
               {batch == 1 && out_batch > 1 ? out_batch : batch, rows, cols},

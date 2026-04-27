@@ -64,8 +64,6 @@ class MusaNormalizeOp : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
-    MUSA_KERNEL_TIMING_GUARD_WITH_NAME(ctx, "MusaNormalize");
-
     const Tensor& x = ctx->input(0);
     // gamma and beta are inputs 1 and 2, but we ignore them
     // We always use gamma=1.0 and beta=0.0 for pure normalization
@@ -94,10 +92,8 @@ class MusaNormalizeOp : public MusaOpKernel {
             << num_rows << ", row_size=" << last_dim << ", epsilon=" << epsilon_
             << ", max_std=" << max_std_;
 
-    MUSA_KERNEL_TRACE_START("Kernel");
     LaunchNormalize<T>(input_ptr, output_ptr, num_rows, last_dim, epsilon_,
                        max_std_, stream);
-    MUSA_KERNEL_TRACE_END("Kernel");
 
     VLOG(1) << "MusaNormalizeOp::Compute finished";
   }

@@ -54,7 +54,6 @@ class MusaResourceApplyNadamOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
-    MUSA_KERNEL_TIMING_GUARD(ctx);
     core::RefCountPtr<Var> var;
     core::RefCountPtr<Var> m;
     core::RefCountPtr<Var> v;
@@ -105,10 +104,8 @@ class MusaResourceApplyNadamOp : public MusaOpKernel {
     const T epsilon = ctx->input(8).scalar<T>()();
     const Tensor& grad = ctx->input(9);
 
-    MUSA_KERNEL_TRACE_START("NadamKernel");
     UseKernel(ctx, var_t, m_t, v_t, grad, beta1_power, beta2_power, lr, beta1,
               beta2, epsilon);
-    MUSA_KERNEL_TRACE_END("NadamKernel");
   }
 
   bool IsExpensive() override { return true; }

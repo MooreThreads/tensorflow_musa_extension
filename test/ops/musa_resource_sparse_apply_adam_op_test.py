@@ -24,7 +24,7 @@ sys.path.insert(0, test_dir)
 
 import numpy as np
 import tensorflow as tf
-from musa_test_utils import MUSATestCase
+from musa_test_utils import MUSATestCase, load_musa_ops
 
 
 class MusaResourceSparseApplyAdamTest(MUSATestCase):
@@ -32,33 +32,13 @@ class MusaResourceSparseApplyAdamTest(MUSATestCase):
 
     @classmethod
     def setUpClass(cls):
-        """Load the custom op module via tf.load_op_library."""
+        """Load the custom op module from the installed tensorflow_musa wheel."""
         super(MusaResourceSparseApplyAdamTest, cls).setUpClass()
 
-        plugin_path = None
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-
-        candidate_paths = [
-            os.path.join(current_dir, "..", "..", "build", "libmusa_plugin.so"),
-            os.path.join(os.path.dirname(current_dir), "..", "build", "libmusa_plugin.so"),
-            os.path.join(os.getcwd(), "build", "libmusa_plugin.so"),
-        ]
-
-        for path in candidate_paths:
-            normalized_path = os.path.normpath(path)
-            if os.path.exists(normalized_path):
-                plugin_path = normalized_path
-                break
-
-        if plugin_path and os.path.exists(plugin_path):
-            try:
-                cls._musa_ops = tf.load_op_library(plugin_path)
-            except Exception as e:
-                print(f"FAILED: Error loading MUSA ops from {plugin_path}: {e}")
-                cls._musa_ops = None
-        else:
-            searched = [os.path.normpath(p) for p in candidate_paths]
-            print("MUSA plugin not found. Searched:\n" + "\n".join(f"  - {loc}" for loc in searched))
+        try:
+            cls._musa_ops = load_musa_ops()
+        except Exception as e:
+            print(f"FAILED: Error loading MUSA ops from tensorflow_musa wheel: {e}")
             cls._musa_ops = None
 
         if cls._musa_ops is not None and not hasattr(cls._musa_ops, 'musa_resource_sparse_apply_adam'):

@@ -1,86 +1,14 @@
 # TensorFlow MUSA Extension 调试指南
 
-本文档详细介绍了 TensorFlow MUSA Extension 的调试工具和方法，包括 Kernel 计时、遥测系统（Telemetry）、环境变量控制等。
+本文档介绍 TensorFlow MUSA Extension 的调试手段：遥测（Telemetry）、环境变量、图与日志诊断等。插件使用常规 Release 构建（`./build.sh` / `pip` 安装的 wheel）即可；仓库不再提供基于内核埋点的 Kernel 计时宏。
 
 ---
 
-## 1. Kernel 计时（Debug 模式）
-
-### 1.1 启用 Debug 构建
-
-Kernel 计时功能仅在 Debug 构建模式下生效：
-
-```bash
-# Debug 构建（启用 MUSA_KERNEL_DEBUG 和计时宏）
-./build.sh debug
-```
-
-Debug 构建会启用以下功能：
-- `MUSA_KERNEL_DEBUG` 编译宏
-- Kernel 执行时间统计宏
-- 分段计时埋点
-
-### 1.2 计时宏使用方式
-
-在 Kernel 代码中使用计时宏进行性能分析：
-
-```cpp
-// 基础 guard - 自动计时整个 Kernel 执行
-MUSA_KERNEL_TIMING_GUARD(ctx);
-
-// 分段埋点 - 精细分析各阶段耗时
-MUSA_KERNEL_TRACE_START("Mem Alloc");
-// ... 内存分配代码 ...
-MUSA_KERNEL_TRACE_END("Mem Alloc");
-
-MUSA_KERNEL_TRACE_START("Kernel");
-// ... Kernel 执行 ...
-MUSA_KERNEL_TRACE_END("Kernel");
-
-// 自定义阶段名
-MUSA_KERNEL_TRACE_START("State1");
-// ... 预处理阶段 ...
-MUSA_KERNEL_TRACE_END("State1");
-
-MUSA_KERNEL_TRACE_START("State2");
-// ... 主计算阶段 ...
-MUSA_KERNEL_TRACE_END("State2");
-```
-
-### 1.3 计时环境变量
-
-通过环境变量控制计时输出：
-
-| 变量名 | 说明 | 示例 |
-|--------|------|------|
-| `MUSA_TIMING_KERNEL_LEVEL` | 计时模式（`1`=仅总耗时，`2`=总耗时+分段耗时） | `export MUSA_TIMING_KERNEL_LEVEL=2` |
-| `MUSA_TIMING_KERNEL_NAME` | 仅打印指定 Kernel（大小写不敏感子串匹配，`ALL` 打印全部） | `export MUSA_TIMING_KERNEL_NAME=MatMul` |
-| `MUSA_TIMING_KERNEL_STATS` | 进程退出时打印计时汇总（`1`=开启，`0`=关闭） | `export MUSA_TIMING_KERNEL_STATS=1` |
-
-### 1.4 常用验证命令（MatMul 示例）
-
-```bash
-# 1. Debug 构建
-./build.sh debug
-
-# 2. 设置计时环境变量
-export MUSA_TIMING_KERNEL_LEVEL=2
-export MUSA_TIMING_KERNEL_NAME=ALL
-export MUSA_TIMING_KERNEL_STATS=1
-
-# 3. 运行测试并保存日志
-mkdir -p /tmp/musa_timing_logs
-cd test
-python test_runner.py --single matmul_op_test.py 2>&1 | tee /tmp/musa_timing_logs/matmul_l2.log
-```
-
----
-
-## 2. 遥测系统（Telemetry）
+## 1. 遥测系统（Telemetry）
 
 遥测系统提供全链路追踪能力，用于诊断脏数据（NaN）、内存问题和同步异常。
 
-### 2.1 启用遥测
+### 1.1 启用遥测
 
 通过环境变量启用和配置遥测系统：
 
@@ -92,7 +20,7 @@ python test_runner.py --single matmul_op_test.py 2>&1 | tee /tmp/musa_timing_log
 | `MUSA_TELEMETRY_FLUSH_MS` | 日志刷新间隔（毫秒） | `100` | `export MUSA_TELEMETRY_FLUSH_MS=50` |
 | `MUSA_TELEMETRY_STACK_TRACE` | 包含堆栈追踪（`1` 或 `true`） | `false` | `export MUSA_TELEMETRY_STACK_TRACE=1` |
 
-### 2.2 遥测事件类型
+### 1.2 遥测事件类型
 
 遥测系统自动记录以下事件：
 
@@ -108,7 +36,7 @@ python test_runner.py --single matmul_op_test.py 2>&1 | tee /tmp/musa_timing_log
 | `event_wait` | Event 等待 | Event 句柄、等待 Stream ID、源 Stream ID |
 | `dirty_data_detected` | 脏数据检测 | 地址、大小、描述信息 |
 
-### 2.3 遥测日志格式
+### 1.3 遥测日志格式
 
 遥测日志采用 JSON Lines 格式（每行一个 JSON 对象）：
 
@@ -118,7 +46,7 @@ python test_runner.py --single matmul_op_test.py 2>&1 | tee /tmp/musa_timing_log
 {"timestamp_ns":1234567890123600,"event_type":"memcpy_d2h","correlation_id":44,"device_id":0,"stream_id":234567,"thread_id":789,"memory_addr":"0x7f1234001000","memory_size":512,"metadata":{"src_addr":"0x7f1234000000"}}
 ```
 
-### 2.4 脏数据反向追溯
+### 1.4 脏数据反向追溯
 
 遥测系统提供三种反向追溯 API：
 
@@ -148,7 +76,7 @@ auto records = MusaTelemetry::Instance().BacktraceByTime(start_ns, end_ns);
 auto records = MusaTelemetry::Instance().BacktraceByTensorId(100, 20);
 ```
 
-### 2.5 遥测使用示例
+### 1.5 遥测使用示例
 
 **完整遥测诊断流程**：
 
@@ -177,7 +105,7 @@ with open('/tmp/musa_telemetry.json') as f:
 "
 ```
 
-### 2.6 遥测预期输出示例
+### 1.6 遥测预期输出示例
 
 启用遥测后，stderr 或日志文件中会输出 JSON Lines 格式的遥测事件：
 
@@ -204,9 +132,9 @@ with open('/tmp/musa_telemetry.json') as f:
 
 ---
 
-## 3. 环境变量汇总
+## 2. 环境变量汇总
 
-### 3.1 功能控制
+### 2.1 功能控制
 
 | 变量名 | 说明 | 示例 |
 |--------|------|------|
@@ -217,17 +145,14 @@ with open('/tmp/musa_telemetry.json') as f:
 | `MUSA_AMP_MODE` | AMP 精度模式（`FP16` 或 `BF16`） | `export MUSA_AMP_MODE=FP16` |
 | `MUSA_DISABLE_GRAPPLER` | 禁用 Grappler 图优化 | `export MUSA_DISABLE_GRAPPLER=1` |
 
-### 3.2 日志与调试
+### 2.2 日志与调试
 
 | 变量名 | 说明 | 示例 |
 |--------|------|------|
-| `MUSA_TIMING_KERNEL_LEVEL` | 计时模式（`1`=仅总耗时，`2`=总耗时+分段） | `export MUSA_TIMING_KERNEL_LEVEL=2` |
-| `MUSA_TIMING_KERNEL_NAME` | 仅打印指定 Kernel（`ALL` 打印全部） | `export MUSA_TIMING_KERNEL_NAME=MatMul` |
-| `MUSA_TIMING_KERNEL_STATS` | 进程退出时打印计时汇总 | `export MUSA_TIMING_KERNEL_STATS=1` |
 | `TF_CPP_MIN_LOG_LEVEL` | 全局日志级别（0=INFO, 1=WARNING, 2=ERROR） | `export TF_CPP_MIN_LOG_LEVEL=1` |
 | `TF_CPP_VMODULE` | 精确控制特定文件的 VLOG 级别 | `export TF_CPP_VMODULE="musa_graph_optimizer=1"` |
 
-### 3.3 遥测系统
+### 2.3 遥测系统
 
 | 变量名 | 说明 | 示例 |
 |--------|------|------|
@@ -238,20 +163,24 @@ with open('/tmp/musa_telemetry.json') as f:
 
 ---
 
-## 4. 常用调试组合
+## 3. 常用调试组合
 
-### 4.1 性能分析
+### 3.1 性能与热点（TensorFlow 侧）
+
+内核级计时宏已移除。可结合 TensorFlow 自带能力做性能分析，例如：
+
+- 使用 TensorFlow Profiler（`tf.profiler` / TensorBoard）采集算子与时间线
+- 使用 `TF_CPP_VMODULE` 打开图优化或融合相关 VLOG，确认优化是否命中
+- 通过 `MUSA_ENABLE_TF32`、`MUSA_AUTO_MIXED_PRECISION` 等开关对比数值与耗时
 
 ```bash
-# Debug 构建 + Kernel 计时
-./build.sh debug
-export MUSA_TIMING_KERNEL_LEVEL=2
-export MUSA_TIMING_KERNEL_NAME=ALL
-export MUSA_TIMING_KERNEL_STATS=1
-python test_runner.py
+cd test
+export TF_CPP_MIN_LOG_LEVEL=0
+export TF_CPP_VMODULE="musa_graph_optimizer=1"
+python test_runner.py --single ops/matmul_op_test.py
 ```
 
-### 4.2 图优化调试
+### 3.2 图优化调试
 
 ```bash
 # 查看图优化器的详细日志
@@ -268,7 +197,7 @@ export MUSA_DUMP_GRAPHDEF_DIR=/tmp/graphs
 python test_runner.py
 ```
 
-### 4.3 脏数据诊断
+### 3.3 脏数据诊断
 
 ```bash
 # 启用遥测进行脏数据追溯
@@ -276,50 +205,50 @@ export MUSA_TELEMETRY_ENABLED=1
 export MUSA_TELEMETRY_LOG_PATH=/tmp/telemetry.json
 export MUSA_TELEMETRY_BUFFER_SIZE=50000
 
-# 运行整网测试
-cd other_models && python tf_rec_example.py
+# 运行你的模型或测试脚本（示例：测试套件）
+cd test && python test_runner.py
 
 # 分析遥测日志
 grep "dirty_data_detected" /tmp/telemetry.json
 ```
 
-### 4.4 静音模式（仅显示错误）
+### 3.4 静音模式（仅显示错误）
 
 ```bash
 export TF_CPP_MIN_LOG_LEVEL=2
 python test_runner.py
 ```
 
-### 4.5 恢复默认配置
+### 3.5 恢复默认配置
 
 ```bash
-unset MUSA_TIMING_KERNEL_LEVEL MUSA_TIMING_KERNEL_NAME MUSA_TIMING_KERNEL_STATS
 unset MUSA_TELEMETRY_ENABLED MUSA_TELEMETRY_LOG_PATH
 unset TF_CPP_MIN_LOG_LEVEL TF_CPP_VMODULE
 ```
 
 ---
 
-## 5. 内存诊断（Memory Coloring）
+## 4. 内存诊断（Memory Coloring）
 
-内存染色功能用于检测 Use-After-Free 和内存越界问题。此功能在 Debug 构建下可用。
+内存染色用于检测 Use-After-Free 和内存越界等问题。请先使用常规方式构建插件（`./build.sh` 或安装 wheel），再按下列流程配合遥测使用。
 
-### 5.1 内存染色原理
+### 4.1 内存染色原理
 
 - **分配时填充**：`0xABABABAB` 模式（标识未初始化内存）
 - **释放时填充**：`0xCDCDCDCD` 模式（标识已释放内存）
 - **检测机制**：Kernel 执行前验证内存模式，若发现 `0xCDCDCDCD` 则报告 Use-After-Free
 
-### 5.2 内存诊断流程
+### 4.2 内存诊断流程
 
 ```bash
-# 1. Debug 构建
-./build.sh debug
+# 1. 构建或安装当前版本插件（Release）
+#    在仓库根目录: ./build.sh
 
 # 2. 启用遥测（配合内存诊断）
 export MUSA_TELEMETRY_ENABLED=1
 
 # 3. 运行测试
+cd test
 python test_runner.py
 
 # 4. 检查日志中的内存问题报告
@@ -329,11 +258,11 @@ grep "memory_corruption" /tmp/telemetry.json
 
 ---
 
-## 6. 流同步诊断
+## 5. 流同步诊断
 
 遥测系统可追踪 Event 和 Stream 的同步关系，用于诊断跨流竞争条件。
 
-### 6.1 同步事件追踪
+### 5.1 同步事件追踪
 
 遥测日志中的同步事件示例：
 
@@ -343,19 +272,20 @@ grep "memory_corruption" /tmp/telemetry.json
 ```
 
 通过分析 `event_record` 和 `event_wait` 的时序关系，可以验证：
+
 - H2D Stream → Compute Stream 同步是否正确
 - Compute Stream → D2H Stream 同步是否正确
 - Event 是否在等待 Stream 完成后才被销毁
 
-### 6.2 同步问题诊断流程
+### 5.2 同步问题诊断流程
 
 ```bash
 # 1. 启用遥测
 export MUSA_TELEMETRY_ENABLED=1
 export MUSA_TELEMETRY_LOG_PATH=/tmp/sync_trace.json
 
-# 2. 运行同步压力测试
-cd test && python test_sync_stress.py --iterations 10000
+# 2. 运行测试（或你的同步压力用例）
+cd test && python test_runner.py
 
 # 3. 分析 Event 同步链
 python -c "
@@ -371,30 +301,30 @@ print(f'Event records: {len(records)}, Event waits: {len(waits)}')
 
 ---
 
-## 7. 故障排查清单
+## 6. 故障排查清单
 
-### 7.1 脏数据（NaN）问题
+### 6.1 脏数据（NaN）问题
 
 1. 启用遥测系统记录完整操作链
 2. 检测到 NaN 后，使用 `BacktraceByAddress` 追溯
 3. 检查最近 10 次内存操作（分配、拷贝、Kernel）
 4. 验证 Event 同步链是否完整
 
-### 7.2 OOM 问题
+### 6.2 OOM 问题
 
 1. 使用 `musaMemGetInfo` 监控显存使用趋势
 2. 检查遥测日志中的 `tensor_allocate` 和 `tensor_free` 计数
 3. 验证是否存在内存泄漏（分配 > 释放）
 4. 检查碎片率（ fragmentation > 40% 为异常）
 
-### 7.3 性能问题
+### 6.3 性能问题
 
-1. 使用 Debug 构建和 Kernel 计时分析瓶颈
-2. 检查计时日志中的耗时热点
-3. 验证是否启用了 TF32/AMP 加速
-4. 检查 Grappler 图优化是否生效
+1. 使用 TensorFlow Profiler 或 timeline 分析算子级耗时
+2. 使用 `TF_CPP_VMODULE` 确认 Grappler / 融合是否按预期执行
+3. 验证是否启用了 TF32/AMP 等加速开关
+4. 对比 `MUSA_DISABLE_GRAPPLER=1` 以隔离图优化影响
 
 ---
 
-**文档版本**: 2026-03-31
+**文档版本**: 2026-04-24
 **适用版本**: TensorFlow MUSA Extension v1.0+

@@ -28,7 +28,14 @@ Example usage:
 
 import logging
 
-from ._loader import get_musa_devices, is_plugin_loaded, load_plugin
+from ._graph_optimizer import (
+    MUSA_GRAPH_OPTIMIZER_NAME,
+    disable_musa_graph_optimizer,
+    enable_musa_graph_optimizer,
+    is_musa_graph_optimizer_enabled,
+    set_musa_graph_optimizer_enabled,
+)
+from ._loader import get_musa_devices, get_musa_ops, is_plugin_loaded, load_plugin
 
 # Package version
 __version__ = "0.1.0"
@@ -50,6 +57,12 @@ except Exception as e:
 __all__ = [
     "__version__",
     "load_plugin",
+    "get_musa_ops",
     "is_plugin_loaded",
     "get_musa_devices",
+    "MUSA_GRAPH_OPTIMIZER_NAME",
+    "set_musa_graph_optimizer_enabled",
+    "enable_musa_graph_optimizer",
+    "disable_musa_graph_optimizer",
+    "is_musa_graph_optimizer_enabled",
 ]
