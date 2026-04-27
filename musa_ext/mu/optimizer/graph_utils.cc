@@ -15,12 +15,16 @@ limitations under the License.
 
 #include "mu/optimizer/graph_utils.h"
 
-#include <chrono>
+#include <algorithm>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <string>
+#include <vector>
 
+#include "google/protobuf/text_format.h"
 #include "tensorflow/core/framework/graph.pb.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/platform/env.h"
@@ -32,14 +36,135 @@ namespace musa {
 
 namespace {
 
-// Get dump directory from environment or use default
+constexpr const char* kDumpDirEnv = "MUSA_DUMP_GRAPHDEF_DIR";
+constexpr const char* kDumpFormatEnv = "MUSA_DUMP_GRAPHDEF_FORMAT";
+
+enum class DumpFormatMode {
+  kAuto,
+  kPbtxt,
+  kPb,
+  kBoth,
+};
+
+std::string ToLower(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char ch) { return std::tolower(ch); });
+  return value;
+}
+
 std::string GetDumpDirectory() {
-  const char* env_dir = std::getenv("MUSA_DUMP_GRAPHDEF_DIR");
-  if (env_dir != nullptr && strlen(env_dir) > 0) {
+  const char* env_dir = std::getenv(kDumpDirEnv);
+  if (env_dir != nullptr && std::strlen(env_dir) > 0) {
     return std::string(env_dir);
   }
-  // Default to current directory
   return ".";
+}
+
+DumpFormatMode GetDumpFormatMode() {
+  const char* env_val = std::getenv(kDumpFormatEnv);
+  if (env_val == nullptr || std::strlen(env_val) == 0) {
+    return DumpFormatMode::kAuto;
+  }
+
+  const std::string mode = ToLower(std::string(env_val));
+  if (mode == "pbtxt" || mode == "text") {
+    return DumpFormatMode::kPbtxt;
+  }
+  if (mode == "pb" || mode == "binary") {
+    return DumpFormatMode::kPb;
+  }
+  if (mode == "both") {
+    return DumpFormatMode::kBoth;
+  }
+  return DumpFormatMode::kAuto;
+}
+
+std::string BuildDumpBasePath(const std::string& dump_dir,
+                              const std::string& prefix,
+                              const std::string& stage_description) {
+  std::stringstream filename;
+  filename << dump_dir << "/" << prefix;
+  if (!stage_description.empty()) {
+    filename << "_" << stage_description;
+  }
+  return filename.str();
+}
+
+Status EnsureDumpDirectoryExists(const std::string& dump_dir) {
+  tensorflow::Env* env = tensorflow::Env::Default();
+  if (!env->FileExists(dump_dir).ok()) {
+    TF_RETURN_IF_ERROR(env->CreateDir(dump_dir));
+  }
+  return Status::OK();
+}
+
+Status WriteStringToFile(const std::string& path, const std::string& contents,
+                         std::ios::openmode mode) {
+  std::ofstream file(path, mode);
+  if (!file.is_open()) {
+    return Status(tensorflow::error::INTERNAL,
+                  "Failed to open file for writing: " + path);
+  }
+  file << contents;
+  file.close();
+  return Status::OK();
+}
+
+Status DumpGraphDefAsPbtxt(const GraphDef& graph_def,
+                           const std::string& base_path,
+                           std::string* dumped_path) {
+  std::string graph_txt;
+  if (!google::protobuf::TextFormat::PrintToString(graph_def, &graph_txt)) {
+    return Status(tensorflow::error::INTERNAL,
+                  "Failed to serialize GraphDef to text format");
+  }
+
+  const std::string path = base_path + ".pbtxt";
+  TF_RETURN_IF_ERROR(
+      WriteStringToFile(path, graph_txt, std::ios::out | std::ios::trunc));
+  *dumped_path = path;
+  return Status::OK();
+}
+
+Status DumpGraphDefAsPb(const GraphDef& graph_def, const std::string& base_path,
+                        std::string* dumped_path) {
+  std::string graph_bin;
+  if (!graph_def.SerializeToString(&graph_bin)) {
+    return Status(tensorflow::error::INTERNAL,
+                  "Failed to serialize GraphDef to binary format");
+  }
+
+  const std::string path = base_path + ".pb";
+  TF_RETURN_IF_ERROR(WriteStringToFile(
+      path, graph_bin, std::ios::out | std::ios::trunc | std::ios::binary));
+  *dumped_path = path;
+  return Status::OK();
+}
+
+std::string JoinStrings(const std::vector<std::string>& values,
+                        const std::string& separator) {
+  std::ostringstream os;
+  for (size_t i = 0; i < values.size(); ++i) {
+    if (i > 0) {
+      os << separator;
+    }
+    os << values[i];
+  }
+  return os.str();
+}
+
+std::string DumpModeToString(DumpFormatMode mode) {
+  switch (mode) {
+    case DumpFormatMode::kAuto:
+      return "auto";
+    case DumpFormatMode::kPbtxt:
+      return "pbtxt";
+    case DumpFormatMode::kPb:
+      return "pb";
+    case DumpFormatMode::kBoth:
+      return "both";
+  }
+  return "auto";
 }
 
 }  // namespace
@@ -57,48 +182,78 @@ Status DumpGraphDef(const GraphDef& graph_def, const std::string& prefix,
     return Status::OK();
   }
 
-  std::string dump_dir = GetDumpDirectory();
+  const std::string dump_dir = GetDumpDirectory();
+  TF_RETURN_IF_ERROR(EnsureDumpDirectoryExists(dump_dir));
 
-  // Create directory if it doesn't exist
-  tensorflow::Env* env = tensorflow::Env::Default();
-  if (!env->FileExists(dump_dir).ok()) {
-    TF_RETURN_IF_ERROR(env->CreateDir(dump_dir));
+  const std::string base_path =
+      BuildDumpBasePath(dump_dir, prefix, stage_description);
+  const DumpFormatMode mode = GetDumpFormatMode();
+
+  std::vector<std::string> dumped_paths;
+  std::vector<std::string> error_messages;
+
+  auto try_dump_pbtxt = [&]() {
+    std::string path;
+    Status status = DumpGraphDefAsPbtxt(graph_def, base_path, &path);
+    if (status.ok()) {
+      dumped_paths.push_back(path);
+    } else {
+      error_messages.push_back("pbtxt: " + status.ToString());
+    }
+    return status;
+  };
+
+  auto try_dump_pb = [&]() {
+    std::string path;
+    Status status = DumpGraphDefAsPb(graph_def, base_path, &path);
+    if (status.ok()) {
+      dumped_paths.push_back(path);
+    } else {
+      error_messages.push_back("pb: " + status.ToString());
+    }
+    return status;
+  };
+
+  switch (mode) {
+    case DumpFormatMode::kPbtxt:
+      TF_RETURN_IF_ERROR(try_dump_pbtxt());
+      break;
+    case DumpFormatMode::kPb:
+      TF_RETURN_IF_ERROR(try_dump_pb());
+      break;
+    case DumpFormatMode::kBoth:
+      try_dump_pbtxt();
+      try_dump_pb();
+      break;
+    case DumpFormatMode::kAuto:
+      if (!try_dump_pbtxt().ok()) {
+        LOG(WARNING) << "MusaGraphOptimizer: pbtxt dump failed for " << base_path
+                     << ", falling back to binary pb";
+        try_dump_pb();
+      }
+      break;
   }
 
-  // Construct filename: {dump_dir}/{prefix}_{stage_description}.pbtxt
-  std::stringstream filename;
-  filename << dump_dir << "/" << prefix;
-  if (!stage_description.empty()) {
-    filename << "_" << stage_description;
-  }
-  filename << ".pbtxt";
-
-  std::string filepath = filename.str();
-
-  // Serialize GraphDef to text format
-  std::string graph_txt;
-  if (!protobuf::TextFormat::PrintToString(graph_def, &graph_txt)) {
+  if (dumped_paths.empty()) {
     return Status(tensorflow::error::INTERNAL,
-                  "Failed to serialize GraphDef to text format");
+                  "Failed to dump GraphDef in mode '" +
+                      DumpModeToString(mode) + "': " +
+                      JoinStrings(error_messages, "; "));
   }
 
-  // Write to file
-  std::ofstream file(filepath, std::ios::out | std::ios::trunc);
-  if (!file.is_open()) {
-    return Status(tensorflow::error::INTERNAL,
-                  "Failed to open file for writing: " + filepath);
+  if (!error_messages.empty()) {
+    LOG(WARNING) << "MusaGraphOptimizer: Partial dump issues for " << base_path
+                 << ": " << JoinStrings(error_messages, "; ");
   }
 
-  file << graph_txt;
-  file.close();
-
-  LOG(INFO) << "MusaGraphOptimizer: Dumped GraphDef to " << filepath
-            << " (nodes: " << graph_def.node_size() << ")";
+  LOG(INFO) << "MusaGraphOptimizer: Dumped GraphDef to "
+            << JoinStrings(dumped_paths, ", ") << " (nodes: "
+            << graph_def.node_size() << ", mode=" << DumpModeToString(mode)
+            << ")";
 
   return Status::OK();
 }
 
-// Initialize static member
 int GraphDefDumper::global_dump_counter_ = 0;
 
 GraphDefDumper::GraphDefDumper(const std::string& optimizer_name)
@@ -107,10 +262,9 @@ GraphDefDumper::GraphDefDumper(const std::string& optimizer_name)
 GraphDefDumper::~GraphDefDumper() {}
 
 void GraphDefDumper::DumpAtStage(const GraphDef& graph,
-                                  const std::string& stage) {
+                                 const std::string& stage) {
   if (!IsGraphDefDumpingEnabled()) return;
 
-  // Create prefix: {optimizer_name}_{dump_id}
   std::stringstream prefix;
   prefix << optimizer_name_ << "_" << std::setfill('0') << std::setw(4)
          << dump_id_;
@@ -123,12 +277,12 @@ void GraphDefDumper::DumpAtStage(const GraphDef& graph,
 }
 
 void GraphDefDumper::DumpBeforePass(const GraphDef& graph,
-                                     const std::string& pass_name) {
+                                    const std::string& pass_name) {
   DumpAtStage(graph, "before_" + pass_name);
 }
 
 void GraphDefDumper::DumpAfterPass(const GraphDef& graph,
-                                    const std::string& pass_name) {
+                                   const std::string& pass_name) {
   DumpAtStage(graph, "after_" + pass_name);
 }
 

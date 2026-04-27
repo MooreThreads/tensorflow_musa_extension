@@ -64,6 +64,12 @@ class PackOpTest(MUSATestCase):
     self._test_pack([4, 4], 0, 1, tf.float32)
     self._test_pack([4, 4], 0, 1, tf.int32, rtol=0, atol=0)
 
+  def testPackAxis0ShapeLikeInputs(self):
+    for dtype in [tf.int32, tf.int64]:
+      self._test_pack([], 0, 3, dtype, rtol=0, atol=0)
+      self._test_pack([1], 0, 3, dtype, rtol=0, atol=0)
+      self._test_pack([768], 0, 2, dtype, rtol=0, atol=0)
+
 
 if __name__ == "__main__":
   tf.test.main()

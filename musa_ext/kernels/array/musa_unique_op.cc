@@ -8,7 +8,6 @@
 
 namespace tensorflow {
 namespace musa {
-
 template <typename T, typename OutIdxT>
 class MusaUniqueOp : public MusaOpKernel {
  public:
@@ -17,80 +16,55 @@ class MusaUniqueOp : public MusaOpKernel {
   void Compute(OpKernelContext* ctx) override {
     const Tensor& input = ctx->input(0);
     OP_REQUIRES(ctx, input.dims() <= 1,
-                errors::InvalidArgument("Unique expects a 1D vector."));
+                errors::InvalidArgument("Unique only supports 1D tensor, got ", input.dims(), "D"));
 
-    const int64_t num_elements = input.NumElements();
-
-    Tensor temp_out_values;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(input.dtype(), input.shape(),
-                                           &temp_out_values));
-
-    Tensor* out_indices = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(1, input.shape(), &out_indices));
-
-    Tensor tmp_counts;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<OutIdxT>::value,
-                                           input.shape(), &tmp_counts));
-
-    if (num_elements == 0) {
-      Tensor* empty_out = nullptr;
-      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &empty_out));
+    const int64_t input_num = input.NumElements();
+    if (input_num == 0) {
+      ctx->set_output(0, Tensor(input.dtype(), TensorShape()));
+      ctx->set_output(1, Tensor(DataTypeToEnum<OutIdxT>::value, TensorShape()));
       return;
     }
 
-    auto& handle = GetHandleByCtx(ctx);
-    auto* musa_device = static_cast<MusaDevice*>(ctx->device());
-
-    size_t counts_bytes = num_elements * sizeof(OutIdxT);
-    musaMemset(tmp_counts.flat<OutIdxT>().data(), 0, counts_bytes);
-
-    std::list<Tensor> workspace_tensors;
-    auto mem_alloc_func =
-        [ctx, &workspace_tensors](size_t size) -> ::musa::dnn::MemoryHandler {
-      workspace_tensors.emplace_back();
-      Tensor& temp = workspace_tensors.back();
-
-      Status s = ctx->allocate_temp(
-          DT_UINT8, TensorShape({static_cast<int64_t>(size)}), &temp);
+    Tensor temp_out_values;
+    Tensor *temp_out_indices;
+    Tensor temp_counts;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(input.dtype(), input.shape(), &temp_out_values));
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(1, input.shape(), &temp_out_indices));
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<OutIdxT>::value, input.shape(), &temp_counts));
+    std::vector<Tensor> workspace_tensors;
+    auto mem_alloc_func = [ctx, &workspace_tensors](size_t size) -> ::musa::dnn::MemoryHandler {
+      if (size == 0) return nullptr;
+      Tensor temp;
+      Status s = ctx->allocate_temp(DT_UINT8, TensorShape({static_cast<int64_t>(size)}), &temp);
       if (!s.ok()) return nullptr;
-
-      void* raw_ptr = static_cast<void*>(temp.flat<uint8_t>().data());
-      return ::musa::dnn::MemoryHandler(raw_ptr, [](void* p) {});
+      workspace_tensors.emplace_back(temp);
+      return ::musa::dnn::MemoryHandler(temp.flat<uint8_t>().data(), [](void*) {});
     };
+    auto* musa_device = static_cast<MusaDevice*>(ctx->device());
+    auto maintainer = musa_device->GetMemMaintainer(mem_alloc_func);
 
-    ::musa::dnn::MemoryMaintainer maintainer =
-        musa_device->GetMemMaintainer(mem_alloc_func);
-
-    mTensor t_in = CreateMTensor(input);
-    mTensor t_temp_out = CreateMTensor(temp_out_values);
-    mTensor t_idx = CreateMTensor(*out_indices);
-    mTensor t_counts = CreateMTensor(tmp_counts);
+    ::musa::dnn::Tensor t_in          = CreateMTensor(input);
+    ::musa::dnn::Tensor t_out_val     = CreateMTensor(temp_out_values);
+    ::musa::dnn::Tensor t_out_indices = CreateMTensor(*temp_out_indices);
+    ::musa::dnn::Tensor t_counts      = CreateMTensor(temp_counts);
 
     ::musa::dnn::Unique op;
-    auto status = op.SetMode(::musa::dnn::Unique::Mode::UNSORTED);
-    OP_REQUIRES(ctx, status == mStatus::SUCCESS,
-                errors::Internal("muDNN Unique SetMode failed"));
-
-    status = op.Run(handle, t_temp_out, t_idx, t_counts, t_in, maintainer);
-
-    OP_REQUIRES(ctx, status == mStatus::SUCCESS,
-                errors::Internal("MUSA muDNN Unique execution failed. Status: ",
-                                 (int)status));
-
-    // Use device-side reduction to count unique elements
-    // This avoids the need for D2H sync
-    // For now, allocate maximum size output and use copy/trim approach
-    // which is compatible with async execution
-
-    // Copy all values (unique ones are at the beginning)
-    if (num_elements > 0) {
-      Tensor final_out = temp_out_values.Slice(0, num_elements);
-      ctx->set_output(0, final_out);
-    } else {
-      // Empty case: allocate empty output
-      Tensor* out_values = nullptr;
-      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &out_values));
+    ::musa::dnn::Status mode_status = op.SetMode(::musa::dnn::Unique::Mode::UNSORTED);
+    if (mode_status != ::musa::dnn::Status::SUCCESS) {
+      ctx->SetStatus(errors::Internal("Unique SetMode failed"));
+      return;
     }
+    auto& handle = GetHandleByCtx(ctx);
+    op.Run(handle, t_out_val, t_out_indices, t_counts, t_in, maintainer);
+
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
+    std::vector<int64_t> nd_info;
+    t_counts.GetNdInfo(nd_info);
+    int64_t num_unique = nd_info[0];
+    Tensor* out_values = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, TensorShape({num_unique}), &out_values));
+    musaMemcpyAsync(out_values->data(), temp_out_values.data(),
+                    num_unique * sizeof(T), musaMemcpyDeviceToDevice, stream);
   }
 };
 

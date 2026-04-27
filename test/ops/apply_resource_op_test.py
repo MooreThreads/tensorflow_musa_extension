@@ -7,9 +7,9 @@
 # 1. ResourceApplyAdam must follow TensorFlow-compatible resource
 #    copy-on-write/update semantics, otherwise graph-mode updates can corrupt
 #    the backing var/m/v tensors.
-# 2. The plugin debug build must still define -DNDEBUG to match the release
-#    TensorFlow wheel. Mixing a debug-built plugin with a release-built
-#    TensorFlow framework can trigger false refcount.h:90 aborts during
+# 2. The plugin must be built with -DNDEBUG to match the pip TensorFlow wheel.
+#    Mixing compile-time DCHECK semantics between the plugin and
+#    libtensorflow_framework can trigger false refcount.h:90 aborts during
 #    Session.close() even when the operator result is numerically correct.
 # Keep this test in graph mode so it guards both the Adam update result and the
 # session teardown path.

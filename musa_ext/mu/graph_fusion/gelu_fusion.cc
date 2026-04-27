@@ -535,6 +535,9 @@ FusionMatchResult MatchByFactor(const GraphDef& graph, int start_node_idx,
 MusaGeluFusion::MusaGeluFusion() = default;
 
 bool MusaGeluFusion::IsKernelAvailable() const {
+  if (IsDisabledByEnv()) {
+    return false;
+  }
   if (!kernel_checked_) {
     kernel_available_ = !IsTruthyEnvVar("MUSA_DISABLE_GELU_FUSION");
     kernel_checked_ = true;

@@ -68,20 +68,14 @@ class MusaErfOp : public MusaOpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
-    MUSA_KERNEL_TIMING_GUARD(ctx);
-
     const Tensor& input = ctx->input(0);
 
     Tensor* output = nullptr;
-    MUSA_KERNEL_TRACE_START("Mem Alloc");
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &output));
-    MUSA_KERNEL_TRACE_END("Mem Alloc");
 
     if (input.NumElements() == 0) return;
 
-    MUSA_KERNEL_TRACE_START("Kernel");
     ErfRunner<T>::Run(ctx, input, output, format_);
-    MUSA_KERNEL_TRACE_END("Kernel");
   }
 };
 

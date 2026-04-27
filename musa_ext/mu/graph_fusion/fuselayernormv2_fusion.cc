@@ -359,6 +359,9 @@ std::string FloatToString(float value) {
 MusaFuseLayerNormV2Fusion::MusaFuseLayerNormV2Fusion() = default;
 
 bool MusaFuseLayerNormV2Fusion::IsKernelAvailable() const {
+  if (IsDisabledByEnv()) {
+    return false;
+  }
   if (!kernel_checked_) {
     kernel_available_ = true;
     kernel_checked_ = true;
@@ -497,11 +500,6 @@ FusionMatchResult MusaFuseLayerNormV2Fusion::MatchFromAddNode(
   result.captured_attrs["beta_tensor"] = beta_tensor;
   result.captured_attrs["epsilon"] = FloatToString(epsilon);
 
-  LOG(INFO) << "[FuseLayerNormV2][Match] matched subgraph at output="
-            << add_node.name() << ", bn=" << bn_node->name()
-            << ", reshape_in=" << reshape_in_node->name()
-            << ", reshape_out=" << reshape_out_node->name();
-
   return result;
 }
 
@@ -539,10 +537,6 @@ Status MusaFuseLayerNormV2Fusion::Apply(
   const NodeDef* output_node = output_it->second;
   const std::string original_name = output_node->name();
   const std::string original_output_name = original_name + "_original";
-
-  LOG(INFO) << "[FuseLayerNormV2][Apply] start apply for output="
-            << original_name << ", input=" << input_tensor
-            << ", gamma=" << gamma_tensor << ", beta=" << beta_tensor;
 
   for (const auto& node : graph->node()) {
     if (node.name() == original_name && node.op() == "MusaLayerNorm") {

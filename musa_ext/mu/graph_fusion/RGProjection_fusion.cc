@@ -46,6 +46,9 @@ bool HasOriginalSuffix(const std::string& node_name) {
 }  // namespace
 
 bool BiasAddReluMatMulFusion::IsKernelAvailable() const {
+  if (IsDisabledByEnv()) {
+    return false;
+  }
   if (!kernel_checked_) {
     kernel_available_ = true;
     kernel_checked_ = true;
