@@ -15,18 +15,12 @@
 
 """Tests for MusaReshapeMatMul operator."""
 
-import os
-
 import numpy as np
 import tensorflow as tf
 
-from musa_test_utils import load_musa_plugin
+from musa_test_utils import load_musa_ops
 
-_TEST_DIR = os.path.dirname(os.path.abspath(__file__))
-_PLUGIN_PATH = os.path.normpath(
-    os.path.join(_TEST_DIR, "..", "..", "build", "libmusa_plugin.so")
-)
-PLUGIN_OPS = tf.load_op_library(_PLUGIN_PATH)
+PLUGIN_OPS = load_musa_ops()
 tf.compat.v1.disable_eager_execution()
 
 
