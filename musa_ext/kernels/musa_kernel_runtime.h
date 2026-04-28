@@ -23,21 +23,34 @@ limitations under the License.
 #include "tensorflow/core/framework/op_kernel.h"
 
 namespace tensorflow {
+class Allocator;
+
 namespace musa {
 
 // Unifies the historical C++ `MusaDevice` path with the PluggableDevice path:
 // - `musa_device` is non-null on the default C++ `DeviceFactory` + `MusaDevice`
 //   registration path.
 // - On the SE/Pluggable path, `musa_device` is null. Resolve `device_id`
-//   from `(legacy) GpuDeviceInfo` where available; resolve `stream` solely from
-//   `DeviceContext`'s StreamExecutor (`GpuStreamHack()`). Do **not** guess a
-//   stream per ordinal — multiple concurrent streams per device cannot be
-//   disambiguated without coupling to TF internals.
+//   from `(legacy) GpuDeviceInfo` via `tf_compat::GpuIdFromDeviceBase`;
+//   resolve `stream` solely through `tf_compat::GpuStreamFromTfStream` on the
+//   current op `DeviceContext` stream.**Do not** infer stream from ordinal —
+//   multiple concurrent streams per device cannot be disambiguated without
+//   `DeviceContext`.
+//
+// Allocation: `allocator` points at TensorFlow's device allocator for tensor
+// backing memory (same as `context->device()->GetAllocator(...)` on both
+// paths when the device exposes it).
+//
+// `mudnn_handle` is taken from `MusaDevice` on the C++ path, or lazily from
+// `musa_runtime_registry` on the SE path once the Pluggable device exists
+// (see `MusaSeRegistryEnsureMudnnForDevice`).
 struct MusaKernelRuntimeView {
   MusaDevice* musa_device = nullptr;
+  bool is_pluggable = false;
   int device_id = -1;
   musaStream_t stream = nullptr;
-  // Valid only when `musa_device != nullptr` (C++ MUSA path).
+  Allocator* allocator = nullptr;
+  // Valid when non-null: either C++ `MusaDevice` handle or SE registry handle.
   ::musa::dnn::Handle* mudnn_handle = nullptr;
 };
 
@@ -45,9 +58,9 @@ struct MusaKernelRuntimeView {
 // path (`DeviceFactory::Register` + `tf.load_op_library`).
 //
 // TensorFlow's PluggableDevice path uses a different `Device` implementation;
-// for those devices this returns nullptr. Kernels that need `MusaDevice` for
-// muDNN must use `MUSA_OP_REQUIRES_CPP_MUSA_DEVICE` or a runtime view with a
-// non-null `mudnn_handle` (future SE wiring).
+// for those devices this returns nullptr. Kernels that need muDNN must ensure
+// `MusaKernelRuntimeView::mudnn_handle` is populated (via C++ MusaDevice or SE
+// registry initialization) rather than blindly casting `Device*` to `MusaDevice*`.
 inline MusaDevice* TryGetMusaDeviceFromContext(OpKernelContext* context) {
   if (context == nullptr) return nullptr;
   DeviceBase* base = context->device();

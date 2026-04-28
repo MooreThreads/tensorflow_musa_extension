@@ -28,6 +28,7 @@ limitations under the License.
 #include <memory>
 
 #include "musa_plugin_env.h"
+#include "mu/musa_plugin_sp_stream.h"
 #include "mu/musa_runtime_adapter.h"
 #include "mu/musa_runtime_registry.h"
 #include "tensorflow/c/experimental/stream_executor/stream_executor.h"
@@ -37,10 +38,6 @@ limitations under the License.
 // TensorFlow headers only forward-declare these; the plugin must define the full
 // struct types in the global namespace (same tag names) so SP_Stream/SP_Event/
 // SP_Timer pointers are complete when dereferenced.
-struct SP_Stream_st {
-  musaStream_t stream;
-};
-
 struct SP_Event_st {
   musaEvent_t event;
 };
@@ -60,7 +57,10 @@ static const char kVendorMthreads[] = "MooreThreads";
 // NAME_MTGPU storage (declared in device_register.h)
 extern "C" const char NAME_MTGPU[] = "MUSA";
 
-static musaStream_t StreamPtr(SP_Stream s) { return s ? s->stream : nullptr; }
+static musaStream_t StreamPtr(SP_Stream s) {
+  if (!s || s->magic != kMusaPluginSpStreamMagic) return nullptr;
+  return s->stream;
+}
 
 static void MallocOrBadAlloc(TF_Status* status) {
   TF_SetStatus(status, TF_RESOURCE_EXHAUSTED, "malloc failed");
@@ -185,6 +185,7 @@ void plugin_se_create_stream(const SP_Device* device, SP_Stream* stream,
     ::tensorflow::musa::runtime::SetStatusFromMusa(status, err, "musaStreamCreate");
     return;
   }
+  s->magic = kMusaPluginSpStreamMagic;
   *stream = s;
   TF_SetStatus(status, TF_OK, "");
 }

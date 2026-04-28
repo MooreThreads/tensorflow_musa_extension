@@ -14,8 +14,7 @@
 
 namespace tensorflow {
 namespace musa {
-// Shared by kernels and GetHandleByCtx: SE-only / non-MusaDevice execution is
-// not supported for muDNN-backed ops on this code path.
+// Legacy: kernels that still require a concrete C++ `MusaDevice` (not just MuDNN).
 inline Status MusaCppDevicePathRequiredError() {
   return errors::Unimplemented(
       "MUSA op requires the C++ MusaDevice path (import tensorflow_musa or "
@@ -23,10 +22,26 @@ inline Status MusaCppDevicePathRequiredError() {
       "SE-only PluggableDevice (MUSA_ENABLE_SE_PLUGIN=1) is not supported for "
       "this kernel; use the default C++ device path.");
 }
+
+// Prefer this for MuDNN-backed kernels: permits either legacy `MusaDevice` or SE
+// registry–initialized `MusaKernelRuntimeView::mudnn_handle`.
+inline Status MusaMudnnHandleRequiredError() {
+  return errors::Unimplemented(
+      "MUSA MuDNN kernel requires `MusaKernelRuntimeView::mudnn_handle`: use "
+      "the default C++ MusaDevice path, or ensure the PluggableDevice SE "
+      "runtime has registered the device ordinal and streams are available.");
+}
 }  // namespace musa
 }  // namespace tensorflow
 
-// Use after other OP_REQUIRES, before GetHandleByCtx on paths that use muDNN.
+#define MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx)                                      \
+  OP_REQUIRES(                                                                   \
+      (ctx),                                                                     \
+      ::tensorflow::musa::QueryMusaKernelRuntimeView((ctx)).mudnn_handle !=     \
+          nullptr,                                                               \
+      ::tensorflow::musa::MusaMudnnHandleRequiredError())
+
+// Deprecated for MuDNN ops: prefer MUSA_OP_REQUIRES_MUDNN_HANDLE.
 #define MUSA_OP_REQUIRES_CPP_MUSA_DEVICE(ctx)                \
   OP_REQUIRES((ctx),                                         \
               ::tensorflow::musa::TryGetMusaDeviceFromContext( \
@@ -154,21 +169,25 @@ inline musaError_t CachedMusaSetDevice(int device_id) {
 
 inline ::musa::dnn::Handle& GetHandleByCtx(
     tensorflow::OpKernelContext* context) {
-  auto* musa_device = TryGetMusaDeviceFromContext(context);
-  if (musa_device == nullptr) {
-    if (context != nullptr) {
-      context->CtxFailure(MusaCppDevicePathRequiredError());
+  MusaKernelRuntimeView view = QueryMusaKernelRuntimeView(context);
+  if (view.mudnn_handle != nullptr) {
+    if (view.device_id >= 0) {
+      musaError_t err = CachedMusaSetDevice(view.device_id);
+      if (err != musaSuccess) {
+        if (context != nullptr) {
+          context->CtxFailure(errors::Internal(
+              "musaSetDevice(", view.device_id, ") failed: ",
+              musaGetErrorString(err)));
+        }
+        return MudnnHandleOrSinkAfterCtxFailure();
+      }
     }
-    return MudnnHandleOrSinkAfterCtxFailure();
+    return *view.mudnn_handle;
   }
-  int device_id = GetMusaDeviceIdByCtx(context);
-
-  musaError_t err = CachedMusaSetDevice(device_id);
-  if (err != musaSuccess) {
-    LOG(ERROR) << "musaSetDevice failed: " << musaGetErrorString(err);
+  if (context != nullptr) {
+    context->CtxFailure(MusaMudnnHandleRequiredError());
   }
-
-  return musa_device->mudnn_handle();
+  return MudnnHandleOrSinkAfterCtxFailure();
 }
 
 inline musaStream_t GetMusaStreamByCtx(tensorflow::OpKernelContext* context) {

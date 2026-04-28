@@ -30,7 +30,7 @@
 
 **生产/默认路径**仍是 C++ 注册 + `MusaDevice`：这是当前算子、allocator、muDNN handle 的完整实现所在。
 
-**`MUSA_ENABLE_SE_PLUGIN=1`（SE-only，实验性）** 只注册 StreamExecutor C API 侧设备，**不**再注册 C++ `DeviceFactory` 与 C++ `MusaPlatform`。该路径用于验证 TensorFlow PluggableDevice 发现与 `SE_InitPlugin` 契约；**算子层仍要求 `MusaDevice`（C++ 路径）**，在纯 Pluggable 设备上执行本仓库的 MUSA kernel 尚未全量打通（见下节 “kernel 与设备实现”）。
+**`MUSA_ENABLE_SE_PLUGIN=1`（SE-only，实验性）** 只注册 StreamExecutor C API 侧设备，**不**再注册 C++ `DeviceFactory` 与 C++ `MusaPlatform`。算子 runtime 通过 **`MusaKernelRuntimeView`**（`stream`、`allocator`、`mudnn_handle`，见下节），双路径逐步迁移中；**生产默认**仍以 C++ `MusaDevice` 为完整基线。
 
 **重要：`MUSA_ENABLE_SE_PLUGIN` 在 `.so` 的静态初始化阶段读取。** 必须在**第一次** `dlopen` / `import` 该插件**之前**在环境中设为 `1`。进程内先 `tf.load_op_library` 或 `import tensorflow_musa` 再改环境变量**无效**。
 
@@ -41,7 +41,7 @@
 
 ### kernel 与设备实现
 
-本仓库的 MUSA 算子通过 `GetHandleByCtx` / `GetMusaStreamByCtx`（内部经 `QueryMusaKernelRuntimeView`）从 **`MusaDevice`** 取 **muDNN**；从 **`MusaKernelRuntimeView`** 取 **stream** 与 **device_id**。C++ 默认路径上 `MusaDevice` 非空；**SE/Pluggable 路径**上 `musa_device` 可能为空：**stream 仅从当前 `DeviceContext` 对应的 `StreamExecutor::GpuStreamHack()` 解析**，不做按 ordinal 猜测（多 stream 无法用单句柄安全表示）。依赖 **muDNN** 的算子仍需要 `musa_device` 或后续接线的 `mudnn_handle`（未迁移路径应返回 `Unimplemented`）。runtime registry（`musa_runtime_registry`）仅跟踪 **device 生命周期** hook，不包含 per-stream 调度表。
+本仓库算子通过 `QueryMusaKernelRuntimeView`/`GetHandleByCtx` 统一解析：**C++** 路径由 `MusaDevice` 提供 **stream/muDNN**；**SE-only Pluggable** 路径由 `mu/tf_compat/pluggable_tf_compat` 从当前 `DeviceContext` 的 `GpuStreamHack()` 解包 **MUSA stream**：SE 注册的 `SP_Stream_st` **首字节为 64-bit magic**（见 `mu/musa_plugin_sp_stream.h`，与插件侧赋值一致）；否则按 **`MusaStream` 语义**解释为裸 **`musaStream_t`**。**不按 ordinal 猜 stream**。**muDNN**：C++ 路径用设备内句柄；SE 路径在 `plugin_create_device` 存活时由 **`musa_runtime_registry` 按 `musaStream_t` 分槽**创建 `mudnn_handle`（避免多 stream 共享同一 `Handle::SetStream` 竞争）。无句柄时须 **Unimplemented**。
 
 | 环境变量 | 含义 |
 |----------|------|

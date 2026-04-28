@@ -17,47 +17,50 @@ limitations under the License.
 
 #include <musa_runtime.h>
 
+#include "mu/musa_runtime_registry.h"
+#include "mu/tf_compat/pluggable_tf_compat.h"
+#include "tensorflow/core/framework/allocator.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/stream_executor/stream.h"
-#include "tensorflow/stream_executor/stream_executor_internal.h"
 
 namespace tensorflow {
 namespace musa {
-
-namespace {
-musaStream_t MusaStreamFromStreamExecutorPluggable(stream_executor::Stream* s) {
-  if (s == nullptr) return nullptr;
-  stream_executor::internal::StreamInterface* impl = s->implementation();
-  if (impl == nullptr) return nullptr;
-  return static_cast<musaStream_t>(impl->GpuStreamHack());
-}
-}  // namespace
 
 MusaKernelRuntimeView QueryMusaKernelRuntimeView(OpKernelContext* context) {
   MusaKernelRuntimeView v;
   if (context == nullptr) {
     return v;
   }
-  const DeviceBase* base = context->device();
-  int device_from_info = -1;
+  DeviceBase* base = context->device();
+  const int device_from_info = tf_compat::GpuIdFromDeviceBase(base);
+
   if (base != nullptr) {
-    auto* ginfo = base->tensorflow_gpu_device_info();
-    if (ginfo != nullptr) {
-      device_from_info = ginfo->gpu_id;
-    }
+    v.allocator = base->GetAllocator(AllocatorAttributes());
   }
+
   v.musa_device = TryGetMusaDeviceFromContext(context);
   if (v.musa_device != nullptr) {
+    v.is_pluggable = false;
     v.device_id = v.musa_device->get_device_id();
     v.stream = v.musa_device->GetStream();
     v.mudnn_handle = &v.musa_device->mudnn_handle();
     return v;
   }
+
+  v.is_pluggable = true;
   v.device_id = device_from_info;
+
   DeviceContext* dctx = context->op_device_context();
   if (dctx != nullptr) {
-    v.stream = MusaStreamFromStreamExecutorPluggable(dctx->stream());
+    v.stream = tf_compat::GpuStreamFromTfStream(dctx->stream());
   }
+
+  if (v.device_id >= 0 && v.stream != nullptr) {
+    ::musa::dnn::Handle* h =
+        MusaSeRegistryEnsureMudnnForDevice(v.device_id, v.stream);
+    v.mudnn_handle = h;
+  }
+
   return v;
 }
 
