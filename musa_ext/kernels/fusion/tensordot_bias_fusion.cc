@@ -150,22 +150,24 @@ FusionMatchResult MusaTensorDotBiasFusion::MatchFromBiasAddNode(
 
   // Check input[0] is MusaTensorDot (already fused by tensordot_fusion)
   if (!tensordot_output || !IsOp(*tensordot_output, "MusaTensorDot")) {
-    VLOG(2) << "[TensorDotBias::Match] FAIL: input[0] is not MusaTensorDot, actual="
-            << (tensordot_output ? tensordot_output->op() : "NULL")
-            << ", node=" << bias_add.name();
+    VLOG(2)
+        << "[TensorDotBias::Match] FAIL: input[0] is not MusaTensorDot, actual="
+        << (tensordot_output ? tensordot_output->op() : "NULL")
+        << ", node=" << bias_add.name();
     return result;
   }
 
   // Check input[1] is a valid weight node
   if (!bias_weights || !IsWeightOp(*bias_weights)) {
-    VLOG(2) << "[TensorDotBias::Match] FAIL: input[1] is not weight node, actual="
-            << (bias_weights ? bias_weights->op() : "NULL")
-            << ", node=" << bias_add.name();
+    VLOG(2)
+        << "[TensorDotBias::Match] FAIL: input[1] is not weight node, actual="
+        << (bias_weights ? bias_weights->op() : "NULL")
+        << ", node=" << bias_add.name();
     return result;
   }
 
-  VLOG(2) << "[TensorDotBias::Match] PASS initial check: BiasAdd=" << bias_add.name()
-          << ", MusaTensorDot=" << tensordot_output->name()
+  VLOG(2) << "[TensorDotBias::Match] PASS initial check: BiasAdd="
+          << bias_add.name() << ", MusaTensorDot=" << tensordot_output->name()
           << ", bias_weights=" << bias_weights->name();
 
   // =========================================================================
@@ -197,17 +199,16 @@ FusionMatchResult MusaTensorDotBiasFusion::MatchFromBiasAddNode(
     axes_b.push_back(0);
   }
 
-  VLOG(2) << "[TensorDotBias::Match] extracted axes_a=" 
-          << [&]() {
-               std::string s;
-               for (size_t i = 0; i < axes_a.size(); ++i) {
-                 if (i > 0) s += ",";
-                 s += std::to_string(axes_a[i]);
-               }
-               return s;
-             }()
-          << ", axes_b="
-          << [&]() {
+  VLOG(2) << "[TensorDotBias::Match] extracted axes_a=" <<
+      [&]() {
+        std::string s;
+        for (size_t i = 0; i < axes_a.size(); ++i) {
+          if (i > 0) s += ",";
+          s += std::to_string(axes_a[i]);
+        }
+        return s;
+      }()
+          << ", axes_b=" << [&]() {
                std::string s;
                for (size_t i = 0; i < axes_b.size(); ++i) {
                  if (i > 0) s += ",";
@@ -233,9 +234,10 @@ FusionMatchResult MusaTensorDotBiasFusion::MatchFromBiasAddNode(
   // Capture attributes needed for Apply
   result.captured_attrs["original_input"] = tensordot_output->input(0);
   result.captured_attrs["tensordot_weight_input"] = tensordot_output->input(1);
-  // Use BiasAdd.input(1) instead of bias_weights->name() to preserve port information
+  // Use BiasAdd.input(1) instead of bias_weights->name() to preserve port
+  // information
   result.captured_attrs["bias_weights_input"] = bias_add.input(1);
-  
+
   // Serialize axes
   std::string axes_a_str, axes_b_str;
   for (size_t i = 0; i < axes_a.size(); ++i) {
@@ -256,20 +258,21 @@ FusionMatchResult MusaTensorDotBiasFusion::MatchFromBiasAddNode(
   return result;
 }
 
-Status MusaTensorDotBiasFusion::Apply(GraphDef* graph,
-                                      const FusionMatchResult& match_result) const {
+Status MusaTensorDotBiasFusion::Apply(
+    GraphDef* graph, const FusionMatchResult& match_result) const {
   VLOG(2) << "[TensorDotBias::Apply] ENTER, matched=" << match_result.matched
           << ", nodes_count=" << match_result.matched_nodes.size()
           << ", kernel_available=" << IsKernelAvailable();
 
   if (!match_result.IsValid()) {
     VLOG(2) << "[TensorDotBias::Apply] RETURN: invalid match result";
-    return Status(error::INVALID_ARGUMENT, "Invalid TensorDotBias match result");
+    return Status(error::INVALID_ARGUMENT,
+                  "Invalid TensorDotBias match result");
   }
 
   if (!IsKernelAvailable()) {
-    VLOG(2)
-        << "[TensorDotBias::Apply] RETURN: kernel not available, skipping fusion";
+    VLOG(2) << "[TensorDotBias::Apply] RETURN: kernel not available, skipping "
+               "fusion";
     return Status::OK();
   }
 
@@ -279,8 +282,8 @@ Status MusaTensorDotBiasFusion::Apply(GraphDef* graph,
   auto bias_weights_it = match_result.captured_nodes.find("bias_weights");
 
   if (bias_add_it == match_result.captured_nodes.end()) {
-    VLOG(2)
-        << "[TensorDotBias::Apply] RETURN: missing bias_add node in captured_nodes";
+    VLOG(2) << "[TensorDotBias::Apply] RETURN: missing bias_add node in "
+               "captured_nodes";
     return Status(error::INVALID_ARGUMENT,
                   "Missing bias_add node in TensorDotBias pattern");
   }
@@ -314,17 +317,20 @@ Status MusaTensorDotBiasFusion::Apply(GraphDef* graph,
                   "Cannot determine TensorDotBias input A");
   }
 
-  auto tensordot_weight_input_it = match_result.captured_attrs.find("tensordot_weight_input");
+  auto tensordot_weight_input_it =
+      match_result.captured_attrs.find("tensordot_weight_input");
   if (tensordot_weight_input_it != match_result.captured_attrs.end() &&
       !tensordot_weight_input_it->second.empty()) {
     tensordot_weight_name = tensordot_weight_input_it->second;
   } else {
-    VLOG(2) << "[TensorDotBias::Apply] RETURN: cannot determine tensordot weight";
+    VLOG(2)
+        << "[TensorDotBias::Apply] RETURN: cannot determine tensordot weight";
     return Status(error::INVALID_ARGUMENT,
                   "Cannot determine TensorDotBias tensordot weight");
   }
 
-  auto bias_weights_input_it = match_result.captured_attrs.find("bias_weights_input");
+  auto bias_weights_input_it =
+      match_result.captured_attrs.find("bias_weights_input");
   if (bias_weights_input_it != match_result.captured_attrs.end() &&
       !bias_weights_input_it->second.empty()) {
     bias_weights_name = bias_weights_input_it->second;
@@ -386,7 +392,7 @@ Status MusaTensorDotBiasFusion::Apply(GraphDef* graph,
   // =========================================================================
   std::unordered_set<std::string> nodes_to_remove;
   nodes_to_remove.insert(output_name);  // BiasAdd will be replaced
-  
+
   auto tensordot_node_it = match_result.captured_nodes.find("tensordot");
   if (tensordot_node_it != match_result.captured_nodes.end() &&
       tensordot_node_it->second) {
@@ -399,16 +405,17 @@ Status MusaTensorDotBiasFusion::Apply(GraphDef* graph,
   if (tensordot_node_it != match_result.captured_nodes.end() &&
       tensordot_node_it->second) {
     tensordot_output_name = tensordot_node_it->second->name();
-    
+
     for (int i = 0; i < graph->node_size(); ++i) {
       const NodeDef& node = graph->node(i);
       if (nodes_to_remove.count(node.name())) continue;
-      
+
       for (int j = 0; j < node.input_size(); ++j) {
         std::string producer = GetCleanName(node.input(j));
         if (producer == tensordot_output_name && producer != output_name) {
           // External node depends on tensordot output, keep it
-          VLOG(2) << "[TensorDotBias::Apply] keeping tensordot due to external dep from "
+          VLOG(2) << "[TensorDotBias::Apply] keeping tensordot due to external "
+                     "dep from "
                   << node.name();
           nodes_to_remove.erase(tensordot_output_name);
           break;
@@ -424,7 +431,7 @@ Status MusaTensorDotBiasFusion::Apply(GraphDef* graph,
   // Remove fused nodes (in reverse topological order)
   // =========================================================================
   int removed_count = 0;
-  
+
   // First remove BiasAdd (will be replaced by fused node)
   int bias_add_idx = FusionGraphUtils::FindNodeIndex(*graph, output_name);
   if (bias_add_idx >= 0) {
@@ -434,7 +441,8 @@ Status MusaTensorDotBiasFusion::Apply(GraphDef* graph,
 
   // Then remove MusaTensorDot if not kept
   if (nodes_to_remove.count(tensordot_output_name)) {
-    int tensordot_idx = FusionGraphUtils::FindNodeIndex(*graph, tensordot_output_name);
+    int tensordot_idx =
+        FusionGraphUtils::FindNodeIndex(*graph, tensordot_output_name);
     if (tensordot_idx >= 0) {
       FusionGraphUtils::RemoveNode(graph, tensordot_idx);
       removed_count++;

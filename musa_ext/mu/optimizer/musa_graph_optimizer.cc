@@ -479,8 +479,9 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
       priority_groups[pattern->GetPriority()].push_back(pattern);
     }
 
-    auto run_scan = [&](const std::vector<const FusionPattern*>& active_patterns,
-                        bool reverse) -> bool {
+    auto run_scan =
+        [&](const std::vector<const FusionPattern*>& active_patterns,
+            bool reverse) -> bool {
       bool pass_modified = false;
 
       while (true) {
@@ -504,8 +505,7 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
               Status status = pattern->Apply(graph, match_result);
               if (!status.ok()) {
                 LOG(WARNING) << "MusaGraphOptimizer: Fallback for pattern '"
-                             << pattern->GetName()
-                             << "' failed: " << status;
+                             << pattern->GetName() << "' failed: " << status;
               }
               fusion_fallback_count++;
               continue;
@@ -519,8 +519,8 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
               pass_modified = true;
               fusion_applied_count++;
               applied_in_sweep = true;
-              VLOG(1) << "MusaGraphOptimizer: Pattern '"
-                      << pattern->GetName() << "' applied successfully";
+              VLOG(1) << "MusaGraphOptimizer: Pattern '" << pattern->GetName()
+                      << "' applied successfully";
               break;
             } else {
               LOG(WARNING) << "MusaGraphOptimizer: Pattern '"

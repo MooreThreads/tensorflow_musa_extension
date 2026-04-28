@@ -179,7 +179,7 @@ bool ExtractConst2DShape(const NodeDef* const_node, int64_t* dim0,
 }
 
 bool ExtractOutputShapeDims(const NodeDef* node, int output_port,
-                           std::vector<int64_t>* dims) {
+                            std::vector<int64_t>* dims) {
   if (!node || !dims) {
     return false;
   }
@@ -224,7 +224,8 @@ bool MatchFlattenShape(const NodeDef* shape_const, int64_t expected_k) {
   return dims[0] == -1 && dims[1] == expected_k;
 }
 
-bool MatchRestoreShapePack(const GraphDef& graph, const std::string& source_input,
+bool MatchRestoreShapePack(const GraphDef& graph,
+                           const std::string& source_input,
                            const NodeDef* pack_node, int64_t expected_n,
                            std::vector<std::string>* removable_node_names) {
   const NodeDef* source_node = FindProducer(graph, source_input);
@@ -239,10 +240,11 @@ bool MatchRestoreShapePack(const GraphDef& graph, const std::string& source_inpu
       ExtractOutputShapeDims(source_node, source_port, &source_shape_dims);
   int inferred_rank_from_unpack = -1;
 
-  const NodeDef* trailing_dim = GetConstLikeNode(
-      graph, pack_node->input(pack_node->input_size() - 1));
+  const NodeDef* trailing_dim =
+      GetConstLikeNode(graph, pack_node->input(pack_node->input_size() - 1));
   int64_t output_dim = 0;
-  if (!ExtractScalarInt(trailing_dim, &output_dim) || output_dim != expected_n) {
+  if (!ExtractScalarInt(trailing_dim, &output_dim) ||
+      output_dim != expected_n) {
     return false;
   }
   removable_node_names->push_back(trailing_dim->name());
@@ -266,10 +268,12 @@ bool MatchRestoreShapePack(const GraphDef& graph, const std::string& source_inpu
       }
       inferred_rank_from_unpack = static_cast<int>(num_it->second.i());
 
-      const NodeDef* shape_of_source = FindProducer(graph, input_node->input(0));
+      const NodeDef* shape_of_source =
+          FindProducer(graph, input_node->input(0));
       if (!shape_of_source || shape_of_source->op() != "Shape" ||
           shape_of_source->input_size() != 1 ||
-          GetCleanName(shape_of_source->input(0)) != GetCleanName(source_input) ||
+          GetCleanName(shape_of_source->input(0)) !=
+              GetCleanName(source_input) ||
           GetOutputPort(shape_of_source->input(0)) != source_port) {
         return false;
       }
@@ -295,8 +299,9 @@ bool MatchRestoreShapePack(const GraphDef& graph, const std::string& source_inpu
         // folded into a Const in restore_shape Pack. In this case runtime
         // correctness still requires the Const to equal source.shape[1], and
         // using source.shape() inside the fused op reproduces the same result.
-        const bool allow_rank3_tail_const =
-            pack_node->input_size() == 3 && i == 1 && inferred_rank_from_unpack == 3;
+        const bool allow_rank3_tail_const = pack_node->input_size() == 3 &&
+                                            i == 1 &&
+                                            inferred_rank_from_unpack == 3;
         if (!allow_rank3_tail_const) {
           return false;
         }
@@ -517,7 +522,8 @@ Status MusaReshapeMatMulFusion::Apply(
                   "Invalid num_shape_nodes for MusaReshapeMatMul");
   }
   for (int i = 0; i < num_shape_nodes; ++i) {
-    auto it = match_result.captured_attrs.find("shape_node_" + std::to_string(i));
+    auto it =
+        match_result.captured_attrs.find("shape_node_" + std::to_string(i));
     if (it != match_result.captured_attrs.end()) {
       removable_names.insert(it->second);
     }
@@ -526,7 +532,8 @@ Status MusaReshapeMatMulFusion::Apply(
   std::vector<std::string> removable_list(removable_names.begin(),
                                           removable_names.end());
   const int removed = FusionGraphUtils::RemoveNodesIfUnused(
-      graph, removable_list, {output_name, source_it->second, weight_it->second});
+      graph, removable_list,
+      {output_name, source_it->second, weight_it->second});
 
   VLOG(1) << "MusaReshapeMatMulFusion: fused output=" << output_name
           << ", removed=" << removed;

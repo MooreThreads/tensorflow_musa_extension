@@ -183,7 +183,8 @@ Status ConcatMatMulFusion::Apply(GraphDef* graph,
   // other matmul input
   int concat_in_matmul_idx = -1;
   for (int i = 0; i < 2; ++i) {
-    if (FusionGraphUtils::GetProducerNodeName(matmul_inputs[i]) == concat_name) {
+    if (FusionGraphUtils::GetProducerNodeName(matmul_inputs[i]) ==
+        concat_name) {
       concat_in_matmul_idx = i;
       break;
     }

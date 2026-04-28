@@ -97,8 +97,8 @@ FusionKernelRegistry& FusionKernelRegistry::GetInstance() {
   return instance;
 }
 
-void FusionKernelRegistry::RegisterKernel(const std::string& pattern_name,
-                                          std::function<bool()> is_available_func) {
+void FusionKernelRegistry::RegisterKernel(
+    const std::string& pattern_name, std::function<bool()> is_available_func) {
   if (pattern_name.empty()) {
     LOG(WARNING) << "Cannot register kernel with empty pattern name";
     return;
@@ -107,7 +107,8 @@ void FusionKernelRegistry::RegisterKernel(const std::string& pattern_name,
   VLOG(2) << "Registered fusion kernel: " << pattern_name;
 }
 
-bool FusionKernelRegistry::IsKernelAvailable(const std::string& pattern_name) const {
+bool FusionKernelRegistry::IsKernelAvailable(
+    const std::string& pattern_name) const {
   if (IsFusionPatternDisabled(pattern_name)) {
     return false;
   }
@@ -136,8 +137,7 @@ std::vector<std::string> FusionKernelRegistry::GetAvailableKernels() const {
 
   // Check dynamic availability
   for (const auto& kv : kernel_availability_) {
-    if (kv.second && kv.second() &&
-        implemented_kernels_.count(kv.first) == 0) {
+    if (kv.second && kv.second() && implemented_kernels_.count(kv.first) == 0) {
       available.push_back(kv.first);
     }
   }
@@ -145,7 +145,8 @@ std::vector<std::string> FusionKernelRegistry::GetAvailableKernels() const {
   return available;
 }
 
-void FusionKernelRegistry::MarkKernelAsImplemented(const std::string& pattern_name) {
+void FusionKernelRegistry::MarkKernelAsImplemented(
+    const std::string& pattern_name) {
   implemented_kernels_.insert(pattern_name);
   VLOG(1) << "Marked kernel as implemented: " << pattern_name;
 }
@@ -159,7 +160,8 @@ FusionPatternManager& FusionPatternManager::GetInstance() {
   return instance;
 }
 
-void FusionPatternManager::RegisterPattern(std::unique_ptr<FusionPattern> pattern) {
+void FusionPatternManager::RegisterPattern(
+    std::unique_ptr<FusionPattern> pattern) {
   if (!pattern) {
     LOG(WARNING) << "Cannot register null fusion pattern";
     return;
@@ -174,7 +176,8 @@ void FusionPatternManager::RegisterPattern(std::unique_ptr<FusionPattern> patter
   // Check if pattern with same name already exists
   for (const auto& existing : patterns_) {
     if (existing->GetName() == name) {
-      LOG(WARNING) << "Fusion pattern '" << name << "' already registered, skipping";
+      LOG(WARNING) << "Fusion pattern '" << name
+                   << "' already registered, skipping";
       return;
     }
   }
@@ -185,14 +188,16 @@ void FusionPatternManager::RegisterPattern(std::unique_ptr<FusionPattern> patter
     VLOG(1) << "Fusion pattern '" << name
             << "' registered but kernel is not available, will use fallback";
   } else {
-    VLOG(1) << "Fusion pattern '" << name << "' registered with available kernel";
+    VLOG(1) << "Fusion pattern '" << name
+            << "' registered with available kernel";
   }
 
   patterns_.push_back(std::move(pattern));
   needs_sort_ = true;
 }
 
-std::vector<const FusionPattern*> FusionPatternManager::GetSortedPatterns() const {
+std::vector<const FusionPattern*> FusionPatternManager::GetSortedPatterns()
+    const {
   SortPatternsIfNeeded();
 
   std::vector<const FusionPattern*> result;
@@ -204,11 +209,13 @@ std::vector<const FusionPattern*> FusionPatternManager::GetSortedPatterns() cons
   return result;
 }
 
-bool FusionPatternManager::HasAvailableKernel(const std::string& pattern_name) const {
+bool FusionPatternManager::HasAvailableKernel(
+    const std::string& pattern_name) const {
   return FusionKernelRegistry::GetInstance().IsKernelAvailable(pattern_name);
 }
 
-void FusionPatternManager::SetPatternEnabled(const std::string& pattern_name, bool enabled) {
+void FusionPatternManager::SetPatternEnabled(const std::string& pattern_name,
+                                             bool enabled) {
   for (auto& pattern : patterns_) {
     if (pattern->GetName() == pattern_name) {
       pattern->SetEnabled(enabled);
@@ -220,7 +227,8 @@ void FusionPatternManager::SetPatternEnabled(const std::string& pattern_name, bo
   LOG(WARNING) << "Fusion pattern '" << pattern_name << "' not found";
 }
 
-const FusionPattern* FusionPatternManager::GetPattern(const std::string& pattern_name) const {
+const FusionPattern* FusionPatternManager::GetPattern(
+    const std::string& pattern_name) const {
   for (const auto& pattern : patterns_) {
     if (pattern->GetName() == pattern_name) {
       return pattern.get();
@@ -229,7 +237,8 @@ const FusionPattern* FusionPatternManager::GetPattern(const std::string& pattern
   return nullptr;
 }
 
-std::vector<std::string> FusionPatternManager::GetRegisteredPatternNames() const {
+std::vector<std::string> FusionPatternManager::GetRegisteredPatternNames()
+    const {
   std::vector<std::string> names;
   for (const auto& pattern : patterns_) {
     names.push_back(pattern->GetName());
@@ -263,7 +272,8 @@ void FusionPatternManager::SortPatternsIfNeeded() const {
   if (VLOG_IS_ON(2)) {
     VLOG(2) << "Sorted fusion patterns by priority:";
     for (const auto& pattern : patterns_) {
-      VLOG(2) << "  " << pattern->GetName() << " (priority=" << pattern->GetPriority()
+      VLOG(2) << "  " << pattern->GetName()
+              << " (priority=" << pattern->GetPriority()
               << ", enabled=" << pattern->IsEnabled()
               << ", kernel=" << pattern->IsKernelAvailable() << ")";
     }
@@ -274,7 +284,8 @@ void FusionPatternManager::SortPatternsIfNeeded() const {
 // FusionGraphUtils Implementation
 // =============================================================================
 
-int FusionGraphUtils::FindNodeIndex(const GraphDef& graph, const std::string& node_name) {
+int FusionGraphUtils::FindNodeIndex(const GraphDef& graph,
+                                    const std::string& node_name) {
   for (int i = 0; i < graph.node_size(); ++i) {
     if (graph.node(i).name() == node_name) {
       return i;
@@ -284,7 +295,7 @@ int FusionGraphUtils::FindNodeIndex(const GraphDef& graph, const std::string& no
 }
 
 const NodeDef* FusionGraphUtils::GetNodeByName(const GraphDef& graph,
-                                                const std::string& node_name) {
+                                               const std::string& node_name) {
   int idx = FindNodeIndex(graph, node_name);
   if (idx >= 0) {
     return &graph.node(idx);
@@ -292,7 +303,8 @@ const NodeDef* FusionGraphUtils::GetNodeByName(const GraphDef& graph,
   return nullptr;
 }
 
-bool FusionGraphUtils::HasInput(const NodeDef& node, const std::string& input_name) {
+bool FusionGraphUtils::HasInput(const NodeDef& node,
+                                const std::string& input_name) {
   for (int i = 0; i < node.input_size(); ++i) {
     if (node.input(i) == input_name) {
       return true;
@@ -329,8 +341,8 @@ void FusionGraphUtils::RemoveNode(GraphDef* graph, int node_idx) {
   graph->mutable_node()->RemoveLast();
 }
 
-bool FusionGraphUtils::HasAnyConsumer(
-    const GraphDef& graph, const std::string& node_name) {
+bool FusionGraphUtils::HasAnyConsumer(const GraphDef& graph,
+                                      const std::string& node_name) {
   for (const auto& node : graph.node()) {
     if (node.name() == node_name) {
       continue;
@@ -392,7 +404,8 @@ int FusionGraphUtils::RemoveNodesIfUnused(
   return removed_count;
 }
 
-void FusionGraphUtils::RedirectInputs(GraphDef* graph, const std::string& old_node_name,
+void FusionGraphUtils::RedirectInputs(GraphDef* graph,
+                                      const std::string& old_node_name,
                                       const std::string& new_node_name) {
   for (int i = 0; i < graph->node_size(); ++i) {
     NodeDef* node = graph->mutable_node(i);
@@ -423,7 +436,8 @@ bool FusionGraphUtils::IsMusaNode(const NodeDef& node) {
          node.device().find("/device:MUSA") != std::string::npos;
 }
 
-bool FusionGraphUtils::IsOpType(const NodeDef& node, const std::string& op_type) {
+bool FusionGraphUtils::IsOpType(const NodeDef& node,
+                                const std::string& op_type) {
   return node.op() == op_type;
 }
 

@@ -160,20 +160,21 @@ FusionMatchResult MusaPReluFusion::MatchFromAddV2Node(
   // Step 1: Identify Relu1 and Mul branches from AddV2
   // ===========================================================================
   const NodeDef* relu1_node = nullptr;  // Positive part: Relu(Select)
-  const NodeDef* mul_node = nullptr;    // Negative part: Mul(Neg(alpha), Relu(Neg(Select)))
+  const NodeDef* mul_node =
+      nullptr;  // Negative part: Mul(Neg(alpha), Relu(Neg(Select)))
 
   const NodeDef* input0 = FindProducer(graph, addv2_node.input(0));
   const NodeDef* input1 = FindProducer(graph, addv2_node.input(1));
   if (!input0 || !input1) {
     VLOG(2) << "MusaPReluFusion: Could not find producers for AddV2 inputs";
     return result;
-  } 
+  }
   // Look for: AddV2(Relu, Mul) pattern
   if (IsOp(*input0, "Relu") && IsOp(*input1, "Mul")) {
     relu1_node = input0;
     mul_node = input1;
-    VLOG(2) << "MusaPReluFusion: Found Relu at input " << 0
-            << ", Mul at input " <<1;
+    VLOG(2) << "MusaPReluFusion: Found Relu at input " << 0 << ", Mul at input "
+            << 1;
   }
 
   if (!relu1_node || !mul_node) {
@@ -200,22 +201,21 @@ FusionMatchResult MusaPReluFusion::MatchFromAddV2Node(
     return result;
   }
 
-  const NodeDef* const_node = nullptr;   // Neg(alpha)
+  const NodeDef* const_node = nullptr;  // Neg(alpha)
   const NodeDef* relu2_node = nullptr;  // Relu(Neg(Select))
 
   const NodeDef* mul_input0 = FindProducer(graph, mul_node->input(0));
   const NodeDef* mul_input1 = FindProducer(graph, mul_node->input(1));
-  if(!mul_input0 || !mul_input1) {
+  if (!mul_input0 || !mul_input1) {
     VLOG(2) << "MusaPReluFusion: Could not find producers for Mul inputs";
     return result;
   }
 
-  if (IsOp(*mul_input0, "Const"))
-  {
+  if (IsOp(*mul_input0, "Const")) {
     const_node = mul_input0;
   }
 
-    // Look for: Mul(Neg, Relu)
+  // Look for: Mul(Neg, Relu)
   if (IsOp(*mul_input1, "Relu")) {
     relu2_node = mul_input1;
   }
@@ -224,8 +224,6 @@ FusionMatchResult MusaPReluFusion::MatchFromAddV2Node(
     VLOG(2) << "MusaPReluFusion: Could not find Const+Relu inputs to Mul";
     return result;
   }
-  
-
 
   // ===========================================================================
   // Step 5: Relu2's input must be Neg2
@@ -253,9 +251,10 @@ FusionMatchResult MusaPReluFusion::MatchFromAddV2Node(
 
   const NodeDef* neg2_input = FindProducer(graph, neg2_node->input(0));
   if (neg2_input != select_node) {
-    VLOG(2) << "MusaPReluFusion: Neg2's input is not the same Select as Relu1's. "
-            << "Neg2 input: " << (neg2_input ? neg2_input->name() : "null")
-            << ", Select: " << select_node->name();
+    VLOG(2)
+        << "MusaPReluFusion: Neg2's input is not the same Select as Relu1's. "
+        << "Neg2 input: " << (neg2_input ? neg2_input->name() : "null")
+        << ", Select: " << select_node->name();
     return result;
   }
 
@@ -264,7 +263,6 @@ FusionMatchResult MusaPReluFusion::MatchFromAddV2Node(
   // ===========================================================================
   // Step 7: Validate single-consumer for intermediate nodes
   // ===========================================================================
-
 
   // Relu1 must only be consumed by AddV2
   int relu1_consumers = CountConsumers(graph, relu1_node->name());
@@ -321,7 +319,7 @@ FusionMatchResult MusaPReluFusion::MatchFromAddV2Node(
   // ===========================================================================
   // Match successful!
   // ===========================================================================
-         
+
   result.matched = true;
   // Note: Select node is NOT included in matched_nodes - fusion starts from
   // after Select node, Select will be preserved
@@ -333,9 +331,9 @@ FusionMatchResult MusaPReluFusion::MatchFromAddV2Node(
   result.matched_nodes.push_back(&addv2_node);
   // x_input: Select node's output (Select is preserved, not fused)
   // The fused MusaPRelu will take Select's output as its x input
-  if(select_node) {
+  if (select_node) {
     result.captured_nodes["input"] = select_node;
-  } 
+  }
 
   result.captured_nodes["alpha_input"] = const_node;  // alpha const input
 
@@ -348,12 +346,12 @@ FusionMatchResult MusaPReluFusion::MatchFromAddV2Node(
   VLOG(1) << "MusaPRelu: Matched PRelu pattern at AddV2 node '" << name << "'"
           << " (x from Select: " << select_node->name()
           << ", alpha: " << const_node->name() << ")";
- 
+
   return result;
 }
 
-Status MusaPReluFusion::Apply(
-    GraphDef* graph, const FusionMatchResult& match_result) const {
+Status MusaPReluFusion::Apply(GraphDef* graph,
+                              const FusionMatchResult& match_result) const {
   if (!match_result.IsValid()) {
     return Status(error::INVALID_ARGUMENT, "Invalid PRelu match result");
   }
@@ -411,7 +409,8 @@ Status MusaPReluFusion::Apply(
       alpha_input_it->second) {
     fused_node->add_input(alpha_input_it->second->name());
   } else {
-    return Status(error::INVALID_ARGUMENT, "Cannot determine PRelu alpha input");
+    return Status(error::INVALID_ARGUMENT,
+                  "Cannot determine PRelu alpha input");
   }
 
   // Attributes
@@ -463,7 +462,8 @@ Status MusaPReluFusion::Apply(
   // Const node (alpha) - only remove if no other consumers
   if (alpha_input_it != match_result.captured_nodes.end() &&
       alpha_input_it->second) {
-    int const_consumers = CountConsumers(*graph, alpha_input_it->second->name());
+    int const_consumers =
+        CountConsumers(*graph, alpha_input_it->second->name());
     if (const_consumers <= 1) {
       nodes_to_remove.insert(alpha_input_it->second->name());
     }

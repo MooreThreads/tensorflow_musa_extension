@@ -206,8 +206,10 @@ Status MatMulBiasAddFusion::Apply(GraphDef* graph,
 
   // Keep original bias edge string exactly, do not replace with
   // bias_node->name() because input could be "bias:0" instead of just "bias".
-  const std::string input0_name = CanonicalizeInputName(bias_add_node->input(0));
-  const std::string input1_name = CanonicalizeInputName(bias_add_node->input(1));
+  const std::string input0_name =
+      CanonicalizeInputName(bias_add_node->input(0));
+  const std::string input1_name =
+      CanonicalizeInputName(bias_add_node->input(1));
   const bool input0_is_matmul = input0_name == matmul_node->name();
   const bool input1_is_matmul = input1_name == matmul_node->name();
 

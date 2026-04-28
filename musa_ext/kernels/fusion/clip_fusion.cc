@@ -45,7 +45,8 @@ int CountConsumersExcluding(const GraphDef& graph, const std::string& node_name,
       continue;
     }
     for (int j = 0; j < consumer.input_size(); ++j) {
-      if (FusionGraphUtils::GetProducerNodeName(consumer.input(j)) == node_name) {
+      if (FusionGraphUtils::GetProducerNodeName(consumer.input(j)) ==
+          node_name) {
         ++count;
       }
     }
@@ -102,7 +103,8 @@ FusionMatchResult MusaClipFusion::MatchFromMaximumNode(
     }
   }
 
-  if (minimum_input_idx < 0 || !minimum_node || minimum_node->input_size() != 2) {
+  if (minimum_input_idx < 0 || !minimum_node ||
+      minimum_node->input_size() != 2) {
     return result;
   }
 

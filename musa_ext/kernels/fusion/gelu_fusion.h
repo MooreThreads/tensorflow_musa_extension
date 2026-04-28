@@ -34,31 +34,35 @@ class MusaGeluFusion : public FusionPattern {
  public:
   MusaGeluFusion();
   ~MusaGeluFusion() override = default;
-  
+
   // Match the GELU pattern starting from a node
-  FusionMatchResult Match(const GraphDef& graph, int start_node_idx) const override;
-  
+  FusionMatchResult Match(const GraphDef& graph,
+                          int start_node_idx) const override;
+
   // Apply the fusion by replacing the matched output with MusaGelu.
-  Status Apply(GraphDef* graph, const FusionMatchResult& match_result) const override;
-  
+  Status Apply(GraphDef* graph,
+               const FusionMatchResult& match_result) const override;
+
   // Priority: same as other activation fusions
   int GetPriority() const override { return 90; }
-  
+
   bool IsKernelAvailable() const override;
-  
+
   std::string GetName() const override { return "MusaGeluFusion"; }
-  
+
   std::string GetFallbackReason() const override { return ""; }
 
  private:
   // Match exact GELU patterns used by TensorFlow's erf-based formulation:
   //   0.5 * x * (1 + erf(x / sqrt(2)))
   //   0.5 * x * erfc(-x / sqrt(2)))
-  FusionMatchResult MatchStandardPattern(const GraphDef& graph, int start_node_idx) const;
-  
+  FusionMatchResult MatchStandardPattern(const GraphDef& graph,
+                                         int start_node_idx) const;
+
   // Match the optional tanh-approximate GELU path:
   //   0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
-  FusionMatchResult MatchApproximatePattern(const GraphDef& graph, int start_node_idx) const;
+  FusionMatchResult MatchApproximatePattern(const GraphDef& graph,
+                                            int start_node_idx) const;
 
   mutable bool kernel_available_ = true;
   mutable bool kernel_checked_ = false;

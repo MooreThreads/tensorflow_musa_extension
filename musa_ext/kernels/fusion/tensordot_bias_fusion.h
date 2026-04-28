@@ -58,11 +58,13 @@ class MusaTensorDotBiasFusion : public FusionPattern {
   ~MusaTensorDotBiasFusion() override = default;
 
   FusionMatchResult Match(const GraphDef& graph,
-                        int start_node_idx) const override;
+                          int start_node_idx) const override;
   Status Apply(GraphDef* graph,
                const FusionMatchResult& match_result) const override;
 
-  int GetPriority() const override { return 105; }  // Slightly higher than MusaTensorDotFusion
+  int GetPriority() const override {
+    return 105;
+  }  // Slightly higher than MusaTensorDotFusion
   bool IsKernelAvailable() const override;
   std::string GetName() const override { return "MusaTensorDotBiasFusion"; }
   std::string GetFallbackReason() const override {
@@ -75,7 +77,7 @@ class MusaTensorDotBiasFusion : public FusionPattern {
  private:
   // Match from BiasAdd node (entry point)
   FusionMatchResult MatchFromBiasAddNode(const GraphDef& graph,
-                                        int bias_add_node_idx) const;
+                                         int bias_add_node_idx) const;
 
   mutable bool kernel_checked_ = false;
   mutable bool kernel_available_ = false;

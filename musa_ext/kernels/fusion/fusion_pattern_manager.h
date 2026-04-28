@@ -37,10 +37,10 @@ struct FusionMatchResult {
   std::vector<const NodeDef*> matched_nodes;
   std::map<std::string, const NodeDef*> captured_nodes;
   std::map<std::string, std::string> captured_attrs;
-  
+
   // Helper method to check if match is valid
   bool IsValid() const { return matched && !matched_nodes.empty(); }
-  
+
   // Reset the match result
   void Reset() {
     matched = false;
@@ -54,25 +54,27 @@ struct FusionMatchResult {
 class FusionPattern {
  public:
   virtual ~FusionPattern() = default;
-  
+
   // Match the pattern starting from a node in the graph
-  virtual FusionMatchResult Match(const GraphDef& graph, int start_node_idx) const = 0;
-  
+  virtual FusionMatchResult Match(const GraphDef& graph,
+                                  int start_node_idx) const = 0;
+
   // Apply the fusion transformation to the graph
-  virtual Status Apply(GraphDef* graph, const FusionMatchResult& match_result) const = 0;
-  
+  virtual Status Apply(GraphDef* graph,
+                       const FusionMatchResult& match_result) const = 0;
+
   // Get the priority of this pattern (higher = applied first)
   virtual int GetPriority() const = 0;
-  
+
   // Check if the corresponding kernel is available
   virtual bool IsKernelAvailable() const = 0;
-  
+
   // Get the name of this fusion pattern
   virtual std::string GetName() const = 0;
-  
+
   // Get fallback reason if kernel is not available
   virtual std::string GetFallbackReason() const { return ""; }
-  
+
   // Enable/disable this pattern
   void SetEnabled(bool enabled) { enabled_ = enabled; }
   bool IsEnabled() const { return enabled_; }
@@ -88,23 +90,23 @@ class FusionPattern {
 class FusionKernelRegistry {
  public:
   static FusionKernelRegistry& GetInstance();
-  
+
   // Register a kernel availability checker
-  void RegisterKernel(const std::string& pattern_name, 
+  void RegisterKernel(const std::string& pattern_name,
                       std::function<bool()> is_available_func);
-  
+
   // Check if kernel is available
   bool IsKernelAvailable(const std::string& pattern_name) const;
-  
+
   // Get all available kernels
   std::vector<std::string> GetAvailableKernels() const;
-  
+
   // Mark a kernel as implemented (for built-in kernels)
   void MarkKernelAsImplemented(const std::string& pattern_name);
 
  private:
   FusionKernelRegistry() = default;
-  
+
   std::unordered_map<std::string, std::function<bool()>> kernel_availability_;
   std::unordered_set<std::string> implemented_kernels_;
 };
@@ -113,52 +115,52 @@ class FusionKernelRegistry {
 class FusionPatternManager {
  public:
   static FusionPatternManager& GetInstance();
-  
+
   // Register a new fusion pattern
   void RegisterPattern(std::unique_ptr<FusionPattern> pattern);
-  
+
   // Get all patterns sorted by priority
   std::vector<const FusionPattern*> GetSortedPatterns() const;
-  
+
   // Check if a pattern has available kernel
   bool HasAvailableKernel(const std::string& pattern_name) const;
-  
+
   // Enable/disable a pattern by name
   void SetPatternEnabled(const std::string& pattern_name, bool enabled);
-  
+
   // Get pattern by name
   const FusionPattern* GetPattern(const std::string& pattern_name) const;
-  
+
   // Get all registered pattern names
   std::vector<std::string> GetRegisteredPatternNames() const;
-  
+
   // Clear all patterns (mainly for testing)
   void ClearPatterns();
 
  private:
   FusionPatternManager() = default;
-  
+
   mutable std::vector<std::unique_ptr<FusionPattern>> patterns_;
   mutable bool needs_sort_ = false;
-  
+
   void SortPatternsIfNeeded() const;
 };
 
 // Helper macros for pattern registration
-#define REGISTER_FUSION_PATTERN(PatternClass) \
-  static struct PatternClass##Registrar { \
-    PatternClass##Registrar() { \
+#define REGISTER_FUSION_PATTERN(PatternClass)                                  \
+  static struct PatternClass##Registrar {                                      \
+    PatternClass##Registrar() {                                                \
       ::tensorflow::grappler::musa_fusion::FusionPatternManager::GetInstance() \
-          .RegisterPattern(std::make_unique<PatternClass>()); \
-    } \
+          .RegisterPattern(std::make_unique<PatternClass>());                  \
+    }                                                                          \
   } g_##PatternClass##_registrar;
 
-#define REGISTER_FUSION_KERNEL(PatternName, IsAvailableFunc) \
-  static struct PatternName##KernelRegistrar { \
-    PatternName##KernelRegistrar() { \
+#define REGISTER_FUSION_KERNEL(PatternName, IsAvailableFunc)                   \
+  static struct PatternName##KernelRegistrar {                                 \
+    PatternName##KernelRegistrar() {                                           \
       ::tensorflow::grappler::musa_fusion::FusionKernelRegistry::GetInstance() \
-          .RegisterKernel(#PatternName, IsAvailableFunc); \
-    } \
+          .RegisterKernel(#PatternName, IsAvailableFunc);                      \
+    }                                                                          \
   } g_##PatternName##_kernel_registrar;
 
 // Graph utilities for fusion patterns
@@ -166,35 +168,38 @@ class FusionGraphUtils {
  public:
   // Find node index by name
   static int FindNodeIndex(const GraphDef& graph, const std::string& node_name);
-  
+
   // Get node by name
-  static const NodeDef* GetNodeByName(const GraphDef& graph, const std::string& node_name);
-  
+  static const NodeDef* GetNodeByName(const GraphDef& graph,
+                                      const std::string& node_name);
+
   // Check if node has specific input
   static bool HasInput(const NodeDef& node, const std::string& input_name);
-  
-  // Get the producer node name from input (handles control dependencies and ports)
+
+  // Get the producer node name from input (handles control dependencies and
+  // ports)
   static std::string GetProducerNodeName(const std::string& input);
-  
+
   // Remove a node from the graph
   static void RemoveNode(GraphDef* graph, int node_idx);
 
   // Check whether a node still has any consumers in the graph.
-  static bool HasAnyConsumer(const GraphDef& graph, const std::string& node_name);
+  static bool HasAnyConsumer(const GraphDef& graph,
+                             const std::string& node_name);
 
   // Remove nodes that are no longer referenced outside the removable set.
   // Protected nodes are excluded from deletion even if listed in node_names.
   static int RemoveNodesIfUnused(
       GraphDef* graph, const std::vector<std::string>& node_names,
       const std::unordered_set<std::string>& protected_node_names = {});
-  
+
   // Redirect all inputs referencing old_node to new_node
   static void RedirectInputs(GraphDef* graph, const std::string& old_node_name,
                              const std::string& new_node_name);
-  
+
   // Check if node is on MUSA device
   static bool IsMusaNode(const NodeDef& node);
-  
+
   // Check if node op matches
   static bool IsOpType(const NodeDef& node, const std::string& op_type);
 };

@@ -31,10 +31,12 @@ class MusaSigmoidCalibrationFusion : public FusionPattern {
   ~MusaSigmoidCalibrationFusion() override = default;
 
   // Match the SigmoidCalibration pattern starting from a node
-  FusionMatchResult Match(const GraphDef& graph, int start_node_idx) const override;
+  FusionMatchResult Match(const GraphDef& graph,
+                          int start_node_idx) const override;
 
   // Apply the fusion: replace matched subgraph with MusaSigmoidCalibration
-  Status Apply(GraphDef* graph, const FusionMatchResult& match_result) const override;
+  Status Apply(GraphDef* graph,
+               const FusionMatchResult& match_result) const override;
 
   // Priority: typical for activation fusions
   int GetPriority() const override { return 100; }
@@ -42,10 +44,13 @@ class MusaSigmoidCalibrationFusion : public FusionPattern {
   // Check if MusaSigmoidCalibration kernel is available
   bool IsKernelAvailable() const override;
 
-  std::string GetName() const override { return "MusaSigmoidCalibrationFusion"; }
+  std::string GetName() const override {
+    return "MusaSigmoidCalibrationFusion";
+  }
 
  private:
-  std::string sigmoid_node_input_name(const FusionMatchResult& match_result) const;
+  std::string sigmoid_node_input_name(
+      const FusionMatchResult& match_result) const;
   mutable bool kernel_available_ = false;
   mutable bool kernel_checked_ = false;
 };
