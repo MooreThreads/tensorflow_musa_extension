@@ -48,7 +48,6 @@ WORKSPACE_DIR = ROOT_DIR.parent
 DEFAULT_FUSED_GRAPH = ROOT_DIR / "gelu_big_graphs_pb" / "musa_optimizer_0002_after_fusion.pb"
 DEFAULT_MODEL_GRAPH = WORKSPACE_DIR / "tf_test_model" / "prunedGraph" / "graph_def.pb"
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "test" / "fusion" / "benchmark_results"
-DEFAULT_PLUGIN_PATH = ROOT_DIR / "build" / "libmusa_plugin.so"
 
 
 def is_truthy_env(value: Optional[str]) -> bool:
@@ -169,38 +168,10 @@ def create_mock_data(
   return feed_dict
 
 
-def load_musa_plugin(plugin_path: Optional[str] = None) -> str:
-  candidates: List[Path] = []
-  if plugin_path:
-    candidates.append(Path(plugin_path).expanduser())
+def load_musa_plugin() -> str:
+  import tensorflow_musa
 
-  env_plugin = os.environ.get("MUSA_PLUGIN_PATH")
-  if env_plugin:
-    candidates.append(Path(env_plugin).expanduser())
-
-  candidates.extend(
-      [
-          DEFAULT_PLUGIN_PATH,
-          Path.cwd() / "build" / "libmusa_plugin.so",
-          ROOT_DIR / "build" / "libmusa_plugin.so",
-      ]
-  )
-
-  seen = set()
-  for candidate in candidates:
-    resolved = candidate.resolve()
-    if resolved in seen:
-      continue
-    seen.add(resolved)
-    if not resolved.exists():
-      continue
-    tf.load_op_library(str(resolved))
-    return str(resolved)
-
-  searched = "\n".join(f"  - {path}" for path in candidates)
-  raise FileNotFoundError(
-      "MUSA plugin not found. Searched locations:\n" + searched
-  )
+  return tensorflow_musa.load_plugin()
 
 
 def create_config_with_musa_optimizer() -> config_pb2.ConfigProto:
@@ -549,11 +520,6 @@ def parse_args() -> argparse.Namespace:
       help="Directory to save benchmark JSON outputs.",
   )
   parser.add_argument(
-      "--plugin-path",
-      default=None,
-      help="Optional explicit path to libmusa_plugin.so.",
-  )
-  parser.add_argument(
       "--extract-only",
       action="store_true",
       help="Only extract the whole-model GELU cases; skip benchmarking.",
@@ -602,8 +568,8 @@ def main() -> None:
   if args.extract_only:
     return
 
-  plugin_path = load_musa_plugin(args.plugin_path)
-  print(f"Loaded MUSA plugin from: {plugin_path}")
+  plugin_path = load_musa_plugin()
+  print(f"Loaded MUSA plugin via tensorflow_musa: {plugin_path}")
 
   physical_devices = tf.config.list_physical_devices("MUSA")
   if not physical_devices:

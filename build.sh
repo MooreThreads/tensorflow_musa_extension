@@ -32,6 +32,22 @@ print(f'TensorFlow {version} found - OK')
 " || exit 1
 }
 
+check_source_layout() {
+    local fusion_dir="musa_ext/kernels/fusion"
+    local old_fusion_dir="musa_ext/mu/graph""_fusion"
+
+    if [ ! -d "$fusion_dir" ]; then
+        echo "ERROR: Fusion source directory '$fusion_dir' not found."
+        exit 1
+    fi
+
+    if [ -d "$old_fusion_dir" ]; then
+        echo "ERROR: Deprecated fusion source directory '$old_fusion_dir' still exists."
+        echo "       Fusion sources should live under '$fusion_dir'."
+        exit 1
+    fi
+}
+
 # Parse build type from command line argument
 BUILD_TYPE="${1:-release}"
 BUILD_TYPE=$(echo "$BUILD_TYPE" | tr '[:upper:]' '[:lower:]')
@@ -52,6 +68,7 @@ case "$BUILD_TYPE" in
         echo "=========================================="
         echo ""
         check_tf_version
+        check_source_layout
         echo ""
         echo "Building wheel package..."
         echo ""
@@ -93,6 +110,7 @@ esac
 
 # Check TensorFlow version before building .so
 check_tf_version
+check_source_layout
 
 # Clean previous build if needed
 rm -rf build

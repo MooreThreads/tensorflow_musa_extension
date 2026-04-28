@@ -50,6 +50,39 @@ with tf.device("/device:MUSA:0"):
     b = tf.matmul(a, a)
 ```
 
+### MUSA 自定义图优化器开关
+
+`tensorflow_musa` 提供了 `ConfigProto` 级别的接口，用于启用、关闭或查询 `musa_graph_optimizer`。常规推理场景推荐使用 `enable_musa_graph_optimizer(config)`，它等价于向 `config.graph_options.rewrite_options.custom_optimizers` 注册 `musa_graph_optimizer`。
+
+```python
+import tensorflow as tf
+import tensorflow_musa as tf_musa
+
+config = tf.compat.v1.ConfigProto()
+
+# 启用 MUSA 自定义图优化器
+tf_musa.enable_musa_graph_optimizer(config)
+
+# 查询是否已启用
+print(tf_musa.is_musa_graph_optimizer_enabled(config))
+
+# 关闭 MUSA 自定义图优化器
+tf_musa.disable_musa_graph_optimizer(config)
+```
+
+也可以使用统一接口显式传入开关值：
+
+```python
+tf_musa.set_musa_graph_optimizer_enabled(config, enabled=True)
+tf_musa.set_musa_graph_optimizer_enabled(config, enabled=False)
+```
+
+少数测试或调试场景需要强制设置 Grappler optimizer 列表时，可以额外传入 `add_to_optimizer_list=True`：
+
+```python
+tf_musa.enable_musa_graph_optimizer(config, add_to_optimizer_list=True)
+```
+
 ## 从源码构建插件（可选）
 
 仅生成 `build/libmusa_plugin.so`（不打包 wheel）：

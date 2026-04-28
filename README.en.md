@@ -50,6 +50,19 @@ with tf.device("/device:MUSA:0"):
     b = tf.matmul(a, a)
 ```
 
+Enable or disable the MUSA custom graph optimizer:
+
+```python
+import tensorflow as tf
+import tensorflow_musa as tf_musa
+
+config = tf.compat.v1.ConfigProto()
+tf_musa.set_musa_graph_optimizer_enabled(config, enabled=True)
+
+# To disable it:
+# tf_musa.set_musa_graph_optimizer_enabled(config, enabled=False)
+```
+
 ## Build plugin from source (optional)
 
 Produces `build/libmusa_plugin.so` only (no wheel):

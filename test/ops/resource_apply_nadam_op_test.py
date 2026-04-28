@@ -17,10 +17,10 @@
 
 import numpy as np
 import tensorflow as tf
-from musa_test_utils import MUSATestCase, load_musa_plugin
+from musa_test_utils import MUSATestCase, load_musa_ops
 from tensorflow.python.ops import gen_training_ops
 
-musa_ops = tf.load_op_library(load_musa_plugin())
+musa_ops = load_musa_ops()
 
 class ResourceApplyNadamOpTest(MUSATestCase):
     """Tests for MUSA ResourceApplyNadam operator."""

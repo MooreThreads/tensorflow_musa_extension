@@ -15,10 +15,9 @@
 
 """Tests for MUSA Interact operator."""
 
-import os
 import numpy as np
 import tensorflow as tf
-from musa_test_utils import MUSATestCase
+from musa_test_utils import MUSATestCase, load_musa_ops
 
 
 def interact_ref(input_tensor):
@@ -32,42 +31,13 @@ class InteractOpTest(MUSATestCase):
 
     @classmethod
     def setUpClass(cls):
-        """Set up the test class by loading the MUSA plugin using load_op_library."""
+        """Set up the test class by loading ops from the tensorflow_musa wheel."""
         super(InteractOpTest, cls).setUpClass()
 
-        # Use the same path resolution logic as in musa_test_utils
-        plugin_path = None
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-
-        # Common plugin locations to try
-        candidate_paths = [
-            # Relative to test directory (most common case)
-            os.path.join(current_dir, "..", "..", "build", "libmusa_plugin.so"),
-            # Relative to project root (when running from project root)
-            os.path.join(os.path.dirname(current_dir), "..", "build", "libmusa_plugin.so"),
-            # Current working directory build
-            os.path.join(os.getcwd(), "..", "build", "libmusa_plugin.so"),
-        ]
-
-        for path in candidate_paths:
-            normalized_path = os.path.normpath(path)
-            if os.path.exists(normalized_path):
-                plugin_path = normalized_path
-                break
-
-        if plugin_path and os.path.exists(plugin_path):
-            try:
-                # Use tf.load_op_library instead of tf.load_library
-                cls._musa_ops = tf.load_op_library(plugin_path)
-                # print(f"SUCCESS: MUSA Interact ops loaded from {plugin_path}!")
-            except Exception as e:
-                print(f"FAILED: Error loading MUSA ops from {plugin_path}: {e}")
-                cls._musa_ops = None
-        else:
-            # Provide helpful error message
-            searched_locations = [os.path.normpath(path) for path in candidate_paths]
-            print(f"MUSA plugin not found. Searched locations:\n" +
-                  "\n".join(f"  - {loc}" for loc in searched_locations))
+        try:
+            cls._musa_ops = load_musa_ops()
+        except Exception as e:
+            print(f"FAILED: Error loading MUSA ops from tensorflow_musa wheel: {e}")
             cls._musa_ops = None
 
     def _test_interact(self, input_shape, dtype):
