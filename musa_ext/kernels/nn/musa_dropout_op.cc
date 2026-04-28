@@ -1,12 +1,12 @@
 #include <mudnn.h>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_shape.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -25,9 +25,9 @@ class MusaDropoutOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("seed", &seed_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("offset", &offset_));
 
-    OP_REQUIRES(ctx, rate_ >= 0.0f && rate_ < 1.0f,
-                errors::InvalidArgument(
-                    "Dropout rate must be in [0, 1), got ", rate_));
+    OP_REQUIRES(
+        ctx, rate_ >= 0.0f && rate_ < 1.0f,
+        errors::InvalidArgument("Dropout rate must be in [0, 1), got ", rate_));
   }
 
   bool IsExpensive() override { return false; }
@@ -85,9 +85,9 @@ class MusaDropoutGradOp : public MusaOpKernel {
   explicit MusaDropoutGradOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("rate", &rate_));
 
-    OP_REQUIRES(ctx, rate_ >= 0.0f && rate_ < 1.0f,
-                errors::InvalidArgument(
-                    "Dropout rate must be in [0, 1), got ", rate_));
+    OP_REQUIRES(
+        ctx, rate_ >= 0.0f && rate_ < 1.0f,
+        errors::InvalidArgument("Dropout rate must be in [0, 1), got ", rate_));
   }
 
   bool IsExpensive() override { return false; }
