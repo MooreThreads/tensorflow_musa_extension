@@ -80,6 +80,12 @@ class PadOpTest(MUSATestCase):
                    paddings_dtype=tf.int64,
                    constant_values=7.0)
 
+  def testPadFourDimensional(self):
+    """Pad a 4D tensor (e.g., NHWC format) and verify behavior."""
+    paddings = [[0, 0], [1, 2], [2, 1], [0, 0]]
+    self._test_pad([2, 4, 4, 3], paddings, tf.float32,
+                   paddings_dtype=tf.int64,
+                   constant_values=1.5)
 
 if __name__ == "__main__":
   tf.test.main()
