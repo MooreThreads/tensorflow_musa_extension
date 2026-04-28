@@ -19,7 +19,7 @@
 
 同一份插件需与构建时所用 TensorFlow **主/次版本** 匹配；多版本请分别构建 wheel。细节见 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)。
 
-**PluggableDevice / `SE_InitPlugin`（实验性）**：支持 TensorFlow StreamExecutor C API 入口与 `MUSA_ENABLE_SE_PLUGIN` 门控，与默认 C++ `MusaDevice` 路径**互斥**；`MUSA_ENABLE_SE_PLUGIN=1` 须在**加载 `libmusa_plugin.so` 之前**设置。全量算子仍以 C++ 路径为主，详见 [COMPATIBILITY](docs/COMPATIBILITY.md)。
+**PluggableDevice / `SE_InitPlugin`（实验性）**：支持 TensorFlow StreamExecutor C API 入口与 `MUSA_ENABLE_SE_PLUGIN` 门控，与默认 C++ `MusaDevice` 路径**互斥**；`MUSA_ENABLE_SE_PLUGIN=1` 须在**加载 `libmusa_plugin.so` 之前**设置。全量算子仍以 C++ 路径为主，详见 [COMPATIBILITY](docs/COMPATIBILITY.md)。CI 固定构建与 pytest 命令见 [docs/CI.md](docs/CI.md)。
 
 ## 安装（推荐：Wheel）
 

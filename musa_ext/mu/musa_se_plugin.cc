@@ -21,6 +21,7 @@ limitations under the License.
 #include <musa_runtime.h>
 
 #include <cstdint>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -28,6 +29,7 @@ limitations under the License.
 
 #include "musa_plugin_env.h"
 #include "mu/musa_runtime_adapter.h"
+#include "mu/musa_runtime_registry.h"
 #include "tensorflow/c/experimental/stream_executor/stream_executor.h"
 #include "tensorflow/c/tf_status.h"
 #include "tensorflow/core/platform/logging.h"
@@ -177,7 +179,7 @@ void plugin_se_create_stream(const SP_Device* device, SP_Stream* stream,
     delete s;
     return;
   }
-  musaError_t err = musaStreamCreate(&s->stream);
+  musaError_t   err = musaStreamCreate(&s->stream);
   if (err != musaSuccess) {
     delete s;
     ::tensorflow::musa::runtime::SetStatusFromMusa(status, err, "musaStreamCreate");
@@ -607,11 +609,8 @@ static SP_PlatformFns g_musa_se_platform_fns;
 
 extern "C" {
 
-void plugin_get_device_count(const SP_Platform*, int* count, TF_Status* status) {
-  if (!count) {
-    TF_SetStatus(status, TF_INVALID_ARGUMENT, "null count");
-    return;
-  }
+// Shared by plugin_get_device_count and MUSA_TestPluginGetDeviceCount.
+static void MUSA_PluginGetDeviceCountBody(int* count, TF_Status* status) {
   int n = 0;
   musaError_t err = musaGetDeviceCount(&n);
   if (err != musaSuccess) {
@@ -627,6 +626,154 @@ void plugin_get_device_count(const SP_Platform*, int* count, TF_Status* status) 
     return;
   }
   *count = n;
+  TF_SetStatus(status, TF_OK, "");
+}
+
+void plugin_get_device_count(const SP_Platform*, int* count, TF_Status* status) {
+  if (!count) {
+    TF_SetStatus(status, TF_INVALID_ARGUMENT, "null count");
+    return;
+  }
+  MUSA_PluginGetDeviceCountBody(count, status);
+}
+
+// Test/CI: same behavior as `plugin_get_device_count` (no `SP_Platform*`
+// indirection) so Python can assert strict vs non-strict `musaGetDeviceCount`
+// without loading TensorFlow Pluggable full stack.
+void MUSA_TestPluginGetDeviceCount(int* count, TF_Status* status) {
+  if (!count) {
+    if (status) {
+      TF_SetStatus(status, TF_INVALID_ARGUMENT, "null count");
+    }
+    return;
+  }
+  if (!status) {
+    return;
+  }
+  MUSA_PluginGetDeviceCountBody(count, status);
+}
+
+// CI/driver smoke: set device, stream, tiny H2D/D2H copy. Does not require TF.
+// Relaxed enumeration (`relaxed_enum=true`): when `musaGetDeviceCount` fails,
+// returns TF_OK with a skip message so no-hardware CI stays green.
+// Strict (`relaxed_enum=false`): `musaGetDeviceCount` failure propagates as an error;
+// zero GPUs returns FAILED_PRECONDITION so `TF_OK` reserved for successful memcpy
+// verification (avoid false-positive `TF_OK` on CI without hardware).
+
+namespace {
+void MUSA_SeRuntimeMemcpySmokeImpl(TF_Status* status, bool relaxed_enum) {
+  if (!status) {
+    return;
+  }
+  int n = 0;
+  musaError_t err = musaGetDeviceCount(&n);
+  if (err != musaSuccess) {
+    if (relaxed_enum) {
+      TF_SetStatus(status, TF_OK,
+                   "MUSA_TestSeRuntimeSmoke: musaGetDeviceCount failed (smoke skipped)");
+      return;
+    }
+    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err, "musaGetDeviceCount");
+    return;
+  }
+  if (n <= 0) {
+    if (relaxed_enum) {
+      TF_SetStatus(status, TF_OK, "MUSA_TestSeRuntimeSmoke: zero devices (smoke skipped)");
+      return;
+    }
+    TF_SetStatus(
+        status, TF_FAILED_PRECONDITION,
+        "MUSA_TestSeRuntimeSmokeStrict: zero MUSA devices (strict smoke skipped)");
+    return;
+  }
+  err = musaSetDevice(0);
+  if (err != musaSuccess) {
+    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err, "musaSetDevice");
+    return;
+  }
+  musaStream_t stream = nullptr;
+  err = musaStreamCreate(&stream);
+  if (err != musaSuccess) {
+    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err, "musaStreamCreate");
+    return;
+  }
+  uint32_t host_in = 0xAABBCCDD;
+  void* d = nullptr;
+  err = musaMalloc(&d, sizeof(uint32_t));
+  if (err != musaSuccess) {
+    (void)musaStreamDestroy(stream);
+    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err, "musaMalloc");
+    return;
+  }
+  err = musaMemcpyAsync(d, &host_in, sizeof(uint32_t), musaMemcpyHostToDevice, stream);
+  if (err != musaSuccess) {
+    (void)musaFree(d);
+    (void)musaStreamDestroy(stream);
+    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err, "musaMemcpyAsync H2D");
+    return;
+  }
+  uint32_t host_out = 0;
+  err = musaMemcpyAsync(&host_out, d, sizeof(uint32_t), musaMemcpyDeviceToHost, stream);
+  if (err != musaSuccess) {
+    (void)musaFree(d);
+    (void)musaStreamDestroy(stream);
+    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err, "musaMemcpyAsync D2H");
+    return;
+  }
+  err = musaStreamSynchronize(stream);
+  if (err != musaSuccess) {
+    (void)musaFree(d);
+    (void)musaStreamDestroy(stream);
+    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err, "musaStreamSynchronize");
+    return;
+  }
+  (void)musaFree(d);
+  (void)musaStreamDestroy(stream);
+  if (host_out != host_in) {
+    TF_SetStatus(status, TF_INTERNAL, "MUSA_TestSeRuntimeSmoke: memcpy check failed");
+    return;
+  }
+  TF_SetStatus(status, TF_OK, "");
+}
+}  // namespace
+
+void MUSA_TestSeRuntimeSmoke(TF_Status* status) {
+  MUSA_SeRuntimeMemcpySmokeImpl(status, /*relaxed_enum=*/true);
+}
+
+void MUSA_TestSeRuntimeSmokeStrict(TF_Status* status) {
+  MUSA_SeRuntimeMemcpySmokeImpl(status, /*relaxed_enum=*/false);
+}
+
+size_t MUSA_TestSeRegistryLiveOrdinalsForTest() {
+  return ::tensorflow::musa::MusaSeRegistrySizeForTest();
+}
+
+void MUSA_TestRegistryDeviceLifecycle(TF_Status* status) {
+  if (!status) {
+    return;
+  }
+  ::tensorflow::musa::MusaSeRegistryResetForTest();
+  if (::tensorflow::musa::MusaSeRegistrySizeForTest() != 0) {
+    TF_SetStatus(status, TF_INTERNAL,
+                 "MUSA_TestRegistryDeviceLifecycle: registry not empty after reset");
+    return;
+  }
+  constexpr int32_t kTestOrdinal = 42;
+  ::tensorflow::musa::MusaSeRegistryOnDeviceCreated(kTestOrdinal);
+  if (::tensorflow::musa::MusaSeRegistrySizeForTest() != 1) {
+    ::tensorflow::musa::MusaSeRegistryResetForTest();
+    TF_SetStatus(status, TF_INTERNAL,
+                 "MUSA_TestRegistryDeviceLifecycle: expected one live ordinal");
+    return;
+  }
+  ::tensorflow::musa::MusaSeRegistryOnDeviceDestroyed(kTestOrdinal);
+  if (::tensorflow::musa::MusaSeRegistrySizeForTest() != 0) {
+    ::tensorflow::musa::MusaSeRegistryResetForTest();
+    TF_SetStatus(status, TF_INTERNAL,
+                 "MUSA_TestRegistryDeviceLifecycle: expected empty registry");
+    return;
+  }
   TF_SetStatus(status, TF_OK, "");
 }
 
@@ -650,11 +797,15 @@ void plugin_create_device(const SP_Platform*, SE_CreateDeviceParams* params,
   dev->hardware_name = kPlatformName;
   dev->device_vendor = kVendorMthreads;
   dev->pci_bus_id = nullptr;
+  ::tensorflow::musa::MusaSeRegistryOnDeviceCreated(
+      static_cast<int32_t>(params->ordinal));
   TF_SetStatus(status, TF_OK, "");
 }
 
 void plugin_destroy_device(const SP_Platform*, SP_Device* device) {
   if (!device) return;
+  const int32_t ord = static_cast<int32_t>(device->ordinal);
+  ::tensorflow::musa::MusaSeRegistryOnDeviceDestroyed(ord);
   if (device->device_handle) {
     delete static_cast<int*>(device->device_handle);
     device->device_handle = nullptr;

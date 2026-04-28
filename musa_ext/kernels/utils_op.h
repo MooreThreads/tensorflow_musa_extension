@@ -128,9 +128,7 @@ class MusaOpKernel : public OpKernel {
 MusaDevice* GetDeviceByCtx(tensorflow::OpKernelContext* context);
 
 inline int GetMusaDeviceIdByCtx(tensorflow::OpKernelContext* context) {
-  auto* musa_device = TryGetMusaDeviceFromContext(context);
-  if (!musa_device) return -1;
-  return musa_device->get_device_id();
+  return GetMusaDeviceIdForKernelContext(context);
 }
 
 // Not for real use: only returned with context already in failed state after
@@ -174,9 +172,7 @@ inline ::musa::dnn::Handle& GetHandleByCtx(
 }
 
 inline musaStream_t GetMusaStreamByCtx(tensorflow::OpKernelContext* context) {
-  auto* musa_device = TryGetMusaDeviceFromContext(context);
-  if (!musa_device) return nullptr;
-  return musa_device->GetStream();
+  return GetMusaStreamForKernelContext(context);
 }
 
 }  // namespace musa

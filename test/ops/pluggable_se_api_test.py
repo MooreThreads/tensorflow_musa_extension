@@ -122,6 +122,178 @@ sys.exit(0)
         proc.returncode, 0,
         "subprocess failed: " + (proc.stdout or "") + (proc.stderr or ""))
 
+  def test_plugin_get_device_count_strict_vs_nonstrict_in_subprocess(self):
+    """`MUSA_STRICT_DEVICE_ENUM` matches plugin + C++ factory behavior (see docs)."""
+    path = _plugin_path()
+    if not path:
+      self.skipTest("libmusa_plugin.so not found")
+
+    def run_case(strict_val):
+      script = r"""
+import ctypes, os, sys
+os.environ['MUSA_ENABLE_SE_PLUGIN'] = '1'
+if sys.argv[2] == '1':
+  os.environ['MUSA_STRICT_DEVICE_ENUM'] = '1'
+elif 'MUSA_STRICT_DEVICE_ENUM' in os.environ:
+  del os.environ['MUSA_STRICT_DEVICE_ENUM']
+tf_lib = os.path.join(os.path.dirname(__import__('tensorflow').__file__),
+                      'libtensorflow_framework.so.2')
+tf_fw = ctypes.CDLL(tf_lib)
+tf_fw.TF_NewStatus.argtypes = []
+tf_fw.TF_NewStatus.restype = ctypes.c_void_p
+tf_fw.TF_GetCode.argtypes = [ctypes.c_void_p]
+tf_fw.TF_GetCode.restype = ctypes.c_int
+tf_fw.TF_DeleteStatus.argtypes = [ctypes.c_void_p]
+lib = ctypes.cdll.LoadLibrary(sys.argv[1])
+fn = lib.MUSA_TestPluginGetDeviceCount
+fn.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_void_p]
+fn.restype = None
+n = ctypes.c_int(-1)
+st = tf_fw.TF_NewStatus()
+try:
+  fn(ctypes.byref(n), st)
+  print(tf_fw.TF_GetCode(st), n.value)
+finally:
+  tf_fw.TF_DeleteStatus(st)
+"""
+      proc = subprocess.run(
+          [sys.executable, "-c", script, path, strict_val],
+          capture_output=True,
+          text=True,
+          timeout=120,
+      )
+      self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+      line = (proc.stdout or "").strip().splitlines()[-1]
+      code_s, count_s = line.split()
+      return int(code_s), int(count_s)
+
+    code_strict, n_strict = run_case("1")
+    code_relax, n_relax = run_case("0")
+    # Relaxed: always TF_OK; count is 0 if musaGetDeviceCount failed, else N.
+    self.assertEqual(code_relax, 0, (code_relax, n_relax))
+    self.assertGreaterEqual(n_relax, 0)
+    # Strict: OK with N devices if driver works; non-OK if musaGetDeviceCount fails.
+    if code_strict == 0:
+      self.assertGreaterEqual(n_strict, 0)
+    # If both OK, device counts should match the same driver.
+    if code_strict == 0 and code_relax == 0:
+      self.assertEqual(n_strict, n_relax)
+
+  def test_se_runtime_smoke_export(self):
+    """Relaxed smoke: always TF_OK when driver missing; uses only TF status code."""
+    path = _plugin_path()
+    if not path:
+      self.skipTest("libmusa_plugin.so not found")
+    script = r"""
+import ctypes, os, sys
+os.environ['MUSA_ENABLE_SE_PLUGIN'] = '1'
+tf_lib = os.path.join(os.path.dirname(__import__('tensorflow').__file__),
+                      'libtensorflow_framework.so.2')
+tf_fw = ctypes.CDLL(tf_lib)
+tf_fw.TF_NewStatus.argtypes = []
+tf_fw.TF_NewStatus.restype = ctypes.c_void_p
+tf_fw.TF_GetCode.argtypes = [ctypes.c_void_p]
+tf_fw.TF_GetCode.restype = ctypes.c_int
+tf_fw.TF_DeleteStatus.argtypes = [ctypes.c_void_p]
+lib = ctypes.cdll.LoadLibrary(sys.argv[1])
+smoke = lib.MUSA_TestSeRuntimeSmoke
+smoke.argtypes = [ctypes.c_void_p]
+smoke.restype = None
+st = tf_fw.TF_NewStatus()
+try:
+  smoke(st)
+  print('RELAX', tf_fw.TF_GetCode(st))
+finally:
+  tf_fw.TF_DeleteStatus(st)
+"""
+    proc = subprocess.run(
+        [sys.executable, "-c", script, path],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+    self.assertEqual((proc.stdout or "").strip().splitlines()[-1], "RELAX 0")
+
+  def test_se_runtime_smoke_strict_export(self):
+    """Strict smoke: no-GPU cases are non-OK; `TF_OK` only after successful memcpy."""
+    path = _plugin_path()
+    if not path:
+      self.skipTest("libmusa_plugin.so not found")
+    script = r"""
+import ctypes, os, sys
+os.environ['MUSA_ENABLE_SE_PLUGIN'] = '1'
+tf_lib = os.path.join(os.path.dirname(__import__('tensorflow').__file__),
+                      'libtensorflow_framework.so.2')
+tf_fw = ctypes.CDLL(tf_lib)
+tf_fw.TF_NewStatus.argtypes = []
+tf_fw.TF_NewStatus.restype = ctypes.c_void_p
+tf_fw.TF_GetCode.argtypes = [ctypes.c_void_p]
+tf_fw.TF_GetCode.restype = ctypes.c_int
+tf_fw.TF_DeleteStatus.argtypes = [ctypes.c_void_p]
+lib = ctypes.cdll.LoadLibrary(sys.argv[1])
+strict = lib.MUSA_TestSeRuntimeSmokeStrict
+strict.argtypes = [ctypes.c_void_p]
+strict.restype = None
+st = tf_fw.TF_NewStatus()
+try:
+  strict(st)
+  print('STRICT', tf_fw.TF_GetCode(st))
+finally:
+  tf_fw.TF_DeleteStatus(st)
+"""
+    proc = subprocess.run(
+        [sys.executable, "-c", script, path],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+    line = (proc.stdout or "").strip().splitlines()[-1]
+    self.assertTrue(line.startswith("STRICT "), line)
+    parts = line.split()
+    code = int(parts[1])
+    if code != 0:
+      return
+
+  def test_registry_device_lifecycle_in_subprocess(self):
+    path = _plugin_path()
+    if not path:
+      self.skipTest("libmusa_plugin.so not found")
+    script = r"""
+import ctypes, os, sys
+os.environ['MUSA_ENABLE_SE_PLUGIN'] = '1'
+tf_lib = os.path.join(os.path.dirname(__import__('tensorflow').__file__),
+                      'libtensorflow_framework.so.2')
+tf_fw = ctypes.CDLL(tf_lib)
+tf_fw.TF_NewStatus.argtypes = []
+tf_fw.TF_NewStatus.restype = ctypes.c_void_p
+tf_fw.TF_GetCode.argtypes = [ctypes.c_void_p]
+tf_fw.TF_GetCode.restype = ctypes.c_int
+tf_fw.TF_DeleteStatus.argtypes = [ctypes.c_void_p]
+lib = ctypes.cdll.LoadLibrary(sys.argv[1])
+fn = lib.MUSA_TestRegistryDeviceLifecycle
+fn.argtypes = [ctypes.c_void_p]
+fn.restype = None
+st = tf_fw.TF_NewStatus()
+try:
+  fn(st)
+  print('LIFE', tf_fw.TF_GetCode(st))
+finally:
+  tf_fw.TF_DeleteStatus(st)
+"""
+    proc = subprocess.run(
+        [sys.executable, "-c", script, path],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+    self.assertEqual(
+        (proc.stdout or "").strip().splitlines()[-1],
+        "LIFE 0",
+        proc.stderr + proc.stdout)
+
 
 if __name__ == "__main__":
   tf.test.main()

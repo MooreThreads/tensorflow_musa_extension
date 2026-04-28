@@ -41,7 +41,7 @@
 
 ### kernel 与设备实现
 
-本仓库的 MUSA 算子通过 `GetHandleByCtx` / `GetMusaStreamByCtx` 等从 **`MusaDevice`** 取 stream 与 muDNN handle。TensorFlow 在纯 PluggableDevice 路径下使用的 `Device` 不是 `MusaDevice`，因此 **SE-only 模式尚不能替代默认路径跑通全部算子**。`TryGetMusaDeviceFromContext` / `dynamic_cast` 用于显式区分两种设备实现；后续可在 SE 路径上为 stream/handle 提供平行实现后逐步放开。
+本仓库的 MUSA 算子通过 `GetHandleByCtx` / `GetMusaStreamByCtx`（内部经 `QueryMusaKernelRuntimeView`）从 **`MusaDevice`** 取 **muDNN**；从 **`MusaKernelRuntimeView`** 取 **stream** 与 **device_id**。C++ 默认路径上 `MusaDevice` 非空；**SE/Pluggable 路径**上 `musa_device` 可能为空：**stream 仅从当前 `DeviceContext` 对应的 `StreamExecutor::GpuStreamHack()` 解析**，不做按 ordinal 猜测（多 stream 无法用单句柄安全表示）。依赖 **muDNN** 的算子仍需要 `musa_device` 或后续接线的 `mudnn_handle`（未迁移路径应返回 `Unimplemented`）。runtime registry（`musa_runtime_registry`）仅跟踪 **device 生命周期** hook，不包含 per-stream 调度表。
 
 | 环境变量 | 含义 |
 |----------|------|
@@ -51,3 +51,19 @@
 **Pluggable 路径上的内存**：`SP_Platform::use_bfc_allocator` 置为 **true**，使 TensorFlow Pluggable 侧可用 BFC 包装插件的 `allocate/deallocate`；与现有 `MusaDevice` 内 BFC **仍属两条可能路径**，同一进程不要混用两种注册方式。
 
 **算子主路径**：默认仍以 C++ `REGISTER_KERNEL_BUILDER` 静态注册为准；与上表设备注册方式独立，但需与构建时 TensorFlow 版本一致。
+
+**Kernel 按类别扩大覆盖（SE-only 迁移顺序）**：
+
+1. Elementwise 自定义快路径（`AddV2` 等，见 `MUSA_ADDV2_ENABLE_CUSTOM_KERNEL`）— 已具备从 `MusaKernelRuntimeView` 取 stream 的通路。
+2. 形状/拷贝类（`Identity`、`Reshape`、`ZerosLike` 等）— 同样优先绕开 muDNN。
+3. **muDNN** 类算子 — 需 `MusaKernelRuntimeView::mudnn_handle` 在 Pluggable 侧完整提供后再迁移。
+4. **Stateful / ResourceVariable** 算子 — 最后迁移（同步与生命周期风险最高）。
+
+## 发布与验证矩阵（按 TensorFlow 次版本门控）
+
+| TensorFlow 版本 | 构建/测试 | `SE_InitPlugin` / `MUSA_ENABLE_SE_PLUGIN` | 枚举 / `MUSA_STRICT_DEVICE_ENUM` | 驱动/memcpy：`MUSA_TestSeRuntimeSmoke`（宽松）/`MUSA_TestSeRuntimeSmokeStrict`、`MUSA_TestRegistryDeviceLifecycle` | SE-only eager `AddV2`（`load_pluggable`） | 全量算子（C++ `MusaDevice`） |
+|-----------------|-----------|---------------------------------------------|------------------------------------|----------------------------------------|------------------------------|----------------------------------|
+| **2.6.1**（主验证） | 仓库内 `cmake` **重新 configure**（见 CI）构建 `libmusa_plugin.so` + `pytest` | 覆盖：`test/ops/pluggable_se_api_test.py` | `MUSA_TestPluginGetDeviceCount` | 宽松：`MUSA_TestSeRuntimeSmoke`；严格：`MUSA_TestSeRuntimeSmokeStrict`（无 GPU 时为非 `TF_OK`）；`MUSA_TestRegistryDeviceLifecycle` | `pluggable_se_eager_add_test`（**需 GPU**，无设备 skip） | 现有 kernel 测试矩阵 |
+| **2.8.x / 2.10.x 等** | **须单独分支/单独预编译**；勿跨 minor 复用同一份 `libmusa_plugin.so` | 计划项 | 计划项 | 计划项 | 计划项 | 同目标版本完整回归 |
+
+详细固定 CI 命令见 **[`docs/CI.md`](CI.md)**。
