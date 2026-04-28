@@ -212,8 +212,6 @@ class MusaPlnCascadeOp : public MusaOpKernel {
   bool IsExpensive() override { return false; }
 
   void Compute(OpKernelContext* ctx) override {
-    MUSA_KERNEL_TIMING_GUARD(ctx);
-
     const Tensor& norm_out = ctx->input(0);
     const Tensor& adpos = ctx->input(1);
     const Tensor& add_input = ctx->input(2);
@@ -308,7 +306,6 @@ class MusaPlnCascadeOp : public MusaOpKernel {
             : BuildBroadcastStrides(adpos.shape(), output_shape);
 
     musaStream_t stream = GetMusaStreamByCtx(ctx);
-    MUSA_KERNEL_TRACE_START("Kernel");
     if (use_table_) {
       LaunchPlnCascadeTableKernel(
           norm_out.flat<float>().data(), norm_st, adpos.flat<bool>().data(),
@@ -329,8 +326,6 @@ class MusaPlnCascadeOp : public MusaOpKernel {
           output->flat<float>().data(), shape,
           static_cast<int>(output->NumElements()), select_on_true_, stream);
     }
-    MUSA_KERNEL_TRACE_END("Kernel");
-
     auto launch_status = musaGetLastError();
     OP_REQUIRES(ctx, launch_status == musaSuccess,
                 errors::Internal("MUSA PlnCascade launch failed: ",
