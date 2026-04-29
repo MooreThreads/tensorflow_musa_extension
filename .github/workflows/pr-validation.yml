@@ -22,23 +22,29 @@ on:
         default: ""
         type: string
   schedule:
-    - cron: "0 0 * * *"
+    - cron: "0 14 * * *"
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
   run:
     shell: bash
 
 env:
-  COMMIT_ID: ${{ github.event.pull_request.head.sha || github.sha }}
   LOG_BASE: /home/runner/ci_logs
   MODEL_ROOT: /home/runner/tf_test_model-master
   BASELINE_WORKSPACE: /home/runner/baseline/tensorflow_musa_extension
   BASELINE_REPO_URL: https://github.com/MooreThreads/tensorflow_musa_extension.git
   CURRENT_PLUGIN_ARTIFACT: current-plugin
   BASELINE_PLUGIN_ARTIFACT: baseline-plugin
+  GPU_GUARD_PATTERN: '[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_tf_musa_extension.py|[t]est_runner.py'
+  GPU_GUARD_TIMEOUT_SECONDS: 180
+  GPU_LOCK_FILE: /tmp/tensorflow_musa_ci_gpu.lock
 
 jobs:
   prepare_metadata:
@@ -51,7 +57,12 @@ jobs:
       requested_baseline_id: ${{ steps.collect.outputs.requested_baseline_id }}
       run_kind: ${{ steps.collect.outputs.run_kind }}
       run_id: ${{ steps.collect.outputs.run_id }}
+      workflow_run_id: ${{ steps.collect.outputs.workflow_run_id }}
+      workflow_run_attempt: ${{ steps.collect.outputs.workflow_run_attempt }}
       log_root: ${{ steps.collect.outputs.log_root }}
+      host_name: ${{ steps.collect.outputs.host_name }}
+      host_ip: ${{ steps.collect.outputs.host_ip }}
+      host_sn: ${{ steps.collect.outputs.host_sn }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
       - name: Prepare metadata
@@ -65,7 +76,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             RUN_KIND="pr"
             RUN_ID="${{ github.event.pull_request.head.sha }}"
-            EFFECTIVE_COMMIT_ID="${{ github.event.pull_request.head.sha }}"
+            EFFECTIVE_COMMIT_ID="${{ github.sha }}"
           elif [[ "${{ github.event_name }}" == "schedule" ]]; then
             RUN_KIND="daily"
             RUN_ID="$(date +%F)"
@@ -80,9 +91,19 @@ jobs:
             fi
           fi
 
-          LOG_ROOT="$LOG_BASE/$RUN_KIND/$RUN_ID"
+          WORKFLOW_RUN_ID="${{ github.run_id }}"
+          WORKFLOW_RUN_ATTEMPT="${{ github.run_attempt }}"
+          LOG_ROOT="$LOG_BASE/$RUN_KIND/$RUN_ID/run-$WORKFLOW_RUN_ID/attempt-$WORKFLOW_RUN_ATTEMPT"
           JOB_LOG_DIR="$LOG_ROOT/prepare-metadata"
           SUMMARY_FILE="$RUNNER_TEMP/prepare-metadata.md"
+          HOST_NAME="$(hostname)"
+          HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+          if [[ -z "$HOST_IP" ]]; then
+            HOST_IP="$(hostname -i 2>/dev/null || true)"
+          fi
+          HOST_IP="${HOST_IP:-unavailable}"
+          HOST_SN="$(cat /sys/class/dmi/id/product_serial 2>/dev/null || true)"
+          HOST_SN="${HOST_SN:-unavailable}"
 
           mkdir -p "$JOB_LOG_DIR"
 
@@ -94,8 +115,12 @@ jobs:
             echo "- Requested baseline override: ${REQUESTED_BASELINE_ID:-none}"
             echo "- Run kind: $RUN_KIND"
             echo "- Run id: $RUN_ID"
+            echo "- Workflow run id: $WORKFLOW_RUN_ID"
+            echo "- Workflow run attempt: $WORKFLOW_RUN_ATTEMPT"
             echo "- Log root: $LOG_ROOT"
-            echo "- Runner: $(hostname)"
+            echo "- Runner: $HOST_NAME"
+            echo "- Host IP: $HOST_IP"
+            echo "- Host SN: $HOST_SN"
           } | tee "$SUMMARY_FILE"
 
           cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
@@ -105,7 +130,12 @@ jobs:
           echo "requested_baseline_id=$REQUESTED_BASELINE_ID" >> "$GITHUB_OUTPUT"
           echo "run_kind=$RUN_KIND" >> "$GITHUB_OUTPUT"
           echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "workflow_run_id=$WORKFLOW_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "workflow_run_attempt=$WORKFLOW_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
           echo "log_root=$LOG_ROOT" >> "$GITHUB_OUTPUT"
+          echo "host_name=$HOST_NAME" >> "$GITHUB_OUTPUT"
+          echo "host_ip=$HOST_IP" >> "$GITHUB_OUTPUT"
+          echo "host_sn=$HOST_SN" >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Upload summary artifact
@@ -149,9 +179,9 @@ jobs:
             find . \( -path ./build -o -path ./.git \) -prune -o \
               -regex ".*\.\(cc\|cpp\|hpp\|c\|h\|cu\)" -print0 > "$FILE_LIST"
             if [[ ! -s "$FILE_LIST" ]]; then
-              echo "No C/C++ files to format-check." > "$LOG_FILE"
+              echo "No C/C++ files to format-check." | tee "$LOG_FILE"
             else
-              xargs -0 clang-format --Werror --dry-run < "$FILE_LIST" > "$LOG_FILE" 2>&1
+              xargs -0 clang-format --Werror --dry-run < "$FILE_LIST" 2>&1 | tee "$LOG_FILE"
             fi
           ' || format_exit=$?
 
@@ -204,6 +234,15 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Upload format logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-format
+          path: ${{ needs.prepare_metadata.outputs.log_root }}/format/format_check.log
+          if-no-files-found: warn
+          retention-days: 7
+
   build_current:
     name: Build Current
     needs: prepare_metadata
@@ -231,10 +270,11 @@ jobs:
           build_exit=0
           export LOG_FILE
           bash -l -c '
+            set -o pipefail
             export CPLUS_INCLUDE_PATH="/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:${CPLUS_INCLUDE_PATH:-}"
             cd "$GITHUB_WORKSPACE"
             rm -rf ./build
-            exec ./build.sh > "$LOG_FILE" 2>&1
+            ./build.sh 2>&1 | tee "$LOG_FILE"
           ' || build_exit=$?
 
           echo "build_exit=$build_exit" >> "$GITHUB_OUTPUT"
@@ -296,6 +336,15 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Upload build current logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-build-current
+          path: ${{ needs.prepare_metadata.outputs.log_root }}/build-current/build_current.log
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Fail job if build failed
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
@@ -334,8 +383,9 @@ jobs:
           test_exit=0
           export LOG_FILE
           bash -l -c '
+            set -o pipefail
             cd "$GITHUB_WORKSPACE/test"
-            exec timeout 30m python test_runner.py --fusion > "$LOG_FILE" 2>&1
+            timeout 30m python test_runner.py --fusion 2>&1 | tee "$LOG_FILE"
           ' || test_exit=$?
 
           echo "test_exit=$test_exit" >> "$GITHUB_OUTPUT"
@@ -381,6 +431,15 @@ jobs:
           name: summary-integration
           path: ${{ steps.collect.outputs.summary_file }}
           if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload integration logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-integration
+          path: ${{ needs.prepare_metadata.outputs.log_root }}/integration/integration_fusion_tests.log
+          if-no-files-found: warn
           retention-days: 7
 
       - name: Fail job if integration failed
@@ -436,10 +495,11 @@ jobs:
             baseline_sha="$(git -C "$BASELINE_WORKSPACE" rev-parse HEAD 2>/dev/null || true)"
             export LOG_FILE BASELINE_WORKSPACE
             bash -l -c '
+            set -o pipefail
             export CPLUS_INCLUDE_PATH="/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:${CPLUS_INCLUDE_PATH:-}"
             cd "$BASELINE_WORKSPACE"
             rm -rf ./build
-            exec ./build.sh > "$LOG_FILE" 2>&1
+            ./build.sh 2>&1 | tee "$LOG_FILE"
           ' || build_exit=$?
           fi
 
@@ -507,12 +567,21 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Upload baseline logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-build-baseline
+          path: ${{ needs.prepare_metadata.outputs.log_root }}/build-baseline/build_baseline.log
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Fail job if baseline build failed
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
 
-  tencent_perf:
-    name: Tencent Performance
+  t_perf:
+    name: T Performance
     needs: [prepare_metadata, build_current, build_baseline]
     if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
     runs-on: [self-hosted, musa-gpu]
@@ -523,6 +592,7 @@ jobs:
       current_ms: ${{ steps.collect.outputs.current_ms }}
       threshold_ms: ${{ steps.collect.outputs.threshold_ms }}
       metrics_summary: ${{ steps.collect.outputs.metrics_summary }}
+      metrics_json: ${{ steps.collect.outputs.metrics_json }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
       - name: Download current plugin
@@ -537,56 +607,101 @@ jobs:
           name: ${{ env.BASELINE_PLUGIN_ARTIFACT }}
           path: ${{ runner.temp }}/baseline-plugin
 
-      - name: Run Tencent performance baseline/current
+      - name: Run T performance baseline/current
         id: run_perf
         run: |
           set +e
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/tencent-perf"
-          BASELINE_LOG="$JOB_LOG_DIR/tencent_perf_baseline.log"
-          CURRENT_LOG="$JOB_LOG_DIR/tencent_perf_current.log"
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/t-perf"
+          BASELINE_LOG="$JOB_LOG_DIR/t_perf_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/t_perf_current.log"
           BASELINE_PLUGIN="$RUNNER_TEMP/baseline-plugin/libmusa_plugin.so"
           CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
           mkdir -p "$JOB_LOG_DIR"
+          rm -f "$BASELINE_LOG" "$CURRENT_LOG"
 
           baseline_exit=0
           current_exit=0
+          guard_failed=0
+          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
+          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
+          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
+
+          start_ts="$(date +%s)"
+          while true; do
+            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
+            if [[ -z "$active_procs" ]]; then
+              break
+            fi
+            now_ts="$(date +%s)"
+            if (( now_ts - start_ts >= guard_timeout )); then
+              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$BASELINE_LOG"
+              echo "$active_procs" | tee -a "$BASELINE_LOG"
+              guard_failed=1
+              break
+            fi
+            echo "Waiting for previous GPU test processes to exit before starting T performance:" | tee -a "$BASELINE_LOG"
+            echo "$active_procs" | tee -a "$BASELINE_LOG"
+            sleep 15
+          done
 
           export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG BASELINE_PLUGIN CURRENT_PLUGIN
 
-          bash -l -c '
-            cd "$MODEL_ROOT/inference/prunedGraph"
-            exec timeout 20m python run_inference.py \
-              --device musa \
-              --musa-plugin "$BASELINE_PLUGIN" \
-              --infer-iters 1000 > "$BASELINE_LOG" 2>&1
-          ' || baseline_exit=$?
+          if [[ "$guard_failed" == "0" ]]; then
+            exec 9>"$lock_file"
+            flock 9
+            echo "Acquired GPU test lock: $lock_file" | tee -a "$BASELINE_LOG"
 
-          bash -l -c '
-            cd "$MODEL_ROOT/inference/prunedGraph"
-            exec timeout 20m python run_inference.py \
-              --device musa \
-              --musa-plugin "$CURRENT_PLUGIN" \
-              --infer-iters 1000 > "$CURRENT_LOG" 2>&1
-          ' || current_exit=$?
+            bash -l -c '
+              set -o pipefail
+              cd "$MODEL_ROOT/inference/prunedGraph"
+              timeout 20m python run_inference.py \
+                --device musa \
+                --batch-size 100 \
+                --musa-plugin "$BASELINE_PLUGIN" \
+                --infer-iters 1000 2>&1 | tee "$BASELINE_LOG"
+            ' || baseline_exit=$?
+
+            bash -l -c '
+              set -o pipefail
+              cd "$MODEL_ROOT/inference/prunedGraph"
+              timeout 20m python run_inference.py \
+                --device musa \
+                --batch-size 100 \
+                --musa-plugin "$CURRENT_PLUGIN" \
+                --infer-iters 1000 2>&1 | tee "$CURRENT_LOG"
+            ' || current_exit=$?
+          else
+            baseline_exit=1
+            current_exit=1
+          fi
 
           echo "baseline_exit=$baseline_exit" >> "$GITHUB_OUTPUT"
           echo "current_exit=$current_exit" >> "$GITHUB_OUTPUT"
 
-      - name: Collect Tencent performance summary
+      - name: Collect T performance summary
         id: collect
         if: always()
         run: |
           set -euo pipefail
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/tencent-perf"
-          BASELINE_LOG="$JOB_LOG_DIR/tencent_perf_baseline.log"
-          CURRENT_LOG="$JOB_LOG_DIR/tencent_perf_current.log"
-          SUMMARY_FILE="$RUNNER_TEMP/tencent-perf.md"
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/t-perf"
+          BASELINE_LOG="$JOB_LOG_DIR/t_perf_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/t_perf_current.log"
+          SUMMARY_FILE="$RUNNER_TEMP/t-perf.md"
           STATUS="success"
           BASELINE_MS=""
           CURRENT_MS=""
           THRESHOLD_MS=""
+          METRICS_SUMMARY=""
+          METRICS_JSON=""
+          RUNNER_NAME="${RUNNER_NAME:-unknown}"
+          HOST_NAME="$(hostname)"
+          HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+          HOST_SN="$(cat /sys/class/dmi/id/product_serial 2>/dev/null || true)"
+
+          HOST_IP="${HOST_IP:-unavailable}"
+          HOST_SN="${HOST_SN:-unavailable}"
 
           if [[ "${{ steps.run_perf.outputs.baseline_exit }}" == "0" && -f "$BASELINE_LOG" ]]; then
             BASELINE_MS="$(python3 -c 'import pathlib,re,sys; text=pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="ignore"); matches=re.findall(r"平均:\s*([0-9]+(?:\.[0-9]+)?)\s*ms", text); print(matches[-1] if matches else "")' "$BASELINE_LOG" || true)"
@@ -604,11 +719,34 @@ jobs:
             fi
           fi
 
+          METRICS_SUMMARY="baseline=${BASELINE_MS:-n/a} ms, current=${CURRENT_MS:-n/a} ms, threshold=${THRESHOLD_MS:-n/a} ms, result=${STATUS}"
+          METRICS_JSON="$(python3 - "$STATUS" "$BASELINE_MS" "$CURRENT_MS" "$THRESHOLD_MS" <<'PY'
+          import json
+          import sys
+
+          status, baseline_ms, current_ms, threshold_ms = sys.argv[1:5]
+          payload = {
+              "name": "T Performance",
+              "kind": "single",
+              "status": status,
+              "baseline_ms": baseline_ms or "n/a",
+              "current_ms": current_ms or "n/a",
+              "threshold_ms": threshold_ms or "n/a",
+          }
+          print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+          PY
+          )"
+
           {
-            echo "## Tencent Performance"
+            echo "## T Performance"
             echo
             echo "- Status: $STATUS"
             echo "- Baseline commit: ${{ needs.build_baseline.outputs.baseline_sha }}"
+            echo "- Runner name: $RUNNER_NAME"
+            echo "- Host name: $HOST_NAME"
+            echo "- Host IP: $HOST_IP"
+            echo "- Host SN: $HOST_SN"
+            echo "- Log artifact: logs-t-perf"
             echo "- Baseline: ${BASELINE_MS:-n/a} ms"
             echo "- Current: ${CURRENT_MS:-n/a} ms"
             echo "- Threshold: ${THRESHOLD_MS:-n/a} ms"
@@ -637,23 +775,40 @@ jobs:
           echo "baseline_ms=$BASELINE_MS" >> "$GITHUB_OUTPUT"
           echo "current_ms=$CURRENT_MS" >> "$GITHUB_OUTPUT"
           echo "threshold_ms=$THRESHOLD_MS" >> "$GITHUB_OUTPUT"
+          echo "metrics_summary=$METRICS_SUMMARY" >> "$GITHUB_OUTPUT"
+          {
+            echo "metrics_json<<EOF"
+            echo "$METRICS_JSON"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: Upload Tencent performance summary artifact
+      - name: Upload T performance summary artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: summary-tencent-perf
+          name: summary-t-perf
           path: ${{ steps.collect.outputs.summary_file }}
           if-no-files-found: error
           retention-days: 7
 
-      - name: Fail job if Tencent performance regressed
+      - name: Upload T performance logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-t-perf
+          path: |
+            ${{ needs.prepare_metadata.outputs.log_root }}/t-perf/t_perf_baseline.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/t-perf/t_perf_current.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Fail job if T performance regressed
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
 
-  tencent_accuracy:
-    name: Tencent Accuracy
+  t_accuracy:
+    name: T Accuracy
     needs: [prepare_metadata, build_current]
     if: needs.build_current.result == 'success'
     runs-on: [self-hosted, musa-gpu]
@@ -661,6 +816,7 @@ jobs:
     outputs:
       status: ${{ steps.collect.outputs.status }}
       current_acc: ${{ steps.collect.outputs.current_acc }}
+      metrics_json: ${{ steps.collect.outputs.metrics_json }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
       - name: Download current plugin
@@ -669,43 +825,85 @@ jobs:
           name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
           path: ${{ runner.temp }}/current-plugin
 
-      - name: Run Tencent accuracy current only
+      - name: Run T accuracy current only
         id: run_acc
         run: |
           set +e
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/tencent-accuracy"
-          CURRENT_LOG="$JOB_LOG_DIR/tencent_accuracy_current.log"
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/t-accuracy"
+          CURRENT_LOG="$JOB_LOG_DIR/t_accuracy_current.log"
           CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
           mkdir -p "$JOB_LOG_DIR"
+          rm -f "$CURRENT_LOG"
 
           current_exit=0
+          guard_failed=0
+          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
+          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
+          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
+
+          start_ts="$(date +%s)"
+          while true; do
+            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
+            if [[ -z "$active_procs" ]]; then
+              break
+            fi
+            now_ts="$(date +%s)"
+            if (( now_ts - start_ts >= guard_timeout )); then
+              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$CURRENT_LOG"
+              echo "$active_procs" | tee -a "$CURRENT_LOG"
+              guard_failed=1
+              break
+            fi
+            echo "Waiting for previous GPU test processes to exit before starting T accuracy:" | tee -a "$CURRENT_LOG"
+            echo "$active_procs" | tee -a "$CURRENT_LOG"
+            sleep 15
+          done
 
           export MODEL_ROOT JOB_LOG_DIR CURRENT_LOG CURRENT_PLUGIN
 
-          bash -l -c '
-            cd "$MODEL_ROOT/inference/prunedGraph"
-            exec timeout 20m python run_inference.py \
-              --device musa \
-              --musa-plugin "$CURRENT_PLUGIN" \
-              --check-acc \
-              --rtol 1e-2 \
-              --atol 1e-2 > "$CURRENT_LOG" 2>&1
-          ' || current_exit=$?
+          if [[ "$guard_failed" == "0" ]]; then
+            exec 9>"$lock_file"
+            flock 9
+            echo "Acquired GPU test lock: $lock_file" | tee -a "$CURRENT_LOG"
+
+            bash -l -c '
+              set -o pipefail
+              cd "$MODEL_ROOT/inference/prunedGraph"
+              MUSA_ENABLE_TF32=0 \
+              timeout 20m python run_inference.py \
+                --device musa \
+                --batch-size 100 \
+                --musa-plugin "$CURRENT_PLUGIN" \
+                --check-acc \
+                --rtol 1e-2 \
+                --atol 1e-2 2>&1 | tee "$CURRENT_LOG"
+            ' || current_exit=$?
+          else
+            current_exit=1
+          fi
 
           echo "current_exit=$current_exit" >> "$GITHUB_OUTPUT"
 
-      - name: Collect Tencent accuracy summary
+      - name: Collect T accuracy summary
         id: collect
         if: always()
         run: |
           set -euo pipefail
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/tencent-accuracy"
-          CURRENT_LOG="$JOB_LOG_DIR/tencent_accuracy_current.log"
-          SUMMARY_FILE="$RUNNER_TEMP/tencent-accuracy.md"
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/t-accuracy"
+          CURRENT_LOG="$JOB_LOG_DIR/t_accuracy_current.log"
+          SUMMARY_FILE="$RUNNER_TEMP/t-accuracy.md"
           STATUS="success"
-          CURRENT_ACC="$(grep -E "整体状态:.*(PASSED|FAILED)" "$CURRENT_LOG" | tail -1 | sed 's/^[[:space:]]*//' || true)"
+          CURRENT_ACC="$(grep -E "整体状态:.*(PASSED|FAILED)" "$CURRENT_LOG" | tail -1 | grep -oE "PASSED|FAILED" || echo "n/a")"
+          METRICS_JSON=""
+          RUNNER_NAME="${RUNNER_NAME:-unknown}"
+          HOST_NAME="$(hostname)"
+          HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+          HOST_SN="$(cat /sys/class/dmi/id/product_serial 2>/dev/null || true)"
+
+          HOST_IP="${HOST_IP:-unavailable}"
+          HOST_SN="${HOST_SN:-unavailable}"
 
           if [[ "${{ steps.run_acc.outputs.current_exit }}" != "0" ]]; then
             STATUS="failure"
@@ -714,10 +912,30 @@ jobs:
             STATUS="failure"
           fi
 
+          METRICS_JSON="$(python3 - "$STATUS" "$CURRENT_ACC" <<'PY'
+          import json
+          import sys
+
+          status, current_acc = sys.argv[1:3]
+          payload = {
+              "name": "T Accuracy",
+              "kind": "accuracy",
+              "status": status,
+              "current": current_acc or "n/a",
+          }
+          print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+          PY
+          )"
+
           {
-            echo "## Tencent Accuracy"
+            echo "## T Accuracy"
             echo
             echo "- Status: $STATUS"
+            echo "- Runner name: $RUNNER_NAME"
+            echo "- Host name: $HOST_NAME"
+            echo "- Host IP: $HOST_IP"
+            echo "- Host SN: $HOST_SN"
+            echo "- Log artifact: logs-t-accuracy"
             echo "- Current: ${CURRENT_ACC:-unavailable}"
             echo
             echo "### Current highlights"
@@ -733,23 +951,37 @@ jobs:
           cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
           echo "status=$STATUS" >> "$GITHUB_OUTPUT"
           echo "current_acc=$CURRENT_ACC" >> "$GITHUB_OUTPUT"
+          {
+            echo "metrics_json<<EOF"
+            echo "$METRICS_JSON"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: Upload Tencent accuracy summary artifact
+      - name: Upload T accuracy summary artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: summary-tencent-accuracy
+          name: summary-t-accuracy
           path: ${{ steps.collect.outputs.summary_file }}
           if-no-files-found: error
           retention-days: 7
 
-      - name: Fail job if Tencent accuracy failed
+      - name: Upload T accuracy logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-t-accuracy
+          path: ${{ needs.prepare_metadata.outputs.log_root }}/t-accuracy/t_accuracy_current.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Fail job if T accuracy failed
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
 
-  bytedance_model1:
-    name: ByteDance Model 1
+  bd_model1:
+    name: BD Model 1
     needs: [prepare_metadata, build_current, build_baseline]
     if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
     runs-on: [self-hosted, musa-gpu]
@@ -759,6 +991,8 @@ jobs:
       baseline_ms: ${{ steps.collect.outputs.baseline_ms }}
       current_ms: ${{ steps.collect.outputs.current_ms }}
       threshold_ms: ${{ steps.collect.outputs.threshold_ms }}
+      metrics_summary: ${{ steps.collect.outputs.metrics_summary }}
+      metrics_json: ${{ steps.collect.outputs.metrics_json }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
       - name: Download current plugin
@@ -778,38 +1012,79 @@ jobs:
         run: |
           set +e
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model1"
-          BASELINE_LOG="$JOB_LOG_DIR/bytedance_model1_baseline.log"
-          CURRENT_LOG="$JOB_LOG_DIR/bytedance_model1_current.log"
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model1"
+          BASELINE_LOG="$JOB_LOG_DIR/bd_model1_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bd_model1_current.log"
           BASELINE_PLUGIN="$RUNNER_TEMP/baseline-plugin/libmusa_plugin.so"
           CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
           SPEC_PATH="$MODEL_ROOT/inference/metaGraph/meta_graph/meta_graph_1.spec"
           mkdir -p "$JOB_LOG_DIR"
+          rm -f "$BASELINE_LOG" "$CURRENT_LOG"
+          rm -rf "$JOB_LOG_DIR/baseline-out" "$JOB_LOG_DIR/current-out"
 
           baseline_exit=0
           current_exit=0
+          guard_failed=0
+          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
+          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
+          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
+
+          start_ts="$(date +%s)"
+          while true; do
+            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
+            if [[ -z "$active_procs" ]]; then
+              break
+            fi
+            now_ts="$(date +%s)"
+            if (( now_ts - start_ts >= guard_timeout )); then
+              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$BASELINE_LOG"
+              echo "$active_procs" | tee -a "$BASELINE_LOG"
+              guard_failed=1
+              break
+            fi
+            echo "Waiting for previous GPU test processes to exit before starting BD Model 1:" | tee -a "$BASELINE_LOG"
+            echo "$active_procs" | tee -a "$BASELINE_LOG"
+            sleep 15
+          done
 
           export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG BASELINE_PLUGIN CURRENT_PLUGIN SPEC_PATH
 
-          bash -l -c '
-            [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
-            cd "$MODEL_ROOT/inference/metaGraph"
-            exec timeout 30m python musa_run_pb_graph.py \
-              --spec "$SPEC_PATH" \
-              --bs 32,128,256,1024 \
-              --out_root "$JOB_LOG_DIR/baseline-out" \
-              --musa-plugin "$BASELINE_PLUGIN" > "$BASELINE_LOG" 2>&1
-          ' || baseline_exit=$?
+          if [[ "$guard_failed" == "0" ]]; then
+            exec 9>"$lock_file"
+            flock 9
+            echo "Acquired GPU test lock: $lock_file" | tee -a "$BASELINE_LOG"
 
-          bash -l -c '
-            [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
-            cd "$MODEL_ROOT/inference/metaGraph"
-            exec timeout 30m python musa_run_pb_graph.py \
-              --spec "$SPEC_PATH" \
-              --bs 32,128,256,1024 \
-              --out_root "$JOB_LOG_DIR/current-out" \
-              --musa-plugin "$CURRENT_PLUGIN" > "$CURRENT_LOG" 2>&1
-          ' || current_exit=$?
+            bash -l -c '
+              set -o pipefail
+              [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
+              cd "$MODEL_ROOT/inference/metaGraph"
+              MUSA_PINNED_FEED=1 \
+              MUSA_PINNED_H2D_ON_COMPUTE_STREAM=1 \
+              timeout 30m python musa_run_pb_graph.py \
+                --spec "$SPEC_PATH" \
+                --bs 32,128,256,1024 \
+                --run_iters 30 \
+                --out_root "$JOB_LOG_DIR/baseline-out" \
+                --musa-plugin "$BASELINE_PLUGIN" 2>&1 | tee "$BASELINE_LOG"
+            ' || baseline_exit=$?
+
+            bash -l -c '
+              set -o pipefail
+              [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
+              cd "$MODEL_ROOT/inference/metaGraph"
+              MUSA_PINNED_FEED=1 \
+              MUSA_PINNED_H2D_ON_COMPUTE_STREAM=1 \
+              timeout 30m python musa_run_pb_graph.py \
+                --spec "$SPEC_PATH" \
+                --bs 32,128,256,1024 \
+                --run_iters 30 \
+                --out_root "$JOB_LOG_DIR/current-out" \
+                --musa-plugin "$CURRENT_PLUGIN" 2>&1 | tee "$CURRENT_LOG"
+            ' || current_exit=$?
+          else
+            baseline_exit=1
+            current_exit=1
+          fi
 
           echo "baseline_exit=$baseline_exit" >> "$GITHUB_OUTPUT"
           echo "current_exit=$current_exit" >> "$GITHUB_OUTPUT"
@@ -820,19 +1095,27 @@ jobs:
         run: |
           set -euo pipefail
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model1"
-          BASELINE_LOG="$JOB_LOG_DIR/bytedance_model1_baseline.log"
-          CURRENT_LOG="$JOB_LOG_DIR/bytedance_model1_current.log"
-          SUMMARY_FILE="$RUNNER_TEMP/bytedance-model1.md"
-          COMPARE_JSON="$RUNNER_TEMP/bytedance-model1-compare.json"
-          DETAIL_FILE="$RUNNER_TEMP/bytedance-model1-details.md"
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model1"
+          BASELINE_LOG="$JOB_LOG_DIR/bd_model1_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bd_model1_current.log"
+          SUMMARY_FILE="$RUNNER_TEMP/bd-model1.md"
+          COMPARE_JSON="$RUNNER_TEMP/bd-model1-compare.json"
+          DETAIL_FILE="$RUNNER_TEMP/bd-model1-details.md"
           STATUS="success"
           BASELINE_MS=""
           CURRENT_MS=""
           THRESHOLD_MS=""
           METRICS_SUMMARY=""
+          METRICS_JSON=""
           BASELINE_REPORT=""
           CURRENT_REPORT=""
+          RUNNER_NAME="${RUNNER_NAME:-unknown}"
+          HOST_NAME="$(hostname)"
+          HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+          HOST_SN="$(cat /sys/class/dmi/id/product_serial 2>/dev/null || true)"
+
+          HOST_IP="${HOST_IP:-unavailable}"
+          HOST_SN="${HOST_SN:-unavailable}"
 
           if [[ -f "$BASELINE_LOG" ]]; then
             REPORT_PATH="$(grep '^\[OK\] report=' "$BASELINE_LOG" | tail -1 | sed 's/^\[OK\] report=//' || true)"
@@ -882,7 +1165,9 @@ jobs:
                       continue
                   rows[bs] = {
                       "status": item.get("status"),
-                      "average_time_ms": item.get("average_time_ms"),
+                      "average_time_ms": item.get("trimmed_avg_ms")
+                      if item.get("trimmed_avg_ms") is not None
+                      else item.get("average_time_ms"),
                       "error_core": item.get("error_core"),
                   }
               if not rows:
@@ -984,11 +1269,14 @@ jobs:
                       f.write(f"- {err}\n")
 
           payload = {
+              "name": "BD Model 1",
+              "kind": "batch_compare",
               "status": overall_status,
               "baseline_ms": ", ".join(baseline_parts) if baseline_parts else "",
               "current_ms": ", ".join(current_parts) if current_parts else "",
               "threshold_ms": ", ".join(threshold_parts) if threshold_parts else "",
               "metrics_summary": " ; ".join(metrics_parts) if metrics_parts else "",
+              "rows": result_rows,
           }
           with open(compare_json, "w", encoding="utf-8") as f:
               json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -999,15 +1287,21 @@ jobs:
           CURRENT_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("current_ms",""))' "$COMPARE_JSON")"
           THRESHOLD_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("threshold_ms",""))' "$COMPARE_JSON")"
           METRICS_SUMMARY="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("metrics_summary",""))' "$COMPARE_JSON")"
+          METRICS_JSON="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(json.dumps(data, ensure_ascii=False, separators=(",", ":")))' "$COMPARE_JSON")"
 
           if [[ "${{ steps.run_perf.outputs.baseline_exit }}" != "0" || "${{ steps.run_perf.outputs.current_exit }}" != "0" ]]; then
             STATUS="failure"
           fi
 
           {
-            echo "## ByteDance Model 1"
+            echo "## BD Model 1"
             echo
             echo "- Status: $STATUS"
+            echo "- Runner name: $RUNNER_NAME"
+            echo "- Host name: $HOST_NAME"
+            echo "- Host IP: $HOST_IP"
+            echo "- Host SN: $HOST_SN"
+            echo "- Log artifact: logs-bd-model1"
             echo "- Baseline: ${BASELINE_MS:-n/a}"
             echo "- Current: ${CURRENT_MS:-n/a}"
             echo "- Threshold: ${THRESHOLD_MS:-n/a}"
@@ -1040,23 +1334,43 @@ jobs:
           echo "current_ms=$CURRENT_MS" >> "$GITHUB_OUTPUT"
           echo "threshold_ms=$THRESHOLD_MS" >> "$GITHUB_OUTPUT"
           echo "metrics_summary=$METRICS_SUMMARY" >> "$GITHUB_OUTPUT"
+          {
+            echo "metrics_json<<EOF"
+            echo "$METRICS_JSON"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Upload model 1 summary artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: summary-bytedance-model1
+          name: summary-bd-model1
           path: ${{ steps.collect.outputs.summary_file }}
           if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload model 1 logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-bd-model1
+          path: |
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model1/bd_model1_baseline.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model1/bd_model1_current.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model1/baseline-out
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model1/current-out
+            ${{ runner.temp }}/bd-model1-details.md
+            ${{ runner.temp }}/bd-model1-compare.json
+          if-no-files-found: warn
           retention-days: 7
 
       - name: Fail job if model 1 regressed
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
 
-  bytedance_model2:
-    name: ByteDance Model 2
+  bd_model2:
+    name: BD Model 2
     needs: [prepare_metadata, build_current, build_baseline]
     if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
     runs-on: [self-hosted, musa-gpu]
@@ -1067,6 +1381,7 @@ jobs:
       current_ms: ${{ steps.collect.outputs.current_ms }}
       threshold_ms: ${{ steps.collect.outputs.threshold_ms }}
       metrics_summary: ${{ steps.collect.outputs.metrics_summary }}
+      metrics_json: ${{ steps.collect.outputs.metrics_json }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
       - name: Download current plugin
@@ -1086,38 +1401,79 @@ jobs:
         run: |
           set +e
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model2"
-          BASELINE_LOG="$JOB_LOG_DIR/bytedance_model2_baseline.log"
-          CURRENT_LOG="$JOB_LOG_DIR/bytedance_model2_current.log"
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model2"
+          BASELINE_LOG="$JOB_LOG_DIR/bd_model2_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bd_model2_current.log"
           BASELINE_PLUGIN="$RUNNER_TEMP/baseline-plugin/libmusa_plugin.so"
           CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
           SPEC_PATH="$MODEL_ROOT/inference/metaGraph/meta_graph/meta_graph_2.spec"
           mkdir -p "$JOB_LOG_DIR"
+          rm -f "$BASELINE_LOG" "$CURRENT_LOG"
+          rm -rf "$JOB_LOG_DIR/baseline-out" "$JOB_LOG_DIR/current-out"
 
           baseline_exit=0
           current_exit=0
+          guard_failed=0
+          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
+          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
+          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
+
+          start_ts="$(date +%s)"
+          while true; do
+            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
+            if [[ -z "$active_procs" ]]; then
+              break
+            fi
+            now_ts="$(date +%s)"
+            if (( now_ts - start_ts >= guard_timeout )); then
+              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$BASELINE_LOG"
+              echo "$active_procs" | tee -a "$BASELINE_LOG"
+              guard_failed=1
+              break
+            fi
+            echo "Waiting for previous GPU test processes to exit before starting BD Model 2:" | tee -a "$BASELINE_LOG"
+            echo "$active_procs" | tee -a "$BASELINE_LOG"
+            sleep 15
+          done
 
           export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG BASELINE_PLUGIN CURRENT_PLUGIN SPEC_PATH
 
-          bash -l -c '
-            [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
-            cd "$MODEL_ROOT/inference/metaGraph"
-            exec timeout 30m python musa_run_pb_graph.py \
-              --spec "$SPEC_PATH" \
-              --bs 32,128,256,1024 \
-              --out_root "$JOB_LOG_DIR/baseline-out" \
-              --musa-plugin "$BASELINE_PLUGIN" > "$BASELINE_LOG" 2>&1
-          ' || baseline_exit=$?
+          if [[ "$guard_failed" == "0" ]]; then
+            exec 9>"$lock_file"
+            flock 9
+            echo "Acquired GPU test lock: $lock_file" | tee -a "$BASELINE_LOG"
 
-          bash -l -c '
-            [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
-            cd "$MODEL_ROOT/inference/metaGraph"
-            exec timeout 30m python musa_run_pb_graph.py \
-              --spec "$SPEC_PATH" \
-              --bs 32,128,256,1024 \
-              --out_root "$JOB_LOG_DIR/current-out" \
-              --musa-plugin "$CURRENT_PLUGIN" > "$CURRENT_LOG" 2>&1
-          ' || current_exit=$?
+            bash -l -c '
+              set -o pipefail
+              [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
+              cd "$MODEL_ROOT/inference/metaGraph"
+              MUSA_PINNED_FEED=1 \
+              MUSA_PINNED_H2D_ON_COMPUTE_STREAM=1 \
+              timeout 30m python musa_run_pb_graph.py \
+                --spec "$SPEC_PATH" \
+                --bs 32,128,256,1024 \
+                --run_iters 30 \
+                --out_root "$JOB_LOG_DIR/baseline-out" \
+                --musa-plugin "$BASELINE_PLUGIN" 2>&1 | tee "$BASELINE_LOG"
+            ' || baseline_exit=$?
+
+            bash -l -c '
+              set -o pipefail
+              [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
+              cd "$MODEL_ROOT/inference/metaGraph"
+              MUSA_PINNED_FEED=1 \
+              MUSA_PINNED_H2D_ON_COMPUTE_STREAM=1 \
+              timeout 30m python musa_run_pb_graph.py \
+                --spec "$SPEC_PATH" \
+                --bs 32,128,256,1024 \
+                --run_iters 30 \
+                --out_root "$JOB_LOG_DIR/current-out" \
+                --musa-plugin "$CURRENT_PLUGIN" 2>&1 | tee "$CURRENT_LOG"
+            ' || current_exit=$?
+          else
+            baseline_exit=1
+            current_exit=1
+          fi
 
           echo "baseline_exit=$baseline_exit" >> "$GITHUB_OUTPUT"
           echo "current_exit=$current_exit" >> "$GITHUB_OUTPUT"
@@ -1128,19 +1484,27 @@ jobs:
         run: |
           set -euo pipefail
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model2"
-          BASELINE_LOG="$JOB_LOG_DIR/bytedance_model2_baseline.log"
-          CURRENT_LOG="$JOB_LOG_DIR/bytedance_model2_current.log"
-          SUMMARY_FILE="$RUNNER_TEMP/bytedance-model2.md"
-          COMPARE_JSON="$RUNNER_TEMP/bytedance-model2-compare.json"
-          DETAIL_FILE="$RUNNER_TEMP/bytedance-model2-details.md"
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model2"
+          BASELINE_LOG="$JOB_LOG_DIR/bd_model2_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bd_model2_current.log"
+          SUMMARY_FILE="$RUNNER_TEMP/bd-model2.md"
+          COMPARE_JSON="$RUNNER_TEMP/bd-model2-compare.json"
+          DETAIL_FILE="$RUNNER_TEMP/bd-model2-details.md"
           STATUS="success"
           BASELINE_MS=""
           CURRENT_MS=""
           THRESHOLD_MS=""
           METRICS_SUMMARY=""
+          METRICS_JSON=""
           BASELINE_REPORT=""
           CURRENT_REPORT=""
+          RUNNER_NAME="${RUNNER_NAME:-unknown}"
+          HOST_NAME="$(hostname)"
+          HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+          HOST_SN="$(cat /sys/class/dmi/id/product_serial 2>/dev/null || true)"
+
+          HOST_IP="${HOST_IP:-unavailable}"
+          HOST_SN="${HOST_SN:-unavailable}"
 
           if [[ -f "$BASELINE_LOG" ]]; then
             REPORT_PATH="$(grep '^\[OK\] report=' "$BASELINE_LOG" | tail -1 | sed 's/^\[OK\] report=//' || true)"
@@ -1190,7 +1554,9 @@ jobs:
                       continue
                   rows[bs] = {
                       "status": item.get("status"),
-                      "average_time_ms": item.get("average_time_ms"),
+                      "average_time_ms": item.get("trimmed_avg_ms")
+                      if item.get("trimmed_avg_ms") is not None
+                      else item.get("average_time_ms"),
                       "error_core": item.get("error_core"),
                   }
               if not rows:
@@ -1292,11 +1658,14 @@ jobs:
                       f.write(f"- {err}\n")
 
           payload = {
+              "name": "BD Model 2",
+              "kind": "batch_compare",
               "status": overall_status,
               "baseline_ms": ", ".join(baseline_parts) if baseline_parts else "",
               "current_ms": ", ".join(current_parts) if current_parts else "",
               "threshold_ms": ", ".join(threshold_parts) if threshold_parts else "",
               "metrics_summary": " ; ".join(metrics_parts) if metrics_parts else "",
+              "rows": result_rows,
           }
           with open(compare_json, "w", encoding="utf-8") as f:
               json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -1307,15 +1676,21 @@ jobs:
           CURRENT_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("current_ms",""))' "$COMPARE_JSON")"
           THRESHOLD_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("threshold_ms",""))' "$COMPARE_JSON")"
           METRICS_SUMMARY="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("metrics_summary",""))' "$COMPARE_JSON")"
+          METRICS_JSON="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(json.dumps(data, ensure_ascii=False, separators=(",", ":")))' "$COMPARE_JSON")"
 
           if [[ "${{ steps.run_perf.outputs.baseline_exit }}" != "0" || "${{ steps.run_perf.outputs.current_exit }}" != "0" ]]; then
             STATUS="failure"
           fi
 
           {
-            echo "## ByteDance Model 2"
+            echo "## BD Model 2"
             echo
             echo "- Status: $STATUS"
+            echo "- Runner name: $RUNNER_NAME"
+            echo "- Host name: $HOST_NAME"
+            echo "- Host IP: $HOST_IP"
+            echo "- Host SN: $HOST_SN"
+            echo "- Log artifact: logs-bd-model2"
             echo "- Baseline: ${BASELINE_MS:-n/a}"
             echo "- Current: ${CURRENT_MS:-n/a}"
             echo "- Threshold: ${THRESHOLD_MS:-n/a}"
@@ -1348,23 +1723,43 @@ jobs:
           echo "current_ms=$CURRENT_MS" >> "$GITHUB_OUTPUT"
           echo "threshold_ms=$THRESHOLD_MS" >> "$GITHUB_OUTPUT"
           echo "metrics_summary=$METRICS_SUMMARY" >> "$GITHUB_OUTPUT"
+          {
+            echo "metrics_json<<EOF"
+            echo "$METRICS_JSON"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Upload model 2 summary artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: summary-bytedance-model2
+          name: summary-bd-model2
           path: ${{ steps.collect.outputs.summary_file }}
           if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload model 2 logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-bd-model2
+          path: |
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model2/bd_model2_baseline.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model2/bd_model2_current.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model2/baseline-out
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model2/current-out
+            ${{ runner.temp }}/bd-model2-details.md
+            ${{ runner.temp }}/bd-model2-compare.json
+          if-no-files-found: warn
           retention-days: 7
 
       - name: Fail job if model 2 regressed
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
 
-  bytedance_model3:
-    name: ByteDance Model 3
+  bd_model3:
+    name: BD Model 3
     needs: [prepare_metadata, build_current, build_baseline]
     if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
     runs-on: [self-hosted, musa-gpu]
@@ -1375,6 +1770,7 @@ jobs:
       current_ms: ${{ steps.collect.outputs.current_ms }}
       threshold_ms: ${{ steps.collect.outputs.threshold_ms }}
       metrics_summary: ${{ steps.collect.outputs.metrics_summary }}
+      metrics_json: ${{ steps.collect.outputs.metrics_json }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
       - name: Download current plugin
@@ -1394,38 +1790,79 @@ jobs:
         run: |
           set +e
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model3"
-          BASELINE_LOG="$JOB_LOG_DIR/bytedance_model3_baseline.log"
-          CURRENT_LOG="$JOB_LOG_DIR/bytedance_model3_current.log"
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model3"
+          BASELINE_LOG="$JOB_LOG_DIR/bd_model3_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bd_model3_current.log"
           BASELINE_PLUGIN="$RUNNER_TEMP/baseline-plugin/libmusa_plugin.so"
           CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
           SPEC_PATH="$MODEL_ROOT/inference/metaGraph/meta_graph/meta_graph_3.spec"
           mkdir -p "$JOB_LOG_DIR"
+          rm -f "$BASELINE_LOG" "$CURRENT_LOG"
+          rm -rf "$JOB_LOG_DIR/baseline-out" "$JOB_LOG_DIR/current-out"
 
           baseline_exit=0
           current_exit=0
+          guard_failed=0
+          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
+          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
+          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
+
+          start_ts="$(date +%s)"
+          while true; do
+            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
+            if [[ -z "$active_procs" ]]; then
+              break
+            fi
+            now_ts="$(date +%s)"
+            if (( now_ts - start_ts >= guard_timeout )); then
+              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$BASELINE_LOG"
+              echo "$active_procs" | tee -a "$BASELINE_LOG"
+              guard_failed=1
+              break
+            fi
+            echo "Waiting for previous GPU test processes to exit before starting BD Model 3:" | tee -a "$BASELINE_LOG"
+            echo "$active_procs" | tee -a "$BASELINE_LOG"
+            sleep 15
+          done
 
           export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG BASELINE_PLUGIN CURRENT_PLUGIN SPEC_PATH
 
-          bash -l -c '
-            [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
-            cd "$MODEL_ROOT/inference/metaGraph"
-            exec timeout 30m python musa_run_pb_graph.py \
-              --spec "$SPEC_PATH" \
-              --bs 32,128,256,1024 \
-              --out_root "$JOB_LOG_DIR/baseline-out" \
-              --musa-plugin "$BASELINE_PLUGIN" > "$BASELINE_LOG" 2>&1
-          ' || baseline_exit=$?
+          if [[ "$guard_failed" == "0" ]]; then
+            exec 9>"$lock_file"
+            flock 9
+            echo "Acquired GPU test lock: $lock_file" | tee -a "$BASELINE_LOG"
 
-          bash -l -c '
-            [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
-            cd "$MODEL_ROOT/inference/metaGraph"
-            exec timeout 30m python musa_run_pb_graph.py \
-              --spec "$SPEC_PATH" \
-              --bs 32,128,256,1024 \
-              --out_root "$JOB_LOG_DIR/current-out" \
-              --musa-plugin "$CURRENT_PLUGIN" > "$CURRENT_LOG" 2>&1
-          ' || current_exit=$?
+            bash -l -c '
+              set -o pipefail
+              [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
+              cd "$MODEL_ROOT/inference/metaGraph"
+              MUSA_PINNED_FEED=1 \
+              MUSA_PINNED_H2D_ON_COMPUTE_STREAM=1 \
+              timeout 30m python musa_run_pb_graph.py \
+                --spec "$SPEC_PATH" \
+                --bs 32,128,256,1024 \
+                --run_iters 30 \
+                --out_root "$JOB_LOG_DIR/baseline-out" \
+                --musa-plugin "$BASELINE_PLUGIN" 2>&1 | tee "$BASELINE_LOG"
+            ' || baseline_exit=$?
+
+            bash -l -c '
+              set -o pipefail
+              [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
+              cd "$MODEL_ROOT/inference/metaGraph"
+              MUSA_PINNED_FEED=1 \
+              MUSA_PINNED_H2D_ON_COMPUTE_STREAM=1 \
+              timeout 30m python musa_run_pb_graph.py \
+                --spec "$SPEC_PATH" \
+                --bs 32,128,256,1024 \
+                --run_iters 30 \
+                --out_root "$JOB_LOG_DIR/current-out" \
+                --musa-plugin "$CURRENT_PLUGIN" 2>&1 | tee "$CURRENT_LOG"
+            ' || current_exit=$?
+          else
+            baseline_exit=1
+            current_exit=1
+          fi
 
           echo "baseline_exit=$baseline_exit" >> "$GITHUB_OUTPUT"
           echo "current_exit=$current_exit" >> "$GITHUB_OUTPUT"
@@ -1436,19 +1873,27 @@ jobs:
         run: |
           set -euo pipefail
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bytedance-model3"
-          BASELINE_LOG="$JOB_LOG_DIR/bytedance_model3_baseline.log"
-          CURRENT_LOG="$JOB_LOG_DIR/bytedance_model3_current.log"
-          SUMMARY_FILE="$RUNNER_TEMP/bytedance-model3.md"
-          COMPARE_JSON="$RUNNER_TEMP/bytedance-model3-compare.json"
-          DETAIL_FILE="$RUNNER_TEMP/bytedance-model3-details.md"
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model3"
+          BASELINE_LOG="$JOB_LOG_DIR/bd_model3_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/bd_model3_current.log"
+          SUMMARY_FILE="$RUNNER_TEMP/bd-model3.md"
+          COMPARE_JSON="$RUNNER_TEMP/bd-model3-compare.json"
+          DETAIL_FILE="$RUNNER_TEMP/bd-model3-details.md"
           STATUS="success"
           BASELINE_MS=""
           CURRENT_MS=""
           THRESHOLD_MS=""
           METRICS_SUMMARY=""
+          METRICS_JSON=""
           BASELINE_REPORT=""
           CURRENT_REPORT=""
+          RUNNER_NAME="${RUNNER_NAME:-unknown}"
+          HOST_NAME="$(hostname)"
+          HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+          HOST_SN="$(cat /sys/class/dmi/id/product_serial 2>/dev/null || true)"
+
+          HOST_IP="${HOST_IP:-unavailable}"
+          HOST_SN="${HOST_SN:-unavailable}"
 
           if [[ -f "$BASELINE_LOG" ]]; then
             REPORT_PATH="$(grep '^\[OK\] report=' "$BASELINE_LOG" | tail -1 | sed 's/^\[OK\] report=//' || true)"
@@ -1498,7 +1943,9 @@ jobs:
                       continue
                   rows[bs] = {
                       "status": item.get("status"),
-                      "average_time_ms": item.get("average_time_ms"),
+                      "average_time_ms": item.get("trimmed_avg_ms")
+                      if item.get("trimmed_avg_ms") is not None
+                      else item.get("average_time_ms"),
                       "error_core": item.get("error_core"),
                   }
               if not rows:
@@ -1600,11 +2047,14 @@ jobs:
                       f.write(f"- {err}\n")
 
           payload = {
+              "name": "BD Model 3",
+              "kind": "batch_compare",
               "status": overall_status,
               "baseline_ms": ", ".join(baseline_parts) if baseline_parts else "",
               "current_ms": ", ".join(current_parts) if current_parts else "",
               "threshold_ms": ", ".join(threshold_parts) if threshold_parts else "",
               "metrics_summary": " ; ".join(metrics_parts) if metrics_parts else "",
+              "rows": result_rows,
           }
           with open(compare_json, "w", encoding="utf-8") as f:
               json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -1615,15 +2065,21 @@ jobs:
           CURRENT_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("current_ms",""))' "$COMPARE_JSON")"
           THRESHOLD_MS="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("threshold_ms",""))' "$COMPARE_JSON")"
           METRICS_SUMMARY="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("metrics_summary",""))' "$COMPARE_JSON")"
+          METRICS_JSON="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(json.dumps(data, ensure_ascii=False, separators=(",", ":")))' "$COMPARE_JSON")"
 
           if [[ "${{ steps.run_perf.outputs.baseline_exit }}" != "0" || "${{ steps.run_perf.outputs.current_exit }}" != "0" ]]; then
             STATUS="failure"
           fi
 
           {
-            echo "## ByteDance Model 3"
+            echo "## BD Model 3"
             echo
             echo "- Status: $STATUS"
+            echo "- Runner name: $RUNNER_NAME"
+            echo "- Host name: $HOST_NAME"
+            echo "- Host IP: $HOST_IP"
+            echo "- Host SN: $HOST_SN"
+            echo "- Log artifact: logs-bd-model3"
             echo "- Baseline: ${BASELINE_MS:-n/a}"
             echo "- Current: ${CURRENT_MS:-n/a}"
             echo "- Threshold: ${THRESHOLD_MS:-n/a}"
@@ -1656,15 +2112,35 @@ jobs:
           echo "current_ms=$CURRENT_MS" >> "$GITHUB_OUTPUT"
           echo "threshold_ms=$THRESHOLD_MS" >> "$GITHUB_OUTPUT"
           echo "metrics_summary=$METRICS_SUMMARY" >> "$GITHUB_OUTPUT"
+          {
+            echo "metrics_json<<EOF"
+            echo "$METRICS_JSON"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Upload model 3 summary artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: summary-bytedance-model3
+          name: summary-bd-model3
           path: ${{ steps.collect.outputs.summary_file }}
           if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload model 3 logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-bd-model3
+          path: |
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model3/bd_model3_baseline.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model3/bd_model3_current.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model3/baseline-out
+            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model3/current-out
+            ${{ runner.temp }}/bd-model3-details.md
+            ${{ runner.temp }}/bd-model3-compare.json
+          if-no-files-found: warn
           retention-days: 7
 
       - name: Fail job if model 3 regressed
@@ -1696,17 +2172,142 @@ jobs:
           LOG_FILE="$JOB_LOG_DIR/training_tests.log"
           ERROR_LOG_DIR="$JOB_LOG_DIR/error_logs"
           CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
+          pr_training_models=(onetrans rankmixer tokenmixer-large)
+          daily_training_models=(deepfm dien din dsin esmm fgcnn flen fwfm mmoe ple wukong xdeepfm)
           mkdir -p "$JOB_LOG_DIR"
+          rm -f "$LOG_FILE"
+          rm -rf "$ERROR_LOG_DIR"
 
           training_exit=0
-          export LOG_FILE ERROR_LOG_DIR CURRENT_PLUGIN
-          bash -l -c '
-            cd "$MODEL_ROOT/training"
-            exec timeout 180m python run_all_training_tests.py \
-              --epochs 100 \
-              --log-dir "$ERROR_LOG_DIR" \
-              --musa-plugin "$CURRENT_PLUGIN" > "$LOG_FILE" 2>&1
-          ' || training_exit=$?
+          guard_failed=0
+          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
+          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
+          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
+
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            selected_training_models=("${daily_training_models[@]}")
+            training_mode="daily-remainder"
+          else
+            selected_training_models=("${pr_training_models[@]}")
+            training_mode="pr-smoke"
+          fi
+          TRAINING_MODELS="${selected_training_models[*]}"
+          printf 'Training mode: %s\n' "$training_mode" | tee -a "$LOG_FILE"
+          printf 'Selected models (%d): %s\n' "${#selected_training_models[@]}" "$TRAINING_MODELS" | tee -a "$LOG_FILE"
+
+          start_ts="$(date +%s)"
+          while true; do
+            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
+            if [[ -z "$active_procs" ]]; then
+              break
+            fi
+            now_ts="$(date +%s)"
+            if (( now_ts - start_ts >= guard_timeout )); then
+              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$LOG_FILE"
+              echo "$active_procs" | tee -a "$LOG_FILE"
+              guard_failed=1
+              break
+            fi
+            echo "Waiting for previous GPU test processes to exit before starting training:" | tee -a "$LOG_FILE"
+            echo "$active_procs" | tee -a "$LOG_FILE"
+            sleep 15
+          done
+
+          LIVE_TRAINING_WRAPPER="$RUNNER_TEMP/run_training_live.py"
+          cat > "$LIVE_TRAINING_WRAPPER" <<'PY'
+          import os
+          import subprocess
+          import selectors
+          import sys
+          import time
+
+          sys.path.insert(0, os.getcwd())
+          import run_all_training_tests as runner
+
+          _real_run = subprocess.run
+
+
+          def run_live(cmd, capture_output=False, text=False, cwd=None, env=None, timeout=None, **kwargs):
+              if not capture_output:
+                  return _real_run(cmd, capture_output=capture_output, text=text, cwd=cwd, env=env, timeout=timeout, **kwargs)
+
+              effective_timeout = int(env.get("TRAINING_MODEL_TIMEOUT_SECONDS", "3600")) if env else 3600
+              cmd = ["--musa-plugin" if arg == "--musa_plugin" else arg for arg in cmd]
+              proc = subprocess.Popen(
+                  cmd,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+                  text=True,
+                  bufsize=1,
+                  cwd=cwd,
+                  env=env,
+              )
+
+              lines = []
+              start = time.monotonic()
+              selector = selectors.DefaultSelector()
+              selector.register(proc.stdout, selectors.EVENT_READ)
+
+              try:
+                  while True:
+                      for key, _ in selector.select(timeout=0.2):
+                          line = key.fileobj.readline()
+                          if line:
+                              lines.append(line)
+                              sys.stdout.write(line)
+                              sys.stdout.flush()
+
+                      if proc.poll() is not None:
+                          rest = proc.stdout.read()
+                          if rest:
+                              lines.append(rest)
+                              sys.stdout.write(rest)
+                              sys.stdout.flush()
+                          break
+
+                      if effective_timeout > 0 and time.monotonic() - start > effective_timeout:
+                          proc.kill()
+                          proc.wait()
+                          timeout_msg = f"\n[ERROR] Model command timeout (>{effective_timeout}s)\n"
+                          lines.append(timeout_msg)
+                          sys.stdout.write(timeout_msg)
+                          sys.stdout.flush()
+                          return subprocess.CompletedProcess(cmd, 124, stdout="".join(lines), stderr="")
+              finally:
+                  selector.close()
+                  if proc.stdout:
+                      proc.stdout.close()
+
+              return subprocess.CompletedProcess(cmd, proc.returncode, stdout="".join(lines), stderr="")
+
+
+          runner.subprocess.run = run_live
+          sys.exit(runner.main())
+          PY
+
+          export MODEL_ROOT LOG_FILE ERROR_LOG_DIR CURRENT_PLUGIN LIVE_TRAINING_WRAPPER TRAINING_MODELS
+          if [[ "$guard_failed" == "0" ]]; then
+            exec 9>"$lock_file"
+            flock 9
+            echo "Acquired GPU test lock: $lock_file" | tee -a "$LOG_FILE"
+
+            timeout 180m bash -l -c '
+              set -o pipefail
+              cd "$MODEL_ROOT/training"
+              mkdir -p "$ERROR_LOG_DIR"
+              read -r -a training_models <<< "$TRAINING_MODELS"
+
+              TRAINING_MODEL_TIMEOUT_SECONDS="${TRAINING_MODEL_TIMEOUT_SECONDS:-3600}" \
+                PYTHONUNBUFFERED=1 \
+                python -u "$LIVE_TRAINING_WRAPPER" \
+                  --epochs 100 \
+                  --log-dir "$ERROR_LOG_DIR" \
+                  --models "${training_models[@]}" \
+                  --musa-plugin "$CURRENT_PLUGIN" 2>&1 | tee "$LOG_FILE"
+            ' || training_exit=$?
+          else
+            training_exit=1
+          fi
 
           echo "training_exit=$training_exit" >> "$GITHUB_OUTPUT"
 
@@ -1756,6 +2357,17 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Upload training logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-training
+          path: |
+            ${{ needs.prepare_metadata.outputs.log_root }}/training/training_tests.log
+            ${{ needs.prepare_metadata.outputs.log_root }}/training/error_logs
+          if-no-files-found: warn
+          retention-days: 7
+
   summary:
     name: Final Summary
     needs:
@@ -1764,17 +2376,21 @@ jobs:
       - build_current
       - integration
       - build_baseline
-      - tencent_perf
-      - tencent_accuracy
-      - bytedance_model1
-      - bytedance_model2
-      - bytedance_model3
+      - t_perf
+      - t_accuracy
+      - bd_model1
+      - bd_model2
+      - bd_model3
       - training
     if: ${{ always() && !cancelled() }}
     runs-on: [self-hosted, musa-gpu]
     timeout-minutes: 10
     env:
-      DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+      T_PERF_JSON: ${{ needs.t_perf.outputs.metrics_json || '' }}
+      T_ACC_JSON: ${{ needs.t_accuracy.outputs.metrics_json || '' }}
+      BD1_JSON: ${{ needs.bd_model1.outputs.metrics_json || '' }}
+      BD2_JSON: ${{ needs.bd_model2.outputs.metrics_json || '' }}
+      BD3_JSON: ${{ needs.bd_model3.outputs.metrics_json || '' }}
     steps:
       - name: Download summary artifacts
         uses: actions/download-artifact@v4
@@ -1785,10 +2401,33 @@ jobs:
 
       - name: Generate final summary
         id: final_summary
+        env:
+          COMMIT_ID: ${{ needs.prepare_metadata.outputs.commit_id }}
+          RUN_KIND: ${{ needs.prepare_metadata.outputs.run_kind }}
+          RUN_ID: ${{ needs.prepare_metadata.outputs.run_id }}
+          WORKFLOW_RUN_ID: ${{ needs.prepare_metadata.outputs.workflow_run_id || github.run_id }}
+          WORKFLOW_RUN_ATTEMPT: ${{ needs.prepare_metadata.outputs.workflow_run_attempt || github.run_attempt }}
+          HOST_NAME: ${{ needs.prepare_metadata.outputs.host_name || 'unavailable' }}
+          HOST_IP: ${{ needs.prepare_metadata.outputs.host_ip || 'unavailable' }}
+          HOST_SN: ${{ needs.prepare_metadata.outputs.host_sn || 'unavailable' }}
+          BASELINE_SHA: ${{ needs.build_baseline.outputs.baseline_sha || 'unavailable' }}
+          FORMAT_DISPLAY: ${{ needs.format.outputs.status == 'failure' && 'failure (non-blocking)' || needs.format.outputs.status || 'skipped' }}
+          BUILD_CURRENT_STATUS: ${{ needs.build_current.outputs.status || 'skipped' }}
+          INTEGRATION_STATUS: ${{ needs.integration.outputs.status || 'skipped' }}
+          BUILD_BASELINE_STATUS: ${{ needs.build_baseline.outputs.status || 'skipped' }}
+          T_PERF_STATUS: ${{ needs.t_perf.outputs.status || 'skipped' }}
+          T_ACC_STATUS: ${{ needs.t_accuracy.outputs.status || 'skipped' }}
+          BD1_STATUS: ${{ needs.bd_model1.outputs.status || 'skipped' }}
+          BD2_STATUS: ${{ needs.bd_model2.outputs.status || 'skipped' }}
+          BD3_STATUS: ${{ needs.bd_model3.outputs.status || 'skipped' }}
+          TRAINING_STATUS: ${{ needs.training.outputs.status || 'skipped' }}
         run: |
           set -euo pipefail
 
-          SUMMARY_FILE="$RUNNER_TEMP/final-summary.md"
+          SUMMARY_DIR="$RUNNER_TEMP/final-summary"
+          SUMMARY_FILE="$SUMMARY_DIR/final-summary.md"
+          SUMMARY_JSON="$SUMMARY_DIR/final-summary.json"
+          mkdir -p "$SUMMARY_DIR"
           FORMAT_STATUS="${{ needs.format.outputs.status || 'skipped' }}"
           FORMAT_RESULT="${{ needs.format.result }}"
           FORMAT_DISPLAY="$FORMAT_STATUS"
@@ -1798,16 +2437,16 @@ jobs:
           INTEGRATION_RESULT="${{ needs.integration.result }}"
           BUILD_BASELINE_STATUS="${{ needs.build_baseline.outputs.status || 'skipped' }}"
           BUILD_BASELINE_RESULT="${{ needs.build_baseline.result }}"
-          TENCENT_PERF_STATUS="${{ needs.tencent_perf.outputs.status || 'skipped' }}"
-          TENCENT_PERF_RESULT="${{ needs.tencent_perf.result }}"
-          TENCENT_ACC_STATUS="${{ needs.tencent_accuracy.outputs.status || 'skipped' }}"
-          TENCENT_ACC_RESULT="${{ needs.tencent_accuracy.result }}"
-          BYTE1_STATUS="${{ needs.bytedance_model1.outputs.status || 'skipped' }}"
-          BYTE1_RESULT="${{ needs.bytedance_model1.result }}"
-          BYTE2_STATUS="${{ needs.bytedance_model2.outputs.status || 'skipped' }}"
-          BYTE2_RESULT="${{ needs.bytedance_model2.result }}"
-          BYTE3_STATUS="${{ needs.bytedance_model3.outputs.status || 'skipped' }}"
-          BYTE3_RESULT="${{ needs.bytedance_model3.result }}"
+          T_PERF_STATUS="${{ needs.t_perf.outputs.status || 'skipped' }}"
+          T_PERF_RESULT="${{ needs.t_perf.result }}"
+          T_ACC_STATUS="${{ needs.t_accuracy.outputs.status || 'skipped' }}"
+          T_ACC_RESULT="${{ needs.t_accuracy.result }}"
+          BD1_STATUS="${{ needs.bd_model1.outputs.status || 'skipped' }}"
+          BD1_RESULT="${{ needs.bd_model1.result }}"
+          BD2_STATUS="${{ needs.bd_model2.outputs.status || 'skipped' }}"
+          BD2_RESULT="${{ needs.bd_model2.result }}"
+          BD3_STATUS="${{ needs.bd_model3.outputs.status || 'skipped' }}"
+          BD3_RESULT="${{ needs.bd_model3.result }}"
           TRAINING_STATUS="${{ needs.training.outputs.status || 'skipped' }}"
           TRAINING_RESULT="${{ needs.training.result }}"
           BASELINE_SHA="${{ needs.build_baseline.outputs.baseline_sha || 'unavailable' }}"
@@ -1816,38 +2455,136 @@ jobs:
             FORMAT_DISPLAY="failure (non-blocking)"
           fi
 
-          {
-            echo "# CI Report"
-            echo
-            echo "- Commit: ${{ needs.prepare_metadata.outputs.commit_id }}"
-            echo "- Run kind: ${{ needs.prepare_metadata.outputs.run_kind }}"
-            echo "- Run id: ${{ needs.prepare_metadata.outputs.run_id }}"
-            echo "- Baseline commit: $BASELINE_SHA"
-            echo
-            echo "## Job Status"
-            echo "| Job | Result | Blocking |"
-            echo "|-----|--------|----------|"
-            echo "| Format | $FORMAT_DISPLAY | no |"
-            echo "| Build Current | $BUILD_CURRENT_STATUS | yes |"
-            echo "| Integration | $INTEGRATION_STATUS | yes |"
-            echo "| Build Baseline | $BUILD_BASELINE_STATUS | yes |"
-            echo "| Tencent Performance | $TENCENT_PERF_STATUS | yes |"
-            echo "| Tencent Accuracy | $TENCENT_ACC_STATUS | yes |"
-            echo "| ByteDance Model 1 | $BYTE1_STATUS | yes |"
-            echo "| ByteDance Model 2 | $BYTE2_STATUS | yes |"
-            echo "| ByteDance Model 3 | $BYTE3_STATUS | yes |"
-            echo "| Training | $TRAINING_STATUS | no |"
-            echo
-            echo "## Performance Metrics"
-            echo "- Tencent Performance: baseline=${{ needs.tencent_perf.outputs.baseline_ms || 'n/a' }} ms, current=${{ needs.tencent_perf.outputs.current_ms || 'n/a' }} ms, threshold=${{ needs.tencent_perf.outputs.threshold_ms || 'n/a' }} ms"
-            echo "- ByteDance Model 1: ${{ needs.bytedance_model1.outputs.metrics_summary || 'n/a' }}"
-            echo "- ByteDance Model 2: ${{ needs.bytedance_model2.outputs.metrics_summary || 'n/a' }}"
-            echo "- ByteDance Model 3: ${{ needs.bytedance_model3.outputs.metrics_summary || 'n/a' }}"
-            echo
-            echo "## Accuracy Highlights"
-            echo "- Tencent Accuracy current: ${{ needs.tencent_accuracy.outputs.current_acc || 'n/a' }}"
-            echo
-          } > "$SUMMARY_FILE"
+          python3 - "$SUMMARY_FILE" "$SUMMARY_JSON" <<'PY'
+          import json
+          import os
+          import sys
+
+          summary_file, summary_json = sys.argv[1:3]
+
+          def load_json_env(name):
+              raw = (os.environ.get(name) or "").strip()
+              if not raw:
+                  return None
+              try:
+                  return json.loads(raw)
+              except json.JSONDecodeError:
+                  return None
+
+          def format_value(value):
+              if value is None:
+                  return "n/a"
+              if isinstance(value, float):
+                  return f"{value:.4f}"
+              return str(value)
+
+          commit_id = os.environ["COMMIT_ID"]
+          run_kind = os.environ["RUN_KIND"]
+          run_id = os.environ["RUN_ID"]
+          workflow_run_id = os.environ["WORKFLOW_RUN_ID"]
+          workflow_run_attempt = os.environ["WORKFLOW_RUN_ATTEMPT"]
+          host_name = os.environ["HOST_NAME"]
+          host_ip = os.environ["HOST_IP"]
+          host_sn = os.environ["HOST_SN"]
+          baseline_sha = os.environ["BASELINE_SHA"]
+
+          jobs = [
+              {"name": "Format", "result": os.environ["FORMAT_DISPLAY"], "blocking": "no"},
+              {"name": "Build Current", "result": os.environ["BUILD_CURRENT_STATUS"], "blocking": "yes"},
+              {"name": "Integration", "result": os.environ["INTEGRATION_STATUS"], "blocking": "yes"},
+              {"name": "Build Baseline", "result": os.environ["BUILD_BASELINE_STATUS"], "blocking": "yes"},
+              {"name": "T Performance", "result": os.environ["T_PERF_STATUS"], "blocking": "yes"},
+              {"name": "T Accuracy", "result": os.environ["T_ACC_STATUS"], "blocking": "yes"},
+              {"name": "BD Model 1", "result": os.environ["BD1_STATUS"], "blocking": "yes"},
+              {"name": "BD Model 2", "result": os.environ["BD2_STATUS"], "blocking": "yes"},
+              {"name": "BD Model 3", "result": os.environ["BD3_STATUS"], "blocking": "yes"},
+              {"name": "Training", "result": os.environ["TRAINING_STATUS"], "blocking": "no"},
+          ]
+
+          metrics = [
+              load_json_env("T_PERF_JSON"),
+              load_json_env("BD1_JSON"),
+              load_json_env("BD2_JSON"),
+              load_json_env("BD3_JSON"),
+              load_json_env("T_ACC_JSON"),
+          ]
+          metrics = [item for item in metrics if item]
+
+          payload = {
+              "commit": commit_id,
+              "run_kind": run_kind,
+              "run_id": run_id,
+              "workflow_run_id": workflow_run_id,
+              "workflow_run_attempt": workflow_run_attempt,
+              "host": {
+                  "name": host_name,
+                  "ip": host_ip,
+                  "sn": host_sn,
+              },
+              "baseline_commit": baseline_sha,
+              "jobs": jobs,
+              "metrics": metrics,
+          }
+
+          lines = [
+              "# CI Report",
+              "",
+              f"- Commit: {commit_id}",
+              f"- Run kind: {run_kind}",
+              f"- Run id: {run_id}",
+              f"- Workflow run id: {workflow_run_id}",
+              f"- Workflow run attempt: {workflow_run_attempt}",
+              f"- Host name: {host_name}",
+              f"- Host IP: {host_ip}",
+              f"- Host SN: {host_sn}",
+              f"- Baseline commit: {baseline_sha}",
+              "",
+              "## Job Status",
+              "| Job | Result | Blocking |",
+              "|-----|--------|----------|",
+          ]
+
+          for job in jobs:
+              lines.append(f"| {job['name']} | {job['result']} | {job['blocking']} |")
+
+          lines.extend(["", "## Key Summary"])
+
+          for metric in metrics:
+              name = metric.get("name", "Unknown Metric")
+              kind = metric.get("kind", "unknown")
+              lines.extend(["", f"### {name}"])
+
+              if kind == "single":
+                  lines.append(f"- Status: {metric.get('status', 'unknown')}")
+                  lines.append(f"- Baseline: {metric.get('baseline_ms', 'n/a')} ms")
+                  lines.append(f"- Current: {metric.get('current_ms', 'n/a')} ms")
+                  lines.append(f"- Threshold: {metric.get('threshold_ms', 'n/a')} ms")
+              elif kind == "batch_compare":
+                  lines.append(f"- Status: {metric.get('status', 'unknown')}")
+                  lines.append("| BS | Baseline (ms) | Current (ms) | Threshold (ms) | Result | Detail |")
+                  lines.append("|----|---------------|--------------|----------------|--------|--------|")
+                  for row in metric.get("rows", []):
+                      lines.append(
+                          "| {bs} | {base} | {cur} | {thr} | {result} | {detail} |".format(
+                              bs=row.get("batch_size", "n/a"),
+                              base=format_value(row.get("baseline_ms")),
+                              cur=format_value(row.get("current_ms")),
+                              thr=format_value(row.get("threshold_ms")),
+                              result=row.get("result", "unknown"),
+                              detail=str(row.get("detail", "")).replace("|", "/"),
+                          )
+                      )
+              elif kind == "accuracy":
+                  lines.append(f"- Status: {metric.get('status', 'unknown')}")
+                  lines.append(f"- Current: {metric.get('current', 'n/a')}")
+              else:
+                  lines.append(f"- Raw metric: {json.dumps(metric, ensure_ascii=False)}")
+
+          with open(summary_file, "w", encoding="utf-8") as f:
+              f.write("\n".join(lines) + "\n")
+          with open(summary_json, "w", encoding="utf-8") as f:
+              json.dump(payload, f, ensure_ascii=False, indent=2)
+          PY
 
           for file in \
             "$RUNNER_TEMP/ci-summary/prepare-metadata.md" \
@@ -1855,11 +2592,11 @@ jobs:
             "$RUNNER_TEMP/ci-summary/build-current.md" \
             "$RUNNER_TEMP/ci-summary/integration.md" \
             "$RUNNER_TEMP/ci-summary/build-baseline.md" \
-            "$RUNNER_TEMP/ci-summary/tencent-perf.md" \
-            "$RUNNER_TEMP/ci-summary/tencent-accuracy.md" \
-            "$RUNNER_TEMP/ci-summary/bytedance-model1.md" \
-            "$RUNNER_TEMP/ci-summary/bytedance-model2.md" \
-            "$RUNNER_TEMP/ci-summary/bytedance-model3.md" \
+            "$RUNNER_TEMP/ci-summary/t-perf.md" \
+            "$RUNNER_TEMP/ci-summary/t-accuracy.md" \
+            "$RUNNER_TEMP/ci-summary/bd-model1.md" \
+            "$RUNNER_TEMP/ci-summary/bd-model2.md" \
+            "$RUNNER_TEMP/ci-summary/bd-model3.md" \
             "$RUNNER_TEMP/ci-summary/training.md"; do
             if [[ -f "$file" ]]; then
               echo >> "$SUMMARY_FILE"
@@ -1875,11 +2612,11 @@ jobs:
           if [[ "$BUILD_CURRENT_STATUS" == "failure" || "$BUILD_CURRENT_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
           if [[ "$INTEGRATION_STATUS" == "failure" || "$INTEGRATION_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
           if [[ "$BUILD_BASELINE_STATUS" == "failure" || "$BUILD_BASELINE_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$TENCENT_PERF_STATUS" == "failure" || "$TENCENT_PERF_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$TENCENT_ACC_STATUS" == "failure" || "$TENCENT_ACC_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$BYTE1_STATUS" == "failure" || "$BYTE1_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$BYTE2_STATUS" == "failure" || "$BYTE2_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$BYTE3_STATUS" == "failure" || "$BYTE3_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$T_PERF_STATUS" == "failure" || "$T_PERF_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$T_ACC_STATUS" == "failure" || "$T_ACC_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BD1_STATUS" == "failure" || "$BD1_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BD2_STATUS" == "failure" || "$BD2_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BD3_STATUS" == "failure" || "$BD3_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
 
           if [[ "$BLOCKING_FAILURE" -ne 0 ]]; then
             FINAL_STATUS="failure"
@@ -1889,126 +2626,18 @@ jobs:
 
           echo "final_status=$FINAL_STATUS" >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+          echo "summary_json=$SUMMARY_JSON" >> "$GITHUB_OUTPUT"
 
-      - name: Send DingTalk notification
+      - name: Upload final summary artifact
         if: always()
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-
-          if [[ -z "${DINGTALK_WEBHOOK:-}" ]]; then
-            echo "DINGTALK_WEBHOOK is not configured, skip notification."
-            exit 0
-          fi
-
-          FINAL_STATUS="${{ steps.final_summary.outputs.final_status }}"
-          COMMIT_ID="${{ needs.prepare_metadata.outputs.commit_id }}"
-          SHORT_COMMIT="${COMMIT_ID:0:8}"
-          RUN_KIND="${{ needs.prepare_metadata.outputs.run_kind }}"
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          REF_NAME="${{ github.ref_name }}"
-          REPOSITORY="${{ github.repository }}"
-          BASELINE_SHA="${{ needs.build_baseline.outputs.baseline_sha || 'unavailable' }}"
-          PR_NUMBER="${{ github.event_name == 'pull_request' && github.event.pull_request.number || '' }}"
-          PR_URL="${{ github.event_name == 'pull_request' && github.event.pull_request.html_url || '' }}"
-          FORMAT_STATUS="${{ needs.format.outputs.status || 'skipped' }}"
-          BUILD_CURRENT_STATUS="${{ needs.build_current.outputs.status || 'skipped' }}"
-          INTEGRATION_STATUS="${{ needs.integration.outputs.status || 'skipped' }}"
-          BUILD_BASELINE_STATUS="${{ needs.build_baseline.outputs.status || 'skipped' }}"
-          TENCENT_PERF_STATUS="${{ needs.tencent_perf.outputs.status || 'skipped' }}"
-          TENCENT_ACC_STATUS="${{ needs.tencent_accuracy.outputs.status || 'skipped' }}"
-          BYTE1_STATUS="${{ needs.bytedance_model1.outputs.status || 'skipped' }}"
-          BYTE2_STATUS="${{ needs.bytedance_model2.outputs.status || 'skipped' }}"
-          BYTE3_STATUS="${{ needs.bytedance_model3.outputs.status || 'skipped' }}"
-          TRAINING_STATUS="${{ needs.training.outputs.status || 'skipped' }}"
-
-          if [[ "$FINAL_STATUS" == "success" ]]; then
-            STATUS_ICON="SUCCESS"
-            STATUS_TEXT="成功"
-          else
-            STATUS_ICON="FAILURE"
-            STATUS_TEXT="失败"
-          fi
-
-          if [[ -n "$PR_NUMBER" ]]; then
-            PR_LINE="- PR: #${PR_NUMBER} ${PR_URL}"
-          else
-            PR_LINE="- PR: n/a"
-          fi
-
-          export STATUS_ICON STATUS_TEXT REPOSITORY REF_NAME RUN_KIND SHORT_COMMIT RUN_URL PR_LINE
-          export BASELINE_SHA FORMAT_STATUS BUILD_CURRENT_STATUS INTEGRATION_STATUS BUILD_BASELINE_STATUS
-          export TENCENT_PERF_STATUS TENCENT_ACC_STATUS BYTE1_STATUS BYTE2_STATUS BYTE3_STATUS TRAINING_STATUS
-
-          PAYLOAD="$(python3 - <<'PY'
-          import json
-          import os
-
-          status_icon = os.environ["STATUS_ICON"]
-          status_text = os.environ["STATUS_TEXT"]
-          repo = os.environ["REPOSITORY"]
-          ref_name = os.environ["REF_NAME"]
-          run_kind = os.environ["RUN_KIND"]
-          short_commit = os.environ["SHORT_COMMIT"]
-          run_url = os.environ["RUN_URL"]
-          pr_line = os.environ["PR_LINE"]
-          baseline_sha = os.environ["BASELINE_SHA"]
-          format_status = os.environ["FORMAT_STATUS"]
-          build_current_status = os.environ["BUILD_CURRENT_STATUS"]
-          integration_status = os.environ["INTEGRATION_STATUS"]
-          build_baseline_status = os.environ["BUILD_BASELINE_STATUS"]
-          tencent_perf_status = os.environ["TENCENT_PERF_STATUS"]
-          tencent_acc_status = os.environ["TENCENT_ACC_STATUS"]
-          byte1_status = os.environ["BYTE1_STATUS"]
-          byte2_status = os.environ["BYTE2_STATUS"]
-          byte3_status = os.environ["BYTE3_STATUS"]
-          training_status = os.environ["TRAINING_STATUS"]
-
-          title = f"CI {status_icon}: {repo}@{ref_name}"
-          text = "\n".join(
-              [
-                  f"### CI通知: {status_text}",
-                  f"- 仓库: {repo}",
-                  f"- 分支: {ref_name}",
-                  f"- Commit: `{short_commit}`",
-                  f"- 触发方式: {run_kind}",
-                  pr_line,
-                  f"- Baseline commit: `{baseline_sha}`",
-                  f"- 运行详情: [GitHub Actions]({run_url})",
-                  "",
-                  "#### Job 状态",
-                  f"- Format: {format_status}",
-                  f"- Build Current: {build_current_status}",
-                  f"- Integration: {integration_status}",
-                  f"- Build Baseline: {build_baseline_status}",
-                  f"- Tencent Performance: {tencent_perf_status}",
-                  f"- Tencent Accuracy: {tencent_acc_status}",
-                  f"- ByteDance Model 1: {byte1_status}",
-                  f"- ByteDance Model 2: {byte2_status}",
-                  f"- ByteDance Model 3: {byte3_status}",
-                  f"- Training: {training_status}",
-              ]
-          )
-
-          print(
-              json.dumps(
-                  {
-                      "msgtype": "markdown",
-                      "markdown": {
-                          "title": title,
-                          "text": text,
-                      },
-                  },
-                  ensure_ascii=False,
-              )
-          )
-          PY
-          )"
-
-          curl -fsSL \
-            -H 'Content-Type: application/json' \
-            -d "$PAYLOAD" \
-            "$DINGTALK_WEBHOOK"
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-final
+          path: |
+            ${{ steps.final_summary.outputs.summary_file }}
+            ${{ steps.final_summary.outputs.summary_json }}
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Fail job if blocking checks failed
         if: always() && steps.final_summary.outputs.final_status == 'failure'

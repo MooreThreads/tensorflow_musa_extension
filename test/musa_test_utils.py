@@ -15,9 +15,6 @@
 
 """Utilities for MUSA kernel tests."""
 
-import logging
-import os
-import sys
 import unittest
 import tensorflow as tf
 
@@ -34,43 +31,18 @@ def _get_test_full_name(test_method):
 
 
 def load_musa_plugin():
-  """Load the MUSA plugin library with simplified path resolution.
-  With __init__.py handling path setup, we can use a simpler approach
-  focusing on the most common locations.
-  """
-  plugin_path = None
-  current_dir = os.path.dirname(os.path.abspath(__file__))
+  """Load the TensorFlow MUSA plugin from the installed wheel."""
+  import tensorflow_musa
 
-  # Common plugin locations to try
-  candidate_paths = [
-    # Relative to test directory (most common case)
-    os.path.join(current_dir, "..", "build", "libmusa_plugin.so"),
-    # Relative to project root (when running from project root)
-    os.path.join(os.path.dirname(current_dir), "build", "libmusa_plugin.so"),
-    # Current working directory build
-    os.path.join(os.getcwd(), "build", "libmusa_plugin.so"),
-  ]
+  return tensorflow_musa.load_plugin()
 
-  for path in candidate_paths:
-    normalized_path = os.path.normpath(path)
-    if os.path.exists(normalized_path):
-      plugin_path = normalized_path
-      break
 
-  if plugin_path and os.path.exists(plugin_path):
-    try:
-      tf.load_library(plugin_path)
-      # print(f"SUCCESS: MUSA plugin loaded from {plugin_path}!")
-    except Exception as e:
-      print(f"FAILED: Error loading plugin from {plugin_path}: {e}")
-      raise
-  else:
-    # Provide helpful error message
-    searched_locations = [os.path.normpath(path) for path in candidate_paths]
-    raise FileNotFoundError(
-        f"MUSA plugin not found. Searched locations:\n" +
-        "\n".join(f"  - {loc}" for loc in searched_locations)
-    )
+def load_musa_ops():
+  """Return generated Python wrappers for MUSA custom ops."""
+  import tensorflow_musa
+
+  load_musa_plugin()
+  return tensorflow_musa.get_musa_ops()
 
 
 # Import tensorflow first (load_musa_plugin needs it)

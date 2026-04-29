@@ -4,3 +4,7 @@ build
 .vscode/**
 # crash dumps
 core.*
+*.egg-info
+*.mudmp
+*.whl
+*.so

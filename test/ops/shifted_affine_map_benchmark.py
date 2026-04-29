@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -50,9 +49,6 @@ from tensorflow.core.protobuf import config_pb2
 from tensorflow.core.protobuf import rewriter_config_pb2
 
 tf.disable_eager_execution()
-
-ROOT_DIR = Path(__file__).resolve().parents[2]
-DEFAULT_PLUGIN_PATH = ROOT_DIR / "build" / "libmusa_plugin.so"
 
 DTYPE_MAP = {
     "float16": tf.float16,
@@ -75,32 +71,11 @@ def numpy_dtype_for_tf(dtype: tf.DType) -> np.dtype:
     return dtype.as_numpy_dtype
 
 
-def resolve_plugin_path() -> Path:
-    candidates = [
-        DEFAULT_PLUGIN_PATH,
-        ROOT_DIR.parent / "build" / "libmusa_plugin.so",
-        Path.cwd() / "build" / "libmusa_plugin.so",
-        Path.cwd().parent / "build" / "libmusa_plugin.so",
-    ]
-
-    seen = set()
-    for candidate in candidates:
-        resolved = candidate.resolve()
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        if resolved.exists():
-            return resolved
-
-    searched = "\n".join(f"  - {path}" for path in candidates)
-    raise FileNotFoundError(
-        "MUSA plugin not found. Searched locations:\n" + searched
-    )
-
-
 def load_musa_ops():
-    plugin_path = resolve_plugin_path()
-    return tf.load_op_library(str(plugin_path))
+    import tensorflow_musa
+
+    tensorflow_musa.load_plugin()
+    return tensorflow_musa.get_musa_ops()
 
 
 def create_config(enable_musa_optimizer: bool) -> config_pb2.ConfigProto:

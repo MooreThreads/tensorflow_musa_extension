@@ -88,8 +88,8 @@ class MusaResourceApplyGradientDescentOp : public MusaOpKernel {
     OP_REQUIRES(ctx, var_t.shape().IsSameSize(grad_t.shape()),
                 errors::InvalidArgument(
                     "Variable and gradient must have the same shape. var: ",
-                    var_t.shape().DebugString(), " grad: ",
-                    grad_t.shape().DebugString()));
+                    var_t.shape().DebugString(),
+                    " grad: ", grad_t.shape().DebugString()));
 
     // Get MuDNN handle
     auto& handle = GetHandleByCtx(ctx);
@@ -146,19 +146,20 @@ class MusaResourceApplyGradientDescentOp : public MusaOpKernel {
 };
 
 // Register the kernel for supported types
-#define REGISTER_RESOURCE_GRADIENT_DESCENT(T)                     \
-  REGISTER_KERNEL_BUILDER(Name("ResourceApplyGradientDescent")    \
-                              .Device(DEVICE_MTGPU)               \
-                              .HostMemory("lr")                   \
-                              .TypeConstraint<T>("T"),            \
+#define REGISTER_RESOURCE_GRADIENT_DESCENT(T)                  \
+  REGISTER_KERNEL_BUILDER(Name("ResourceApplyGradientDescent") \
+                              .Device(DEVICE_MTGPU)            \
+                              .HostMemory("alpha")             \
+                              .TypeConstraint<T>("T"),         \
                           MusaResourceApplyGradientDescentOp<T>);
 
 REGISTER_RESOURCE_GRADIENT_DESCENT(float);
 REGISTER_RESOURCE_GRADIENT_DESCENT(Eigen::half);
 REGISTER_RESOURCE_GRADIENT_DESCENT(bfloat16);
 
-// Note: muDNN does not support DOUBLE (float64) for binary operations (MUL, SUB).
-// Do not register for double - TensorFlow will fall back to CPU implementation.
+// Note: muDNN does not support DOUBLE (float64) for binary operations (MUL,
+// SUB). Do not register for double - TensorFlow will fall back to CPU
+// implementation.
 
 // ApplyGradientDescent (non-resource version)
 template <typename T>
@@ -177,9 +178,9 @@ class MusaApplyGradientDescentOp : public MusaOpKernel {
     OP_REQUIRES(ctx, lr_t.NumElements() == 1,
                 errors::InvalidArgument("lr must be a scalar"));
 
-    OP_REQUIRES(ctx, var_t.shape().IsSameSize(grad_t.shape()),
-                errors::InvalidArgument(
-                    "var and grad must have the same shape"));
+    OP_REQUIRES(
+        ctx, var_t.shape().IsSameSize(grad_t.shape()),
+        errors::InvalidArgument("var and grad must have the same shape"));
 
     // Allocate output
     Tensor* out_t;
@@ -230,10 +231,10 @@ class MusaApplyGradientDescentOp : public MusaOpKernel {
   }
 };
 
-#define REGISTER_APPLY_GRADIENT_DESCENT(T)                        \
-  REGISTER_KERNEL_BUILDER(Name("ApplyGradientDescent")            \
-                              .Device(DEVICE_MTGPU)               \
-                              .TypeConstraint<T>("T"),            \
+#define REGISTER_APPLY_GRADIENT_DESCENT(T)             \
+  REGISTER_KERNEL_BUILDER(Name("ApplyGradientDescent") \
+                              .Device(DEVICE_MTGPU)    \
+                              .TypeConstraint<T>("T"), \
                           MusaApplyGradientDescentOp<T>);
 
 REGISTER_APPLY_GRADIENT_DESCENT(float);

@@ -34,8 +34,6 @@ class MusaBiasAddReluMatMulOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
-    MUSA_KERNEL_TIMING_GUARD(ctx);
-
     const Tensor& input = ctx->input(0);
     const Tensor& bias_input = ctx->input(1);
     const Tensor& other = ctx->input(2);
@@ -72,9 +70,7 @@ class MusaBiasAddReluMatMulOp : public MusaOpKernel {
       return;
     }
 
-    MUSA_KERNEL_TRACE_START("BiasAddRelu");
     RunBiasAddRelu(ctx, input, bias_input, bias_relu_tensor);
-    MUSA_KERNEL_TRACE_END("BiasAddRelu");
 
     // 2. MatMul
     const Tensor* lhs = nullptr;
@@ -98,9 +94,7 @@ class MusaBiasAddReluMatMulOp : public MusaOpKernel {
       return;
     }
 
-    MUSA_KERNEL_TRACE_START("MatMul");
     RunMatMul(ctx, *lhs, *rhs, *output);
-    MUSA_KERNEL_TRACE_END("MatMul");
   }
 
   bool IsExpensive() override { return true; }

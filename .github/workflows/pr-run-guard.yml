@@ -1,0 +1,74 @@
+name: PR Run Guard
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cancel_previous_pr_runs:
+    name: Cancel Previous PR Runs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cancel older CI runs for the same PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const workflowId = 'pr-validation.yml';
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const prNumber = context.payload.pull_request.number;
+            const currentHeadSha = context.payload.pull_request.head.sha;
+            const currentHeadBranch = context.payload.pull_request.head.ref;
+            const currentHeadRepo = context.payload.pull_request.head.repo.full_name;
+
+            const runs = await github.paginate(
+              github.rest.actions.listWorkflowRuns,
+              {
+                owner,
+                repo,
+                workflow_id: workflowId,
+                event: 'pull_request',
+                branch: currentHeadBranch,
+                per_page: 100,
+              }
+            );
+
+            const candidates = runs.filter((run) => {
+              if (run.status === 'completed') {
+                return false;
+              }
+              if (run.head_sha === currentHeadSha) {
+                return false;
+              }
+              const runHeadRepo = run.head_repository?.full_name || `${owner}/${repo}`;
+              const sameHead = run.head_branch === currentHeadBranch && runHeadRepo === currentHeadRepo;
+              const samePr = (run.pull_requests || []).some((pr) => pr.number === prNumber);
+              return samePr || sameHead;
+            });
+
+            core.info(
+              `Scanned ${runs.length} PR validation runs for ${currentHeadRepo}:${currentHeadBranch}.`
+            );
+
+            if (candidates.length === 0) {
+              core.info(
+                `No older CI runs found for PR #${prNumber} (${currentHeadRepo}:${currentHeadBranch}).`
+              );
+              return;
+            }
+
+            for (const run of candidates) {
+              core.info(
+                `Canceling run ${run.id} for PR #${prNumber} ` +
+                  `(status=${run.status}, head_sha=${run.head_sha})`
+              );
+              await github.rest.actions.cancelWorkflowRun({
+                owner,
+                repo,
+                run_id: run.id,
+              });
+            }

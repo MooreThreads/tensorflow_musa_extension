@@ -1,11 +1,9 @@
 """Unit tests for custom MusaShiftedAffineMap op."""
 
-import os
-
 import numpy as np
 import tensorflow as tf
 
-from musa_test_utils import MUSATestCase
+from musa_test_utils import MUSATestCase, load_musa_ops
 
 
 def shifted_affine_map_ref(data_left, mask, sliced_var_right):
@@ -20,30 +18,10 @@ class ShiftedAffineMapOpTest(MUSATestCase):
     def setUpClass(cls):
         super().setUpClass()
 
-        plugin_path = None
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        candidate_paths = [
-            os.path.join(current_dir, "..", "..", "build", "libmusa_plugin.so"),
-            os.path.join(os.path.dirname(current_dir), "..", "build", "libmusa_plugin.so"),
-            os.path.join(os.getcwd(), "..", "build", "libmusa_plugin.so"),
-        ]
-
-        for path in candidate_paths:
-            normalized_path = os.path.normpath(path)
-            if os.path.exists(normalized_path):
-                plugin_path = normalized_path
-                break
-
-        if plugin_path and os.path.exists(plugin_path):
-            try:
-                cls._musa_ops = tf.load_op_library(plugin_path)
-            except Exception as exc:
-                print(f"FAILED: Error loading MUSA ops from {plugin_path}: {exc}")
-                cls._musa_ops = None
-        else:
-            searched_locations = [os.path.normpath(path) for path in candidate_paths]
-            print("MUSA plugin not found. Searched locations:\n" +
-                  "\n".join(f"  - {loc}" for loc in searched_locations))
+        try:
+            cls._musa_ops = load_musa_ops()
+        except Exception as exc:
+            print(f"FAILED: Error loading MUSA ops from tensorflow_musa wheel: {exc}")
             cls._musa_ops = None
 
     def _run_musa_shifted_affine_map(self, data_left, mask,

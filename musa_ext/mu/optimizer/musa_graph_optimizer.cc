@@ -14,15 +14,18 @@ limitations under the License.
 ==============================================================================*/
 
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <map>
 #include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
-#include "mu/graph_fusion/fusion_pattern_manager.h"
-#include "mu/graph_fusion/gelu_fusion.h"
-#include "mu/graph_fusion/layernorm_fusion.h"
+#include "kernels/fusion/fusion_pattern_manager.h"
+#include "kernels/fusion/gelu_fusion.h"
+#include "kernels/fusion/layernorm_fusion.h"
 #include "mu/optimizer/graph_utils.h"
 #include "tensorflow/core/framework/attr_value.pb.h"
 #include "tensorflow/core/framework/graph.pb.h"
@@ -48,6 +51,27 @@ namespace {
 
 // Device type for MUSA
 constexpr char kMusaDeviceType[] = "MUSA";
+constexpr char kDisabledFusionPatternsParam[] = "disabled_fusion_patterns";
+
+std::string NormalizeFusionPatternName(const std::string& value) {
+  size_t begin = 0;
+  size_t end = value.size();
+
+  while (begin < end &&
+         std::isspace(static_cast<unsigned char>(value[begin])) != 0) {
+    ++begin;
+  }
+  while (end > begin &&
+         std::isspace(static_cast<unsigned char>(value[end - 1])) != 0) {
+    --end;
+  }
+
+  std::string normalized = value.substr(begin, end - begin);
+  std::transform(
+      normalized.begin(), normalized.end(), normalized.begin(),
+      [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  return normalized;
+}
 
 // Tri-state configuration for optimizers
 enum class TriState { kDefault = 0, kOff = 1, kOn = 2 };
@@ -319,6 +343,9 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
 
   Status Init(
       const tensorflow::RewriterConfig_CustomGraphOptimizer* config) override {
+    disabled_fusion_patterns_.clear();
+    disable_all_fusion_patterns_ = false;
+
     // Environment variable control for AMP (performance quick win)
     const char* amp_env = std::getenv("MUSA_AUTO_MIXED_PRECISION");
     if (amp_env && std::string(amp_env) == "1") {
@@ -372,6 +399,8 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
           if (param.second.b()) {
             configs_.auto_mixed_precision = TriState::kOff;
           }
+        } else if (param.first == kDisabledFusionPatternsParam) {
+          SetDisabledFusionPatterns(param.second.s());
         }
       }
     }
@@ -475,6 +504,87 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
     int fusion_applied_count = 0;
     int fusion_fallback_count = 0;
 
+    std::map<int, std::vector<const FusionPattern*>, std::greater<int>>
+        priority_groups;
+    for (const auto* pattern : patterns) {
+      if (!pattern->IsEnabled()) {
+        continue;
+      }
+      if (IsFusionPatternDisabled(pattern->GetName())) {
+        VLOG(1) << "MusaGraphOptimizer: Fusion pattern '" << pattern->GetName()
+                << "' disabled by " << kDisabledFusionPatternsParam;
+        continue;
+      }
+      priority_groups[pattern->GetPriority()].push_back(pattern);
+    }
+
+    if (priority_groups.empty()) {
+      VLOG(1) << "MusaGraphOptimizer: No enabled fusion patterns after "
+              << kDisabledFusionPatternsParam << " filtering";
+      return Status::OK();
+    }
+
+    auto run_scan =
+        [&](const std::vector<const FusionPattern*>& active_patterns,
+            bool reverse) -> bool {
+      bool pass_modified = false;
+
+      while (true) {
+        bool applied_in_sweep = false;
+        const int node_count = graph->node_size();
+
+        for (int offset = 0; offset < node_count; ++offset) {
+          const int node_idx = reverse ? (node_count - 1 - offset) : offset;
+
+          for (const auto* pattern : active_patterns) {
+            auto match_result = pattern->Match(*graph, node_idx);
+            if (!match_result.matched) {
+              continue;
+            }
+
+            if (!pattern->IsKernelAvailable()) {
+              VLOG(1) << "MusaGraphOptimizer: Pattern '" << pattern->GetName()
+                      << "' matched at node " << node_idx
+                      << " but kernel not available - using fallback";
+
+              Status status = pattern->Apply(graph, match_result);
+              if (!status.ok()) {
+                LOG(WARNING) << "MusaGraphOptimizer: Fallback for pattern '"
+                             << pattern->GetName() << "' failed: " << status;
+              }
+              fusion_fallback_count++;
+              continue;
+            }
+
+            VLOG(1) << "MusaGraphOptimizer: Applying pattern '"
+                    << pattern->GetName() << "' at node " << node_idx;
+
+            Status status = pattern->Apply(graph, match_result);
+            if (status.ok()) {
+              pass_modified = true;
+              fusion_applied_count++;
+              applied_in_sweep = true;
+              VLOG(1) << "MusaGraphOptimizer: Pattern '" << pattern->GetName()
+                      << "' applied successfully";
+              break;
+            } else {
+              LOG(WARNING) << "MusaGraphOptimizer: Pattern '"
+                           << pattern->GetName()
+                           << "' apply failed: " << status;
+            }
+          }
+
+          if (applied_in_sweep) {
+            break;
+          }
+        }
+
+        if (!applied_in_sweep) {
+          return pass_modified;
+        }
+      }
+    };
+
     bool graph_modified = true;
     int iteration = 0;
     const int kMaxIterations = 50;  // Prevent infinite loops
@@ -483,80 +593,34 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
       graph_modified = false;
       iteration++;
 
-      auto run_scan = [&](bool reverse) -> bool {
-        bool pass_modified = false;
+      for (const auto& priority_group : priority_groups) {
+        const int priority = priority_group.first;
+        const auto& active_patterns = priority_group.second;
 
-        while (true) {
-          bool applied_in_sweep = false;
-          const int node_count = graph->node_size();
+        bool priority_modified = true;
+        int priority_iteration = 0;
+        while (priority_modified && priority_iteration < kMaxIterations) {
+          priority_modified = false;
+          priority_iteration++;
 
-          for (int offset = 0; offset < node_count; ++offset) {
-            const int node_idx = reverse ? (node_count - 1 - offset) : offset;
-
-            for (const auto* pattern : patterns) {
-              if (!pattern->IsEnabled()) {
-                continue;
-              }
-
-              auto match_result = pattern->Match(*graph, node_idx);
-              if (!match_result.matched) {
-                continue;
-              }
-
-              // Check kernel availability
-              if (!pattern->IsKernelAvailable()) {
-                VLOG(1) << "MusaGraphOptimizer: Pattern '" << pattern->GetName()
-                        << "' matched at node " << node_idx
-                        << " but kernel not available - using fallback";
-
-                // Call Apply anyway to allow pattern to handle fallback
-                Status status = pattern->Apply(graph, match_result);
-                if (!status.ok()) {
-                  LOG(WARNING) << "MusaGraphOptimizer: Fallback for pattern '"
-                               << pattern->GetName() << "' failed: " << status;
-                }
-                fusion_fallback_count++;
-                continue;
-              }
-
-              VLOG(1) << "MusaGraphOptimizer: Applying pattern '"
-                      << pattern->GetName() << "' at node " << node_idx;
-
-              Status status = pattern->Apply(graph, match_result);
-              if (status.ok()) {
-                pass_modified = true;
-                fusion_applied_count++;
-                applied_in_sweep = true;
-                VLOG(1) << "MusaGraphOptimizer: Pattern '" << pattern->GetName()
-                        << "' applied successfully";
-                break;  // Restart this direction since graph was modified
-              } else {
-                LOG(WARNING)
-                    << "MusaGraphOptimizer: Pattern '" << pattern->GetName()
-                    << "' apply failed: " << status;
-              }
-            }
-
-            if (applied_in_sweep) {
-              break;
-            }
+          if (run_scan(active_patterns, false)) {
+            priority_modified = true;
+            graph_modified = true;
           }
-
-          if (!applied_in_sweep) {
-            return pass_modified;
+          if (run_scan(active_patterns, true)) {
+            priority_modified = true;
+            graph_modified = true;
           }
         }
-      };
 
-      // Conservative improvement: keep the original "restart after each
-      // successful rewrite" behavior, but exhaust both forward and reverse
-      // traversals within one outer iteration so we can expose more patterns
-      // before consuming another iteration budget.
-      if (run_scan(false)) {
-        graph_modified = true;
-      }
-      if (run_scan(true)) {
-        graph_modified = true;
+        if (priority_modified && priority_iteration >= kMaxIterations) {
+          LOG(WARNING) << "MusaGraphOptimizer: Priority " << priority
+                       << " group hit iteration limit (" << kMaxIterations
+                       << ") before reaching a fixed point";
+        } else {
+          VLOG(2) << "MusaGraphOptimizer: Priority " << priority
+                  << " group reached fixed point";
+        }
       }
     }
 
@@ -576,9 +640,51 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
   }
 
  private:
+  void SetDisabledFusionPatterns(const string& disabled_patterns) {
+    disabled_fusion_patterns_.clear();
+    disable_all_fusion_patterns_ = false;
+
+    size_t token_begin = 0;
+    while (token_begin <= disabled_patterns.size()) {
+      const size_t token_end = disabled_patterns.find(',', token_begin);
+      const string token = NormalizeFusionPatternName(
+          disabled_patterns.substr(token_begin, token_end - token_begin));
+
+      if (!token.empty()) {
+        if (token == "all") {
+          disable_all_fusion_patterns_ = true;
+          disabled_fusion_patterns_.clear();
+          VLOG(1) << "MusaGraphOptimizer: All fusion patterns disabled by "
+                  << kDisabledFusionPatternsParam;
+          return;
+        }
+        disabled_fusion_patterns_.insert(token);
+      }
+
+      if (token_end == string::npos) {
+        break;
+      }
+      token_begin = token_end + 1;
+    }
+
+    if (!disabled_fusion_patterns_.empty()) {
+      VLOG(1) << "MusaGraphOptimizer: Disabled "
+              << disabled_fusion_patterns_.size() << " fusion pattern(s) by "
+              << kDisabledFusionPatternsParam;
+    }
+  }
+
+  bool IsFusionPatternDisabled(const string& pattern_name) const {
+    return disable_all_fusion_patterns_ ||
+           disabled_fusion_patterns_.count(
+               NormalizeFusionPatternName(pattern_name)) > 0;
+  }
+
   MusaAmpConfig amp_config_;
   MusaOptimizerConfigs configs_;
   string device_type_;
+  bool disable_all_fusion_patterns_ = false;
+  std::unordered_set<string> disabled_fusion_patterns_;
 
   // Layout Optimization
   void OptimizeLayout(GraphDef* graph) {
