@@ -80,9 +80,6 @@ class FusionPattern {
   bool IsEnabled() const { return enabled_; }
 
  protected:
-  // Check whether this fusion pattern is disabled by environment variable.
-  bool IsDisabledByEnv() const;
-
   bool enabled_ = true;
 };
 

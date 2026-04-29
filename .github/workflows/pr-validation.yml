@@ -2330,7 +2330,7 @@ jobs:
           fi
 
           {
-            echo "## Training (Non-blocking)"
+            echo "## Training"
             echo
             echo "- Status: $STATUS"
             echo "- Log file: $LOG_FILE"
@@ -2367,6 +2367,10 @@ jobs:
             ${{ needs.prepare_metadata.outputs.log_root }}/training/error_logs
           if-no-files-found: warn
           retention-days: 7
+
+      - name: Fail job if training failed
+        if: always() && steps.collect.outputs.status == 'failure'
+        run: exit 1
 
   summary:
     name: Final Summary
@@ -2450,6 +2454,7 @@ jobs:
           TRAINING_STATUS="${{ needs.training.outputs.status || 'skipped' }}"
           TRAINING_RESULT="${{ needs.training.result }}"
           BASELINE_SHA="${{ needs.build_baseline.outputs.baseline_sha || 'unavailable' }}"
+          PREPARE_METADATA_RESULT="${{ needs.prepare_metadata.result }}"
 
           if [[ "$FORMAT_STATUS" == "failure" ]]; then
             FORMAT_DISPLAY="failure (non-blocking)"
@@ -2498,7 +2503,7 @@ jobs:
               {"name": "BD Model 1", "result": os.environ["BD1_STATUS"], "blocking": "yes"},
               {"name": "BD Model 2", "result": os.environ["BD2_STATUS"], "blocking": "yes"},
               {"name": "BD Model 3", "result": os.environ["BD3_STATUS"], "blocking": "yes"},
-              {"name": "Training", "result": os.environ["TRAINING_STATUS"], "blocking": "no"},
+              {"name": "Training", "result": os.environ["TRAINING_STATUS"], "blocking": "yes"},
           ]
 
           metrics = [
@@ -2617,6 +2622,8 @@ jobs:
           if [[ "$BD1_STATUS" == "failure" || "$BD1_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
           if [[ "$BD2_STATUS" == "failure" || "$BD2_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
           if [[ "$BD3_STATUS" == "failure" || "$BD3_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$TRAINING_STATUS" == "failure" || "$TRAINING_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$PREPARE_METADATA_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
 
           if [[ "$BLOCKING_FAILURE" -ne 0 ]]; then
             FINAL_STATUS="failure"

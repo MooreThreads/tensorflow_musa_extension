@@ -77,6 +77,21 @@ tf_musa.set_musa_graph_optimizer_enabled(config, enabled=True)
 tf_musa.set_musa_graph_optimizer_enabled(config, enabled=False)
 ```
 
+按名称关闭部分融合 pattern 时，可直接在 Python 配置里传参给 C++ 优化器：
+
+```python
+tf_musa.disable_musa_fusion_patterns(
+    config,
+    patterns=["MusaGeluFusion", "MusaLayerNormFusion"],
+)
+
+# 关闭所有融合 pattern
+tf_musa.disable_musa_fusion_patterns(config, patterns="all")
+
+# 清除融合 pattern 禁用列表
+tf_musa.clear_musa_disabled_fusion_patterns(config)
+```
+
 少数测试或调试场景需要强制设置 Grappler optimizer 列表时，可以额外传入 `add_to_optimizer_list=True`：
 
 ```python

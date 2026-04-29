@@ -48,9 +48,6 @@ bool HasOriginalSuffix(const std::string& node_name) {
 }  // namespace
 
 bool LinearReluFusion::IsKernelAvailable() const {
-  if (IsDisabledByEnv()) {
-    return false;
-  }
   if (!kernel_checked_) {
     kernel_available_ = true;
     kernel_checked_ = true;

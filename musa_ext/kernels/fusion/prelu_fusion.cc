@@ -111,9 +111,6 @@ const NodeDef* FindAlphaSource(const GraphDef& graph, const NodeDef* node) {
 MusaPReluFusion::MusaPReluFusion() = default;
 
 bool MusaPReluFusion::IsKernelAvailable() const {
-  if (IsDisabledByEnv()) {
-    return false;
-  }
   if (!kernel_checked_) {
     kernel_available_ = true;
     kernel_checked_ = true;

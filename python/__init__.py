@@ -29,10 +29,15 @@ Example usage:
 import logging
 
 from ._graph_optimizer import (
+    DISABLED_FUSION_PATTERNS_PARAM,
     MUSA_GRAPH_OPTIMIZER_NAME,
+    clear_musa_disabled_fusion_patterns,
     disable_musa_graph_optimizer,
+    disable_musa_fusion_patterns,
     enable_musa_graph_optimizer,
+    get_musa_disabled_fusion_patterns,
     is_musa_graph_optimizer_enabled,
+    set_musa_disabled_fusion_patterns,
     set_musa_graph_optimizer_enabled,
 )
 from ._loader import get_musa_devices, get_musa_ops, is_plugin_loaded, load_plugin
@@ -61,8 +66,13 @@ __all__ = [
     "is_plugin_loaded",
     "get_musa_devices",
     "MUSA_GRAPH_OPTIMIZER_NAME",
+    "DISABLED_FUSION_PATTERNS_PARAM",
     "set_musa_graph_optimizer_enabled",
     "enable_musa_graph_optimizer",
     "disable_musa_graph_optimizer",
     "is_musa_graph_optimizer_enabled",
+    "set_musa_disabled_fusion_patterns",
+    "disable_musa_fusion_patterns",
+    "clear_musa_disabled_fusion_patterns",
+    "get_musa_disabled_fusion_patterns",
 ]
