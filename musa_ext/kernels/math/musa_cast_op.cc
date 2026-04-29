@@ -1,7 +1,7 @@
+#include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/types.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -11,7 +11,8 @@ class MusaCastOp : public MusaOpKernel {
   explicit MusaCastOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("SrcT", &external_src_dtype_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("DstT", &external_dst_dtype_));
-    // Cache identity check for zero-copy fast path (matches TensorFlow's CastOpBase)
+    // Cache identity check for zero-copy fast path (matches TensorFlow's
+    // CastOpBase)
     is_identity_cast_ = (external_src_dtype_ == external_dst_dtype_);
   }
 
@@ -30,14 +31,14 @@ class MusaCastOp : public MusaOpKernel {
       return;
     }
 
-    // Early exit for empty tensors - still need to allocate output with correct shape
-    if (inp.NumElements() == 0) {
-      ctx->set_output(0, inp);
-      return;
-    }
-
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, inp.shape(), &output));
+
+    if (inp.NumElements() == 0) {
+      // No need to run muDNN for empty tensors. Just return the zero-element
+      // output tensor (already allocated above).
+      return;
+    }
 
     auto in_mt = CreateMTensor(inp);
     auto out_mt = CreateMTensor(*output);

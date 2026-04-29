@@ -60,5 +60,61 @@ class CastOpTest(MUSATestCase):
     """Test Int32 -> Int64 (Safe upcasting)."""
     self._test_cast(tf.int32, tf.int64)
 
+  def testEmptyTensorPreservesDstDtype(self):
+    """Empty tensor cast must output DstT dtype, not SrcT dtype.
+
+    Regression test for: Cast(bool->float) on empty tensor returned bool
+    output because the early-exit path did `set_output(0, inp)` which kept
+    the source dtype.  The fix allocates a new output with the correct DstT.
+    """
+    # Cover the exact failure case from the Dropout/Cast bug:
+    # bool -> float on an empty tensor
+    cross_type_pairs = [
+        (tf.bool,    tf.float32),
+        (tf.bool,    tf.float16),
+        (tf.bool,    tf.int32),
+        (tf.float32, tf.bool),
+        (tf.float32, tf.int32),
+        (tf.int32,   tf.float32),
+        (tf.int64,   tf.float32),
+    ]
+    empty_shapes = [
+        (0,),
+        (0, 4),
+        (2, 0, 8),
+    ]
+    for src_dtype, dst_dtype in cross_type_pairs:
+      for shape in empty_shapes:
+        with self.subTest(src=src_dtype.name, dst=dst_dtype.name, shape=shape):
+          x = tf.zeros(shape, dtype=src_dtype)
+          with tf.device('/device:MUSA:0'):
+            y = tf.cast(x, dtype=dst_dtype)
+          # Shape must be preserved
+          self.assertEqual(y.shape.as_list(), list(shape))
+          # Output dtype must be DstT, not SrcT
+          self.assertEqual(
+              y.dtype, dst_dtype,
+              msg=f"Cast({src_dtype.name}->{dst_dtype.name}) empty tensor: "
+                  f"expected output dtype {dst_dtype.name}, got {y.dtype.name}")
+
+  def testEmptyTensorInGraphMode(self):
+    """Verify empty-tensor Cast dtype is correct inside @tf.function (graph mode).
+
+    The original bug manifested during gradient computation where TF constructs
+    empty tensors for shape inference inside @tf.function.
+    """
+    @tf.function
+    def cast_in_graph(x):
+      with tf.device('/device:MUSA:0'):
+        return tf.cast(x, tf.float32)
+
+    for shape in [(0,), (0, 8), (3, 0, 4)]:
+      with self.subTest(shape=shape):
+        x = tf.zeros(shape, dtype=tf.bool)
+        y = cast_in_graph(x)
+        self.assertEqual(y.dtype, tf.float32)
+        self.assertEqual(y.shape.as_list(), list(shape))
+
+
 if __name__ == "__main__":
   tf.test.main()
