@@ -1,5 +1,0 @@
-{
-  "last_turn_at": "2026-04-29T06:47:46.817Z",
-  "turn_count": 2,
-  "last_agent_output": "已处理并 push 到远端 PR 分支了。\n\n这次冲突的核心确实是 upstream 的 `#195 Feature/reorg fusion dir` 把 fusion 实现从 `musa_ext/"
-}
