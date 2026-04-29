@@ -1,8 +1,4 @@
-<<<<<<<< HEAD:musa_ext/kernels/fusion/linear_relu_fusion.cc
-#include "kernels/fusion/linear_relu_fusion.h"
-========
-#include "mu/graph_fusion/linear_activation_fusion.h"
->>>>>>>> ad7754f (feat: switch linear relu fusion to mudnn epilogue):musa_ext/kernels/fusion/linear_activation_fusion.cc
+#include "linear_activation_fusion.h"
 
 #include <algorithm>
 #include <cmath>
@@ -63,14 +59,7 @@ std::string GetActivationType(const NodeDef& node) {
 
 }  // namespace
 
-<<<<<<<< HEAD:musa_ext/kernels/fusion/linear_relu_fusion.cc
-bool LinearReluFusion::IsKernelAvailable() const {
-========
 bool LinearActivationFusion::IsKernelAvailable() const {
-  if (IsDisabledByEnv()) {
-    return false;
-  }
->>>>>>>> ad7754f (feat: switch linear relu fusion to mudnn epilogue):musa_ext/kernels/fusion/linear_activation_fusion.cc
   if (!kernel_checked_) {
     kernel_available_ = true;
     kernel_checked_ = true;
