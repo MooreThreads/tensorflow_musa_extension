@@ -31,16 +31,14 @@ class MusaCastOp : public MusaOpKernel {
       return;
     }
 
-    // Early exit for empty tensors - must allocate output with DstT dtype,
-    // NOT return inp directly (inp has SrcT dtype, output must have DstT dtype)
-    if (inp.NumElements() == 0) {
-      Tensor* output = nullptr;
-      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, inp.shape(), &output));
-      return;
-    }
-
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, inp.shape(), &output));
+
+    if (inp.NumElements() == 0) {
+      // No need to run muDNN for empty tensors. Just return the zero-element
+      // output tensor (already allocated above).
+      return;
+    }
 
     auto in_mt = CreateMTensor(inp);
     auto out_mt = CreateMTensor(*output);
