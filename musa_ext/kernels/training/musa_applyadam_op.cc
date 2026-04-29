@@ -296,7 +296,7 @@ class MusaResourceApplyAdamOp : public MusaOpKernel {
     mTensor t_update = CreateMTensor(temp_storage.back(), format_);
     b_op.SetMode(::musa::dnn::Binary::Mode::DIV);
     OP_REQUIRES_OK(ctx,
-                   require_success(b_op.Run(handle, t_update, t_m, t_sqrt_v),
+                   require_success(b_op.Run(handle, t_update, t_m, t_v_plus_eps),
                                    "DIV update"));
 
     // Step 5: update = update * alpha
