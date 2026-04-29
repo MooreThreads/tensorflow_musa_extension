@@ -221,9 +221,6 @@ std::string BuildTensorDotBiasBackendConfig(const std::vector<int>& axes_a,
 MusaTensorDotBiasFusion::MusaTensorDotBiasFusion() = default;
 
 bool MusaTensorDotBiasFusion::IsKernelAvailable() const {
-  if (IsDisabledByEnv()) {
-    return false;
-  }
   if (!kernel_checked_) {
     kernel_available_ = true;
     kernel_checked_ = true;

@@ -253,9 +253,6 @@ std::vector<std::string> CollectNodesWithPrefix(const GraphDef& graph,
 MusaNormalizeFusion::MusaNormalizeFusion() = default;
 
 bool MusaNormalizeFusion::IsKernelAvailable() const {
-  if (IsDisabledByEnv()) {
-    return false;
-  }
   if (!kernel_checked_) {
     kernel_available_ = true;
     kernel_checked_ = true;

@@ -63,6 +63,22 @@ tf_musa.set_musa_graph_optimizer_enabled(config, enabled=True)
 # tf_musa.set_musa_graph_optimizer_enabled(config, enabled=False)
 ```
 
+Disable selected fusion patterns from Python by passing parameters to the C++
+optimizer:
+
+```python
+tf_musa.disable_musa_fusion_patterns(
+    config,
+    patterns=["MusaGeluFusion", "MusaLayerNormFusion"],
+)
+
+# Disable all fusion patterns
+tf_musa.disable_musa_fusion_patterns(config, patterns="all")
+
+# Clear the disabled fusion pattern list
+tf_musa.clear_musa_disabled_fusion_patterns(config)
+```
+
 ## Build plugin from source (optional)
 
 Produces `build/libmusa_plugin.so` only (no wheel):

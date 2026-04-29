@@ -361,9 +361,6 @@ std::string FloatToString(float value) {
 MusaFuseLayerNormV2Fusion::MusaFuseLayerNormV2Fusion() = default;
 
 bool MusaFuseLayerNormV2Fusion::IsKernelAvailable() const {
-  if (IsDisabledByEnv()) {
-    return false;
-  }
   if (!kernel_checked_) {
     kernel_available_ = true;
     kernel_checked_ = true;
