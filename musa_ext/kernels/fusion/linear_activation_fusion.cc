@@ -1,4 +1,4 @@
-#include "mu/graph_fusion/linear_activation_fusion.h"
+#include "linear_activation_fusion.h"
 
 #include <algorithm>
 #include <cmath>

@@ -1,7 +1,7 @@
 #include <string>
 #include <vector>
 
-#include "mu/graph_fusion/fusion_pattern_manager.h"
+#include "fusion_pattern_manager.h"
 
 namespace tensorflow {
 namespace grappler {
