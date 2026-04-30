@@ -7,12 +7,12 @@ namespace tensorflow {
 namespace grappler {
 namespace musa_fusion {
 
-// Computes: MatMul + BiasAdd + Relu
+// Computes: MatMul + BiasAdd + Activation
 
-class LinearReluFusion : public FusionPattern {
+class LinearActivationFusion : public FusionPattern {
  public:
-  LinearReluFusion() = default;
-  ~LinearReluFusion() override = default;
+  LinearActivationFusion() = default;
+  ~LinearActivationFusion() override = default;
 
   FusionMatchResult Match(const GraphDef& graph,
                           int start_node_idx) const override;
@@ -24,11 +24,11 @@ class LinearReluFusion : public FusionPattern {
 
   bool IsKernelAvailable() const override;
 
-  std::string GetName() const override { return "LinearReluFusion"; }
+  std::string GetName() const override { return "LinearActivationFusion"; }
 
   std::string GetFallbackReason() const override {
     if (!kernel_available_) {
-      return "LinearReluFusion kernel not available on this device";
+      return "LinearActivationFusion kernel not available on this device";
     }
     return "";
   }

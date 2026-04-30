@@ -25,12 +25,13 @@ namespace tensorflow {
 namespace grappler {
 namespace musa {
 
-// Check if MUSA_DUMP_GRAPHDEF environment variable is set
+// Check if MUSA_DUMP_GRAPHDEF environment variable is set.
 bool IsGraphDefDumpingEnabled();
 
-// Dump GraphDef to a pbtxt file with a descriptive name
-// The filename will be: {prefix}_{stage_description}.pbtxt
-// Example: musa_optimizer_before_layout.pbtxt
+// Dump GraphDef to a binary pb file.
+// When MUSA_DUMP_GRAPHDEF_SLIM=1 is set, an additional
+// {prefix}_{stage_description}.slim.pb artifact is emitted with trimmed metadata
+// and truncated Const payloads for faster inspection.
 Status DumpGraphDef(const GraphDef& graph_def, const std::string& prefix,
                     const std::string& stage_description);
 

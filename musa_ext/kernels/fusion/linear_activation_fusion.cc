@@ -1,6 +1,7 @@
-#include "kernels/fusion/linear_relu_fusion.h"
+#include "linear_activation_fusion.h"
 
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 #include "tensorflow/core/framework/attr_value.pb.h"
@@ -45,9 +46,20 @@ bool HasOriginalSuffix(const std::string& node_name) {
                            kOriginalSuffix.size(), kOriginalSuffix) == 0;
 }
 
+bool IsActivationNode(const NodeDef& node) {
+  return IsOp(node, "Relu");
+}
+
+std::string GetActivationType(const NodeDef& node) {
+  if (IsOp(node, "Relu")) {
+    return "relu";
+  }
+  return "";
+}
+
 }  // namespace
 
-bool LinearReluFusion::IsKernelAvailable() const {
+bool LinearActivationFusion::IsKernelAvailable() const {
   if (!kernel_checked_) {
     kernel_available_ = true;
     kernel_checked_ = true;
@@ -55,24 +67,27 @@ bool LinearReluFusion::IsKernelAvailable() const {
   return kernel_available_;
 }
 
-FusionMatchResult LinearReluFusion::Match(const GraphDef& graph,
-                                          int start_node_idx) const {
+FusionMatchResult LinearActivationFusion::Match(const GraphDef& graph,
+                                                int start_node_idx) const {
   FusionMatchResult result;
   if (start_node_idx < 0 || start_node_idx >= graph.node_size()) {
     return result;
   }
 
-  const NodeDef& relu_node = graph.node(start_node_idx);
+  const NodeDef& activation_node = graph.node(start_node_idx);
 
-  // match start with relu node
-  if (!IsOp(relu_node, "Relu")) return result;
-  if (HasOriginalSuffix(relu_node.name())) return result;
+  // Match starts from activation node.
+  if (!IsActivationNode(activation_node)) return result;
+  if (HasOriginalSuffix(activation_node.name())) return result;
+
+  const std::string activation_type = GetActivationType(activation_node);
+  if (activation_type.empty()) return result;
 
   // find BiasAdd node
   const NodeDef* bias_add_node = nullptr;
 
-  if (relu_node.input_size() > 0) {
-    const NodeDef* input_node = FindProducer(graph, relu_node.input(0));
+  if (activation_node.input_size() > 0) {
+    const NodeDef* input_node = FindProducer(graph, activation_node.input(0));
     if (input_node &&
         (IsOp(*input_node, "BiasAdd") || IsOp(*input_node, "Add") ||
          IsOp(*input_node, "AddV2"))) {
@@ -105,11 +120,11 @@ FusionMatchResult LinearReluFusion::Match(const GraphDef& graph,
 
   // record into result
   result.matched = true;
-  result.matched_nodes.push_back(&relu_node);
+  result.matched_nodes.push_back(&activation_node);
   result.matched_nodes.push_back(bias_add_node);
   result.matched_nodes.push_back(matmul_node);
 
-  result.captured_nodes["output"] = &relu_node;
+  result.captured_nodes["output"] = &activation_node;
   result.captured_nodes["bias_add"] = bias_add_node;
   result.captured_nodes["matmul"] = matmul_node;
   result.captured_nodes["bias"] = bias_node;
@@ -117,10 +132,11 @@ FusionMatchResult LinearReluFusion::Match(const GraphDef& graph,
   return result;
 }
 
-Status LinearReluFusion::Apply(GraphDef* graph,
-                               const FusionMatchResult& match_result) const {
+Status LinearActivationFusion::Apply(
+    GraphDef* graph, const FusionMatchResult& match_result) const {
   if (!match_result.IsValid()) {
-    return Status(error::INVALID_ARGUMENT, "Invalid LinearRelu match result");
+    return Status(error::INVALID_ARGUMENT,
+                  "Invalid LinearActivation match result");
   }
 
   if (!IsKernelAvailable()) {
@@ -136,20 +152,25 @@ Status LinearReluFusion::Apply(GraphDef* graph,
       matmul_it == match_result.captured_nodes.end() ||
       bias_it == match_result.captured_nodes.end()) {
     return Status(error::INVALID_ARGUMENT,
-                  "Missing required nodes in LinearRelu pattern");
+                  "Missing required nodes in LinearActivation pattern");
   }
 
   const NodeDef* output_node = output_it->second;
   const NodeDef* matmul_node = matmul_it->second;
   const NodeDef* bias_node = bias_it->second;
+  const std::string activation_type = GetActivationType(*output_node);
+  if (activation_type.empty()) {
+    return Status(error::INVALID_ARGUMENT,
+                  "Unsupported activation in LinearActivation pattern");
+  }
 
   const std::string original_name = output_node->name();
   const std::string original_output_name = original_name + "_original";
 
   // Check if this output node has already been fused (avoid duplicates)
   for (const auto& node : graph->node()) {
-    if (node.name() == original_name && node.op() == "MusaLinearRelu") {
-      VLOG(1) << "MusaLinearRelu: Output node " << original_name
+    if (node.name() == original_name && node.op() == "MusaLinearActivation") {
+      VLOG(1) << "MusaLinearActivation: Output node " << original_name
               << " is already a fused node, skipping";
       return Status::OK();
     }
@@ -168,8 +189,8 @@ Status LinearReluFusion::Apply(GraphDef* graph,
                   "Failed to find output node in graph: " + original_name);
   }
 
-  VLOG(1) << "LinearReluFusion: Replacing " << original_name
-          << " with MusaLinearRelu";
+  VLOG(1) << "LinearActivationFusion: Replacing " << original_name
+          << " with MusaLinearActivation(" << activation_type << ")";
 
   NodeDef* original_output_node = graph->mutable_node(output_node_idx);
   const std::string output_device = original_output_node->device();
@@ -192,10 +213,10 @@ Status LinearReluFusion::Apply(GraphDef* graph,
 
   NodeDef* fused_node = graph->add_node();
   fused_node->set_name(original_name);
-  fused_node->set_op("MusaLinearRelu");
+  fused_node->set_op("MusaLinearActivation");
   fused_node->set_device(output_device);
 
-  // MusaLinearRelu inputs: a, b, bias
+  // MusaLinearActivation inputs: a, b, bias
   fused_node->add_input(matmul_node->input(0));
   fused_node->add_input(matmul_node->input(1));
   // bias input might need port handling if it's more than just a name
@@ -208,6 +229,8 @@ Status LinearReluFusion::Apply(GraphDef* graph,
 
   auto* attr = fused_node->mutable_attr();
   (*attr)["T"] = output_dtype;
+  (*attr)["activation"].set_s(activation_type);
+  (*attr)["alpha"].set_f(0.0f);
 
   if (matmul_node->attr().count("transpose_a")) {
     (*attr)["transpose_a"] = matmul_node->attr().at("transpose_a");
@@ -230,17 +253,17 @@ Status LinearReluFusion::Apply(GraphDef* graph,
       {matmul_node->input(0), matmul_node->input(1), bias_node->name(),
        original_name});
 
-  VLOG(1) << "LinearReluFusion: Successfully replaced '" << original_name
-          << "' with MusaLinearRelu";
+  VLOG(1) << "LinearActivationFusion: Successfully replaced '"
+          << original_name << "' with MusaLinearActivation";
 
   return Status::OK();
 }
 
 // Register the pattern
-REGISTER_FUSION_PATTERN(LinearReluFusion);
+REGISTER_FUSION_PATTERN(LinearActivationFusion);
 
 // Register kernel availability
-REGISTER_FUSION_KERNEL(LinearReluFusion, []() { return true; });
+REGISTER_FUSION_KERNEL(LinearActivationFusion, []() { return true; });
 
 }  // namespace musa_fusion
 }  // namespace grappler
