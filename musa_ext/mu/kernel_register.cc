@@ -1,3 +1,13 @@
+// C kernel registration hook for TensorFlow Pluggable / modular kernel paths.
+//
+// Current MUSA op kernels are registered with C++ static initialization via
+// REGISTER_KERNEL_BUILDER in individual `*.cc` files; that runs when
+// `libmusa_plugin.so` is loaded, without calling `TF_InitKernel()`.
+//
+// The vector below is only populated if code uses the `MUSA_KERNEL_REGISTER`
+// macro in `kernel_register.h` to defer registration to an explicit
+// `TF_InitKernel()` call. Reserved for future C-API-based kernel registration.
+
 #include "kernel_register.h"
 
 #include <algorithm>

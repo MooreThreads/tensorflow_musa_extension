@@ -35,12 +35,27 @@ LICENSE = "Apache 2.0"
 PLUGIN_LIBRARY = "libmusa_plugin.so"
 BUILD_DIR = "build"
 
-# Required TensorFlow version
-REQUIRED_TF_VERSION = "2.6.1"
+# Default TensorFlow version (used if TENSORFLOW_MUSA_TARGET_TF is unset)
+_DEFAULT_TF_VERSION = "2.6.1"
+
+
+def _supported_tf_versions():
+    """Comma-separated list from TENSORFLOW_MUSA_TARGET_TF or default."""
+    raw = os.environ.get("TENSORFLOW_MUSA_TARGET_TF", _DEFAULT_TF_VERSION)
+    return {v.strip() for v in raw.split(",") if v.strip()}
 
 
 def check_tensorflow_version():
-    """Check if TensorFlow is installed with the required version.
+    """Check if TensorFlow is installed and matches the supported set.
+
+    Set `TENSORFLOW_MUSA_TARGET_TF` to a comma-separated list, e.g.
+    `2.6.1` or `2.6.1,2.8.0` to build against one of those versions.
+    The installed `tf.__version__` must be exactly in that set.
+
+    The allowlist is for **this build** only: each produced wheel / `libmusa_plugin.so`
+    must still be **compiled and tested** against the TensorFlow you run with.
+    A comma-separated set does *not* mean a single binary safely works against
+    multiple TF minor versions (headers/ABI/Pluggable C API may differ).
 
     Returns:
         tuple: (is_installed, version_string or None)
@@ -48,23 +63,26 @@ def check_tensorflow_version():
     Raises:
         SystemExit: If TensorFlow is installed but version doesn't match.
     """
+    allowed = _supported_tf_versions()
     try:
         import tensorflow as tf
         version = tf.__version__
 
-        if version != REQUIRED_TF_VERSION:
-            print(f"ERROR: TensorFlow version mismatch!")
-            print(f"  Required: {REQUIRED_TF_VERSION}")
+        if version not in allowed:
+            print("ERROR: TensorFlow version mismatch!")
+            print(f"  Allowed: {sorted(allowed)}")
             print(f"  Installed: {version}")
-            print(f"  Please install the correct version: pip install tensorflow=={REQUIRED_TF_VERSION}")
+            print("  Set TENSORFLOW_MUSA_TARGET_TF to include your version, e.g.:")
+            print("    export TENSORFLOW_MUSA_TARGET_TF=2.6.1,2.8.0")
+            print("  Or: pip install tensorflow==<one of the allowed versions>")
             sys.exit(1)
 
-        print(f"TensorFlow {version} found - OK")
+        print(f"TensorFlow {version} found - OK (allowed: {sorted(allowed)})")
         return True, version
     except ImportError:
-        print(f"WARNING: TensorFlow not installed.")
-        print(f"  Required version: {REQUIRED_TF_VERSION}")
-        print(f"  Please install: pip install tensorflow=={REQUIRED_TF_VERSION}")
+        print("WARNING: TensorFlow not installed.")
+        print(f"  Allowed versions: {sorted(allowed)}")
+        print("  See docs/COMPATIBILITY.md for the build matrix.")
         return False, None
 
 

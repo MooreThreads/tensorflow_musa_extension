@@ -85,8 +85,8 @@ class MusaSelectOp : public MusaOpKernel {
     }
     if (output->NumElements() == 0) return;
 
-    MusaDevice* device = reinterpret_cast<MusaDevice*>(ctx->device());
-    auto& handle = device->mudnn_handle();
+    MUSA_OP_REQUIRES_CPP_MUSA_DEVICE(ctx);
+    auto& handle = GetHandleByCtx(ctx);
 
     std::vector<std::vector<int64_t>> shape_storage;
     shape_storage.reserve(10);

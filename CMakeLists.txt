@@ -104,7 +104,13 @@ link_directories("${MUSA_PATH}/lib" "${MUSA_PATH}/lib64" "${TF_LIB_DIR}")
 file(GLOB_RECURSE CPP_SOURCES
     "${SRC_ROOT}/*.cc"
     "${SRC_ROOT}/mu/*.cc"
+<<<<<<< HEAD
     "${KERNELS_ROOT}/*.cc"
+=======
+    "${SRC_ROOT}/mu/tf_compat/*.cc"
+    "${SRC_ROOT}/mu/collective/*.cc"
+    "${SRC_ROOT}/kernels/*.cc"
+>>>>>>> aa7b3cc (feat(musa): pluggable SE path + MemberHack stream unwrap)
 )
 
 # filter out disabled kernels (if any)

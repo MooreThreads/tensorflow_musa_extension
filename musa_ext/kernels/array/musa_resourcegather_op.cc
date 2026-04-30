@@ -226,8 +226,9 @@ class MusaResourceScatterAddOp : public MusaOpKernel {
     const Tensor& updates = c->input(2);
 
     if (indices.NumElements() > 0) {
+      MUSA_OP_REQUIRES_CPP_MUSA_DEVICE(c);
       auto& h = GetHandleByCtx(c);
-      auto* device = static_cast<MusaDevice*>(c->device());
+      auto* device = TryGetMusaDeviceFromContext(c);
       auto maintainer = device->GetMemMaintainer(
           [](size_t s) { return ::musa::dnn::MemoryHandler(); });
 
@@ -264,6 +265,7 @@ class MusaAssignUpdateVariableOp : public MusaOpKernel {
     const Tensor& value = c->input(1);
 
     if (var_tensor->NumElements() > 0) {
+      MUSA_OP_REQUIRES_CPP_MUSA_DEVICE(c);
       auto& h = GetHandleByCtx(c);
       mBinary op;
       MTOP_CHECK_OK(op.SetMode(BMODE), "SetMode", c);

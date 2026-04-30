@@ -39,9 +39,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from musa_test_utils import load_musa_plugin
 
 
-tf.disable_eager_execution()
-
-
 def build_graph_def() -> graph_pb2.GraphDef:
     with tf.Graph().as_default() as graph:
         with tf.device('/device:MUSA:0'):
@@ -186,4 +183,5 @@ def main() -> None:
 
 
 if __name__ == '__main__':
+    tf.disable_eager_execution()
     main()

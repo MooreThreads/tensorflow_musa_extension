@@ -1,6 +1,11 @@
 #ifndef TENSORFLOW_MUSA_MU_KERNEL_REGISTER_H_
 #define TENSORFLOW_MUSA_MU_KERNEL_REGISTER_H_
 
+// Optional deferred kernel registration. Most MUSA kernels use
+// `REGISTER_KERNEL_BUILDER` in their translation units. Use
+// `MUSA_KERNEL_REGISTER` only when you need registration to run from
+// `TF_InitKernel()` (e.g. C API kernel builders).
+
 #include "../kernels/utils_op.h"
 #include "./device_register.h"
 

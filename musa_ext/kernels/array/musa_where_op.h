@@ -102,6 +102,10 @@ struct Where {
       return Status::OK();
     }
 
+    if (TryGetMusaDeviceFromContext(ctx) == nullptr) {
+      return MusaCppDevicePathRequiredError();
+    }
+
     musaStream_t stream = GetMusaStreamByCtx(ctx);
     const int64_t num_items = input.size();
 
@@ -128,7 +132,7 @@ struct Where {
     int dim = 0;
     cum_op.SetDim(dim);
 
-    auto* musa_device = static_cast<MusaDevice*>(ctx->device());
+    MusaDevice* musa_device = TryGetMusaDeviceFromContext(ctx);
     std::list<Tensor> workspace_tensors;
     auto mem_alloc_func =
         [ctx, &workspace_tensors](size_t size) -> ::musa::dnn::MemoryHandler {

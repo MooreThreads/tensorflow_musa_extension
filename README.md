@@ -11,11 +11,15 @@
 
 ## 环境要求
 
-- CMake ≥ 3.10，Make，GCC/G++（与 TensorFlow 2.6.1 wheel ABI 一致）
+- CMake ≥ 3.10，Make，GCC/G++（与目标 TensorFlow wheel 的 ABI 一致，见 [版本与构建矩阵](docs/COMPATIBILITY.md)）
 - MUSA SDK（默认路径 `/usr/local/musa`）：Runtime、muBLAS、muDNN
 - Python ≥ 3.7
-- **TensorFlow == 2.6.1**（须与此版本一致）
+- **TensorFlow**：默认以 **2.6.1** 为验证基线；构建时通过环境变量 **`TENSORFLOW_MUSA_TARGET_TF`** 声明允许的版本（逗号分隔，如 `2.6.1` 或 `2.6.1,2.8.0`），已安装的 `tf.__version__` 须在该集合内
 - NumPy ≥ 1.19.0
+
+同一份插件需与构建时所用 TensorFlow **主/次版本** 匹配；多版本请分别构建 wheel。细节见 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)。
+
+**PluggableDevice / `SE_InitPlugin`（实验性）**：支持 TensorFlow StreamExecutor C API 入口与 `MUSA_ENABLE_SE_PLUGIN` 门控，与默认 C++ `MusaDevice` 路径**互斥**；`MUSA_ENABLE_SE_PLUGIN=1` 须在**加载 `libmusa_plugin.so` 之前**设置。全量算子仍以 C++ 路径为主，详见 [COMPATIBILITY](docs/COMPATIBILITY.md)。CI 固定构建与 pytest 命令见 [docs/CI.md](docs/CI.md)。
 
 ## 安装（推荐：Wheel）
 
