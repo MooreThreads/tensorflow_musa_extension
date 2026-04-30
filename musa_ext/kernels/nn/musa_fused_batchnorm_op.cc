@@ -1,5 +1,6 @@
 #include <vector>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/common_shape_fns.h"
 #include "tensorflow/core/framework/numeric_types.h"
@@ -7,7 +8,6 @@
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/framework/tensor.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -167,6 +167,8 @@ class MusaFusedBatchNormGradOp : public MusaOpKernel {
     auto stream = device->GetStream();
     handle.SetAllowTF32(false);
 
+    musaMemsetAsync(const_cast<char*>(dx->tensor_data().data()), 0,
+                    dx->TotalBytes(), stream);
     musaMemsetAsync(d_scale->flat<float>().data(), 0,
                     d_scale->NumElements() * sizeof(float), stream);
     musaMemsetAsync(d_offset->flat<float>().data(), 0,
