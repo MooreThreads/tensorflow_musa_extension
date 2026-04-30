@@ -275,18 +275,17 @@ class MusaResourceApplyAdamOp : public MusaOpKernel {
                                            v_t.shape(), &temp_storage.back()));
     mTensor t_sqrt_v = CreateMTensor(temp_storage.back(), format_);
     u_op.SetMode(::musa::dnn::Unary::Mode::SQRT);
-    OP_REQUIRES_OK(
-        ctx,
-        require_success(u_op.Run(handle, t_sqrt_v, t_v), "SQRT v"));
-    
+    OP_REQUIRES_OK(ctx,
+                   require_success(u_op.Run(handle, t_sqrt_v, t_v), "SQRT v"));
+
     temp_storage.emplace_back();
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
                                            v_t.shape(), &temp_storage.back()));
     mTensor t_v_plus_eps = CreateMTensor(temp_storage.back(), format_);
     b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(ctx,
-                   require_success(b_op.Run(handle, t_v_plus_eps, t_sqrt_v, t_eps),
-                                   "ADD epsilon"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_v_plus_eps, t_sqrt_v, t_eps),
+                             "ADD epsilon"));
 
     // Step 4: update = m / denom
     temp_storage.emplace_back();
@@ -295,9 +294,9 @@ class MusaResourceApplyAdamOp : public MusaOpKernel {
                                       &temp_storage.back()));
     mTensor t_update = CreateMTensor(temp_storage.back(), format_);
     b_op.SetMode(::musa::dnn::Binary::Mode::DIV);
-    OP_REQUIRES_OK(ctx,
-                   require_success(b_op.Run(handle, t_update, t_m, t_sqrt_v),
-                                   "DIV update"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_update, t_m, t_v_plus_eps),
+                             "DIV update"));
 
     // Step 5: update = update * alpha
     temp_storage.emplace_back();

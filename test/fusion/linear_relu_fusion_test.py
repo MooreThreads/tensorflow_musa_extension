@@ -13,7 +13,7 @@
 # limitations under the License.
 # ==============================================================================
 
-"""Tests for Linear+Relu fusion."""
+"""Tests for Linear+Activation fusion."""
 
 import os
 import numpy as np
@@ -40,8 +40,8 @@ def create_config_with_musa_optimizer():
     return config
 
 
-class LinearReluFusionTest(MUSATestCase):
-    """Tests for Linear+Relu fusion."""
+class LinearActivationFusionTest(MUSATestCase):
+    """Tests for Linear+Activation fusion."""
 
     def test_linear_relu_fusion_basic(self):
         """Test Linear+Relu pattern fusion."""
@@ -77,7 +77,7 @@ class LinearReluFusionTest(MUSATestCase):
                 w = tf.constant(w_np, dtype=tf.float32, name="w")
                 b = tf.constant(b_np, dtype=tf.float32, name="b")
 
-                # This pattern should be matched by LinearReluFusion
+                # This pattern should be matched by LinearActivationFusion
                 mm_musa = tf.matmul(x, w)
                 bias_musa = tf.nn.bias_add(mm_musa, b)
                 relu_out = tf.nn.relu(bias_musa)
@@ -93,7 +93,7 @@ class LinearReluFusionTest(MUSATestCase):
         self.assertAllClose(actual_out, expected_out.numpy(), rtol=1e-5, atol=1e-5)
 
     def test_linear_relu_fusion_applied(self):
-        """Verify that Linear+Relu fusion is applied: MusaLinearRelu node exists in optimized graph."""
+        """Verify that Linear+Relu fusion is applied as MusaLinearActivation."""
         m, k, n = 4, 8, 16
         x_np = np.random.randn(m, k).astype(np.float32)
         w_np = np.random.randn(k, n).astype(np.float32)
@@ -123,11 +123,11 @@ class LinearReluFusionTest(MUSATestCase):
         has_fused_node = False
         for partition_graph in run_metadata.partition_graphs:
             for node in partition_graph.node:
-                if node.op == "MusaLinearRelu":
+                if node.op == "MusaLinearActivation":
                     has_fused_node = True
                     break
 
-        self.assertTrue(has_fused_node, "MusaLinearRelu fusion was NOT applied to the graph")
+        self.assertTrue(has_fused_node, "MusaLinearActivation fusion was NOT applied to the graph")
 
     def test_linear_relu_fusion_various_batch_sizes(self):
         """Test fusion correctness across several batch sizes."""
@@ -200,11 +200,11 @@ class LinearReluFusionTest(MUSATestCase):
         has_fused_node = False
         for partition_graph in run_metadata.partition_graphs:
             for node in partition_graph.node:
-                if node.op == "MusaLinearRelu":
+                if node.op == "MusaLinearActivation":
                     has_fused_node = True
                     break
 
-        self.assertFalse(has_fused_node, "MusaLinearRelu fusion should NOT be applied when an intervening op exists")
+        self.assertFalse(has_fused_node, "MusaLinearActivation fusion should NOT be applied when an intervening op exists")
 
     def test_linear_relu_fusion_dtypes(self):
         """Test fusion correctness across multiple dtypes: float32, float16, bfloat16."""

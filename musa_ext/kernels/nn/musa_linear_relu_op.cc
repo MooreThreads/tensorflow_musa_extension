@@ -1,6 +1,5 @@
 #include <mudnn.h>
 #include <mudnn_xmma.h>
-#include <musa_runtime.h>
 
 #include <cstdlib>
 
@@ -23,23 +22,24 @@ inline bool ResolveTF32Enabled() {
 
 }  // namespace
 
-// The fused op for MusaLinearRelu, which computes MatMul + BiasAdd + Relu.
-// Write MatMul directly into the final output and then apply the fused epilogue
-// in-place to avoid an additional large temporary tensor and two extra mudnn
-// launches.
+// The fused op for MusaLinearActivation, which computes
+// MatMul + BiasAdd + Activation.
+// MatMul + BiasAdd + Relu is executed by mudnn BatchMatMul RunLt with a
+// RELU_BIAS epilogue.
 
 template <typename T>
-void LaunchBiasAddReluKernel(const T* x, const T* bias, T* output,
-                             int64_t n_elements, int64_t n_cols,
-                             musaStream_t stream);
-
-template <typename T>
-class MusaLinearReluOp : public MusaOpKernel {
+class MusaLinearActivationOp : public MusaOpKernel {
  public:
-  explicit MusaLinearReluOp(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {
+  explicit MusaLinearActivationOp(OpKernelConstruction* ctx)
+      : MusaOpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("transpose_a", &trans_a_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("transpose_b", &trans_b_));
-
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("activation", &activation_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("alpha", &alpha_));
+    OP_REQUIRES(ctx, activation_ == "relu",
+                errors::InvalidArgument(
+                    "Unsupported activation for MusaLinearActivation: ",
+                    activation_));
     static const bool tf32_enabled_global = ResolveTF32Enabled();
     tf32_enabled_ = tf32_enabled_global;
   }
@@ -97,51 +97,84 @@ class MusaLinearReluOp : public MusaOpKernel {
 
     ::musa::dnn::Status status;
 
-    if (in0.dims() == 2 && in1.dims() == 2) {
-      mMatMul op;
-      op.SetTranspose(trans_a_, trans_b_);
-      op.SetAlpha(1.0);
-      op.SetBeta(0.0);
-      status = op.Run(handle, mt_out, mt_a, mt_b);
-    } else {
-      mBatchMatMul op;
-      op.SetTranspose(trans_a_, trans_b_);
-      op.SetAlpha(1.0);
-      op.SetBeta(0.0);
-      const int64_t out_batch = bcast.output_batch_shape().num_elements();
+    mTensor mt_bias = CreateMTensor(bias_input);
 
-      auto ReshapeTo3D = [out_batch](mTensor& mt, const Tensor& t) {
-        const int64_t dims = t.dims();
-        const int64_t rows = t.dim_size(dims - 2);
-        const int64_t cols = t.dim_size(dims - 1);
-        const int64_t batch = t.NumElements() / (rows * cols);
-        if (dims != 3 || (batch == 1 && out_batch > 1)) {
-          mt.SetNdInfo(
-              {batch == 1 && out_batch > 1 ? out_batch : batch, rows, cols},
-              {batch == 1 && out_batch > 1 ? 0 : rows * cols, cols, 1});
-        }
-      };
-      ReshapeTo3D(mt_a, in0);
-      ReshapeTo3D(mt_b, in1);
-      mt_out.SetNdInfo({out_batch, m, n}, {m * n, n, 1});
-      status = op.Run(handle, mt_out, mt_a, mt_b);
+    mBatchMatMul op;
+    const auto compute_mode =
+        (!tf32_enabled_ && (in0.dtype() == DT_FLOAT || in0.dtype() == DT_DOUBLE))
+            ? mBatchMatMul::ComputeMode::SCALAR
+            : mBatchMatMul::ComputeMode::TENSOR;
+    status = op.SetComputeMode(compute_mode);
+    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
+                errors::Internal(
+                    "muDNN BatchMatMul SetComputeMode failed in LinearActivation."));
+    status = op.SetTranspose(trans_a_, trans_b_);
+    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
+                errors::Internal(
+                    "muDNN BatchMatMul SetTranspose failed in LinearActivation."));
+    status = op.SetAlpha(1.0);
+    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
+                errors::Internal(
+                    "muDNN BatchMatMul SetAlpha failed in LinearActivation."));
+    status = op.SetBeta(0.0);
+    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
+                errors::Internal(
+                    "muDNN BatchMatMul SetBeta failed in LinearActivation."));
+    status = op.SetGamma(1.0);
+    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
+                errors::Internal(
+                    "muDNN BatchMatMul SetGamma failed in LinearActivation."));
+
+    const int64_t out_batch = bcast.output_batch_shape().num_elements();
+
+    auto ReshapeTo3D = [out_batch](mTensor& mt, const Tensor& t) {
+      const int64_t dims = t.dims();
+      const int64_t rows = t.dim_size(dims - 2);
+      const int64_t cols = t.dim_size(dims - 1);
+      const int64_t batch = t.NumElements() / (rows * cols);
+      if (dims != 3 || (batch == 1 && out_batch > 1)) {
+        mt.SetNdInfo(
+            {batch == 1 && out_batch > 1 ? out_batch : batch, rows, cols},
+            {batch == 1 && out_batch > 1 ? 0 : rows * cols, cols, 1});
+      }
+    };
+    ReshapeTo3D(mt_a, in0);
+    ReshapeTo3D(mt_b, in1);
+    mt_out.SetNdInfo({out_batch, m, n}, {m * n, n, 1});
+
+    if (!tf32_enabled_) {
+      status = op.RunWithBiasAdd(handle, mt_out, mt_a, mt_b, mt_bias);
+      OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
+                  errors::Internal(
+                      "MUSA BatchMatMul bias add execution failed in "
+                      "LinearActivation."));
+
+      mUnary relu_op;
+      status = relu_op.SetMode(::musa::dnn::Unary::Mode::RELU);
+      OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
+                  errors::Internal(
+                      "muDNN Unary SetMode(RELU) failed in LinearActivation."));
+      status = relu_op.Run(handle, mt_out, mt_out);
+      OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
+                  errors::Internal(
+                      "MUSA Relu execution failed in LinearActivation."));
+      return;
     }
+
+    ::musa::dnn::MatMulLtParam param;
+    status = param.SetEpilogue(
+        ::musa::dnn::MatMulLtParam::MatMulLtEpilogueMode::
+            MATMULLT_EPILOGUE_RELU_BIAS);
+    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
+                errors::Internal(
+                    "muDNN MatMulLtParam SetEpilogue failed in LinearActivation."));
+
+    status = op.RunLt(handle, mt_out, mt_a, mt_b, mt_out, mt_bias, param);
 
     OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
                 errors::Internal(
-                    "MUSA MatMul/BatchMatMul execution failed in LinearRelu."));
-
-    const T* bias_ptr = bias_input.flat<T>().data();
-    T* out_ptr = output->flat<T>().data();
-    musaStream_t stream = GetMusaStreamByCtx(ctx);
-    LaunchBiasAddReluKernel(out_ptr, bias_ptr, out_ptr, output->NumElements(),
-                            output_shape.dim_size(channel_dim), stream);
-
-    const musaError_t launch_status = musaGetLastError();
-    OP_REQUIRES(ctx, launch_status == musaSuccess,
-                errors::Internal("MUSA BiasAddRelu kernel launch failed in "
-                                 "LinearRelu: ",
-                                 musaGetErrorString(launch_status)));
+                    "MUSA BatchMatMul epilogue relu execution failed in "
+                    "LinearActivation."));
   }
 
   bool IsExpensive() override { return true; }
@@ -149,28 +182,32 @@ class MusaLinearReluOp : public MusaOpKernel {
  private:
   bool trans_a_ = false;
   bool trans_b_ = false;
-  bool tf32_enabled_ = false;
+  bool tf32_enabled_ = false;  // TF32 acceleration enabled by default
+  std::string activation_ = "relu";
+  float alpha_ = 0.0f;
 };
 
-#define REGISTER_MUSA_LINEAR_RELU(TYPE)                                \
+#define REGISTER_MUSA_LINEAR_ACTIVATION(TYPE)                                \
   REGISTER_KERNEL_BUILDER(                                             \
-      Name("MusaLinearRelu").Device("MUSA").TypeConstraint<TYPE>("T"), \
-      MusaLinearReluOp<TYPE>);
+      Name("MusaLinearActivation").Device("MUSA").TypeConstraint<TYPE>("T"), \
+      MusaLinearActivationOp<TYPE>);
 
-REGISTER_MUSA_LINEAR_RELU(float);
-REGISTER_MUSA_LINEAR_RELU(Eigen::half);
-REGISTER_MUSA_LINEAR_RELU(bfloat16);
-REGISTER_MUSA_LINEAR_RELU(double);
+REGISTER_MUSA_LINEAR_ACTIVATION(float);
+REGISTER_MUSA_LINEAR_ACTIVATION(Eigen::half);
+REGISTER_MUSA_LINEAR_ACTIVATION(bfloat16);
+REGISTER_MUSA_LINEAR_ACTIVATION(double);
 
-#undef REGISTER_MUSA_LINEAR_RELU
+#undef REGISTER_MUSA_LINEAR_ACTIVATION
 }  // namespace musa
 
-REGISTER_OP("MusaLinearRelu")
+REGISTER_OP("MusaLinearActivation")
     .Input("a: T")
     .Input("b: T")
     .Input("bias: T")
     .Output("product: T")
-    .Attr("T: {float, half, bfloat16}")
+    .Attr("T: {float, half, bfloat16, double}")
+    .Attr("activation: string = 'relu'")
+    .Attr("alpha: float = 0.0")
     .Attr("transpose_a: bool = false")
     .Attr("transpose_b: bool = false")
     .SetShapeFn(::tensorflow::shape_inference::MatMulShape);
