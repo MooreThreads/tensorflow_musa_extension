@@ -26,7 +26,7 @@ class FusedBatchNormOpTest(MUSATestCase):
   def testFusedBatchNormV3Forward(self):
     shape = [2, 2, 2, 4]
     dtype = tf.float32
-    
+
     x_np = np.random.randn(*shape).astype(np.float32)
     scale_np = np.random.rand(shape[-1]).astype(np.float32)
     offset_np = np.random.rand(shape[-1]).astype(np.float32)
@@ -57,7 +57,7 @@ class FusedBatchNormOpTest(MUSATestCase):
   def testFusedBatchNormV3GradientDX(self):
     shape = [2, 2, 2, 4]
     dtype = tf.float32
-    
+
     x_np = np.random.randn(*shape).astype(np.float32)
     scale_np = np.random.rand(shape[-1]).astype(np.float32)
     offset_np = np.random.rand(shape[-1]).astype(np.float32)
@@ -67,7 +67,7 @@ class FusedBatchNormOpTest(MUSATestCase):
     def grad_dx_op(x, scale, offset, mean, var):
       # 【核心修复】强制将输入转换为 Tensor，否则 tape.watch 会报错
       x = tf.convert_to_tensor(x)
-      
+
       with tf.GradientTape() as tape:
         tape.watch(x)
         y, _, _, _, _, _ = tf.raw_ops.FusedBatchNormV3(
@@ -81,7 +81,7 @@ class FusedBatchNormOpTest(MUSATestCase):
             data_format="NHWC",
             is_training=True)
         loss = tf.reduce_sum(y)
-      
+
       dx = tape.gradient(loss, x)
       return dx
 

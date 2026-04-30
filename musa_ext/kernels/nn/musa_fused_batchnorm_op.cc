@@ -1,5 +1,6 @@
 #include <vector>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/common_shape_fns.h"
 #include "tensorflow/core/framework/numeric_types.h"
@@ -7,7 +8,6 @@
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/framework/tensor.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {

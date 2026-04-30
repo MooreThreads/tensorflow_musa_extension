@@ -102,8 +102,7 @@ class MusaMatMulOp : public MusaOpKernel {
     // flat<T>().setZero() is a CPU Eigen op and must NOT be called on device
     // memory — that causes a segfault. Use musaMemsetAsync instead.
     if (in0.NumElements() == 0 || in1.NumElements() == 0) {
-      musaStream_t stream =
-          reinterpret_cast<musaStream_t>(handle.GetStream());
+      musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
       musaMemsetAsync(out->data(), 0, out->TotalBytes(), stream);
       return;
     }
