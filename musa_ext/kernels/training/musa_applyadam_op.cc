@@ -275,8 +275,9 @@ class MusaResourceApplyAdamOp : public MusaOpKernel {
                                            v_t.shape(), &temp_storage.back()));
     mTensor t_sqrt_v = CreateMTensor(temp_storage.back(), format_);
     u_op.SetMode(::musa::dnn::Unary::Mode::SQRT);
-    OP_REQUIRES_OK(ctx,
-                   require_success(u_op.Run(handle, t_sqrt_v, t_v), "SQRT v"));
+    OP_REQUIRES_OK(
+        ctx,
+        require_success(u_op.Run(handle, t_sqrt_v, t_v), "SQRT v"));
 
     temp_storage.emplace_back();
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,

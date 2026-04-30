@@ -28,7 +28,7 @@ class MusaConcatMatMulOp : public MusaOpKernel {
       if (tf32_env) {
         return std::atoi(tf32_env) != 0;
       }
-      return false;  // Default: TF32 disabled for higher precision
+      return true;  // Default: TF32 enabled for performance
     }();
     tf32_enabled_ = tf32_enabled_global;
   }
@@ -131,7 +131,7 @@ class MusaConcatMatMulOp : public MusaOpKernel {
   bool trans_b_ = false;
   int num_concat_ = 0;
   int concat_input_idx_ = 0;
-  bool tf32_enabled_ = false;
+  bool tf32_enabled_ = true;
 };
 
 #define REGISTER_MUSA_CONCAT_MATMUL(TYPE)                \

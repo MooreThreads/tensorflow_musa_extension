@@ -400,7 +400,7 @@ Status DumpGraphDef(const GraphDef& graph_def, const std::string& prefix,
   TF_RETURN_IF_ERROR(WriteGraphDefBinary(graph_def, pb_path));
   LOG(INFO) << "MusaGraphOptimizer: Dumped GraphDef (binary) to " << pb_path
             << " (nodes: " << graph_def.node_size() << ")";
-  
+
   bool SlimGraphStatus = IsSlimGraphDefDumpEnabled();
 
   if (SlimGraphStatus) {

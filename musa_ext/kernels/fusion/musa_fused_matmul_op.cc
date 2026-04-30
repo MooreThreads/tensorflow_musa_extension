@@ -1,10 +1,11 @@
 #include <mudnn.h>
+#include <mudnn_xmma.h>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/util/matmul_bcast.h"
-#include "../utils_op.h"
 
 #define ENABLE_MUSA_DEBUG 0
 
@@ -93,16 +94,19 @@ class MusaFusedMatMulOp : public MusaOpKernel {
     if (out->NumElements() == 0) return;
 
     auto& handle = GetHandleByCtx(ctx);
+    handle.SetAllowTF32(tf32_enabled_);
 
     {
       mBatchMatMul matmul_op;
       matmul_op.SetTranspose(trans_x_, trans_y_);
       matmul_op.SetAlpha(1.0);
       matmul_op.SetBeta(0.0);
+      matmul_op.SetGamma(1.0);
 
       mTensor mt0 = CreateMTensor(in0, format_);
       mTensor mt1 = CreateMTensor(in1, format_);
       mTensor mt_out = CreateMTensor(*out, format_);
+      mTensor mt_bias = CreateMTensor(bias, format_);
 
       std::vector<std::vector<int64_t>> shape_storage;
       shape_storage.reserve(6);
@@ -129,21 +133,10 @@ class MusaFusedMatMulOp : public MusaOpKernel {
       FixToBatchFormat(mt1, in1);
       FixToBatchFormat(mt_out, *out);
 
-      auto status = matmul_op.Run(handle, mt_out, mt0, mt1);
+      auto status = matmul_op.RunWithBiasAdd(handle, mt_out, mt0, mt1, mt_bias);
       OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
-                  errors::Internal("MatMul failed. Status: ", (int)status));
-    }
-
-    {
-      mBinary binary_op;
-      binary_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-
-      mTensor mt_out = CreateMTensor(*out, format_);
-      mTensor mt_bias = CreateMTensor(bias, format_);
-
-      auto status = binary_op.Run(handle, mt_out, mt_out, mt_bias);
-      OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
-                  errors::Internal("BiasAdd failed. Status: ", (int)status));
+                  errors::Internal("FusedMatMul+BiasAdd failed. Status: ",
+                                   (int)status));
     }
 
     if (fusion_type_ == FusionType::BIAS_ADD_RELU) {
@@ -164,6 +157,7 @@ class MusaFusedMatMulOp : public MusaOpKernel {
   std::string fusion_name_;
   enum class FusionType { BIAS_ADD, BIAS_ADD_RELU };
   FusionType fusion_type_;
+  bool tf32_enabled_ = true;
 };
 
 #define REGISTER_MUSA_FUSED_MATMUL(TYPE)                                \
