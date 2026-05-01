@@ -50,7 +50,8 @@ class MusaBiasAddGradOp : public MusaOpKernel {
     }
 
     // When reduce_dims is empty, output_backprop is already the correct result.
-    // Use set_output() directly without allocating (avoid double assignment bug).
+    // Use set_output() directly without allocating (avoid double assignment
+    // bug).
     if (reduce_dims.empty()) {
       ctx->set_output(0, output_backprop);
       return;
