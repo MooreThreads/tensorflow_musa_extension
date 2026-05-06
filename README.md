@@ -50,6 +50,28 @@ with tf.device("/device:MUSA:0"):
     b = tf.matmul(a, a)
 ```
 
+### MUSA 显存按需增长
+
+`tensorflow_musa` 支持控制 MUSA BFC allocator 的 `allow_growth` 行为。默认值与 TensorFlow 原生 GPU 保持一致，为 `False`；启用后，MUSA 显存池会按需增长，而不是在设备初始化时一次性申请完整显存池。请在 MUSA 设备初始化前设置：
+
+```python
+import tensorflow_musa as tf_musa
+
+tf_musa.set_musa_allow_growth(enabled=True)
+```
+
+如需显式关闭：
+
+```python
+tf_musa.set_musa_allow_growth(enabled=False)
+```
+
+也可以使用 TensorFlow 官方兼容环境变量强制覆盖 Python 设置：
+
+```bash
+export TF_FORCE_GPU_ALLOW_GROWTH=true
+```
+
 ### MUSA 自定义图优化器开关
 
 `tensorflow_musa` 提供了 `ConfigProto` 级别的接口，用于启用、关闭或查询 `musa_graph_optimizer`。常规推理场景推荐使用 `enable_musa_graph_optimizer(config)`，它等价于向 `config.graph_options.rewrite_options.custom_optimizers` 注册 `musa_graph_optimizer`。

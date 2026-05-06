@@ -33,6 +33,8 @@ LICENSE = "Apache 2.0"
 
 # Build configuration
 PLUGIN_LIBRARY = "libmusa_plugin.so"
+RUNTIME_CONFIG_BINDINGS = "_runtime_config_bindings"
+RUNTIME_CONFIG_BINDINGS_PATTERN = f"{RUNTIME_CONFIG_BINDINGS}*.so"
 BUILD_DIR = "build"
 
 # Required TensorFlow version
@@ -66,6 +68,17 @@ def check_tensorflow_version():
         print(f"  Required version: {REQUIRED_TF_VERSION}")
         print(f"  Please install: pip install tensorflow=={REQUIRED_TF_VERSION}")
         return False, None
+
+
+def find_runtime_config_bindings(build_dir):
+    """Find the built pybind runtime config module."""
+    if not os.path.exists(build_dir):
+        return None
+
+    for filename in os.listdir(build_dir):
+        if filename.startswith(RUNTIME_CONFIG_BINDINGS) and filename.endswith(".so"):
+            return os.path.join(build_dir, filename)
+    return None
 
 
 class BuildPluginCommand(Command):
@@ -117,10 +130,22 @@ class BuildPluginCommand(Command):
             print(f"Error: {PLUGIN_LIBRARY} not found after build.")
             sys.exit(1)
 
+        runtime_config_bindings_path = find_runtime_config_bindings(build_dir)
+        if runtime_config_bindings_path is None:
+            print(f"Error: {RUNTIME_CONFIG_BINDINGS_PATTERN} not found after build.")
+            sys.exit(1)
+
         # Copy to package directory (source dir is python, but package name is tensorflow_musa)
         package_lib_path = os.path.join(project_root, SOURCE_DIR, PLUGIN_LIBRARY)
         shutil.copy2(plugin_path, package_lib_path)
+        package_bindings_path = os.path.join(
+            project_root,
+            SOURCE_DIR,
+            os.path.basename(runtime_config_bindings_path),
+        )
+        shutil.copy2(runtime_config_bindings_path, package_bindings_path)
         print(f"Successfully built and copied to: {package_lib_path}")
+        print(f"Successfully built and copied to: {package_bindings_path}")
 
 
 class BdistWheelCommand(bdist_wheel):
@@ -137,7 +162,9 @@ class BdistWheelCommand(bdist_wheel):
 
         # Force only the tensorflow_musa package (source is in python directory)
         self.distribution.packages = ["tensorflow_musa"]
-        self.distribution.package_data = {PACKAGE_NAME: [PLUGIN_LIBRARY]}
+        self.distribution.package_data = {
+            PACKAGE_NAME: [PLUGIN_LIBRARY, RUNTIME_CONFIG_BINDINGS_PATTERN]
+        }
         self.distribution.py_modules = None
         # Map tensorflow_musa package name to python source directory
         self.distribution.package_dir = {"tensorflow_musa": SOURCE_DIR}
@@ -188,7 +215,7 @@ setup(
     # Package name (pip install tensorflow_musa)
     packages=["tensorflow_musa"],
     package_data={
-        PACKAGE_NAME: [PLUGIN_LIBRARY],
+        PACKAGE_NAME: [PLUGIN_LIBRARY, RUNTIME_CONFIG_BINDINGS_PATTERN],
     },
     python_requires=">=3.7",
     # NOTE: tensorflow is NOT listed in install_requires to prevent pip from

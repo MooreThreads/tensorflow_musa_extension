@@ -68,7 +68,7 @@ class MusaHostSubAllocator : public SubAllocator {
     }
   }
 
-  bool SupportsCoalescing() const override { return true; }
+  bool SupportsCoalescing() const override { return false; }
 };
 
 }  // namespace musa

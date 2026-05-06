@@ -2,6 +2,7 @@
 
 #include "../utils_op.h"
 #include "mu/device/musa_memcpy.h"
+#include "mu/device/musa_memset.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/util/tensor_format.h"
@@ -49,7 +50,8 @@ class MusaBiasAddGradOp : public MusaOpKernel {
     }
 
     // When reduce_dims is empty, output_backprop is already the correct result.
-    // Use set_output() directly without allocating (avoid double assignment bug).
+    // Use set_output() directly without allocating (avoid double assignment
+    // bug).
     if (reduce_dims.empty()) {
       ctx->set_output(0, output_backprop);
       return;
@@ -59,7 +61,11 @@ class MusaBiasAddGradOp : public MusaOpKernel {
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
 
-    if (output_backprop.NumElements() == 0) return;
+    if (output_backprop.NumElements() == 0) {
+      auto& handle = GetHandleByCtx(ctx);
+      Memset(handle, output->data(), output->TotalBytes(), 0);
+      return;
+    }
 
     auto& handle = GetHandleByCtx(ctx);
 

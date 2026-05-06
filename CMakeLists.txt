@@ -37,10 +37,38 @@ execute_process(COMMAND python3 -c "import tensorflow as tf; print(' '.join(tf.s
     OUTPUT_VARIABLE TF_LINK_FLAGS OUTPUT_STRIP_TRAILING_WHITESPACE)
 execute_process(COMMAND python3 -c "import tensorflow as tf; import os; print(os.path.dirname(tf.__file__))"
     OUTPUT_VARIABLE TF_LIB_DIR OUTPUT_STRIP_TRAILING_WHITESPACE)
+execute_process(COMMAND python3 -c "import sysconfig; print(sysconfig.get_path('include') or '')"
+    OUTPUT_VARIABLE PYTHON_INCLUDE OUTPUT_STRIP_TRAILING_WHITESPACE)
+execute_process(COMMAND python3 -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX') or '.so')"
+    OUTPUT_VARIABLE PYTHON_EXTENSION_SUFFIX OUTPUT_STRIP_TRAILING_WHITESPACE)
+execute_process(
+    COMMAND python3 -c "import pybind11; print(pybind11.get_include())"
+    OUTPUT_VARIABLE PYBIND11_INCLUDE OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+    RESULT_VARIABLE PYBIND11_RESULT)
 
 # Validate TensorFlow is available
 if(NOT TF_INC)
     message(FATAL_ERROR "Failed to get TensorFlow include path. Please ensure TensorFlow is installed.")
+endif()
+if(NOT PYTHON_INCLUDE)
+    message(FATAL_ERROR "Failed to get Python include path.")
+endif()
+set(PYBIND11_CANDIDATE_INCLUDES
+    "${PYBIND11_INCLUDE}"
+    "${TF_INC}/external/pybind11/include"
+    "${TF_INC}/external/pybind11/_virtual_includes/pybind11"
+    "${TF_INC}/external/pybind11"
+)
+set(PYBIND11_INCLUDE "")
+foreach(candidate_include ${PYBIND11_CANDIDATE_INCLUDES})
+    if(EXISTS "${candidate_include}/pybind11/pybind11.h")
+        set(PYBIND11_INCLUDE "${candidate_include}")
+        break()
+    endif()
+endforeach()
+if(NOT EXISTS "${PYBIND11_INCLUDE}/pybind11/pybind11.h")
+    message(FATAL_ERROR "Failed to find pybind11 headers. Please install pybind11 or use a TensorFlow package that includes pybind11 headers.")
 endif()
 
 # Clean ABI conflicts in TF_COMPILE_FLAGS
@@ -161,6 +189,27 @@ set_target_properties(musa_plugin PROPERTIES
 
 # Link
 target_link_libraries(musa_plugin PRIVATE ${TF_LINK_FLAGS} musa mublas ${MUSA_DNN_LIBRARY} rt)
+
+# Generate Python runtime configuration bindings.
+add_library(_runtime_config_bindings MODULE
+    "${CMAKE_CURRENT_SOURCE_DIR}/python/_runtime_config_bindings.cc"
+)
+add_dependencies(_runtime_config_bindings musa_plugin)
+target_include_directories(_runtime_config_bindings PRIVATE
+    "${PYTHON_INCLUDE}"
+    "${PYBIND11_INCLUDE}"
+    "${SRC_ROOT}"
+)
+set_target_properties(_runtime_config_bindings PROPERTIES
+    PREFIX ""
+    SUFFIX "${PYTHON_EXTENSION_SUFFIX}"
+    COMPILE_FLAGS "${TF_COMPILE_FLAGS}"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+    SKIP_BUILD_RPATH FALSE
+    BUILD_WITH_INSTALL_RPATH TRUE
+    INSTALL_RPATH "$ORIGIN;${TF_LIB_DIR};${MUSA_PATH}/lib;${MUSA_PATH}/lib64"
+)
+target_link_libraries(_runtime_config_bindings PRIVATE musa_plugin)
 
 # Output configuration
 set_target_properties(musa_plugin PROPERTIES

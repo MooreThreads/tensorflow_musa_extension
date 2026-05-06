@@ -1,0 +1,10 @@
+#ifndef TENSORFLOW_MUSA_MUSA_EXT_MU_RUNTIME_CONFIG_C_API_H_
+#define TENSORFLOW_MUSA_MUSA_EXT_MU_RUNTIME_CONFIG_C_API_H_
+
+extern "C" {
+
+void TFMusaSetAllowGrowth(int enabled);
+
+}  // extern "C"
+
+#endif  // TENSORFLOW_MUSA_MUSA_EXT_MU_RUNTIME_CONFIG_C_API_H_

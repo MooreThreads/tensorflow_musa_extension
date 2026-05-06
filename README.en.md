@@ -50,6 +50,29 @@ with tf.device("/device:MUSA:0"):
     b = tf.matmul(a, a)
 ```
 
+MUSA allocator memory growth defaults to `False`, matching TensorFlow's native
+GPU behavior. You can configure it explicitly before MUSA devices are
+initialized:
+
+```python
+import tensorflow_musa as tf_musa
+
+tf_musa.set_musa_allow_growth(enabled=True)
+```
+
+To explicitly disable it:
+
+```python
+tf_musa.set_musa_allow_growth(enabled=False)
+```
+
+The TensorFlow-compatible environment variable can also override the Python
+setting:
+
+```bash
+export TF_FORCE_GPU_ALLOW_GROWTH=true
+```
+
 Enable or disable the MUSA custom graph optimizer:
 
 ```python

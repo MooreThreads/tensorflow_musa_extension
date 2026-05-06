@@ -1,14 +1,14 @@
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/util/bcast.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
 
 template <typename T>
-class MusaTahnOp : public MusaOpKernel {
+class MusaTanhOp : public MusaOpKernel {
  public:
   using MusaOpKernel::MusaOpKernel;
 
@@ -32,18 +32,18 @@ class MusaTahnOp : public MusaOpKernel {
 };
 
 REGISTER_KERNEL_BUILDER(Name("Tanh").Device("MUSA").TypeConstraint<float>("T"),
-                        MusaTahnOp<float>);
+                        MusaTanhOp<float>);
 
 REGISTER_KERNEL_BUILDER(
     Name("Tanh").Device("MUSA").TypeConstraint<Eigen::half>("T"),
-    MusaTahnOp<Eigen::half>);
+    MusaTanhOp<Eigen::half>);
 
 REGISTER_KERNEL_BUILDER(
     Name("Tanh").Device("MUSA").TypeConstraint<bfloat16>("T"),
-    MusaTahnOp<bfloat16>);
+    MusaTanhOp<bfloat16>);
 
 REGISTER_KERNEL_BUILDER(Name("Tanh").Device("MUSA").TypeConstraint<double>("T"),
-                        MusaTahnOp<double>);
+                        MusaTanhOp<double>);
 
 }  // namespace musa
 }  // namespace tensorflow

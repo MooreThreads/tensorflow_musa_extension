@@ -1,13 +1,18 @@
 #include <musa_runtime.h>
 #include <stdio.h>
 
+#include <atomic>
+#include <cstdlib>
+#include <cstring>
 #include <vector>
 
 #include "device/musa_device.h"
 #include "mu/device/musa_telemetry.h"
+#include "mu/runtime_config_c_api.h"
 #include "tensorflow/core/common_runtime/device_factory.h"
 #include "tensorflow/core/framework/device_attributes.pb.h"
 #include "tensorflow/core/platform/env.h"
+#include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/public/session_options.h"
 #include "tensorflow/stream_executor/multi_platform_manager.h"
 
@@ -17,6 +22,46 @@ void ForceMusaOptimizationPassRegistration();
 
 namespace tensorflow {
 namespace musa {
+namespace {
+
+constexpr bool kDefaultMusaAllowGrowth = false;
+
+std::atomic<bool> g_musa_allow_growth(kDefaultMusaAllowGrowth);
+
+bool ParseAllowGrowthEnv(const char* env_name, const char* env_value,
+                         bool* allow_growth) {
+  if (std::strcmp("false", env_value) == 0) {
+    *allow_growth = false;
+    return true;
+  }
+
+  if (std::strcmp("true", env_value) == 0) {
+    *allow_growth = true;
+    return true;
+  }
+
+  LOG(ERROR) << env_name << " is set but could not be parsed: \"" << env_value
+             << "\". Valid values are \"true\" or \"false\". Ignoring it.";
+  return false;
+}
+
+bool GetMusaAllowGrowthValue() {
+  const char* force_allow_growth = std::getenv("TF_FORCE_GPU_ALLOW_GROWTH");
+  bool allow_growth = kDefaultMusaAllowGrowth;
+  if (force_allow_growth != nullptr &&
+      ParseAllowGrowthEnv("TF_FORCE_GPU_ALLOW_GROWTH", force_allow_growth,
+                          &allow_growth)) {
+    return allow_growth;
+  }
+
+  return g_musa_allow_growth.load();
+}
+
+}  // namespace
+
+void SetMusaAllowGrowthOverride(bool enabled) {
+  g_musa_allow_growth.store(enabled);
+}
 
 class MusaDeviceFactory : public DeviceFactory {
  public:
@@ -35,6 +80,7 @@ class MusaDeviceFactory : public DeviceFactory {
 
   Status CreateDevices(const SessionOptions& options, const string& name_prefix,
                        std::vector<std::unique_ptr<Device>>* devices) override {
+    (void)options;
     int count = 0;
     musaError_t err = musaGetDeviceCount(&count);
     if (err != musaSuccess) {
@@ -47,6 +93,7 @@ class MusaDeviceFactory : public DeviceFactory {
       return platform_status.status();
     }
     auto* platform = platform_status.ValueOrDie();
+    const bool allow_growth = GetMusaAllowGrowthValue();
 
     for (int i = 0; i < count; ++i) {
       DeviceAttributes attr;
@@ -73,7 +120,7 @@ class MusaDeviceFactory : public DeviceFactory {
       auto* executor = executor_status.ValueOrDie();
 
       devices->push_back(std::unique_ptr<Device>(
-          new MusaDevice(Env::Default(), attr, i, executor)));
+          new MusaDevice(Env::Default(), attr, i, executor, allow_growth)));
     }
     return Status::OK();
   }
@@ -85,6 +132,10 @@ REGISTER_LOCAL_DEVICE_FACTORY("MUSA", MusaDeviceFactory, 210);
 }  // namespace tensorflow
 
 extern "C" {
+void __attribute__((visibility("default"))) TFMusaSetAllowGrowth(int enabled) {
+  ::tensorflow::musa::SetMusaAllowGrowthOverride(enabled != 0);
+}
+
 void __attribute__((constructor)) OnMusaPluginLoad() {
   // Initialize telemetry system from environment variables
   auto config = ::tensorflow::musa::TelemetryConfig::FromEnv();

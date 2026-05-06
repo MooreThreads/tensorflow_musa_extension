@@ -83,7 +83,7 @@ class MusaDeviceContext : public DeviceContext {
 class MusaDevice : public Device {
  public:
   MusaDevice(Env* env, const DeviceAttributes& attributes, int device_id,
-             ::stream_executor::StreamExecutor* executor);
+             ::stream_executor::StreamExecutor* executor, bool allow_growth);
   ~MusaDevice() override;
 
   const GpuDeviceInfo* tensorflow_gpu_device_info() const override {

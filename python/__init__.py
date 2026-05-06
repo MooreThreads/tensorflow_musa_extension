@@ -18,6 +18,7 @@
 This package provides:
 - Automatic plugin loading on import
 - Device discovery utilities for available MUSA devices
+- Runtime configuration helpers for MUSA memory growth
 
 Example usage:
     import tensorflow_musa as tf_musa
@@ -41,6 +42,7 @@ from ._graph_optimizer import (
     set_musa_graph_optimizer_enabled,
 )
 from ._loader import get_musa_devices, get_musa_ops, is_plugin_loaded, load_plugin
+from ._runtime_config import set_musa_allow_growth
 
 # Package version
 __version__ = "0.1.0"
@@ -75,4 +77,5 @@ __all__ = [
     "disable_musa_fusion_patterns",
     "clear_musa_disabled_fusion_patterns",
     "get_musa_disabled_fusion_patterns",
+    "set_musa_allow_growth",
 ]

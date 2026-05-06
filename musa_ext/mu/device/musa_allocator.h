@@ -38,8 +38,9 @@ namespace musa {
 // Magic numbers for memory coloring
 // These patterns help detect uninitialized memory and Use-After-Free
 // Using byte patterns since musaMemset works with bytes
-constexpr uint8_t kMusaAllocByte = 0xAB;  // Filled on allocation (0xABABABAB pattern)
-constexpr uint8_t kMusaFreeByte = 0xCD;   // Filled on free (0xCDCDCDCD pattern)
+constexpr uint8_t kMusaAllocByte =
+    0xAB;  // Filled on allocation (0xABABABAB pattern)
+constexpr uint8_t kMusaFreeByte = 0xCD;  // Filled on free (0xCDCDCDCD pattern)
 // For verification we check for these patterns
 constexpr uint32_t kMusaAllocMagic = 0xABABABAB;  // Expected after alloc
 constexpr uint32_t kMusaFreeMagic = 0xCDCDCDCD;   // Expected after free
@@ -53,13 +54,23 @@ class MemoryColoringConfig {
   }
 
   bool enabled() const { return enabled_.load(std::memory_order_acquire); }
-  void set_enabled(bool enabled) { enabled_.store(enabled, std::memory_order_release); }
+  void set_enabled(bool enabled) {
+    enabled_.store(enabled, std::memory_order_release);
+  }
 
-  bool track_history() const { return track_history_.load(std::memory_order_acquire); }
-  void set_track_history(bool track) { track_history_.store(track, std::memory_order_release); }
+  bool track_history() const {
+    return track_history_.load(std::memory_order_acquire);
+  }
+  void set_track_history(bool track) {
+    track_history_.store(track, std::memory_order_release);
+  }
 
-  bool verify_on_free() const { return verify_on_free_.load(std::memory_order_acquire); }
-  void set_verify_on_free(bool verify) { verify_on_free_.store(verify, std::memory_order_release); }
+  bool verify_on_free() const {
+    return verify_on_free_.load(std::memory_order_acquire);
+  }
+  void set_verify_on_free(bool verify) {
+    verify_on_free_.store(verify, std::memory_order_release);
+  }
 
   // Size of guard bytes at start and end of each allocation (in uint32_t units)
   size_t guard_size() const { return 4; }  // 16 bytes
@@ -242,8 +253,8 @@ class MemoryForensicsTracker {
     mutex_lock lock(mu_);
     stats_.magic_mismatch++;
     LOG(ERROR) << "[MemoryForensics] Magic mismatch at " << ptr
-               << " expected=0x" << std::hex << expected
-               << " actual=0x" << actual << std::dec;
+               << " expected=0x" << std::hex << expected << " actual=0x"
+               << actual << std::dec;
   }
 
   // Generate forensics report for debugging
@@ -284,7 +295,8 @@ class MemoryForensicsTracker {
   static uint64_t GetCurrentTimestampMs() {
     auto now = std::chrono::system_clock::now();
     auto duration = now.time_since_epoch();
-    return std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+    return std::chrono::duration_cast<std::chrono::milliseconds>(duration)
+        .count();
   }
 
   mutable mutex mu_;
@@ -302,7 +314,8 @@ class MemoryForensicsTracker {
 //
 // Memory Coloring Implementation:
 // - On allocation: Fill memory with magic pattern (0xDEADBEEF)
-// - On free: Verify magic pattern integrity and fill with free pattern (0xFEEDFACE)
+// - On free: Verify magic pattern integrity and fill with free pattern
+// (0xFEEDFACE)
 // - Track allocation history for forensics
 // - Detect Use-After-Free and memory corruption
 class MusaSubAllocator : public SubAllocator {
@@ -362,7 +375,8 @@ class MusaSubAllocator : public SubAllocator {
         ptr, alloc_size, device_id_);
 
     // Record telemetry event for allocation
-    MUSA_TELEMETRY_ON_TENSOR_ALLOCATE(tensor_id, ptr, alloc_size, device_id_, 0);
+    MUSA_TELEMETRY_ON_TENSOR_ALLOCATE(tensor_id, ptr, alloc_size, device_id_,
+                                      0);
 
     // Call visitor to track allocation
     VisitAlloc(ptr, device_id_, alloc_size);
@@ -375,9 +389,11 @@ class MusaSubAllocator : public SubAllocator {
       // Check for potential Use-After-Free before freeing
       if (MemoryColoringConfig::Instance().track_history()) {
         if (!MemoryForensicsTracker::Instance().IsAddressAllocated(ptr)) {
-          LOG(WARNING) << "[MemoryForensics] Potential double-free or UAF detected"
-                       << " for address " << ptr << " size=" << num_bytes;
-          MemoryForensicsTracker::Instance().RecordCorruption("Double-free/UAF");
+          LOG(WARNING)
+              << "[MemoryForensics] Potential double-free or UAF detected"
+              << " for address " << ptr << " size=" << num_bytes;
+          MemoryForensicsTracker::Instance().RecordCorruption(
+              "Double-free/UAF");
         }
       }
 
@@ -392,7 +408,8 @@ class MusaSubAllocator : public SubAllocator {
       }
 
       // Get tensor ID for telemetry before recording free
-      auto history = MemoryForensicsTracker::Instance().GetAllocationHistory(ptr);
+      auto history =
+          MemoryForensicsTracker::Instance().GetAllocationHistory(ptr);
       uint64_t tensor_id = 0;
       if (!history.empty()) {
         tensor_id = history.back().alloc_id;
@@ -416,7 +433,7 @@ class MusaSubAllocator : public SubAllocator {
     }
   }
 
-  bool SupportsCoalescing() const override { return true; }
+  bool SupportsCoalescing() const override { return false; }
 
  private:
   int device_id_;
@@ -426,7 +443,8 @@ class MusaSubAllocator : public SubAllocator {
     musaSetDevice(device_id_);
 
     // Fill entire allocation with allocation magic pattern
-    // This helps detect uninitialized reads and provides baseline for corruption detection
+    // This helps detect uninitialized reads and provides baseline for
+    // corruption detection
     musaError_t err = musaMemset(ptr, kMusaAllocByte, size);
     if (err != musaSuccess) {
       LOG(WARNING) << "[MemoryColoring] Failed to apply allocation pattern: "
@@ -434,8 +452,8 @@ class MusaSubAllocator : public SubAllocator {
     }
 
     VLOG(2) << "[MemoryColoring] Applied magic byte 0x" << std::hex
-            << static_cast<int>(kMusaAllocByte)
-            << std::dec << " to " << size << " bytes at " << ptr;
+            << static_cast<int>(kMusaAllocByte) << std::dec << " to " << size
+            << " bytes at " << ptr;
   }
 
   // Verify memory coloring integrity and apply free pattern
@@ -447,10 +465,11 @@ class MusaSubAllocator : public SubAllocator {
 
     musaSetDevice(device_id_);
     musaError_t err = musaMemcpy(host_buffer.data(), ptr, sample_size,
-                                  musaMemcpyDeviceToHost);
+                                 musaMemcpyDeviceToHost);
     if (err != musaSuccess) {
-      LOG(WARNING) << "[MemoryColoring] Failed to read memory for verification: "
-                   << musaGetErrorString(err);
+      LOG(WARNING)
+          << "[MemoryColoring] Failed to read memory for verification: "
+          << musaGetErrorString(err);
       return;
     }
 
@@ -459,9 +478,8 @@ class MusaSubAllocator : public SubAllocator {
     for (size_t i = 0; i < host_buffer.size(); ++i) {
       if (host_buffer[i] == kMusaFreeMagic) {
         LOG(ERROR) << "[MemoryColoring] UAF detected! Found free magic 0x"
-                   << std::hex << kMusaFreeMagic << std::dec
-                   << " at offset " << i * sizeof(uint32_t)
-                   << " in allocated memory at " << ptr;
+                   << std::hex << kMusaFreeMagic << std::dec << " at offset "
+                   << i * sizeof(uint32_t) << " in allocated memory at " << ptr;
         MemoryForensicsTracker::Instance().RecordCorruption("UAF detected");
         break;
       }
@@ -483,8 +501,8 @@ class MusaSubAllocator : public SubAllocator {
     }
 
     VLOG(2) << "[MemoryColoring] Applied free magic byte 0x" << std::hex
-            << static_cast<int>(kMusaFreeByte)
-            << std::dec << " to " << size << " bytes at " << ptr;
+            << static_cast<int>(kMusaFreeByte) << std::dec << " to " << size
+            << " bytes at " << ptr;
   }
 };
 
