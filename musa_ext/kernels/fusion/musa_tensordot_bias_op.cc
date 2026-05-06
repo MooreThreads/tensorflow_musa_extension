@@ -24,7 +24,7 @@ limitations under the License.
 #include <vector>
 
 #include "../utils_op.h"
-#include "musa_transpose_functor.h"
+#include "../array/musa_transpose_functor.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/common_shape_fns.h"
 #include "tensorflow/core/framework/op.h"

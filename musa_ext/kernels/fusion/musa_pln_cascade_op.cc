@@ -18,7 +18,7 @@ limitations under the License.
 #include <vector>
 
 #include "../utils_op.h"
-#include "kernels/math/musa_pln_cascade_kernel.h"
+#include "musa_pln_cascade_kernel.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/shape_inference.h"
