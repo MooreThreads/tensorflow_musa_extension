@@ -35,7 +35,7 @@ class ResourceOpTest(MUSATestCase):
         """
         vocab_size = 100
         embedding_dim = 8
-        
+
         # 准备输入数据 (使用 Tensor 包装以便传递)
         # 词表: 100x8
         h_params = np.array([np.full(embedding_dim, i, dtype=np.float32) for i in range(vocab_size)])
@@ -47,7 +47,7 @@ class ResourceOpTest(MUSATestCase):
             # 1. 在当前设备 (CPU 或 MUSA) 创建变量
             # 注意：因为外层有 with tf.device(...), 变量会自动落在这个设备上
             var = tf.Variable(params_val)
-            
+
             # 2. 执行 Gather 操作
             result = tf.gather(var, indices_val)
             return result
@@ -66,10 +66,10 @@ class ResourceOpTest(MUSATestCase):
         """
         vocab_size = 10
         embedding_dim = 4
-        
+
         # 初始参数全为 1.0
         h_params = np.ones((vocab_size, embedding_dim), dtype=np.float32)
-        
+
         # 更新参数: 给索引 1 和 3 分别加上不同的值
         # 索引 1 加 [10, 10...]
         # 索引 3 加 [20, 20...]
@@ -83,11 +83,11 @@ class ResourceOpTest(MUSATestCase):
         def scatter_add_wrapper(params_val, updates_val, indices_val):
             # 1. 创建变量
             var = tf.Variable(params_val)
-            
+
             # 2. 执行 ScatterAdd (这是一个原地更新操作)
             # 构造 IndexedSlices 对象
             ops = var.scatter_add(tf.IndexedSlices(updates_val, indices_val))
-            
+
             # 3. 读取更新后的值返回 (为了对比结果)
             return var.read_value()
 
