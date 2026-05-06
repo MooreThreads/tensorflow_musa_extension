@@ -150,11 +150,14 @@ inline int GetMusaDeviceIdByCtx(tensorflow::OpKernelContext* context) {
 // CtxFailure. Prefer MUSA_OP_REQUIRES_CPP_MUSA_DEVICE or MTOP_* after
 // GetHandleByCtx, which return early when !ctx->status().ok().
 inline ::musa::dnn::Handle& MudnnHandleOrSinkAfterCtxFailure() {
+  // Deliberately leaked sink handle for error paths after CtxFailure.
+  // This is never used for real kernel execution.
   static ::musa::dnn::Handle* h = new ::musa::dnn::Handle();
   return *h;
 }
 
 // Thread-local cache for current device to avoid redundant musaSetDevice calls
+// Assumption: per-thread device assignment stays stable for kernel execution.
 inline musaError_t CachedMusaSetDevice(int device_id) {
   static thread_local int cached_device_id = -1;
   if (device_id != cached_device_id) {

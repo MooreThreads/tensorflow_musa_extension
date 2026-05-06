@@ -1,5 +1,5 @@
-#ifndef TENSORFLOW_MUSA_MU1_DEVICE_REGISTER_H_
-#define TENSORFLOW_MUSA_MU1_DEVICE_REGISTER_H_
+#ifndef TENSORFLOW_MUSA_MU_DEVICE_REGISTER_H_
+#define TENSORFLOW_MUSA_MU_DEVICE_REGISTER_H_
 
 #include "tensorflow/c/experimental/stream_executor/stream_executor.h"
 #include "tensorflow/c/tf_status.h"
@@ -40,4 +40,4 @@ void plugin_destroy_platform_fns(SP_PlatformFns* platform_fns);
 }
 #endif
 
-#endif
+#endif  // TENSORFLOW_MUSA_MU_DEVICE_REGISTER_H_

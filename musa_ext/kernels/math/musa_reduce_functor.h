@@ -18,8 +18,8 @@ struct ReduceFunctor {
   static Status Compute(OpKernelContext* ctx, mTensor* output, mTensor* input,
                         ::musa::dnn::Reduce::Mode mode, const int* reduce_dims,
                         int reduce_dim_count, const char* error_prefix) {
-    if (TryGetMusaDeviceFromContext(ctx) == nullptr) {
-      return MusaCppDevicePathRequiredError();
+    if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+      return MusaMudnnHandleRequiredError();
     }
     auto& handle = GetHandleByCtx(ctx);
 

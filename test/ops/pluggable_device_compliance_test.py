@@ -19,6 +19,8 @@ SE_InitPlugin-only tests live in pluggable_se_api_test.py (no early plugin load)
 
 import ctypes
 import os
+import subprocess
+import sys
 
 import musa_test_utils
 import tensorflow as tf
@@ -51,10 +53,27 @@ class PluggableDeviceComplianceTest(musa_test_utils.MUSATestCase):
     path = _plugin_path()
     if not path:
       self.skipTest("libmusa_plugin.so not found next to test/build")
-    lib = ctypes.cdll.LoadLibrary(path)
-    # musa_se_plugin.cc exports SE_InitPlugin for PluggableDevice discovery
-    if not hasattr(lib, "SE_InitPlugin"):
-      self.fail("SE_InitPlugin not exported from %s" % path)
+    # Run in a fresh subprocess: loading the plugin in the current process may
+    # re-trigger op registration and abort when TensorFlow has already loaded it.
+    script = r"""
+import ctypes, sys
+lib = ctypes.cdll.LoadLibrary(sys.argv[1])
+if not hasattr(lib, "SE_InitPlugin"):
+  raise SystemExit(2)
+print("OK")
+"""
+    proc = subprocess.run(
+        [sys.executable, "-c", script, path],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    self.assertEqual(
+        proc.returncode,
+        0,
+        "SE_InitPlugin not exported from %s (stdout=%s stderr=%s)"
+        % (path, proc.stdout, proc.stderr),
+    )
 
   def test_minimal_musa_eager_add(self):
     with tf.device("/device:MUSA:0"):

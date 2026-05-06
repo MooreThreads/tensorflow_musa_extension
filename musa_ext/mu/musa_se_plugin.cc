@@ -48,14 +48,14 @@ struct SP_Timer_st {
   bool has_stop;
 };
 
+// NAME_MTGPU storage (declared in device_register.h)
+extern "C" const char NAME_MTGPU[] = "MUSA";
+
 namespace {
 
 static const char kPlatformName[] = "MUSA";
 static const char kPlatformType[] = "MUSA";
 static const char kVendorMthreads[] = "MooreThreads";
-
-// NAME_MTGPU storage (declared in device_register.h)
-extern "C" const char NAME_MTGPU[] = "MUSA";
 
 static musaStream_t StreamPtr(SP_Stream s) {
   if (!s || s->magic != kMusaPluginSpStreamMagic) return nullptr;
@@ -67,7 +67,7 @@ static void MallocOrBadAlloc(TF_Status* status) {
 }
 
 static int Ordinal(const SP_Device* d) {
-  if (!d) return 0;
+  if (!d) return -1;
   return ::tensorflow::musa::runtime::GetDeviceOrdinal(
       d->device_handle, d->ordinal);
 }
@@ -83,13 +83,16 @@ void plugin_se_allocate(const SP_Device* device, uint64_t size, int64_t,
   mem->size = 0;
   mem->payload = 0;
   if (size == 0) return;
-  TF_Status* status = TF_NewStatus();
-  ::tensorflow::musa::runtime::SetMusaDeviceOrStatus(Ordinal(device), status);
-  if (TF_GetCode(status) != TF_OK) {
-    TF_DeleteStatus(status);
+  const int ordinal = Ordinal(device);
+  musaError_t set_dev_err = musaSetDevice(ordinal);
+  if (set_dev_err != musaSuccess) {
+    LOG(ERROR) << "plugin_se_allocate: musaSetDevice(" << ordinal
+               << ") failed: " << musaGetErrorString(set_dev_err);
+    // Preserve requested size so callers can distinguish from a real zero-size
+    // allocation.
+    mem->size = size;
     return;
   }
-  TF_DeleteStatus(status);
   void* p = nullptr;
   musaError_t err = musaMalloc(&p, size);
   if (err != musaSuccess) {
@@ -101,26 +104,27 @@ void plugin_se_allocate(const SP_Device* device, uint64_t size, int64_t,
 
 void plugin_se_deallocate(const SP_Device* device, SP_DeviceMemoryBase* mem) {
   if (!mem || !mem->opaque) return;
-  TF_Status* status = TF_NewStatus();
-  ::tensorflow::musa::runtime::SetMusaDeviceOrStatus(Ordinal(device), status);
-  if (TF_GetCode(status) == TF_OK) {
-    musaError_t err = musaFree(mem->opaque);
-    (void)err;
+  const int ordinal = Ordinal(device);
+  musaError_t set_dev_err = musaSetDevice(ordinal);
+  if (set_dev_err == musaSuccess) {
+    (void)musaFree(mem->opaque);
+  } else {
+    LOG(ERROR) << "plugin_se_deallocate: musaSetDevice(" << ordinal
+               << ") failed: " << musaGetErrorString(set_dev_err);
   }
-  TF_DeleteStatus(status);
   mem->opaque = nullptr;
   mem->size = 0;
 }
 
 void* plugin_se_host_memory_allocate(const SP_Device* device, uint64_t size) {
   if (size == 0) return nullptr;
-  TF_Status* status = TF_NewStatus();
-  ::tensorflow::musa::runtime::SetMusaDeviceOrStatus(Ordinal(device), status);
-  if (TF_GetCode(status) != TF_OK) {
-    TF_DeleteStatus(status);
+  const int ordinal = Ordinal(device);
+  musaError_t set_dev_err = musaSetDevice(ordinal);
+  if (set_dev_err != musaSuccess) {
+    LOG(ERROR) << "plugin_se_host_memory_allocate: musaSetDevice(" << ordinal
+               << ") failed: " << musaGetErrorString(set_dev_err);
     return nullptr;
   }
-  TF_DeleteStatus(status);
   void* p = nullptr;
   musaError_t err = musaHostAlloc(&p, size, musaHostAllocDefault);
   if (err != musaSuccess) return nullptr;
@@ -129,12 +133,14 @@ void* plugin_se_host_memory_allocate(const SP_Device* device, uint64_t size) {
 
 void plugin_se_host_memory_deallocate(const SP_Device* device, void* mem) {
   if (!mem) return;
-  TF_Status* st = TF_NewStatus();
-  ::tensorflow::musa::runtime::SetMusaDeviceOrStatus(Ordinal(device), st);
-  if (TF_GetCode(st) == TF_OK) {
+  const int ordinal = Ordinal(device);
+  musaError_t set_dev_err = musaSetDevice(ordinal);
+  if (set_dev_err == musaSuccess) {
     (void)musaFreeHost(mem);
+  } else {
+    LOG(ERROR) << "plugin_se_host_memory_deallocate: musaSetDevice(" << ordinal
+               << ") failed: " << musaGetErrorString(set_dev_err);
   }
-  TF_DeleteStatus(st);
 }
 
 void* plugin_se_unified_memory_allocate(const SP_Device*, uint64_t) {
@@ -150,13 +156,13 @@ TF_Bool plugin_se_get_allocator_stats(const SP_Device*, SP_AllocatorStats*) {
 TF_Bool plugin_se_device_memory_usage(const SP_Device* device, int64_t* free_out,
                                             int64_t* total_out) {
   if (!free_out || !total_out) return 0;
-  TF_Status* st = TF_NewStatus();
-  ::tensorflow::musa::runtime::SetMusaDeviceOrStatus(Ordinal(device), st);
-  if (TF_GetCode(st) != TF_OK) {
-    TF_DeleteStatus(st);
+  const int ordinal = Ordinal(device);
+  musaError_t set_dev_err = musaSetDevice(ordinal);
+  if (set_dev_err != musaSuccess) {
+    LOG(ERROR) << "plugin_se_device_memory_usage: musaSetDevice(" << ordinal
+               << ") failed: " << musaGetErrorString(set_dev_err);
     return 0;
   }
-  TF_DeleteStatus(st);
   size_t free_m = 0, total = 0;
   musaError_t err = musaMemGetInfo(&free_m, &total);
   if (err != musaSuccess) return 0;

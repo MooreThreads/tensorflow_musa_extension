@@ -85,13 +85,6 @@ void MusaSeRegistryOnDeviceDestroyed(int32_t ordinal) {
 
   if (!slot.handle && !slot.init_failed) {
     slot.handle.reset(new ::musa::dnn::Handle());
-    ::musa::dnn::Status s = slot.handle->SetStream(stream);
-    if (s != ::musa::dnn::Status::SUCCESS) {
-      slot.handle.reset();
-      slot.init_failed = true;
-      LOG(ERROR) << "MuDNN Handle init failed for ordinal " << ordinal;
-      return nullptr;
-    }
   }
 
   if (slot.init_failed || !slot.handle) {

@@ -113,10 +113,6 @@ class MusaAssignVariableOp : public OpKernel {
             "Variable and value dtypes don't match; respectively, ",
             DataTypeString(dtype_), " and ", DataTypeString(value.dtype())));
 
-    if (ctx->num_outputs() > 0) {
-      ctx->set_output(0, ctx->input(0));
-    }
-
     // Must run before LookupOrCreateResource: the create lambda can initialize
     // the variable; fail first on SE-only / non-MusaDevice paths with no
     // side effects on the resource.
@@ -129,6 +125,10 @@ class MusaAssignVariableOp : public OpKernel {
         errors::Unimplemented(
             "MUSA variable assign requires MusaDeviceContext; SE-only "
             "PluggableDevice is not supported for this op yet."));
+
+    if (ctx->num_outputs() > 0) {
+      ctx->set_output(0, ctx->input(0));
+    }
 
     core::RefCountPtr<Var> var;
     OP_REQUIRES_OK(ctx, LookupOrCreateResource<Var>(

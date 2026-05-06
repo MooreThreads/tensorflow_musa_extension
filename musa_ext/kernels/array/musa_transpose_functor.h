@@ -9,8 +9,8 @@ struct TransposeFunctor {
   static Status Compute(OpKernelContext* ctx, mTensor& in_mt,
                         const std::vector<int64_t>& permutation,
                         mTensor& out_mt) {
-    if (TryGetMusaDeviceFromContext(ctx) == nullptr) {
-      return MusaCppDevicePathRequiredError();
+    if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+      return MusaMudnnHandleRequiredError();
     }
     mHandle& h = GetHandleByCtx(ctx);
 
