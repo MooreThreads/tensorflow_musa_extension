@@ -98,6 +98,71 @@ class ResourceOpTest(MUSATestCase):
             tf.float32
         )
 
+    def testResourceScatterAddAllIndicesUpdated(self):
+        """
+        验证 ResourceScatterAdd 能正确更新 *所有* indices 对应的 embedding 行。
+
+        Bug 背景: 原实现调用 indices_mt.SetNdInfo({ndim, 1}) 而不是
+        SetNdInfo({NumElements, 1})，导致 indices 的 shape 被错误地设置为
+        [1, 1]（对 1D indices 而言 ndim==1），从而只 scatter 了第 0 个 index，
+        其余所有行的梯度更新全部丢失。
+
+        本测试使用较大 batch（32 个 index），若 MUSA 结果与 CPU 结果一致则说明
+        修复正确；若仍存在 bug，只有 1 行会被更新，diff 会非常大。
+        """
+        vocab_size = 50
+        embedding_dim = 16
+        batch_size = 32
+
+        rng = np.random.default_rng(42)
+        h_params = rng.standard_normal((vocab_size, embedding_dim)).astype(np.float32)
+        # 生成 batch_size 个随机索引（允许重复，模拟真实 embedding scatter）
+        h_indices = rng.integers(0, vocab_size, size=batch_size).astype(np.int32)
+        h_updates = rng.standard_normal((batch_size, embedding_dim)).astype(np.float32)
+
+        def scatter_add_all_indices(params_val, indices_val, updates_val):
+            var = tf.Variable(params_val)
+            var.scatter_add(tf.IndexedSlices(updates_val, indices_val))
+            return var.read_value()
+
+        self._compare_cpu_musa_results(
+            scatter_add_all_indices,
+            [tf.constant(h_params),
+             tf.constant(h_indices),
+             tf.constant(h_updates)],
+            tf.float32,
+            rtol=1e-5,
+            atol=1e-5,
+        )
+
+    def testResourceScatterAddInt64Indices(self):
+        """
+        同上，但使用 int64 类型的 indices，覆盖 MusaResourceScatterAddOp<T, int64>。
+        """
+        vocab_size = 50
+        embedding_dim = 16
+        batch_size = 32
+
+        rng = np.random.default_rng(7)
+        h_params = rng.standard_normal((vocab_size, embedding_dim)).astype(np.float32)
+        h_indices = rng.integers(0, vocab_size, size=batch_size).astype(np.int64)
+        h_updates = rng.standard_normal((batch_size, embedding_dim)).astype(np.float32)
+
+        def scatter_add_int64(params_val, indices_val, updates_val):
+            var = tf.Variable(params_val)
+            var.scatter_add(tf.IndexedSlices(updates_val, indices_val))
+            return var.read_value()
+
+        self._compare_cpu_musa_results(
+            scatter_add_int64,
+            [tf.constant(h_params),
+             tf.constant(h_indices),
+             tf.constant(h_updates)],
+            tf.float32,
+            rtol=1e-5,
+            atol=1e-5,
+        )
+
     def testVariableShapeComparison(self):
         """
         对比 CPU 和 MUSA 的 VariableShape 结果。
