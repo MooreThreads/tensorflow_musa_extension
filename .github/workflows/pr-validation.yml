@@ -606,7 +606,7 @@ jobs:
   t_perf:
     name: T Performance
     needs: [prepare_metadata, build_current, build_baseline]
-    if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
+    if: needs.prepare_metadata.result == 'success' && needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
     runs-on: [self-hosted, musa-gpu]
     timeout-minutes: 60
     outputs:
@@ -833,7 +833,7 @@ jobs:
   t_accuracy:
     name: T Accuracy
     needs: [prepare_metadata, build_current]
-    if: needs.build_current.result == 'success'
+    if: needs.prepare_metadata.result == 'success' && needs.build_current.result == 'success'
     runs-on: [self-hosted, musa-gpu]
     timeout-minutes: 30
     outputs:
@@ -1006,7 +1006,7 @@ jobs:
   bd_model1:
     name: BD Model 1
     needs: [prepare_metadata, build_current, build_baseline]
-    if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
+    if: needs.prepare_metadata.result == 'success' && needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
     runs-on: [self-hosted, musa-gpu]
     timeout-minutes: 75
     outputs:
@@ -1395,7 +1395,7 @@ jobs:
   bd_model2:
     name: BD Model 2
     needs: [prepare_metadata, build_current, build_baseline]
-    if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
+    if: needs.prepare_metadata.result == 'success' && needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
     runs-on: [self-hosted, musa-gpu]
     timeout-minutes: 75
     outputs:
@@ -1784,7 +1784,7 @@ jobs:
   bd_model3:
     name: BD Model 3
     needs: [prepare_metadata, build_current, build_baseline]
-    if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
+    if: needs.prepare_metadata.result == 'success' && needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
     runs-on: [self-hosted, musa-gpu]
     timeout-minutes: 75
     outputs:
@@ -2173,7 +2173,7 @@ jobs:
   training:
     name: Training
     needs: [prepare_metadata, build_current]
-    if: needs.build_current.result == 'success'
+    if: needs.prepare_metadata.result == 'success' && needs.build_current.result == 'success'
     runs-on: [self-hosted, musa-gpu]
     timeout-minutes: 210
     outputs:
@@ -2348,7 +2348,9 @@ jobs:
           if [[ "${{ steps.run_training.outputs.training_exit }}" != "0" ]]; then
             STATUS="failure"
           fi
-          if [[ -f "$LOG_FILE" ]] && { grep -q '^\[FAIL\]' "$LOG_FILE" || grep -Eq '^失败:[[:space:]]*[1-9][0-9]*' "$LOG_FILE"; }; then
+          if [[ ! -f "$LOG_FILE" ]]; then
+            STATUS="failure"
+          elif grep -Eq "$EMPTY_TEST_RESULT_PATTERN" "$LOG_FILE" || grep -q '^\[FAIL\]' "$LOG_FILE" || grep -Eq '^失败:[[:space:]]*[1-9][0-9]*' "$LOG_FILE"; then
             STATUS="failure"
           fi
 
@@ -2637,16 +2639,16 @@ jobs:
           cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
 
           BLOCKING_FAILURE=0
-          if [[ "$BUILD_CURRENT_STATUS" == "failure" || "$BUILD_CURRENT_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$INTEGRATION_STATUS" == "failure" || "$INTEGRATION_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$BUILD_BASELINE_STATUS" == "failure" || "$BUILD_BASELINE_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$T_PERF_STATUS" == "failure" || "$T_PERF_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$T_ACC_STATUS" == "failure" || "$T_ACC_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$BD1_STATUS" == "failure" || "$BD1_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$BD2_STATUS" == "failure" || "$BD2_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$BD3_STATUS" == "failure" || "$BD3_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$TRAINING_STATUS" == "failure" || "$TRAINING_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$PREPARE_METADATA_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BUILD_CURRENT_STATUS" == "failure" || "$BUILD_CURRENT_RESULT" == "failure" || "$BUILD_CURRENT_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$INTEGRATION_STATUS" == "failure" || "$INTEGRATION_RESULT" == "failure" || "$INTEGRATION_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BUILD_BASELINE_STATUS" == "failure" || "$BUILD_BASELINE_RESULT" == "failure" || "$BUILD_BASELINE_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$T_PERF_STATUS" == "failure" || "$T_PERF_RESULT" == "failure" || "$T_PERF_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$T_ACC_STATUS" == "failure" || "$T_ACC_RESULT" == "failure" || "$T_ACC_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BD1_STATUS" == "failure" || "$BD1_RESULT" == "failure" || "$BD1_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BD2_STATUS" == "failure" || "$BD2_RESULT" == "failure" || "$BD2_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BD3_STATUS" == "failure" || "$BD3_RESULT" == "failure" || "$BD3_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$TRAINING_STATUS" == "failure" || "$TRAINING_RESULT" == "failure" || "$TRAINING_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$PREPARE_METADATA_RESULT" == "failure" || "$PREPARE_METADATA_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
 
           if [[ "$BLOCKING_FAILURE" -ne 0 ]]; then
             FINAL_STATUS="failure"
