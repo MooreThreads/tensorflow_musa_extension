@@ -272,6 +272,7 @@ jobs:
           export LOG_FILE
           bash -l -c '
             set -o pipefail
+            export CPLUS_INCLUDE_PATH="/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:${CPLUS_INCLUDE_PATH:-}"
             cd "$GITHUB_WORKSPACE"
             rm -rf ./build ./dist
             ./build.sh wheel 2>&1 | tee "$LOG_FILE"
@@ -400,6 +401,7 @@ jobs:
             export LOG_FILE BASELINE_WORKSPACE
             bash -l -c '
               set -o pipefail
+              export CPLUS_INCLUDE_PATH="/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:${CPLUS_INCLUDE_PATH:-}"
               cd "$BASELINE_WORKSPACE"
               rm -rf ./build ./dist
               ./build.sh wheel 2>&1 | tee "$LOG_FILE"
