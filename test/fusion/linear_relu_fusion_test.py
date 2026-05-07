@@ -16,6 +16,8 @@
 """Tests for Linear+Activation fusion."""
 
 import os
+os.environ.setdefault("MUSA_ENABLE_TF32", "0")
+
 import numpy as np
 import tensorflow as tf
 from musa_test_utils import MUSATestCase
