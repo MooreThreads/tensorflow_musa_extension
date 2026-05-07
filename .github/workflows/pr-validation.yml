@@ -41,10 +41,12 @@ env:
   BASELINE_WORKSPACE: /home/runner/baseline/tensorflow_musa_extension
   BASELINE_REPO_URL: https://github.com/MooreThreads/tensorflow_musa_extension.git
   CURRENT_PLUGIN_ARTIFACT: current-plugin
+  CURRENT_WHEEL_ARTIFACT: current-wheel
   BASELINE_PLUGIN_ARTIFACT: baseline-plugin
   GPU_GUARD_PATTERN: '[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_tf_musa_extension.py|[t]est_runner.py'
   GPU_GUARD_TIMEOUT_SECONDS: 180
   GPU_LOCK_FILE: /tmp/tensorflow_musa_ci_gpu.lock
+  EMPTY_TEST_RESULT_PATTERN: 'No tests found|No test files found|Total Tests:[[:space:]]*0|Total Tests[[:space:]]*│[[:space:]]*0|总计:[[:space:]]*0|no average_time_summary entries|report path missing|log not found'
 
 jobs:
   prepare_metadata:
@@ -273,8 +275,9 @@ jobs:
             set -o pipefail
             export CPLUS_INCLUDE_PATH="/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:${CPLUS_INCLUDE_PATH:-}"
             cd "$GITHUB_WORKSPACE"
-            rm -rf ./build
+            rm -rf ./build ./dist
             ./build.sh 2>&1 | tee "$LOG_FILE"
+            ./build.sh wheel 2>&1 | tee -a "$LOG_FILE"
           ' || build_exit=$?
 
           echo "build_exit=$build_exit" >> "$GITHUB_OUTPUT"
@@ -289,13 +292,15 @@ jobs:
           LOG_FILE="$JOB_LOG_DIR/build_current.log"
           SUMMARY_FILE="$RUNNER_TEMP/build-current.md"
           PLUGIN_PATH="$GITHUB_WORKSPACE/build/libmusa_plugin.so"
+          WHEEL_PATH="$(find "$GITHUB_WORKSPACE/dist" -maxdepth 1 -name 'tensorflow_musa-*.whl' -print -quit 2>/dev/null || true)"
           STATUS="success"
 
-          if [[ "${{ steps.run_build.outputs.build_exit }}" != "0" || ! -f "$PLUGIN_PATH" ]]; then
+          if [[ "${{ steps.run_build.outputs.build_exit }}" != "0" || ! -f "$PLUGIN_PATH" || -z "$WHEEL_PATH" ]]; then
             STATUS="failure"
           fi
 
           PLUGIN_SIZE="$(stat -c%s "$PLUGIN_PATH" 2>/dev/null || echo "n/a")"
+          WHEEL_SIZE="$(stat -c%s "$WHEEL_PATH" 2>/dev/null || echo "n/a")"
 
           {
             echo "## Build Current"
@@ -303,6 +308,8 @@ jobs:
             echo "- Status: $STATUS"
             echo "- Plugin path: $PLUGIN_PATH"
             echo "- Plugin size: $PLUGIN_SIZE"
+            echo "- Wheel path: ${WHEEL_PATH:-not found}"
+            echo "- Wheel size: $WHEEL_SIZE"
             echo "- Log file: $LOG_FILE"
             echo
             echo '```text'
@@ -324,6 +331,15 @@ jobs:
         with:
           name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
           path: ${{ github.workspace }}/build/libmusa_plugin.so
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload current wheel artifact
+        if: steps.collect.outputs.status == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.CURRENT_WHEEL_ARTIFACT }}
+          path: ${{ github.workspace }}/dist/tensorflow_musa-*.whl
           if-no-files-found: error
           retention-days: 7
 
@@ -352,7 +368,7 @@ jobs:
   integration:
     name: Integration Test
     needs: [prepare_metadata, build_current]
-    if: needs.build_current.result == 'success'
+    if: needs.prepare_metadata.result == 'success' && needs.build_current.result == 'success'
     runs-on: [self-hosted, musa-gpu]
     timeout-minutes: 45
     outputs:
@@ -365,11 +381,11 @@ jobs:
           fetch-depth: 0
           ref: ${{ needs.prepare_metadata.outputs.commit_id }}
 
-      - name: Download current plugin
+      - name: Download current wheel
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
-          path: ${{ github.workspace }}/build
+          name: ${{ env.CURRENT_WHEEL_ARTIFACT }}
+          path: ${{ runner.temp }}/current-wheel
 
       - name: Run integration tests
         id: run_test
@@ -381,11 +397,13 @@ jobs:
           mkdir -p "$JOB_LOG_DIR"
 
           test_exit=0
-          export LOG_FILE
+          export LOG_FILE WHEEL_DIR="$RUNNER_TEMP/current-wheel"
           bash -l -c '
-            set -o pipefail
+            set -e -o pipefail
+            cd "$GITHUB_WORKSPACE"
+            pip install "$WHEEL_DIR"/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee "$LOG_FILE"
             cd "$GITHUB_WORKSPACE/test"
-            timeout 30m python test_runner.py --fusion 2>&1 | tee "$LOG_FILE"
+            timeout 30m python test_runner.py --fusion 2>&1 | tee -a "$LOG_FILE"
           ' || test_exit=$?
 
           echo "test_exit=$test_exit" >> "$GITHUB_OUTPUT"
@@ -402,6 +420,11 @@ jobs:
           STATUS="success"
 
           if [[ "${{ steps.run_test.outputs.test_exit }}" != "0" ]]; then
+            STATUS="failure"
+          fi
+          if [[ ! -f "$LOG_FILE" ]]; then
+            STATUS="failure"
+          elif grep -Eq "$EMPTY_TEST_RESULT_PATTERN" "$LOG_FILE"; then
             STATUS="failure"
           fi
 
@@ -583,7 +606,7 @@ jobs:
   t_perf:
     name: T Performance
     needs: [prepare_metadata, build_current, build_baseline]
-    if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
+    if: needs.prepare_metadata.result == 'success' && needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
     runs-on: [self-hosted, musa-gpu]
     timeout-minutes: 60
     outputs:
@@ -810,7 +833,7 @@ jobs:
   t_accuracy:
     name: T Accuracy
     needs: [prepare_metadata, build_current]
-    if: needs.build_current.result == 'success'
+    if: needs.prepare_metadata.result == 'success' && needs.build_current.result == 'success'
     runs-on: [self-hosted, musa-gpu]
     timeout-minutes: 30
     outputs:
@@ -983,7 +1006,7 @@ jobs:
   bd_model1:
     name: BD Model 1
     needs: [prepare_metadata, build_current, build_baseline]
-    if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
+    if: needs.prepare_metadata.result == 'success' && needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
     runs-on: [self-hosted, musa-gpu]
     timeout-minutes: 75
     outputs:
@@ -1372,7 +1395,7 @@ jobs:
   bd_model2:
     name: BD Model 2
     needs: [prepare_metadata, build_current, build_baseline]
-    if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
+    if: needs.prepare_metadata.result == 'success' && needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
     runs-on: [self-hosted, musa-gpu]
     timeout-minutes: 75
     outputs:
@@ -1761,7 +1784,7 @@ jobs:
   bd_model3:
     name: BD Model 3
     needs: [prepare_metadata, build_current, build_baseline]
-    if: needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
+    if: needs.prepare_metadata.result == 'success' && needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
     runs-on: [self-hosted, musa-gpu]
     timeout-minutes: 75
     outputs:
@@ -2150,7 +2173,7 @@ jobs:
   training:
     name: Training
     needs: [prepare_metadata, build_current]
-    if: needs.build_current.result == 'success'
+    if: needs.prepare_metadata.result == 'success' && needs.build_current.result == 'success'
     runs-on: [self-hosted, musa-gpu]
     timeout-minutes: 210
     outputs:
@@ -2325,7 +2348,9 @@ jobs:
           if [[ "${{ steps.run_training.outputs.training_exit }}" != "0" ]]; then
             STATUS="failure"
           fi
-          if [[ -f "$LOG_FILE" ]] && { grep -q '^\[FAIL\]' "$LOG_FILE" || grep -Eq '^失败:[[:space:]]*[1-9][0-9]*' "$LOG_FILE"; }; then
+          if [[ ! -f "$LOG_FILE" ]]; then
+            STATUS="failure"
+          elif grep -Eq "$EMPTY_TEST_RESULT_PATTERN" "$LOG_FILE" || grep -q '^\[FAIL\]' "$LOG_FILE" || grep -Eq '^失败:[[:space:]]*[1-9][0-9]*' "$LOG_FILE"; then
             STATUS="failure"
           fi
 
@@ -2614,16 +2639,16 @@ jobs:
           cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
 
           BLOCKING_FAILURE=0
-          if [[ "$BUILD_CURRENT_STATUS" == "failure" || "$BUILD_CURRENT_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$INTEGRATION_STATUS" == "failure" || "$INTEGRATION_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$BUILD_BASELINE_STATUS" == "failure" || "$BUILD_BASELINE_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$T_PERF_STATUS" == "failure" || "$T_PERF_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$T_ACC_STATUS" == "failure" || "$T_ACC_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$BD1_STATUS" == "failure" || "$BD1_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$BD2_STATUS" == "failure" || "$BD2_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$BD3_STATUS" == "failure" || "$BD3_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$TRAINING_STATUS" == "failure" || "$TRAINING_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$PREPARE_METADATA_RESULT" == "failure" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BUILD_CURRENT_STATUS" == "failure" || "$BUILD_CURRENT_RESULT" == "failure" || "$BUILD_CURRENT_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$INTEGRATION_STATUS" == "failure" || "$INTEGRATION_RESULT" == "failure" || "$INTEGRATION_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BUILD_BASELINE_STATUS" == "failure" || "$BUILD_BASELINE_RESULT" == "failure" || "$BUILD_BASELINE_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$T_PERF_STATUS" == "failure" || "$T_PERF_RESULT" == "failure" || "$T_PERF_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$T_ACC_STATUS" == "failure" || "$T_ACC_RESULT" == "failure" || "$T_ACC_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BD1_STATUS" == "failure" || "$BD1_RESULT" == "failure" || "$BD1_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BD2_STATUS" == "failure" || "$BD2_RESULT" == "failure" || "$BD2_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$BD3_STATUS" == "failure" || "$BD3_RESULT" == "failure" || "$BD3_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$TRAINING_STATUS" == "failure" || "$TRAINING_RESULT" == "failure" || "$TRAINING_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$PREPARE_METADATA_RESULT" == "failure" || "$PREPARE_METADATA_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
 
           if [[ "$BLOCKING_FAILURE" -ne 0 ]]; then
             FINAL_STATUS="failure"
