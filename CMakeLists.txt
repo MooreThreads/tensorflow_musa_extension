@@ -113,16 +113,28 @@ endif()
 
 # Define source root directory
 set(SRC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/musa_ext")
+set(GRAPH_ROOT "${SRC_ROOT}/graph")
+set(GRAPH_FUSION_ROOT "${GRAPH_ROOT}/fusion")
 set(KERNELS_ROOT "${SRC_ROOT}/kernels")
 set(FUSION_ROOT "${KERNELS_ROOT}/fusion")
-include_directories("${SRC_ROOT}" "${SRC_ROOT}/mu" "${KERNELS_ROOT}" "${FUSION_ROOT}")
+include_directories(
+    "${SRC_ROOT}"
+    "${SRC_ROOT}/mu"
+    "${GRAPH_ROOT}"
+    "${GRAPH_FUSION_ROOT}"
+    "${KERNELS_ROOT}"
+    "${FUSION_ROOT}"
+)
 
 # Validate source directory exists
 if(NOT EXISTS "${SRC_ROOT}")
     message(FATAL_ERROR "Source directory '${SRC_ROOT}' does not exist.")
 endif()
+if(NOT EXISTS "${GRAPH_FUSION_ROOT}")
+    message(FATAL_ERROR "Graph fusion rule directory '${GRAPH_FUSION_ROOT}' does not exist.")
+endif()
 if(NOT EXISTS "${FUSION_ROOT}")
-    message(FATAL_ERROR "Fusion source directory '${FUSION_ROOT}' does not exist.")
+    message(FATAL_ERROR "Kernel fusion implementation directory '${FUSION_ROOT}' does not exist.")
 endif()
 
 # Link paths
