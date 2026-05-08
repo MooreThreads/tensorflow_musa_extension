@@ -16,6 +16,8 @@
 """Tests for Linear+Activation fusion."""
 
 import os
+os.environ.setdefault("MUSA_ENABLE_TF32", "0")
+
 import numpy as np
 import tensorflow as tf
 from musa_test_utils import MUSATestCase
@@ -38,6 +40,14 @@ def create_config_with_musa_optimizer():
     rewriter_config.optimizers.extend(["musa_graph_optimizer"])
 
     return config
+
+
+def is_tf32_enabled():
+    return int(os.environ.get("MUSA_ENABLE_TF32", "0")) != 0
+
+
+def float32_tolerance(default_rtol=1e-5, default_atol=1e-5):
+    return (1e-2, 1e-2) if is_tf32_enabled() else (default_rtol, default_atol)
 
 
 class LinearActivationFusionTest(MUSATestCase):
@@ -90,7 +100,8 @@ class LinearActivationFusionTest(MUSATestCase):
             actual_out = sess.run(output, feed_dict={x: x_np})
 
         # Verification
-        self.assertAllClose(actual_out, expected_out.numpy(), rtol=1e-5, atol=1e-5)
+        rtol, atol = float32_tolerance()
+        self.assertAllClose(actual_out, expected_out.numpy(), rtol=rtol, atol=atol)
 
     def test_linear_relu_fusion_applied(self):
         """Verify that Linear+Relu fusion is applied as MusaLinearActivation."""
@@ -166,7 +177,8 @@ class LinearActivationFusionTest(MUSATestCase):
             with tf.compat.v1.Session(graph=graph, config=config) as sess:
                 actual = sess.run(out, feed_dict={x: x_np})
 
-            self.assertAllClose(actual, expected.numpy(), rtol=1e-5, atol=1e-5)
+            rtol, atol = float32_tolerance()
+            self.assertAllClose(actual, expected.numpy(), rtol=rtol, atol=atol)
 
     def test_linear_relu_fusion_not_applied_with_intervening_op(self):
         """If an extra op exists between MatMul and BiasAdd, fusion should not occur."""
@@ -250,7 +262,7 @@ class LinearActivationFusionTest(MUSATestCase):
 
             # Tolerances adjusted for reduced-precision dtypes
             if dtype == tf.float32:
-                rtol, atol = 1e-5, 1e-5
+                rtol, atol = float32_tolerance()
             elif dtype == tf.float16:
                 rtol, atol = 1e-2, 1e-2
             else:  # bfloat16
@@ -292,7 +304,8 @@ class LinearActivationFusionTest(MUSATestCase):
         with tf.compat.v1.Session(graph=graph, config=config) as sess:
             actual = sess.run(out, feed_dict={x: x_np})
 
-        self.assertAllClose(actual, expected.numpy(), rtol=1e-4, atol=1e-4)
+        rtol, atol = float32_tolerance(default_rtol=1e-4, default_atol=1e-4)
+        self.assertAllClose(actual, expected.numpy(), rtol=rtol, atol=atol)
 
     def test_linear_relu_fusion_large_batch(self):
         """Optional large-batch test. Enable by setting MUSA_RUN_LARGE_TESTS=1."""
@@ -328,7 +341,8 @@ class LinearActivationFusionTest(MUSATestCase):
         with tf.compat.v1.Session(graph=graph, config=config) as sess:
             actual = sess.run(out, feed_dict={x: x_np})
 
-        self.assertAllClose(actual, expected.numpy(), rtol=1e-4, atol=1e-4)
+        rtol, atol = float32_tolerance(default_rtol=1e-4, default_atol=1e-4)
+        self.assertAllClose(actual, expected.numpy(), rtol=rtol, atol=atol)
 
 
 if __name__ == "__main__":

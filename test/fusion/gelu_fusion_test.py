@@ -52,15 +52,12 @@ class GeluFusionE2ETest(MUSATestCase):
     """End-to-end tests for exact and approximate GELU fusion."""
 
     def _load_after_fusion_dump(self, dump_dir):
-        """Load the last after_fusion dump as both text and GraphDef."""
-        dump_files = sorted(glob.glob(os.path.join(dump_dir, "*_after_fusion.pbtxt")))
+        dump_files = sorted(glob.glob(os.path.join(dump_dir, "*_after_fusion.pb")))
         self.assertTrue(dump_files, f"No after_fusion dump found in {dump_dir}")
-
-        with open(dump_files[-1], "r", encoding="utf-8") as handle:
-            dump_text = handle.read()
-
         graph_def = graph_pb2.GraphDef()
-        text_format.Parse(dump_text, graph_def)
+        with open(dump_files[-1], "rb") as handle:
+            graph_def.ParseFromString(handle.read())
+        dump_text = text_format.MessageToString(graph_def)
         return dump_text, graph_def
 
     def _build_exact_gelu_graph(self, input_shape):
