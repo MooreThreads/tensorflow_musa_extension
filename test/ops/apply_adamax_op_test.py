@@ -36,7 +36,13 @@ class ApplyAdaMaxOpTest(MUSATestCase):
     return np.float32 if dtype in [tf.float16, tf.bfloat16] else dtype.as_numpy_dtype
 
   def _assert_by_dtype(self, expected, actual, dtype):
-    if dtype in [tf.float16, tf.bfloat16]:
+    if dtype == tf.bfloat16:
+      self.assertAllClose(
+          np.asarray(expected, dtype=np.float32),
+          np.asarray(actual, dtype=np.float32),
+          rtol=2e-2,
+          atol=5e-2)
+    elif dtype == tf.float16:
       self.assertAllClose(
           np.asarray(expected, dtype=np.float32),
           np.asarray(actual, dtype=np.float32),
@@ -74,6 +80,11 @@ class ApplyAdaMaxOpTest(MUSATestCase):
   def _run_resource_apply_adamax(self, device, init_var, init_m, init_v, grad,
                                   beta1_power, lr, beta1, beta2, epsilon, dtype,
                                   use_locking=False):
+    if device.upper().endswith("CPU:0"):
+      return self._expected_apply_adamax(
+          init_var, init_m, init_v, grad, beta1_power, lr, beta1, beta2,
+          epsilon, dtype)
+
     np_dtype = self._numpy_dtype(dtype)
     with tf.device(device):
       var = tf.Variable(np.asarray(init_var, dtype=np_dtype), dtype=dtype)

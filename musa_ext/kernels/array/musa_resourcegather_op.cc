@@ -14,8 +14,8 @@
 #include <vector>
 
 #include "../utils_op.h"
-#include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/bfloat16.h"
+#include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/resource_mgr.h"
 #include "tensorflow/core/framework/resource_var.h"
 #include "tensorflow/core/platform/logging.h"
@@ -351,18 +351,18 @@ REGISTER_MUSA_KERNELS(double);
 REGISTER_MUSA_KERNELS(int32);
 REGISTER_MUSA_KERNELS(int64);
 
-#define REGISTER_MUSA_ASSIGN_UPDATE_VARIABLE_KERNELS(type)             \
-  REGISTER_KERNEL_BUILDER(                                             \
-      Name("AssignSubVariableOp")                                      \
-          .Device(DEVICE_MTGPU)                                        \
-          .HostMemory("resource")                                      \
-          .TypeConstraint<type>("dtype"),                              \
-      MusaAssignUpdateVariableOp<type, mBinary::Mode::SUB>);           \
-  REGISTER_KERNEL_BUILDER(                                             \
-      Name("AssignAddVariableOp")                                      \
-          .Device(DEVICE_MTGPU)                                        \
-          .HostMemory("resource")                                      \
-          .TypeConstraint<type>("dtype"),                              \
+#define REGISTER_MUSA_ASSIGN_UPDATE_VARIABLE_KERNELS(type)   \
+  REGISTER_KERNEL_BUILDER(                                   \
+      Name("AssignSubVariableOp")                            \
+          .Device(DEVICE_MTGPU)                              \
+          .HostMemory("resource")                            \
+          .TypeConstraint<type>("dtype"),                    \
+      MusaAssignUpdateVariableOp<type, mBinary::Mode::SUB>); \
+  REGISTER_KERNEL_BUILDER(                                   \
+      Name("AssignAddVariableOp")                            \
+          .Device(DEVICE_MTGPU)                              \
+          .HostMemory("resource")                            \
+          .TypeConstraint<type>("dtype"),                    \
       MusaAssignUpdateVariableOp<type, mBinary::Mode::ADD>);
 
 REGISTER_MUSA_ASSIGN_UPDATE_VARIABLE_KERNELS(Eigen::bfloat16);

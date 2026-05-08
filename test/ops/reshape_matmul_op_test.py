@@ -15,10 +15,21 @@
 
 """Tests for MusaReshapeMatMul operator."""
 
+import os
+os.environ.setdefault("MUSA_ENABLE_TF32", "0")
+
 import numpy as np
 import tensorflow as tf
 
 from musa_test_utils import MUSATestCase, load_musa_ops
+
+
+def is_tf32_enabled():
+    return int(os.environ.get("MUSA_ENABLE_TF32", "0")) != 0
+
+
+def float32_tolerance(default_rtol=1e-5, default_atol=1e-6):
+    return (1e-2, 1e-2) if is_tf32_enabled() else (default_rtol, default_atol)
 
 
 class ReshapeMatMulOpTest(MUSATestCase):
@@ -58,7 +69,8 @@ class ReshapeMatMulOpTest(MUSATestCase):
 
         expected = self._run_reference(x_np, w_np)
         actual = self._run_graph(x_np, w_np)
-        self.assertAllClose(expected, actual, rtol=1e-5, atol=1e-6)
+        rtol, atol = float32_tolerance()
+        self.assertAllClose(expected, actual, rtol=rtol, atol=atol)
 
     def test_rank4_float16(self):
         x_np = np.random.randn(2, 3, 4, 8).astype(np.float16)
@@ -74,7 +86,8 @@ class ReshapeMatMulOpTest(MUSATestCase):
 
         expected = self._run_reference(x_np, w_np, transpose_b=True)
         actual = self._run_graph(x_np, w_np, transpose_b=True)
-        self.assertAllClose(expected, actual, rtol=1e-5, atol=1e-6)
+        rtol, atol = float32_tolerance()
+        self.assertAllClose(expected, actual, rtol=rtol, atol=atol)
 
     def test_invalid_dim_mismatch(self):
         x_np = np.random.randn(2, 4, 7).astype(np.float32)
