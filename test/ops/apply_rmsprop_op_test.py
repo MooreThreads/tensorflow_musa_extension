@@ -328,7 +328,8 @@ class ResourceApplyCenteredRMSPropTest(MUSATestCase):
         rng = np.random.RandomState(sum(shape))
         init_var = rng.randn(*shape).astype(np.float32)
         init_mg = rng.randn(*shape).astype(np.float32) * 0.1
-        init_ms = np.abs(rng.randn(*shape).astype(np.float32)) * 0.1
+        init_ms_noise = np.abs(rng.randn(*shape).astype(np.float32)) * 0.1
+        init_ms = np.square(init_mg) + init_ms_noise
         init_mom = rng.randn(*shape).astype(np.float32) * 0.01
         grad = rng.randn(*shape).astype(np.float32)
 
