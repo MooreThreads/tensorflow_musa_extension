@@ -13,21 +13,21 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef TENSORFLOW_MUSA_EXTENSION_KERNELS_FUSION_PLN_CASCADE_BLOCK_FUSION_H_
-#define TENSORFLOW_MUSA_EXTENSION_KERNELS_FUSION_PLN_CASCADE_BLOCK_FUSION_H_
+#ifndef TENSORFLOW_MUSA_EXTENSION_GRAPH_FUSION_MATMUL_BIAS_FUSION_H_
+#define TENSORFLOW_MUSA_EXTENSION_GRAPH_FUSION_MATMUL_BIAS_FUSION_H_
 
 #include <string>
 
-#include "kernels/fusion/fusion_pattern_manager.h"
+#include "graph/fusion/fusion_pattern_manager.h"
 
 namespace tensorflow {
 namespace grappler {
 namespace musa_fusion {
 
-class MusaPlnCascadeBlockFusion : public FusionPattern {
+class MatMulBiasFusion : public FusionPattern {
  public:
-  MusaPlnCascadeBlockFusion();
-  ~MusaPlnCascadeBlockFusion() override = default;
+  MatMulBiasFusion();
+  ~MatMulBiasFusion() override = default;
 
   FusionMatchResult Match(const GraphDef& graph,
                           int start_node_idx) const override;
@@ -35,16 +35,17 @@ class MusaPlnCascadeBlockFusion : public FusionPattern {
   Status Apply(GraphDef* graph,
                const FusionMatchResult& match_result) const override;
 
-  // Must run after single-step MusaPlnCascade fusion (priority=80).
+  // Keep this below LinearReluFusion (100) so MatMul+BiasAdd+Relu chains are
+  // consumed by the more specific pattern first.
   int GetPriority() const override { return 70; }
 
   bool IsKernelAvailable() const override;
 
-  std::string GetName() const override { return "MusaPlnCascadeBlockFusion"; }
+  std::string GetName() const override { return "MatMulBiasFusion"; }
 
   std::string GetFallbackReason() const override {
     if (!kernel_available_) {
-      return "MusaPlnCascadeBlock kernel not available on this device";
+      return "MusaFusedMatMul kernel not available on this device";
     }
     return "";
   }
@@ -58,4 +59,4 @@ class MusaPlnCascadeBlockFusion : public FusionPattern {
 }  // namespace grappler
 }  // namespace tensorflow
 
-#endif  // TENSORFLOW_MUSA_EXTENSION_KERNELS_FUSION_PLN_CASCADE_BLOCK_FUSION_H_
+#endif  // TENSORFLOW_MUSA_EXTENSION_GRAPH_FUSION_MATMUL_BIAS_FUSION_H_

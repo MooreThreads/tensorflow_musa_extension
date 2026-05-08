@@ -13,15 +13,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef TENSORFLOW_MUSA_EXTENSION_KERNELS_FUSION_PLN_CASCADE_FUSION_H_
-#define TENSORFLOW_MUSA_EXTENSION_KERNELS_FUSION_PLN_CASCADE_FUSION_H_
+#ifndef TENSORFLOW_MUSA_EXTENSION_GRAPH_FUSION_PLN_CASCADE_FUSION_H_
+#define TENSORFLOW_MUSA_EXTENSION_GRAPH_FUSION_PLN_CASCADE_FUSION_H_
 
 #include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
-#include "kernels/fusion/fusion_pattern_manager.h"
+#include "graph/fusion/fusion_pattern_manager.h"
 
 namespace tensorflow {
 namespace grappler {
@@ -76,4 +76,4 @@ class MusaPlnCascadeFusion : public FusionPattern {
 }  // namespace grappler
 }  // namespace tensorflow
 
-#endif  // TENSORFLOW_MUSA_EXTENSION_KERNELS_FUSION_PLN_CASCADE_FUSION_H_
+#endif  // TENSORFLOW_MUSA_EXTENSION_GRAPH_FUSION_PLN_CASCADE_FUSION_H_

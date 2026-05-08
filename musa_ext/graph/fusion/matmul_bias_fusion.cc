@@ -13,12 +13,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "kernels/fusion/matmul_bias_fusion.h"
+#include "graph/fusion/matmul_bias_fusion.h"
 
 #include <string>
 #include <vector>
 
-#include "kernels/fusion/fusion_pattern_manager.h"
+#include "graph/fusion/fusion_pattern_manager.h"
 #include "tensorflow/core/framework/attr_value.pb.h"
 #include "tensorflow/core/framework/tensor.pb.h"
 #include "tensorflow/core/framework/types.pb.h"

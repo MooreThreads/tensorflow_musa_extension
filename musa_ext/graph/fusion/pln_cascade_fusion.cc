@@ -13,7 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "kernels/fusion/pln_cascade_fusion.h"
+#include "graph/fusion/pln_cascade_fusion.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -22,7 +22,7 @@ limitations under the License.
 #include <unordered_set>
 #include <vector>
 
-#include "kernels/fusion/fusion_pattern_manager.h"
+#include "graph/fusion/fusion_pattern_manager.h"
 #include "tensorflow/core/framework/attr_value.pb.h"
 #include "tensorflow/core/framework/tensor.pb.h"
 #include "tensorflow/core/framework/types.pb.h"

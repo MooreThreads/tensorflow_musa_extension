@@ -13,13 +13,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "kernels/fusion/pln_cascade_block_fusion.h"
+#include "graph/fusion/pln_cascade_block_fusion.h"
 
 #include <sstream>
 #include <string>
 #include <vector>
 
-#include "kernels/fusion/fusion_pattern_manager.h"
+#include "graph/fusion/fusion_pattern_manager.h"
 #include "tensorflow/core/framework/attr_value.pb.h"
 #include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/lib/core/status.h"
