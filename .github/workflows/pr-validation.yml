@@ -403,7 +403,7 @@ jobs:
             cd "$GITHUB_WORKSPACE"
             pip install "$WHEEL_DIR"/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee "$LOG_FILE"
             cd "$GITHUB_WORKSPACE/test"
-            timeout 30m python test_runner.py --fusion 2>&1 | tee -a "$LOG_FILE"
+            timeout 60m python test_runner.py --quiet 2>&1 | tee -a "$LOG_FILE"
           ' || test_exit=$?
 
           echo "test_exit=$test_exit" >> "$GITHUB_OUTPUT"
