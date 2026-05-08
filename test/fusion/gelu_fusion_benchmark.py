@@ -41,8 +41,6 @@ import tensorflow.compat.v1 as tf
 from tensorflow.core.framework import graph_pb2
 from tensorflow.core.protobuf import config_pb2
 
-tf.disable_eager_execution()
-
 ROOT_DIR = Path(__file__).resolve().parents[2]
 WORKSPACE_DIR = ROOT_DIR.parent
 DEFAULT_FUSED_GRAPH = ROOT_DIR / "gelu_big_graphs_pb" / "musa_optimizer_0002_after_fusion.pb"
@@ -534,6 +532,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+  tf.disable_eager_execution()
   args = parse_args()
 
   if args.compare_json:

@@ -39,9 +39,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from musa_test_utils import load_musa_plugin
 
 
-tf.disable_eager_execution()
-
-
 def build_graph_def() -> graph_pb2.GraphDef:
     with tf.Graph().as_default() as graph:
         with tf.device('/device:MUSA:0'):
@@ -102,6 +99,7 @@ def save_graph(graph_def: graph_pb2.GraphDef, pbtxt_path: Path, pb_path: Path) -
 
 
 def main() -> None:
+    tf.disable_eager_execution()
     default_dir = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(
         description='Generate graph artifacts that exercise RemoveIsolatedNodes.'

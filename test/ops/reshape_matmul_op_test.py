@@ -18,26 +18,30 @@
 import numpy as np
 import tensorflow as tf
 
-from musa_test_utils import load_musa_ops
-
-PLUGIN_OPS = load_musa_ops()
-tf.compat.v1.disable_eager_execution()
+from musa_test_utils import MUSATestCase, load_musa_ops
 
 
-class ReshapeMatMulOpTest(tf.test.TestCase):
+class ReshapeMatMulOpTest(MUSATestCase):
     """Functional tests for MusaReshapeMatMul."""
 
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            cls._musa_ops = load_musa_ops()
+        except Exception as e:
+            print(f"FAILED: Error loading MUSA ops: {e}")
+            cls._musa_ops = None
+
     def _run_graph(self, x_np, w_np, transpose_b=False):
-        graph = tf.Graph()
-        with graph.as_default():
-            x = tf.constant(x_np)
-            w = tf.constant(w_np)
-            with tf.device("/device:MUSA:0"):
-                actual = PLUGIN_OPS.musa_reshape_mat_mul(
-                    x=x, w=w, transpose_b=transpose_b
-                )
-        with tf.compat.v1.Session(graph=graph) as sess:
-            return sess.run(actual)
+        if self._musa_ops is None:
+            self.skipTest("MUSA ops not available")
+        x = tf.constant(x_np)
+        w = tf.constant(w_np)
+        with tf.device("/device:MUSA:0"):
+            return self._musa_ops.musa_reshape_mat_mul(
+                x=x, w=w, transpose_b=transpose_b
+            ).numpy()
 
     def _run_reference(self, x_np, w_np, transpose_b=False):
         x_shape = list(x_np.shape)

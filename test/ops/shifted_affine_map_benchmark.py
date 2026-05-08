@@ -48,8 +48,6 @@ import tensorflow.compat.v1 as tf
 from tensorflow.core.protobuf import config_pb2
 from tensorflow.core.protobuf import rewriter_config_pb2
 
-tf.disable_eager_execution()
-
 DTYPE_MAP = {
     "float16": tf.float16,
     "float32": tf.float32,
@@ -294,6 +292,7 @@ def save_json_summary(path: Path, payload: Dict[str, object]) -> None:
 
 
 def main() -> None:
+    tf.disable_eager_execution()
     parser = argparse.ArgumentParser(
         description="Benchmark ShiftedAffineMap primitive/fused/custom paths."
     )
