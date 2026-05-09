@@ -16,7 +16,7 @@
 """Tests for MusaReshapeMatMul operator."""
 
 import os
-os.environ.setdefault("MUSA_ENABLE_TF32", "0")
+# os.environ.setdefault("MUSA_ENABLE_TF32", "0")
 
 import numpy as np
 import tensorflow as tf
@@ -29,7 +29,8 @@ def is_tf32_enabled():
 
 
 def float32_tolerance(default_rtol=1e-5, default_atol=1e-6):
-    return (1e-2, 1e-2) if is_tf32_enabled() else (default_rtol, default_atol)
+    # return (1e-2, 1e-2) if is_tf32_enabled() else (default_rtol, default_atol)
+    return (default_rtol, default_atol)
 
 
 class ReshapeMatMulOpTest(MUSATestCase):

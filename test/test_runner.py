@@ -482,6 +482,7 @@ def discover_and_run_tests(test_pattern="*_op_test.py", test_dir_name="ops",
                             detail_mode=detail_mode,
                             log_file=log_file)
     result = runner.run(suite)
+    return result
 
 
 # ============================================================================
@@ -564,15 +565,19 @@ Examples:
             if args.pattern == "*_op_test.py"
             else args.pattern
         )
-        discover_and_run_tests(fusion_pattern,
+        result = discover_and_run_tests(fusion_pattern,
                              test_dir_name="fusion",
                              quiet=quiet_mode,
                              detail_mode=detail_mode,
                              log_file=args.log_file if detail_mode else None)
+        if result and (result.failures or result.errors):
+            sys.exit(1)
     else:
         # Run all operator tests
-        discover_and_run_tests(args.pattern,
+        result = discover_and_run_tests(args.pattern,
                              test_dir_name="ops",
                              quiet=quiet_mode,
                              detail_mode=detail_mode,
                              log_file=args.log_file if detail_mode else None)
+        if result and (result.failures or result.errors):
+            sys.exit(1)
