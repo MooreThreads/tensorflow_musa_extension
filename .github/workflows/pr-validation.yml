@@ -38,12 +38,9 @@ defaults:
 env:
   LOG_BASE: /home/runner/ci_logs
   MODEL_ROOT: /home/runner/tf_test_model_wheel
-  BASELINE_WORKSPACE: /home/runner/baseline/tensorflow_musa_extension
   BASELINE_REPO_URL: https://github.com/MooreThreads/tensorflow_musa_extension.git
   BASELINE_WHEEL_ARTIFACT: baseline-wheel
   CURRENT_WHEEL_ARTIFACT: current-wheel
-  GPU_GUARD_PATTERN: '[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_tf_musa_extension.py|[t]est_runner.py'
-  GPU_GUARD_TIMEOUT_SECONDS: 180
   EMPTY_TEST_RESULT_PATTERN: 'No tests found|No test files found|Total Tests:[[:space:]]*0|Total Tests[[:space:]]*│[[:space:]]*0|总计:[[:space:]]*0|no average_time_summary entries|report path missing|log not found'
 
 jobs:
@@ -373,6 +370,9 @@ jobs:
           build_exit=0
           baseline_sha=""
 
+          BASELINE_WORKSPACE="${RUNNER_TEMP}/baseline-workspace"
+          echo "baseline_workspace=$BASELINE_WORKSPACE" >> "$GITHUB_OUTPUT"
+
           export LOG_FILE BASELINE_WORKSPACE BASELINE_REPO_URL
           bash -l -c '
             BASELINE_PARENT=$(dirname "$BASELINE_WORKSPACE")
@@ -420,6 +420,7 @@ jobs:
           JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/build-baseline"
           LOG_FILE="$JOB_LOG_DIR/build_baseline.log"
           SUMMARY_FILE="$RUNNER_TEMP/build-baseline.md"
+          BASELINE_WORKSPACE="${{ steps.run_build.outputs.baseline_workspace }}"
           WHEEL_PATH="$(find "$BASELINE_WORKSPACE/dist" -maxdepth 1 -name 'tensorflow_musa-*.whl' -print -quit 2>/dev/null || true)"
           BASELINE_SHA="${{ steps.run_build.outputs.baseline_sha }}"
           STATUS="success"
@@ -458,7 +459,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.BASELINE_WHEEL_ARTIFACT }}
-          path: ${{ env.BASELINE_WORKSPACE }}/dist/tensorflow_musa-*.whl
+          path: ${{ steps.run_build.outputs.baseline_workspace }}/dist/tensorflow_musa-*.whl
           if-no-files-found: error
           retention-days: 7
 
@@ -629,27 +630,13 @@ jobs:
           baseline_exit=0
           current_exit=0
           guard_failed=0
-          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
-          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
-          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
-
-          start_ts="$(date +%s)"
-          while true; do
-            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
-            if [[ -z "$active_procs" ]]; then
-              break
-            fi
-            now_ts="$(date +%s)"
-            if (( now_ts - start_ts >= guard_timeout )); then
-              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$BASELINE_LOG"
-              echo "$active_procs" | tee -a "$BASELINE_LOG"
-              guard_failed=1
-              break
-            fi
-            echo "Waiting for previous GPU test processes to exit before starting T performance:" | tee -a "$BASELINE_LOG"
-            echo "$active_procs" | tee -a "$BASELINE_LOG"
-            sleep 15
-          done
+          if [[ -z "${GPU_LOCK_FILE:-}" ]]; then
+            echo "GPU_LOCK_FILE is not set; refusing to use a global GPU lock." | tee -a "$BASELINE_LOG"
+            guard_failed=1
+            lock_file=""
+          else
+            lock_file="$GPU_LOCK_FILE"
+          fi
 
           export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG
 
@@ -847,27 +834,13 @@ jobs:
 
           current_exit=0
           guard_failed=0
-          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
-          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
-          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
-
-          start_ts="$(date +%s)"
-          while true; do
-            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
-            if [[ -z "$active_procs" ]]; then
-              break
-            fi
-            now_ts="$(date +%s)"
-            if (( now_ts - start_ts >= guard_timeout )); then
-              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$CURRENT_LOG"
-              echo "$active_procs" | tee -a "$CURRENT_LOG"
-              guard_failed=1
-              break
-            fi
-            echo "Waiting for previous GPU test processes to exit before starting T accuracy:" | tee -a "$CURRENT_LOG"
-            echo "$active_procs" | tee -a "$CURRENT_LOG"
-            sleep 15
-          done
+          if [[ -z "${GPU_LOCK_FILE:-}" ]]; then
+            echo "GPU_LOCK_FILE is not set; refusing to use a global GPU lock." | tee -a "$CURRENT_LOG"
+            guard_failed=1
+            lock_file=""
+          else
+            lock_file="$GPU_LOCK_FILE"
+          fi
 
           export MODEL_ROOT JOB_LOG_DIR CURRENT_LOG
 
@@ -1031,27 +1004,13 @@ jobs:
           baseline_exit=0
           current_exit=0
           guard_failed=0
-          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
-          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
-          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
-
-          start_ts="$(date +%s)"
-          while true; do
-            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
-            if [[ -z "$active_procs" ]]; then
-              break
-            fi
-            now_ts="$(date +%s)"
-            if (( now_ts - start_ts >= guard_timeout )); then
-              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$BASELINE_LOG"
-              echo "$active_procs" | tee -a "$BASELINE_LOG"
-              guard_failed=1
-              break
-            fi
-            echo "Waiting for previous GPU test processes to exit before starting BD Model 1:" | tee -a "$BASELINE_LOG"
-            echo "$active_procs" | tee -a "$BASELINE_LOG"
-            sleep 15
-          done
+          if [[ -z "${GPU_LOCK_FILE:-}" ]]; then
+            echo "GPU_LOCK_FILE is not set; refusing to use a global GPU lock." | tee -a "$BASELINE_LOG"
+            guard_failed=1
+            lock_file=""
+          else
+            lock_file="$GPU_LOCK_FILE"
+          fi
 
           export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG SPEC_PATH
 
@@ -1418,27 +1377,13 @@ jobs:
           baseline_exit=0
           current_exit=0
           guard_failed=0
-          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
-          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
-          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
-
-          start_ts="$(date +%s)"
-          while true; do
-            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
-            if [[ -z "$active_procs" ]]; then
-              break
-            fi
-            now_ts="$(date +%s)"
-            if (( now_ts - start_ts >= guard_timeout )); then
-              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$BASELINE_LOG"
-              echo "$active_procs" | tee -a "$BASELINE_LOG"
-              guard_failed=1
-              break
-            fi
-            echo "Waiting for previous GPU test processes to exit before starting BD Model 2:" | tee -a "$BASELINE_LOG"
-            echo "$active_procs" | tee -a "$BASELINE_LOG"
-            sleep 15
-          done
+          if [[ -z "${GPU_LOCK_FILE:-}" ]]; then
+            echo "GPU_LOCK_FILE is not set; refusing to use a global GPU lock." | tee -a "$BASELINE_LOG"
+            guard_failed=1
+            lock_file=""
+          else
+            lock_file="$GPU_LOCK_FILE"
+          fi
 
           export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG SPEC_PATH
 
@@ -1805,27 +1750,13 @@ jobs:
           baseline_exit=0
           current_exit=0
           guard_failed=0
-          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
-          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
-          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
-
-          start_ts="$(date +%s)"
-          while true; do
-            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
-            if [[ -z "$active_procs" ]]; then
-              break
-            fi
-            now_ts="$(date +%s)"
-            if (( now_ts - start_ts >= guard_timeout )); then
-              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$BASELINE_LOG"
-              echo "$active_procs" | tee -a "$BASELINE_LOG"
-              guard_failed=1
-              break
-            fi
-            echo "Waiting for previous GPU test processes to exit before starting BD Model 3:" | tee -a "$BASELINE_LOG"
-            echo "$active_procs" | tee -a "$BASELINE_LOG"
-            sleep 15
-          done
+          if [[ -z "${GPU_LOCK_FILE:-}" ]]; then
+            echo "GPU_LOCK_FILE is not set; refusing to use a global GPU lock." | tee -a "$BASELINE_LOG"
+            guard_failed=1
+            lock_file=""
+          else
+            lock_file="$GPU_LOCK_FILE"
+          fi
 
           export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG SPEC_PATH
 
@@ -2184,9 +2115,13 @@ jobs:
 
           training_exit=0
           guard_failed=0
-          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
-          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
-          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
+          if [[ -z "${GPU_LOCK_FILE:-}" ]]; then
+            echo "GPU_LOCK_FILE is not set; refusing to use a global GPU lock." | tee -a "$LOG_FILE"
+            guard_failed=1
+            lock_file=""
+          else
+            lock_file="$GPU_LOCK_FILE"
+          fi
 
           if [[ "${{ github.event_name }}" == "schedule" ]]; then
             selected_training_models=("${daily_training_models[@]}")
@@ -2198,24 +2133,6 @@ jobs:
           TRAINING_MODELS="${selected_training_models[*]}"
           printf 'Training mode: %s\n' "$training_mode" | tee -a "$LOG_FILE"
           printf 'Selected models (%d): %s\n' "${#selected_training_models[@]}" "$TRAINING_MODELS" | tee -a "$LOG_FILE"
-
-          start_ts="$(date +%s)"
-          while true; do
-            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
-            if [[ -z "$active_procs" ]]; then
-              break
-            fi
-            now_ts="$(date +%s)"
-            if (( now_ts - start_ts >= guard_timeout )); then
-              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$LOG_FILE"
-              echo "$active_procs" | tee -a "$LOG_FILE"
-              guard_failed=1
-              break
-            fi
-            echo "Waiting for previous GPU test processes to exit before starting training:" | tee -a "$LOG_FILE"
-            echo "$active_procs" | tee -a "$LOG_FILE"
-            sleep 15
-          done
 
           LIVE_TRAINING_WRAPPER="$RUNNER_TEMP/run_training_live.py"
           cat > "$LIVE_TRAINING_WRAPPER" <<'PY'
