@@ -448,7 +448,7 @@ def discover_and_run_tests(test_pattern="*_op_test.py", test_dir_name="ops",
 
     if not test_files:
         print(f"{red('✗')} No test files found matching pattern: {test_pattern} in {test_dir_name}/")
-        return
+        sys.exit(1)
 
     # Add test directory to Python path
     sys.path.insert(0, str(test_dir))
@@ -456,6 +456,7 @@ def discover_and_run_tests(test_pattern="*_op_test.py", test_dir_name="ops",
     # Load and run all test suites
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
+    load_failures = []
 
     for test_file in sorted(test_files):
         module_name = test_file.stem
@@ -466,12 +467,19 @@ def discover_and_run_tests(test_pattern="*_op_test.py", test_dir_name="ops",
             if detail_mode:
                 print(f"  {green('✓')} Loaded tests from: {test_dir_name}/{module_name}")
         except Exception as e:
+            load_failures.append((module_name, e))
             if detail_mode:
                 print(f"  {red('✗')} Failed to load {module_name}: {e}")
 
+    if load_failures:
+        print(f"{red('✗')} Failed to load {len(load_failures)} test module(s):")
+        for module_name, error in load_failures:
+            print(f"  {red('✗')} {test_dir_name}/{module_name}: {error}")
+        sys.exit(1)
+
     if suite.countTestCases() == 0:
         print(f"{red('✗')} No tests found!")
-        return
+        sys.exit(1)
 
     if detail_mode:
         print(f"\n  Running {suite.countTestCases()} tests...\n")

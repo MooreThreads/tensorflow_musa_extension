@@ -45,6 +45,8 @@ env:
   GPU_GUARD_PATTERN: '[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_tf_musa_extension.py|[t]est_runner.py'
   GPU_GUARD_TIMEOUT_SECONDS: 180
   EMPTY_TEST_RESULT_PATTERN: 'No tests found|No test files found|Total Tests:[[:space:]]*0|Total Tests[[:space:]]*│[[:space:]]*0|总计:[[:space:]]*0|no average_time_summary entries|report path missing|log not found'
+  MUSA_PLUGIN_FAILURE_PATTERN: 'Failed to load MUSA plugin|MUSA functionality will not be available|libmusart\.so\.[0-9]+: cannot open shared object file'
+  MIN_INTEGRATION_TESTS: 500
 
 jobs:
   prepare_metadata:
@@ -543,8 +545,13 @@ jobs:
           fi
           if [[ ! -f "$LOG_FILE" ]]; then
             STATUS="failure"
-          elif grep -Eq "$EMPTY_TEST_RESULT_PATTERN" "$LOG_FILE"; then
+          elif grep -Eq "$EMPTY_TEST_RESULT_PATTERN|$MUSA_PLUGIN_FAILURE_PATTERN" "$LOG_FILE"; then
             STATUS="failure"
+          else
+            total_tests="$(grep -E "Total Tests[[:space:]]*(\||│|:)[[:space:]]*[0-9]+" "$LOG_FILE" | tail -1 | grep -oE "[0-9]+" | tail -1 || true)"
+            if [[ -z "$total_tests" || "$total_tests" -lt "$MIN_INTEGRATION_TESTS" ]]; then
+              STATUS="failure"
+            fi
           fi
 
           {
