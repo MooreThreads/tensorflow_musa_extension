@@ -44,7 +44,6 @@ env:
   CURRENT_WHEEL_ARTIFACT: current-wheel
   GPU_GUARD_PATTERN: '[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_tf_musa_extension.py|[t]est_runner.py'
   GPU_GUARD_TIMEOUT_SECONDS: 180
-  GPU_LOCK_FILE: /tmp/tensorflow_musa_ci_gpu.lock
   EMPTY_TEST_RESULT_PATTERN: 'No tests found|No test files found|Total Tests:[[:space:]]*0|Total Tests[[:space:]]*│[[:space:]]*0|总计:[[:space:]]*0|no average_time_summary entries|report path missing|log not found'
 
 jobs:
