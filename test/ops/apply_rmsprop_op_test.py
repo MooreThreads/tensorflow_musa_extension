@@ -30,7 +30,7 @@ class ResourceApplyRMSPropTest(MUSATestCase):
     self.assertTrue(len(musa_devices) > 0, "No MUSA devices found")
 
   def _numpy_dtype(self, dtype):
-    return np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    return dtype.as_numpy_dtype
 
   def _calc_dtype(self, dtype):
     return np.float32 if dtype in [tf.float16, tf.bfloat16] else dtype.as_numpy_dtype
@@ -206,7 +206,7 @@ class ResourceApplyCenteredRMSPropTest(MUSATestCase):
     self.assertTrue(len(musa_devices) > 0, "No MUSA devices found")
 
   def _numpy_dtype(self, dtype):
-    return np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    return dtype.as_numpy_dtype
 
   def _calc_dtype(self, dtype):
     return np.float32 if dtype in [tf.float16, tf.bfloat16] else dtype.as_numpy_dtype

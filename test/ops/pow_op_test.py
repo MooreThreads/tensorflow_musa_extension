@@ -7,7 +7,7 @@ from musa_test_utils import MUSATestCase
 class PowOpTest(MUSATestCase):
 
   def _test_pow(self, shape_x, shape_y, dtype, rtol=1e-5, atol=1e-8):
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
     
     if shape_x:
       x_np = np.abs(np.random.randn(*shape_x)).astype(np_dtype) + 0.1

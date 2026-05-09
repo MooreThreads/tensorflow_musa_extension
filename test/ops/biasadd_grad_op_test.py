@@ -23,7 +23,7 @@ class BiasAddGradOpTest(MUSATestCase):
 
     for dtype in [tf.float32, tf.float16, tf.bfloat16]:
       # 1. 准备数据
-      np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+      np_dtype = dtype.as_numpy_dtype
       grad_np = np.random.randn(*input_shape).astype(np_dtype)
       grad = tf.constant(grad_np, dtype=dtype)
 
@@ -59,7 +59,7 @@ class BiasAddGradOpTest(MUSATestCase):
     data_format = 'NCHW'
 
     for dtype in [tf.float32, tf.float16, tf.bfloat16]:
-      np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+      np_dtype = dtype.as_numpy_dtype
       grad_np = np.random.randn(*input_shape).astype(np_dtype)
       grad = tf.constant(grad_np, dtype=dtype)
 
@@ -97,7 +97,7 @@ class BiasAddGradOpTest(MUSATestCase):
     an out_backprop with 0 elements, and the bias gradient must be all-zeros.
     """
     for dtype in [tf.float32, tf.float16, tf.bfloat16]:
-      np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+      np_dtype = dtype.as_numpy_dtype
 
       # Shape (batch=4096, seq=0, features=512): mimics block_2 ffn W1S case
       for empty_shape in [(4096, 0, 512), (4096, 0, 128), (0, 16)]:

@@ -27,7 +27,7 @@ class StopGradientOpTest(MUSATestCase):
   def _test_forward(self, shape, dtype, rtol=1e-5, atol=1e-8):
     """Test that stop_gradient acts as identity in forward pass."""
     # Prepare Data
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
     
     if np.issubdtype(np_dtype, np.integer):
         x_np = np.random.randint(-100, 100, size=shape).astype(np_dtype)
@@ -48,7 +48,7 @@ class StopGradientOpTest(MUSATestCase):
     if not dtype.is_floating:
         return
 
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
     x_np = np.random.randn(*shape).astype(np_dtype)
     x = tf.constant(x_np, dtype=dtype)
 

@@ -7,7 +7,7 @@ from musa_test_utils import MUSATestCase
 class MeanOpTest(MUSATestCase):
 
   def _test_mean(self, shape, axis, dtype, keepdims=False, rtol=1e-5, atol=1e-8):
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
 
     data_np = np.random.randn(*shape).astype(np_dtype)
 

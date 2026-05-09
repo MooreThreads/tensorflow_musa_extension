@@ -27,7 +27,7 @@ class SqrtOpTest(MUSATestCase):
   def _test_sqrt(self, shape, dtype, rtol=1e-5, atol=1e-8):
     """Test sqrt operation with given shapes and dtype."""
     # Prepare Data
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
     
     x_np = np.random.uniform(1.0, 100.0, size=shape).astype(np_dtype)
     x = tf.constant(x_np, dtype=dtype)

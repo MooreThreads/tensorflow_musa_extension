@@ -27,7 +27,7 @@ class UnpackOpTest(MUSATestCase):
 
   def _test_pack(self, inputs, axis, dtype, rtol=1e-5, atol=1e-8):
     """Test pack (tf.stack) operation."""
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
     
     tf_inputs = []
     for item in inputs:
@@ -44,7 +44,7 @@ class UnpackOpTest(MUSATestCase):
 
   def _test_unpack(self, input_data, axis, dtype, rtol=1e-5, atol=1e-8):
     """Test unpack (tf.unstack) operation."""
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
     x_np = np.array(input_data).astype(np_dtype)
     x = tf.constant(x_np, dtype=dtype)
 

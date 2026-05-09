@@ -26,7 +26,7 @@ class ArgMaxOpTest(MUSATestCase):
             
             x_np[100] = True 
         else:
-            np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+            np_dtype = dtype.as_numpy_dtype
             x_np = np.random.uniform(-100, 100, size=shape).astype(np_dtype)
         
             x_np[500] = 10000 

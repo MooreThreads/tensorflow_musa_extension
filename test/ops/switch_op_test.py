@@ -29,7 +29,7 @@ class SwitchOpTest(MUSATestCase):
       return tf.raw_ops.Switch(data=data, pred=pred)
 
   def _compare_active_branch(self, dtype, pred_value):
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
     if dtype == tf.bool:
       data_np = np.array([[True, False], [False, True]], dtype=np.bool_)
     elif np.issubdtype(np_dtype, np.integer):

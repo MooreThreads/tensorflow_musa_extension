@@ -30,7 +30,7 @@ class AbsOpTest(MUSATestCase):
     # 2. 覆盖三种核心数据类型
     for dtype in [tf.float32, tf.float16, tf.bfloat16]:
       # 处理 numpy 类型兼容性 (numpy 不支持 bfloat16，用 float32 代替生成)
-      np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+      np_dtype = dtype.as_numpy_dtype
       
       # 生成 -10 到 10 的随机数
       x_np = np.random.uniform(-10, 10, size=shape).astype(np_dtype)

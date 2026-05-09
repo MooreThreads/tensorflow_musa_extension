@@ -7,7 +7,7 @@ from musa_test_utils import MUSATestCase
 class ProdOpTest(MUSATestCase):
 
   def _test_prod(self, shape, axis, dtype, keepdims=False, rtol=1e-5, atol=1e-8):
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
     
     if dtype in [tf.int32, tf.int64]:
       data_np = np.random.randint(1, 10, size=shape).astype(np_dtype)

@@ -30,7 +30,7 @@ class SqrtGradOpTest(MUSATestCase):
     This matches 'test_sqrt_grad_logic' in the original script.
     """
     # Prepare Data
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
     
     y_np = np.abs(np.random.randn(*shape).astype(np_dtype)) + 0.5
     dy_np = np.random.randn(*shape).astype(np_dtype)
@@ -51,7 +51,7 @@ class SqrtGradOpTest(MUSATestCase):
     This matches 'test_sqrt_integration' in the original script.
     """
     # Prepare Data
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
     
     x_np = np.abs(np.random.randn(*shape).astype(np_dtype)) + 0.1
     x = tf.constant(x_np, dtype=dtype)

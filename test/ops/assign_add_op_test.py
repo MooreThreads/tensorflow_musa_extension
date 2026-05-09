@@ -32,7 +32,7 @@ class AssignAddOpTest(MUSATestCase):
       dtype: TensorFlow data type
       use_locking: Whether to use locking for the operation
     """
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
 
     # Generate test data
     if np_dtype in [np.int32, np.int64]:

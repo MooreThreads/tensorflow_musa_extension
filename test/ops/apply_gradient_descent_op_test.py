@@ -25,7 +25,7 @@ class ApplyGradientDescentOpTest(MUSATestCase):
   """Tests for MUSA ApplyGradientDescent operators."""
 
   def _numpy_dtype(self, dtype):
-    return np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    return dtype.as_numpy_dtype
 
   def _assert_by_dtype(self, expected, actual, dtype):
     if dtype in [tf.float16, tf.bfloat16]:

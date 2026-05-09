@@ -27,7 +27,7 @@ class UnsortedSegmentSumOpTest(MUSATestCase):
   def _test_unsorted_segment_sum(self, data, segment_ids, num_segments, dtype, 
                                  index_type=tf.int32, rtol=1e-5, atol=1e-8):
     """Test unsorted_segment_sum operation."""
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
     
     if not isinstance(data, np.ndarray):
         data = np.array(data, dtype=np_dtype)

@@ -27,7 +27,7 @@ class SoftmaxOpTest(MUSATestCase):
         # print(f"Testing shape={shape}, dtype={dtype}, axis={axis}, log={log}")
 
         # Prepare input data
-        np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+        np_dtype = dtype.as_numpy_dtype
         input_np = np.random.randn(*shape).astype(np_dtype)
 
         # Determine which op to test

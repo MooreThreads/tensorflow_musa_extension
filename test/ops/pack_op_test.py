@@ -7,7 +7,7 @@ from musa_test_utils import MUSATestCase
 class PackOpTest(MUSATestCase):
 
   def _test_pack(self, shape, axis, num_inputs, dtype, rtol=1e-5, atol=1e-8):
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
     
     inputs_np = []
     for i in range(num_inputs):

@@ -28,7 +28,7 @@ class SplitOpTest(MUSATestCase):
     """Test split operation with given parameters."""
     
     # Prepare Data
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
     x_np = np.random.uniform(-1, 1, size=shape).astype(np_dtype)
     x = tf.constant(x_np, dtype=dtype)
 

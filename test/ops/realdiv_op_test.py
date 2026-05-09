@@ -7,7 +7,7 @@ from musa_test_utils import MUSATestCase
 class RealDivOpTest(MUSATestCase):
 
   def _test_realdiv(self, shape_x, shape_y, dtype, rtol=1e-5, atol=1e-8):
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
     
     x_np = np.random.uniform(1, 10, size=shape_x).astype(np_dtype)
     y_np = np.random.uniform(1, 5, size=shape_y).astype(np_dtype)

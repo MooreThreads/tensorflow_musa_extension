@@ -38,7 +38,7 @@ class MathAndShapeOpTest(MUSATestCase):
             # Rsqrt 对负数会产生 NaN，对 0 会产生 Inf
             # 为了验证计算精度，我们生成正数区间 [0.1, 10.0] 的数据
             shape = [32, 32]
-            np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+            np_dtype = dtype.as_numpy_dtype
             data = np.random.uniform(0.1, 10.0, size=shape).astype(np_dtype)
             
             # 适当放宽 float16 的误差容忍度

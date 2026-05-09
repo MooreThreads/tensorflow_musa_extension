@@ -28,7 +28,7 @@ class SplitVOpTest(MUSATestCase):
     """Test splitv operation with given parameters."""
 
     # Prepare Data
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
     
     # Generate data based on dtype
     if dtype in [tf.int32, tf.int64]:

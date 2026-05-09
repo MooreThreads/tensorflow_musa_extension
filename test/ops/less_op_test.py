@@ -26,7 +26,7 @@ class LessOpTest(MUSATestCase):
 
   def _test_less(self, shape_x, shape_y, dtype):
     """Test less operation with given shapes and dtype."""
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
 
     x_np = np.random.uniform(-1, 1, size=shape_x).astype(np_dtype)
     y_np = np.random.uniform(-1, 1, size=shape_y).astype(np_dtype)

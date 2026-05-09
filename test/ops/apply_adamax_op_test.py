@@ -30,10 +30,10 @@ class ApplyAdaMaxOpTest(MUSATestCase):
     self.assertTrue(len(musa_devices) > 0, "No MUSA devices found")
 
   def _numpy_dtype(self, dtype):
-    return np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    return dtype.as_numpy_dtype
 
   def _calc_dtype(self, dtype):
-    return np.float32 if dtype in [tf.float16, tf.bfloat16] else dtype.as_numpy_dtype
+    return dtype.as_numpy_dtype
 
   def _assert_by_dtype(self, expected, actual, dtype):
     if dtype == tf.bfloat16:
@@ -158,20 +158,26 @@ class ApplyAdaMaxOpTest(MUSATestCase):
     for dtype in [tf.float32, tf.float16, tf.bfloat16]:
       np_dtype = self._numpy_dtype(dtype)
       with self.subTest(dtype=dtype.name):
-        cpu_var, cpu_m, cpu_v = self._run_resource_apply_adamax(
-            "/CPU:0",
-            init_var.astype(np_dtype), init_m.astype(np_dtype),
-            init_v.astype(np_dtype), grad.astype(np_dtype),
-            beta1_power, lr, beta1, beta2, epsilon, dtype)
+        # CPU kernel does not support bfloat16; use numpy reference instead.
+        if dtype == tf.bfloat16:
+          ref_var, ref_m, ref_v = self._expected_apply_adamax(
+              init_var, init_m, init_v, grad,
+              beta1_power, lr, beta1, beta2, epsilon, dtype)
+        else:
+          ref_var, ref_m, ref_v = self._run_resource_apply_adamax(
+              "/CPU:0",
+              init_var.astype(np_dtype), init_m.astype(np_dtype),
+              init_v.astype(np_dtype), grad.astype(np_dtype),
+              beta1_power, lr, beta1, beta2, epsilon, dtype)
         musa_var, musa_m, musa_v = self._run_resource_apply_adamax(
             "/device:MUSA:0",
             init_var.astype(np_dtype), init_m.astype(np_dtype),
             init_v.astype(np_dtype), grad.astype(np_dtype),
             beta1_power, lr, beta1, beta2, epsilon, dtype)
 
-        self._assert_by_dtype(cpu_var, musa_var, dtype)
-        self._assert_by_dtype(cpu_m, musa_m, dtype)
-        self._assert_by_dtype(cpu_v, musa_v, dtype)
+        self._assert_by_dtype(ref_var, musa_var, dtype)
+        self._assert_by_dtype(ref_m, musa_m, dtype)
+        self._assert_by_dtype(ref_v, musa_v, dtype)
 
   def testResourceApplyAdaMaxMultipleShapes(self):
     """Test ResourceApplyAdaMax with 2D and 3D tensor shapes."""
@@ -320,16 +326,22 @@ class ApplyAdaMaxOpTest(MUSATestCase):
         init_v = np.abs(rng.randn(*shape)).astype(np_dtype)
         grad = (rng.randn(*shape) * 0.1).astype(np_dtype)
 
-        cpu_var, cpu_m, cpu_v = self._run_resource_apply_adamax(
-            "/CPU:0", init_var, init_m, init_v, grad,
-            0.9, 0.01, 0.9, 0.999, 1e-8, dtype)
+        # CPU kernel does not support bfloat16; use numpy reference instead.
+        if dtype == tf.bfloat16:
+          ref_var, ref_m, ref_v = self._expected_apply_adamax(
+              init_var, init_m, init_v, grad,
+              0.9, 0.01, 0.9, 0.999, 1e-8, dtype)
+        else:
+          ref_var, ref_m, ref_v = self._run_resource_apply_adamax(
+              "/CPU:0", init_var, init_m, init_v, grad,
+              0.9, 0.01, 0.9, 0.999, 1e-8, dtype)
         musa_var, musa_m, musa_v = self._run_resource_apply_adamax(
             "/device:MUSA:0", init_var, init_m, init_v, grad,
             0.9, 0.01, 0.9, 0.999, 1e-8, dtype)
 
-        self._assert_by_dtype(cpu_var, musa_var, dtype)
-        self._assert_by_dtype(cpu_m, musa_m, dtype)
-        self._assert_by_dtype(cpu_v, musa_v, dtype)
+        self._assert_by_dtype(ref_var, musa_var, dtype)
+        self._assert_by_dtype(ref_m, musa_m, dtype)
+        self._assert_by_dtype(ref_v, musa_v, dtype)
 
   def testResourceApplyAdaMaxNumericsAgainstReference(self):
     """Verify MUSA result matches numpy reference formula."""
