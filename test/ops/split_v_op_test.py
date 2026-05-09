@@ -29,18 +29,18 @@ class SplitVOpTest(MUSATestCase):
 
     # Prepare Data
     np_dtype = dtype.as_numpy_dtype
-    
+
     # Generate data based on dtype
     if dtype in [tf.int32, tf.int64]:
         x_np = np.random.randint(-100, 100, size=shape).astype(np_dtype)
     else:
         x_np = np.random.uniform(-10, 10, size=shape).astype(np_dtype)
-        
+
     x = tf.constant(x_np, dtype=dtype)
 
     # Compare Results individually for each split output
     num_outputs = len(size_splits)
-    
+
     for i in range(num_outputs):
         def op_func(input_tensor, index=i):
             return tf.split(input_tensor, num_or_size_splits=size_splits, axis=axis)[index]

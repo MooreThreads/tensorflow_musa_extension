@@ -83,7 +83,7 @@ class TanhGradOpTest(MUSATestCase):
           dtype=dtype,
           rtol=rtol,
           atol=atol,
-      )    
+      )
 
 
 if __name__ == "__main__":

@@ -27,13 +27,13 @@ class AddOpTest(MUSATestCase):
   def _test_add(self, shape_x, shape_y, dtype, rtol=1e-5, atol=1e-8):
     """Test add operation with given shapes and dtype."""
     np_dtype = dtype.as_numpy_dtype
-    
+
     x_np = np.random.uniform(-1, 1, size=shape_x).astype(np_dtype)
     y_np = np.random.uniform(-1, 1, size=shape_y).astype(np_dtype)
-    
+
     x = tf.constant(x_np, dtype=dtype)
     y = tf.constant(y_np, dtype=dtype)
-    
+
     self._compare_cpu_musa_results(tf.add, [x, y], dtype, rtol=rtol, atol=atol)
 
   def testAddBasic(self):

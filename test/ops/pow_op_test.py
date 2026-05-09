@@ -8,20 +8,20 @@ class PowOpTest(MUSATestCase):
 
   def _test_pow(self, shape_x, shape_y, dtype, rtol=1e-5, atol=1e-8):
     np_dtype = dtype.as_numpy_dtype
-    
+
     if shape_x:
       x_np = np.abs(np.random.randn(*shape_x)).astype(np_dtype) + 0.1
     else:
       x_np = np.array(np.abs(np.random.randn()) + 0.1, dtype=np_dtype)
-    
+
     if shape_y:
       y_np = np.random.randn(*shape_y).astype(np_dtype)
     else:
       y_np = np.array(np.random.randn(), dtype=np_dtype)
-    
+
     x = tf.constant(x_np, dtype=dtype)
     y = tf.constant(y_np, dtype=dtype)
-    
+
     self._compare_cpu_musa_results(tf.math.pow, [x, y], dtype, rtol=rtol, atol=atol)
 
   def testPowBasic(self):
