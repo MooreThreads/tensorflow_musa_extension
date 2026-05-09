@@ -2,7 +2,7 @@ name: PR Run Guard
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, closed]
 
 permissions:
   actions: write
@@ -13,17 +13,25 @@ jobs:
     name: Cancel Previous PR Runs
     runs-on: ubuntu-latest
     steps:
-      - name: Cancel older CI runs for the same PR
+      - name: Cancel stale CI runs for the same PR
         uses: actions/github-script@v7
         with:
           script: |
             const workflowId = 'pr-validation.yml';
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const prNumber = context.payload.pull_request.number;
-            const currentHeadSha = context.payload.pull_request.head.sha;
-            const currentHeadBranch = context.payload.pull_request.head.ref;
-            const currentHeadRepo = context.payload.pull_request.head.repo.full_name;
+            const action = context.payload.action;
+            const pullRequest = context.payload.pull_request;
+            const prNumber = pullRequest.number;
+            const currentHeadSha = pullRequest.head.sha;
+            const currentHeadBranch = pullRequest.head.ref;
+            const currentHeadRepo = pullRequest.head.repo.full_name;
+            const cancelMergedPrRuns = action === 'closed' && pullRequest.merged === true;
+
+            if (action === 'closed' && !cancelMergedPrRuns) {
+              core.info(`PR #${prNumber} was closed without merge; no CI runs will be canceled.`);
+              return;
+            }
 
             const runs = await github.paginate(
               github.rest.actions.listWorkflowRuns,
@@ -32,7 +40,6 @@ jobs:
                 repo,
                 workflow_id: workflowId,
                 event: 'pull_request',
-                branch: currentHeadBranch,
                 per_page: 100,
               }
             );
@@ -41,29 +48,38 @@ jobs:
               if (run.status === 'completed') {
                 return false;
               }
-              if (run.head_sha === currentHeadSha) {
-                return false;
-              }
+
               const runHeadRepo = run.head_repository?.full_name || `${owner}/${repo}`;
               const sameHead = run.head_branch === currentHeadBranch && runHeadRepo === currentHeadRepo;
               const samePr = (run.pull_requests || []).some((pr) => pr.number === prNumber);
-              return samePr || sameHead;
+
+              if (!samePr && !sameHead) {
+                return false;
+              }
+
+              if (!cancelMergedPrRuns && run.head_sha === currentHeadSha) {
+                return false;
+              }
+
+              return true;
             });
 
             core.info(
-              `Scanned ${runs.length} PR validation runs for ${currentHeadRepo}:${currentHeadBranch}.`
+              `Scanned ${runs.length} PR validation runs for PR #${prNumber} (${currentHeadRepo}:${currentHeadBranch}).`
             );
 
             if (candidates.length === 0) {
+              const reason = cancelMergedPrRuns ? 'active merged PR' : 'older';
               core.info(
-                `No older CI runs found for PR #${prNumber} (${currentHeadRepo}:${currentHeadBranch}).`
+                `No ${reason} CI runs found for PR #${prNumber} (${currentHeadRepo}:${currentHeadBranch}).`
               );
               return;
             }
 
             for (const run of candidates) {
+              const reason = cancelMergedPrRuns ? 'merged PR' : 'older PR update';
               core.info(
-                `Canceling run ${run.id} for PR #${prNumber} ` +
+                `Canceling run ${run.id} for PR #${prNumber} due to ${reason} ` +
                   `(status=${run.status}, head_sha=${run.head_sha})`
               );
               await github.rest.actions.cancelWorkflowRun({
