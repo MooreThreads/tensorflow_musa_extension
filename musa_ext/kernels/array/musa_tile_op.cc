@@ -3,11 +3,11 @@
 #include <limits>
 #include <vector>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_shape.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -15,8 +15,7 @@ namespace musa {
 template <typename T>
 void LaunchMusaTileKernel(const T* input, const int64_t* input_dims,
                           const int64_t* output_dims, int dims,
-                          int64_t output_size, T* output,
-                          musaStream_t stream);
+                          int64_t output_size, T* output, musaStream_t stream);
 
 namespace {
 
@@ -53,9 +52,11 @@ class MusaTileOp : public MusaOpKernel {
       OP_REQUIRES(context, multiple >= 0,
                   errors::InvalidArgument("Expected multiples[", i,
                                           "] >= 0, got ", multiple));
-      OP_REQUIRES(context,
-                  in_dim == 0 || multiple <= std::numeric_limits<int64_t>::max() / in_dim,
-                  errors::InvalidArgument("Tile output dimension overflow at dim ", i));
+      OP_REQUIRES(
+          context,
+          in_dim == 0 ||
+              multiple <= std::numeric_limits<int64_t>::max() / in_dim,
+          errors::InvalidArgument("Tile output dimension overflow at dim ", i));
 
       const int64_t out_dim = in_dim * multiple;
       output_shape.AddDim(out_dim);
@@ -99,11 +100,10 @@ class MusaTileOp : public MusaOpKernel {
                 errors::Internal("Tile output_dims H2D copy failed: ",
                                  static_cast<int>(copy_status)));
 
-    LaunchMusaTileKernel<T>(input.flat<T>().data(),
-                            input_dims_dev.flat<int64_t>().data(),
-                            output_dims_dev.flat<int64_t>().data(), input_dims,
-                            output->NumElements(), output->flat<T>().data(),
-                            stream);
+    LaunchMusaTileKernel<T>(
+        input.flat<T>().data(), input_dims_dev.flat<int64_t>().data(),
+        output_dims_dev.flat<int64_t>().data(), input_dims,
+        output->NumElements(), output->flat<T>().data(), stream);
   }
 };
 
