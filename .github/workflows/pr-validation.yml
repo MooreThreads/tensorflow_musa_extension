@@ -42,6 +42,7 @@ env:
   BASELINE_WHEEL_ARTIFACT: baseline-wheel
   CURRENT_WHEEL_ARTIFACT: current-wheel
   EMPTY_TEST_RESULT_PATTERN: 'No tests found|No test files found|Total Tests:[[:space:]]*0|Total Tests[[:space:]]*│[[:space:]]*0|总计:[[:space:]]*0|no average_time_summary entries|report path missing|log not found'
+  MIN_INTEGRATION_TESTS: 500
 
 jobs:
   prepare_metadata:
@@ -518,13 +519,49 @@ jobs:
 
           test_exit=0
           export LOG_FILE WHEEL_DIR="$RUNNER_TEMP/current-wheel"
-          bash -l -c '
-            set -e -o pipefail
-            cd "$GITHUB_WORKSPACE"
-            pip install "$WHEEL_DIR"/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee "$LOG_FILE"
-            cd "$GITHUB_WORKSPACE/test"
-            timeout 60m python test_runner.py --quiet 2>&1 | tee -a "$LOG_FILE"
-          ' || test_exit=$?
+          bash -l <<'BASH' || test_exit=$?
+          set -e -o pipefail
+          cd "$GITHUB_WORKSPACE"
+          pip install "$WHEEL_DIR"/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee "$LOG_FILE"
+          cd "$GITHUB_WORKSPACE/test"
+          python - <<'PY' 2>&1 | tee -a "$LOG_FILE"
+          import importlib
+          import pathlib
+          import sys
+          import unittest
+
+          test_dir = pathlib.Path("ops")
+          test_files = sorted(test_dir.glob("*_op_test.py"))
+          if not test_files:
+              print("No test files found matching pattern: *_op_test.py in ops/")
+              sys.exit(1)
+
+          sys.path.insert(0, str(test_dir.resolve()))
+          loader = unittest.TestLoader()
+          load_failures = []
+          total_tests = 0
+
+          for test_file in test_files:
+              module_name = test_file.stem
+              try:
+                  module = importlib.import_module(module_name)
+                  total_tests += loader.loadTestsFromModule(module).countTestCases()
+              except Exception as exc:
+                  load_failures.append((module_name, exc))
+
+          if load_failures:
+              print(f"Failed to load {len(load_failures)} test module(s):")
+              for module_name, error in load_failures:
+                  print(f"  ops/{module_name}: {error}")
+              sys.exit(1)
+
+          print(f"Discovered test cases: {total_tests}")
+          if total_tests == 0:
+              print("No tests found")
+              sys.exit(1)
+          PY
+          timeout 60m python test_runner.py --quiet 2>&1 | tee -a "$LOG_FILE"
+          BASH
 
           echo "test_exit=$test_exit" >> "$GITHUB_OUTPUT"
 
@@ -546,6 +583,11 @@ jobs:
             STATUS="failure"
           elif grep -Eq "$EMPTY_TEST_RESULT_PATTERN" "$LOG_FILE"; then
             STATUS="failure"
+          else
+            total_tests="$(grep -E "Total Tests[[:space:]]*(\||│|:)[[:space:]]*[0-9]+" "$LOG_FILE" | tail -1 | grep -oE "[0-9]+" | tail -1 || true)"
+            if [[ -z "$total_tests" || "$total_tests" -lt "$MIN_INTEGRATION_TESTS" ]]; then
+              STATUS="failure"
+            fi
           fi
 
           {
