@@ -9,6 +9,13 @@
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/framework/tensor.h"
 
+// Bessel de-correction kernel: converts muDNN sample variance (1/(N-1)) back
+// to population variance (1/N) to match TF CPU FusedBatchNorm output convention.
+extern "C" {
+void LaunchBesselCorrection(float* data, float factor, int count,
+                            musaStream_t stream);
+}
+
 namespace tensorflow {
 namespace musa {
 
@@ -46,6 +53,8 @@ class MusaFusedBatchNormOp : public MusaOpKernel {
     Tensor* saved_var = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(4, scale.shape(), &saved_var));
     Tensor* reserve_3 = nullptr;
+    // CPU FusedBatchNormV3 allocates reserve_3 as a 0-D scalar TensorShape({}).
+    // muDNN does not populate this field; zero-initialise for safety.
     OP_REQUIRES_OK(ctx, ctx->allocate_output(5, TensorShape({}), &reserve_3));
 
     auto* device = GetDeviceByCtx(ctx);
@@ -81,6 +90,12 @@ class MusaFusedBatchNormOp : public MusaOpKernel {
     bn_op.SetEpsilon(epsilon_);
     bn_op.SetTraining(is_training_);
 
+    // Zero-initialise reserve_3 so it is always in a defined state.
+    // The current backward op (MusaFusedBatchNormGradOp) does not consume
+    // reserve_3, but TF's graph executor may inspect its shape/value.
+    musaMemsetAsync(reserve_3->flat<float>().data(), 0,
+                    reserve_3->TotalBytes(), stream);
+
     mStatus status;
     if (is_training_) {
       Tensor temp_acc_mean, temp_acc_var;
@@ -101,13 +116,49 @@ class MusaFusedBatchNormOp : public MusaOpKernel {
                              (double)exp_avg_factor_, maintainer);
 
       if (status == mStatus::SUCCESS) {
+        // muDNN RunComposite writes the batch statistics (mean / sample
+        // variance) into acc_mean / acc_var.  fresh_mean / fresh_var are
+        // *input* parameters (the prior running stats) and are NOT populated
+        // by the kernel, so reading from saved_mean/saved_var (= fresh_*)
+        // would return uninitialised / stale data.
         size_t copy_size = saved_mean->NumElements() * sizeof(float);
+
+        // batch_mean = saved_mean = batch mean from acc_mean
         musaMemcpyAsync(batch_mean->flat<float>().data(),
-                        saved_mean->flat<float>().data(), copy_size,
+                        temp_acc_mean.flat<float>().data(), copy_size,
                         musaMemcpyDeviceToDevice, stream);
+        musaMemcpyAsync(saved_mean->flat<float>().data(),
+                        temp_acc_mean.flat<float>().data(), copy_size,
+                        musaMemcpyDeviceToDevice, stream);
+
+        // muDNN RunComposite writes *sample* variance (1/(N-1)) into acc_var.
+        // TF CPU FusedBatchNorm convention:
+        //   batch_var  (output[2]) = sample variance  (1/(N-1)), Bessel-corrected
+        //   saved_var  (output[4]) = population variance (1/N), NOT Bessel-corrected
+        //
+        // Therefore:
+        //   batch_var <- acc_var directly (muDNN already provides sample variance)
+        //   saved_var <- acc_var * (N-1)/N  (convert sample → population variance)
         musaMemcpyAsync(batch_var->flat<float>().data(),
-                        saved_var->flat<float>().data(), copy_size,
+                        temp_acc_var.flat<float>().data(), copy_size,
                         musaMemcpyDeviceToDevice, stream);
+        musaMemcpyAsync(saved_var->flat<float>().data(),
+                        temp_acc_var.flat<float>().data(), copy_size,
+                        musaMemcpyDeviceToDevice, stream);
+
+        // N_pixels = N * H * W  (elements per channel)
+        int64_t N_pixels = is_nhwc_
+            ? (x.dim_size(0) * x.dim_size(1) * x.dim_size(2))   // NHWC
+            : (x.dim_size(0) * x.dim_size(2) * x.dim_size(3));  // NCHW
+        if (N_pixels > 1) {
+          // Factor (N-1)/N converts sample variance → population variance.
+          // Applied only to saved_var; batch_var stays as sample variance.
+          float correction =
+              static_cast<float>(N_pixels - 1) / static_cast<float>(N_pixels);
+          int C = static_cast<int>(scale.NumElements());
+          LaunchBesselCorrection(saved_var->flat<float>().data(),
+                                 correction, C, stream);
+        }
       }
 
     } else {
