@@ -10,7 +10,8 @@
 #include "tensorflow/core/framework/tensor.h"
 
 // Bessel de-correction kernel: converts muDNN sample variance (1/(N-1)) back
-// to population variance (1/N) to match TF CPU FusedBatchNorm output convention.
+// to population variance (1/N) to match TF CPU FusedBatchNorm output
+// convention.
 extern "C" {
 void LaunchBesselCorrection(float* data, float factor, int count,
                             musaStream_t stream);
@@ -93,8 +94,8 @@ class MusaFusedBatchNormOp : public MusaOpKernel {
     // Zero-initialise reserve_3 so it is always in a defined state.
     // The current backward op (MusaFusedBatchNormGradOp) does not consume
     // reserve_3, but TF's graph executor may inspect its shape/value.
-    musaMemsetAsync(reserve_3->flat<float>().data(), 0,
-                    reserve_3->TotalBytes(), stream);
+    musaMemsetAsync(reserve_3->flat<float>().data(), 0, reserve_3->TotalBytes(),
+                    stream);
 
     mStatus status;
     if (is_training_) {
@@ -133,12 +134,14 @@ class MusaFusedBatchNormOp : public MusaOpKernel {
 
         // muDNN RunComposite writes *sample* variance (1/(N-1)) into acc_var.
         // TF CPU FusedBatchNorm convention:
-        //   batch_var  (output[2]) = sample variance  (1/(N-1)), Bessel-corrected
-        //   saved_var  (output[4]) = population variance (1/N), NOT Bessel-corrected
+        //   batch_var  (output[2]) = sample variance  (1/(N-1)),
+        //   Bessel-corrected saved_var  (output[4]) = population variance
+        //   (1/N), NOT Bessel-corrected
         //
         // Therefore:
-        //   batch_var <- acc_var directly (muDNN already provides sample variance)
-        //   saved_var <- acc_var * (N-1)/N  (convert sample → population variance)
+        //   batch_var <- acc_var directly (muDNN already provides sample
+        //   variance) saved_var <- acc_var * (N-1)/N  (convert sample →
+        //   population variance)
         musaMemcpyAsync(batch_var->flat<float>().data(),
                         temp_acc_var.flat<float>().data(), copy_size,
                         musaMemcpyDeviceToDevice, stream);
@@ -147,17 +150,17 @@ class MusaFusedBatchNormOp : public MusaOpKernel {
                         musaMemcpyDeviceToDevice, stream);
 
         // N_pixels = N * H * W  (elements per channel)
-        int64_t N_pixels = is_nhwc_
-            ? (x.dim_size(0) * x.dim_size(1) * x.dim_size(2))   // NHWC
-            : (x.dim_size(0) * x.dim_size(2) * x.dim_size(3));  // NCHW
+        int64_t N_pixels =
+            is_nhwc_ ? (x.dim_size(0) * x.dim_size(1) * x.dim_size(2))   // NHWC
+                     : (x.dim_size(0) * x.dim_size(2) * x.dim_size(3));  // NCHW
         if (N_pixels > 1) {
           // Factor (N-1)/N converts sample variance → population variance.
           // Applied only to saved_var; batch_var stays as sample variance.
           float correction =
               static_cast<float>(N_pixels - 1) / static_cast<float>(N_pixels);
           int C = static_cast<int>(scale.NumElements());
-          LaunchBesselCorrection(saved_var->flat<float>().data(),
-                                 correction, C, stream);
+          LaunchBesselCorrection(saved_var->flat<float>().data(), correction, C,
+                                 stream);
         }
       }
 
