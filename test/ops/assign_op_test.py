@@ -28,7 +28,7 @@ class AssignOpTest(MUSATestCase):
 
   def _test_assign(self, shape, dtype, validate_shape=True, use_locking=True):
     """Test assign operation with given shape and dtype."""
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
 
     if np_dtype in [np.int32, np.int64]:
       init_val_np = np.random.randint(-10, 10, size=shape).astype(np_dtype)

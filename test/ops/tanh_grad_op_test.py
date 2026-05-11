@@ -29,7 +29,7 @@ class TanhGradOpTest(MUSATestCase):
     input_shape = [2, 3]
 
     for dtype in [tf.float32, tf.float16, tf.bfloat16]:
-      np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+      np_dtype = dtype.as_numpy_dtype
 
       x_np = np.random.uniform(-5.0, 5.0, size=input_shape).astype(np_dtype)
       dy_np = np.random.uniform(-2.0, 2.0, size=input_shape).astype(np_dtype)
@@ -58,7 +58,7 @@ class TanhGradOpTest(MUSATestCase):
     input_shape = [2, 3]
 
     for dtype in [tf.float32, tf.float16, tf.bfloat16]:
-      np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+      np_dtype = dtype.as_numpy_dtype
 
 #生成输入（用 fp32 生成，避免极端数值；再 cast 到目标 dtype）
       x_np = np.random.uniform(-5.0, 5.0, size=input_shape).astype(np_dtype)
@@ -83,7 +83,7 @@ class TanhGradOpTest(MUSATestCase):
           dtype=dtype,
           rtol=rtol,
           atol=atol,
-      )    
+      )
 
 
 if __name__ == "__main__":

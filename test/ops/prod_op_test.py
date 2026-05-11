@@ -7,18 +7,18 @@ from musa_test_utils import MUSATestCase
 class ProdOpTest(MUSATestCase):
 
   def _test_prod(self, shape, axis, dtype, keepdims=False, rtol=1e-5, atol=1e-8):
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
-    
+    np_dtype = dtype.as_numpy_dtype
+
     if dtype in [tf.int32, tf.int64]:
       data_np = np.random.randint(1, 10, size=shape).astype(np_dtype)
     else:
       data_np = np.random.uniform(0.5, 2.0, size=shape).astype(np_dtype)
-    
+
     data_tensor = tf.constant(data_np, dtype=dtype)
-    
+
     def prod_func(x):
       return tf.reduce_prod(x, axis=axis, keepdims=keepdims)
-    
+
     self._compare_cpu_musa_results(prod_func, [data_tensor], dtype, rtol=rtol, atol=atol)
 
   def testProdGlobal(self):
@@ -59,45 +59,45 @@ class ProdOpTest(MUSATestCase):
   def testProdWithZeros(self):
     data_np = np.array([[1.0, 2.0, 0.0], [4.0, 5.0, 6.0]], dtype=np.float32)
     data_tensor = tf.constant(data_np, dtype=tf.float32)
-    
+
     def prod_func(x):
       return tf.reduce_prod(x, axis=1)
-    
+
     self._compare_cpu_musa_results(prod_func, [data_tensor], tf.float32)
 
   def testProdWithNegatives(self):
     data_np = np.array([[-1.0, 2.0], [-3.0, -4.0]], dtype=np.float32)
     data_tensor = tf.constant(data_np, dtype=tf.float32)
-    
+
     def prod_func(x):
       return tf.reduce_prod(x, axis=1)
-    
+
     self._compare_cpu_musa_results(prod_func, [data_tensor], tf.float32)
 
   def testProdEmptyAxis(self):
     data_np = np.array([[2.0, 2.0], [3.0, 3.0]], dtype=np.float32)
     data_tensor = tf.constant(data_np, dtype=tf.float32)
-    
+
     def prod_func(x):
       return tf.reduce_prod(x, axis=[])
-    
+
     self._compare_cpu_musa_results(prod_func, [data_tensor], tf.float32)
 
   def testProdLargeTensor(self):
     data_tensor = tf.ones([100, 100], dtype=tf.float32)
-    
+
     def prod_func(x):
       return tf.reduce_prod(x)
-    
+
     self._compare_cpu_musa_results(prod_func, [data_tensor], tf.float32)
 
   def testProdSingleElement(self):
     data_np = np.array([5.0], dtype=np.float32)
     data_tensor = tf.constant(data_np, dtype=tf.float32)
-    
+
     def prod_func(x):
       return tf.reduce_prod(x, axis=0)
-    
+
     self._compare_cpu_musa_results(prod_func, [data_tensor], tf.float32)
 
   def testProdDifferentShapes(self):

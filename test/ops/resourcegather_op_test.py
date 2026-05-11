@@ -35,7 +35,7 @@ class ResourceOpTest(MUSATestCase):
         """
         vocab_size = 100
         embedding_dim = 8
-        
+
         # 准备输入数据 (使用 Tensor 包装以便传递)
         # 词表: 100x8
         h_params = np.array([np.full(embedding_dim, i, dtype=np.float32) for i in range(vocab_size)])
@@ -47,7 +47,7 @@ class ResourceOpTest(MUSATestCase):
             # 1. 在当前设备 (CPU 或 MUSA) 创建变量
             # 注意：因为外层有 with tf.device(...), 变量会自动落在这个设备上
             var = tf.Variable(params_val)
-            
+
             # 2. 执行 Gather 操作
             result = tf.gather(var, indices_val)
             return result
@@ -66,10 +66,10 @@ class ResourceOpTest(MUSATestCase):
         """
         vocab_size = 10
         embedding_dim = 4
-        
+
         # 初始参数全为 1.0
         h_params = np.ones((vocab_size, embedding_dim), dtype=np.float32)
-        
+
         # 更新参数: 给索引 1 和 3 分别加上不同的值
         # 索引 1 加 [10, 10...]
         # 索引 3 加 [20, 20...]
@@ -83,11 +83,11 @@ class ResourceOpTest(MUSATestCase):
         def scatter_add_wrapper(params_val, updates_val, indices_val):
             # 1. 创建变量
             var = tf.Variable(params_val)
-            
+
             # 2. 执行 ScatterAdd (这是一个原地更新操作)
             # 构造 IndexedSlices 对象
             ops = var.scatter_add(tf.IndexedSlices(updates_val, indices_val))
-            
+
             # 3. 读取更新后的值返回 (为了对比结果)
             return var.read_value()
 
@@ -96,6 +96,71 @@ class ResourceOpTest(MUSATestCase):
             scatter_add_wrapper,
             [tf.constant(h_params), tf.constant(h_updates), tf.constant(h_indices)],
             tf.float32
+        )
+
+    def testResourceScatterAddAllIndicesUpdated(self):
+        """
+        验证 ResourceScatterAdd 能正确更新 *所有* indices 对应的 embedding 行。
+
+        Bug 背景: 原实现调用 indices_mt.SetNdInfo({ndim, 1}) 而不是
+        SetNdInfo({NumElements, 1})，导致 indices 的 shape 被错误地设置为
+        [1, 1]（对 1D indices 而言 ndim==1），从而只 scatter 了第 0 个 index，
+        其余所有行的梯度更新全部丢失。
+
+        本测试使用较大 batch（32 个 index），若 MUSA 结果与 CPU 结果一致则说明
+        修复正确；若仍存在 bug，只有 1 行会被更新，diff 会非常大。
+        """
+        vocab_size = 50
+        embedding_dim = 16
+        batch_size = 32
+
+        rng = np.random.default_rng(42)
+        h_params = rng.standard_normal((vocab_size, embedding_dim)).astype(np.float32)
+        # 生成 batch_size 个随机索引（允许重复，模拟真实 embedding scatter）
+        h_indices = rng.integers(0, vocab_size, size=batch_size).astype(np.int32)
+        h_updates = rng.standard_normal((batch_size, embedding_dim)).astype(np.float32)
+
+        def scatter_add_all_indices(params_val, indices_val, updates_val):
+            var = tf.Variable(params_val)
+            var.scatter_add(tf.IndexedSlices(updates_val, indices_val))
+            return var.read_value()
+
+        self._compare_cpu_musa_results(
+            scatter_add_all_indices,
+            [tf.constant(h_params),
+             tf.constant(h_indices),
+             tf.constant(h_updates)],
+            tf.float32,
+            rtol=1e-5,
+            atol=1e-5,
+        )
+
+    def testResourceScatterAddInt64Indices(self):
+        """
+        同上，但使用 int64 类型的 indices，覆盖 MusaResourceScatterAddOp<T, int64>。
+        """
+        vocab_size = 50
+        embedding_dim = 16
+        batch_size = 32
+
+        rng = np.random.default_rng(7)
+        h_params = rng.standard_normal((vocab_size, embedding_dim)).astype(np.float32)
+        h_indices = rng.integers(0, vocab_size, size=batch_size).astype(np.int64)
+        h_updates = rng.standard_normal((batch_size, embedding_dim)).astype(np.float32)
+
+        def scatter_add_int64(params_val, indices_val, updates_val):
+            var = tf.Variable(params_val)
+            var.scatter_add(tf.IndexedSlices(updates_val, indices_val))
+            return var.read_value()
+
+        self._compare_cpu_musa_results(
+            scatter_add_int64,
+            [tf.constant(h_params),
+             tf.constant(h_indices),
+             tf.constant(h_updates)],
+            tf.float32,
+            rtol=1e-5,
+            atol=1e-5,
         )
 
     def testVariableShapeComparison(self):

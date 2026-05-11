@@ -27,8 +27,8 @@ class MathAndShapeOpTest(MUSATestCase):
         # 1. 使用你原始用例中的特定数值进行冒烟测试
         input_data = np.array([1.0, 4.0, 16.0], dtype=np.float32)
         self._compare_cpu_musa_results(
-            tf.math.rsqrt, 
-            [tf.constant(input_data)], 
+            tf.math.rsqrt,
+            [tf.constant(input_data)],
             tf.float32
         )
 
@@ -38,9 +38,9 @@ class MathAndShapeOpTest(MUSATestCase):
             # Rsqrt 对负数会产生 NaN，对 0 会产生 Inf
             # 为了验证计算精度，我们生成正数区间 [0.1, 10.0] 的数据
             shape = [32, 32]
-            np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+            np_dtype = dtype.as_numpy_dtype
             data = np.random.uniform(0.1, 10.0, size=shape).astype(np_dtype)
-            
+
             # 适当放宽 float16 的误差容忍度
             rtol = 1e-3 if dtype == tf.float16 else 1e-5
             atol = 1e-3 if dtype == tf.float16 else 1e-8
@@ -58,7 +58,7 @@ class MathAndShapeOpTest(MUSATestCase):
         # 对应你原始代码中的 x = tf.ones([1, 10, 1])
         shape = [1, 10, 1]
         data = np.ones(shape, dtype=np.float32)
-        
+
         # 默认 Squeeze (移除所有为1的维度)
         self._compare_cpu_musa_results(
             tf.squeeze,

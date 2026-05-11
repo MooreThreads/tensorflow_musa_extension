@@ -26,13 +26,13 @@ class AssignAddOpTest(MUSATestCase):
 
   def _test_assign_add(self, shape, dtype, use_locking=False):
     """Test AssignAdd operation with given shape and dtype.
-    
+
     Args:
       shape: Shape of the tensor
       dtype: TensorFlow data type
       use_locking: Whether to use locking for the operation
     """
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
 
     # Generate test data
     if np_dtype in [np.int32, np.int64]:
@@ -48,7 +48,7 @@ class AssignAddOpTest(MUSATestCase):
     # Test on CPU using tf.raw_ops.AssignAdd (requires RefVariable)
     # Note: Modern TensorFlow prefers ResourceVariable, but AssignAdd op
     # works with legacy ref tensors. We'll use Variable.state_value() approach.
-    
+
     # Test on MUSA
     with tf.device('/device:MUSA:0'):
       # Create a variable and perform assign_add
@@ -73,7 +73,7 @@ class AssignAddOpTest(MUSATestCase):
     else:
       rtol = 1e-5
       atol = 1e-8
-      self.assertAllClose(cpu_result.numpy(), musa_result.numpy(), 
+      self.assertAllClose(cpu_result.numpy(), musa_result.numpy(),
                           rtol=rtol, atol=atol)
 
   def testAssignAdd1D(self):
@@ -159,7 +159,7 @@ class AssignAddOpTest(MUSATestCase):
       var_cpu.assign_add(add_val_3)
       cpu_result = var_cpu.read_value()
 
-    self.assertAllClose(cpu_result.numpy(), musa_result.numpy(), 
+    self.assertAllClose(cpu_result.numpy(), musa_result.numpy(),
                         rtol=1e-5, atol=1e-8)
 
   def testAssignAddWithZeros(self):
@@ -201,7 +201,7 @@ class AssignAddOpTest(MUSATestCase):
       var_cpu.assign_add(neg_val)
       cpu_result = var_cpu.read_value()
 
-    self.assertAllClose(cpu_result.numpy(), musa_result.numpy(), 
+    self.assertAllClose(cpu_result.numpy(), musa_result.numpy(),
                         rtol=1e-5, atol=1e-8)
 
   def testAssignAddDoublePrecision(self):
@@ -226,7 +226,7 @@ class AssignAddOpTest(MUSATestCase):
       cpu_result = var_cpu.read_value()
 
     # Double precision should be very accurate
-    self.assertAllClose(cpu_result.numpy(), musa_result.numpy(), 
+    self.assertAllClose(cpu_result.numpy(), musa_result.numpy(),
                         rtol=1e-10, atol=1e-14)
 
 

@@ -18,7 +18,7 @@ class Conv2DOpTest(MUSATestCase):
 
   def _make_input_and_filter(self, input_shape, filter_shape, dtype, seed=2026):
     np.random.seed(seed)
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
     x_np = np.random.uniform(-1.0, 1.0, size=input_shape).astype(np_dtype)
     w_np = np.random.uniform(-1.0, 1.0, size=filter_shape).astype(np_dtype)
     return tf.constant(x_np, dtype=dtype), tf.constant(w_np, dtype=dtype)

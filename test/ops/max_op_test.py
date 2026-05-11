@@ -32,7 +32,7 @@ class MaxOpTest(MUSATestCase):
 
   def _test_max(self, shape, dtype, axis=None, keepdims=False, rtol=1e-5, atol=1e-8):
     """Test reduce_max operation with given parameters."""
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
 
     if np.issubdtype(np_dtype, np.integer):
       x_np = np.random.randint(-100, 100, size=shape).astype(np_dtype)

@@ -26,18 +26,18 @@ class SubOpTest(MUSATestCase):
 
   def _test_sub(self, shape_x, shape_y, dtype, rtol=1e-5, atol=1e-8):
     """Test subtract operation with given shapes and dtype."""
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
-    
+    np_dtype = dtype.as_numpy_dtype
+
     if np.issubdtype(np_dtype, np.integer):
         x_np = np.random.randint(-100, 100, size=shape_x).astype(np_dtype)
         y_np = np.random.randint(-100, 100, size=shape_y).astype(np_dtype)
     else:
         x_np = np.random.uniform(-1, 1, size=shape_x).astype(np_dtype)
         y_np = np.random.uniform(-1, 1, size=shape_y).astype(np_dtype)
-    
+
     x = tf.constant(x_np, dtype=dtype)
     y = tf.constant(y_np, dtype=dtype)
-    
+
     self._compare_cpu_musa_results(tf.math.subtract, [x, y], dtype, rtol=rtol, atol=atol)
 
   def testSubBasic(self):

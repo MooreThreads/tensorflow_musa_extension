@@ -12,7 +12,7 @@ class DiagPartOpTest(MUSATestCase):
   def _build_input_tensor(self, shape, dtype):
     """Create an input tensor whose first and second halves share the same sizes."""
     size = int(np.prod(shape))
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
     values = np.arange(size, dtype=np_dtype).reshape(shape)
     return tf.constant(values, dtype=dtype)
 

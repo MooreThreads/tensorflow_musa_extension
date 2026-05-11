@@ -27,19 +27,19 @@ class LessEqualOpTest(MUSATestCase):
 
   def _test_less_equal(self, shape_x, shape_y, dtype):
     """Test less_equal operation with given shapes and dtype."""
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
-    
+    np_dtype = dtype.as_numpy_dtype
+
     if np.issubdtype(np_dtype, np.integer):
         x_np = np.random.randint(-100, 100, size=shape_x).astype(np_dtype)
         y_np = np.random.randint(-100, 100, size=shape_y).astype(np_dtype)
     else:
         x_np = np.array(np.random.randn(*shape_x)).astype(np_dtype)
         y_np = np.array(np.random.randn(*shape_y)).astype(np_dtype)
-        
+
     if x_np.size > 0 and y_np.size > 0 and x_np.shape == y_np.shape:
         mask = np.random.rand(*shape_x) < 0.2
         y_np[mask] = x_np[mask]
-        
+
         if x_np.size > 1:
             flat_x = x_np.ravel()
             flat_y = y_np.ravel()
@@ -49,10 +49,10 @@ class LessEqualOpTest(MUSATestCase):
             flat_y[1] = -100
             x_np = flat_x.reshape(shape_x)
             y_np = flat_y.reshape(shape_y)
-    
+
     x = tf.constant(x_np, dtype=dtype)
     y = tf.constant(y_np, dtype=dtype)
-    
+
     def op_func(input_x, input_y):
         return tf.math.less_equal(input_x, input_y)
 

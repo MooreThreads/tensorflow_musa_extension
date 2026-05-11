@@ -11,14 +11,14 @@ class MaximumOpTest(MUSATestCase):
 
   def _test_maximum(self, shape_x, shape_y, dtype, rtol=1e-5, atol=1e-8):
     """Test maximum operation with given shapes and dtype."""
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
-    
+    np_dtype = dtype.as_numpy_dtype
+
     x_np = np.random.uniform(-2, 2, size=shape_x).astype(np_dtype)
     y_np = np.random.uniform(-2, 2, size=shape_y).astype(np_dtype)
-    
+
     x = tf.constant(x_np, dtype=dtype)
     y = tf.constant(y_np, dtype=dtype)
-    
+
     self._compare_cpu_musa_results(tf.maximum, [x, y], dtype, rtol=rtol, atol=atol)
 
   def testMaximumBasic(self):
@@ -68,18 +68,18 @@ class MaximumOpTest(MUSATestCase):
     for dtype in [tf.float32, tf.float16, tf.bfloat16]:
       rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
       atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
-      
+
       # 创建包含负数的测试数据
       x_np = np.array([1.0, -2.0, 3.0, -4.0, 0.0], dtype=np.float32)
       y_np = np.array([-1.0, 2.0, -3.0, 4.0, 0.0], dtype=np.float32)
-      
+
       if dtype != tf.float32:
         x_np = x_np.astype(np.float16) if dtype == tf.float16 else x_np
         y_np = y_np.astype(np.float16) if dtype == tf.float16 else y_np
-      
+
       x = tf.constant(x_np, dtype=dtype)
       y = tf.constant(y_np, dtype=dtype)
-      
+
       self._compare_cpu_musa_results(tf.maximum, [x, y], dtype, rtol=rtol, atol=atol)
 
   def testMaximumLargeTensors(self):

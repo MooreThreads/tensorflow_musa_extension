@@ -27,13 +27,13 @@ class StopGradientOpTest(MUSATestCase):
   def _test_forward(self, shape, dtype, rtol=1e-5, atol=1e-8):
     """Test that stop_gradient acts as identity in forward pass."""
     # Prepare Data
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
-    
+    np_dtype = dtype.as_numpy_dtype
+
     if np.issubdtype(np_dtype, np.integer):
         x_np = np.random.randint(-100, 100, size=shape).astype(np_dtype)
     else:
         x_np = np.random.uniform(-10, 10, size=shape).astype(np_dtype)
-        
+
     x = tf.constant(x_np, dtype=dtype)
 
     # Define Forward Operator
@@ -48,7 +48,7 @@ class StopGradientOpTest(MUSATestCase):
     if not dtype.is_floating:
         return
 
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
     x_np = np.random.randn(*shape).astype(np_dtype)
     x = tf.constant(x_np, dtype=dtype)
 
@@ -62,8 +62,8 @@ class StopGradientOpTest(MUSATestCase):
             stopped = tf.stop_gradient(intermediate)
             # Continue operation
             final = stopped + 1.0
-            
-        grad = tape.gradient(final, input_tensor, 
+
+        grad = tape.gradient(final, input_tensor,
                              unconnected_gradients=tf.UnconnectedGradients.ZERO)
         return grad
 
@@ -73,13 +73,13 @@ class StopGradientOpTest(MUSATestCase):
   def testStopGradientForwardBasic(self):
     """Test forward pass identity for various types."""
     shape = [2, 5]
-    
+
     # Test Floating points
     for dtype in [tf.float32, tf.float16, tf.bfloat16]:
       rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
       atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
       self._test_forward(shape, dtype, rtol=rtol, atol=atol)
-      
+
     for dtype in [tf.int32, tf.int64]:
       self._test_forward(shape, dtype)
 

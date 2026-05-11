@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "../utils_op.h"
+#include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/resource_mgr.h"
 #include "tensorflow/core/framework/resource_var.h"
@@ -237,7 +238,8 @@ class MusaResourceScatterAddOp : public MusaOpKernel {
       auto params_mt = CreateMTensor(*params, format_);
       auto indices_mt = CreateMTensor(indices, format_);
       // Reshape indices for scatter-nd op.
-      indices_mt.SetNdInfo({static_cast<int64_t>(indices.shape().dim_sizes().size()), 1LL});;
+      // indicates the number of axes being scattered (1 for embedding scatter).
+      indices_mt.SetNdInfo({static_cast<int64_t>(indices.NumElements()), 1LL});
       auto updates_mt = CreateMTensor(updates, format_);
       MTOP_CHECK_OK_RUN(
           op.Run(h, params_mt, indices_mt, updates_mt, maintainer),
@@ -349,6 +351,22 @@ REGISTER_MUSA_KERNELS(double);
 REGISTER_MUSA_KERNELS(int32);
 REGISTER_MUSA_KERNELS(int64);
 
+#define REGISTER_MUSA_ASSIGN_UPDATE_VARIABLE_KERNELS(type)   \
+  REGISTER_KERNEL_BUILDER(                                   \
+      Name("AssignSubVariableOp")                            \
+          .Device(DEVICE_MTGPU)                              \
+          .HostMemory("resource")                            \
+          .TypeConstraint<type>("dtype"),                    \
+      MusaAssignUpdateVariableOp<type, mBinary::Mode::SUB>); \
+  REGISTER_KERNEL_BUILDER(                                   \
+      Name("AssignAddVariableOp")                            \
+          .Device(DEVICE_MTGPU)                              \
+          .HostMemory("resource")                            \
+          .TypeConstraint<type>("dtype"),                    \
+      MusaAssignUpdateVariableOp<type, mBinary::Mode::ADD>);
+
+REGISTER_MUSA_ASSIGN_UPDATE_VARIABLE_KERNELS(Eigen::bfloat16);
+
 REGISTER_KERNEL_BUILDER(Name("VariableShape")
                             .Device(DEVICE_MTGPU)
                             .HostMemory("input")
@@ -356,6 +374,7 @@ REGISTER_KERNEL_BUILDER(Name("VariableShape")
                         MusaVariableShapeOp);
 
 #undef REGISTER_MUSA_KERNELS
+#undef REGISTER_MUSA_ASSIGN_UPDATE_VARIABLE_KERNELS
 
 }  // namespace musa
 }  // namespace tensorflow

@@ -24,16 +24,16 @@ from musa_test_utils import MUSATestCase
 class UnsortedSegmentSumOpTest(MUSATestCase):
   """Tests for MUSA UnsortedSegmentSum operator."""
 
-  def _test_unsorted_segment_sum(self, data, segment_ids, num_segments, dtype, 
+  def _test_unsorted_segment_sum(self, data, segment_ids, num_segments, dtype,
                                  index_type=tf.int32, rtol=1e-5, atol=1e-8):
     """Test unsorted_segment_sum operation."""
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
-    
+    np_dtype = dtype.as_numpy_dtype
+
     if not isinstance(data, np.ndarray):
         data = np.array(data, dtype=np_dtype)
     else:
         data = data.astype(np_dtype)
-        
+
     segment_ids = np.array(segment_ids, dtype=index_type.as_numpy_dtype)
 
     x = tf.constant(data, dtype=dtype)
@@ -51,11 +51,11 @@ class UnsortedSegmentSumOpTest(MUSATestCase):
     inputs = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
     segment_ids = [0, 1, 0]
     num_segments = 2
-    
+
     for dtype in [tf.float32, tf.float16, tf.bfloat16, tf.int32, tf.int64]:
         rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
         atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
-        
+
         self._test_unsorted_segment_sum(inputs, segment_ids, num_segments, dtype, rtol=rtol, atol=atol)
 
   def testIndicesTypes(self):
@@ -72,7 +72,7 @@ class UnsortedSegmentSumOpTest(MUSATestCase):
     inputs = []
     segment_ids = []
     num_segments = 3
-    
+
     self._test_unsorted_segment_sum(inputs, segment_ids, num_segments, tf.float32)
 
   def testDropIndices(self):
@@ -80,7 +80,7 @@ class UnsortedSegmentSumOpTest(MUSATestCase):
     inputs = [[1, 2], [3, 4], [5, 6], [7, 8]]
     segment_ids = [0, -1, 1, -1]
     num_segments = 2
-    
+
     self._test_unsorted_segment_sum(inputs, segment_ids, num_segments, tf.float32)
 
   def testHighDim(self):
@@ -89,7 +89,7 @@ class UnsortedSegmentSumOpTest(MUSATestCase):
     inputs = np.random.uniform(0, 10, size=shape)
     segment_ids = [0, 1, 0, 1]
     num_segments = 2
-    
+
     self._test_unsorted_segment_sum(inputs, segment_ids, num_segments, tf.float32)
 
 

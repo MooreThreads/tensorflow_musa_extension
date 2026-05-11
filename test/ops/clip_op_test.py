@@ -36,7 +36,7 @@ class ClipOpTest(MUSATestCase):
 
     def _assert_clip_close(self, x_np, lo_np, hi_np, dtype, rtol=1e-5, atol=1e-8):
         """Compare CPU reference vs custom MUSA clip op."""
-        np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+        np_dtype = dtype.as_numpy_dtype
 
         x = tf.constant(np.array(x_np, dtype=np_dtype), dtype=dtype)
         lo = tf.constant(np.array(lo_np, dtype=np_dtype), dtype=dtype)

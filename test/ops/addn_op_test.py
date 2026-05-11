@@ -26,7 +26,7 @@ class AddNOpTest(MUSATestCase):
 
   def _test_addn(self, shapes, dtype, rtol=1e-5, atol=1e-8):
     """Test addn operation with given shapes and dtype."""
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
 
     # Generate input tensors
     inputs_np = []
@@ -119,7 +119,7 @@ class AddNOpTest(MUSATestCase):
 
       # All zeros
       shapes = [[100]]
-      inputs_np = [np.zeros(shape, dtype=np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype)
+      inputs_np = [np.zeros(shape, dtype=dtype.as_numpy_dtype)
                   for shape in shapes]
       inputs_tf = [tf.constant(inp, dtype=dtype) for inp in inputs_np]
 
@@ -141,7 +141,7 @@ class AddNOpTest(MUSATestCase):
         if dtype in [tf.int32, tf.int64]:
           inp = np.random.randint(-100, 100, size=shape).astype(dtype.as_numpy_dtype)
         else:
-          inp = np.random.uniform(-10, 10, size=shape).astype(np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype)
+          inp = np.random.uniform(-10, 10, size=shape).astype(dtype.as_numpy_dtype)
         inputs_np.append(inp)
 
       inputs_tf = [tf.constant(inp, dtype=dtype) for inp in inputs_np]

@@ -37,15 +37,10 @@ defaults:
 
 env:
   LOG_BASE: /home/runner/ci_logs
-  MODEL_ROOT: /home/runner/tf_test_model-master
-  BASELINE_WORKSPACE: /home/runner/baseline/tensorflow_musa_extension
+  MODEL_ROOT: /home/runner/tf_test_model_wheel
   BASELINE_REPO_URL: https://github.com/MooreThreads/tensorflow_musa_extension.git
-  CURRENT_PLUGIN_ARTIFACT: current-plugin
+  BASELINE_WHEEL_ARTIFACT: baseline-wheel
   CURRENT_WHEEL_ARTIFACT: current-wheel
-  BASELINE_PLUGIN_ARTIFACT: baseline-plugin
-  GPU_GUARD_PATTERN: '[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_tf_musa_extension.py|[t]est_runner.py'
-  GPU_GUARD_TIMEOUT_SECONDS: 180
-  GPU_LOCK_FILE: /tmp/tensorflow_musa_ci_gpu.lock
   EMPTY_TEST_RESULT_PATTERN: 'No tests found|No test files found|Total Tests:[[:space:]]*0|Total Tests[[:space:]]*│[[:space:]]*0|总计:[[:space:]]*0|no average_time_summary entries|report path missing|log not found'
 
 jobs:
@@ -260,7 +255,7 @@ jobs:
           fetch-depth: 0
           ref: ${{ needs.prepare_metadata.outputs.commit_id }}
 
-      - name: Build current plugin
+      - name: Build current wheel
         id: run_build
         run: |
           set +e
@@ -276,8 +271,7 @@ jobs:
             export CPLUS_INCLUDE_PATH="/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:${CPLUS_INCLUDE_PATH:-}"
             cd "$GITHUB_WORKSPACE"
             rm -rf ./build ./dist
-            ./build.sh 2>&1 | tee "$LOG_FILE"
-            ./build.sh wheel 2>&1 | tee -a "$LOG_FILE"
+            ./build.sh wheel 2>&1 | tee "$LOG_FILE"
           ' || build_exit=$?
 
           echo "build_exit=$build_exit" >> "$GITHUB_OUTPUT"
@@ -291,23 +285,19 @@ jobs:
           JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/build-current"
           LOG_FILE="$JOB_LOG_DIR/build_current.log"
           SUMMARY_FILE="$RUNNER_TEMP/build-current.md"
-          PLUGIN_PATH="$GITHUB_WORKSPACE/build/libmusa_plugin.so"
           WHEEL_PATH="$(find "$GITHUB_WORKSPACE/dist" -maxdepth 1 -name 'tensorflow_musa-*.whl' -print -quit 2>/dev/null || true)"
           STATUS="success"
 
-          if [[ "${{ steps.run_build.outputs.build_exit }}" != "0" || ! -f "$PLUGIN_PATH" || -z "$WHEEL_PATH" ]]; then
+          if [[ "${{ steps.run_build.outputs.build_exit }}" != "0" || -z "$WHEEL_PATH" ]]; then
             STATUS="failure"
           fi
 
-          PLUGIN_SIZE="$(stat -c%s "$PLUGIN_PATH" 2>/dev/null || echo "n/a")"
           WHEEL_SIZE="$(stat -c%s "$WHEEL_PATH" 2>/dev/null || echo "n/a")"
 
           {
             echo "## Build Current"
             echo
             echo "- Status: $STATUS"
-            echo "- Plugin path: $PLUGIN_PATH"
-            echo "- Plugin size: $PLUGIN_SIZE"
             echo "- Wheel path: ${WHEEL_PATH:-not found}"
             echo "- Wheel size: $WHEEL_SIZE"
             echo "- Log file: $LOG_FILE"
@@ -324,15 +314,6 @@ jobs:
           cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
           echo "status=$STATUS" >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
-
-      - name: Upload current plugin artifact
-        if: steps.collect.outputs.status == 'success'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
-          path: ${{ github.workspace }}/build/libmusa_plugin.so
-          if-no-files-found: error
-          retention-days: 7
 
       - name: Upload current wheel artifact
         if: steps.collect.outputs.status == 'success'
@@ -358,6 +339,145 @@ jobs:
         with:
           name: logs-build-current
           path: ${{ needs.prepare_metadata.outputs.log_root }}/build-current/build_current.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Fail job if build failed
+        if: always() && steps.collect.outputs.status == 'failure'
+        run: exit 1
+
+
+  build_baseline:
+    name: Build Baseline
+    needs: prepare_metadata
+    runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 120
+    outputs:
+      status: ${{ steps.collect.outputs.status }}
+      baseline_sha: ${{ steps.collect.outputs.baseline_sha }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
+    steps:
+      - name: Sync and build baseline
+        id: run_build
+        run: |
+          set +e
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/build-baseline"
+          LOG_FILE="$JOB_LOG_DIR/build_baseline.log"
+          mkdir -p "$JOB_LOG_DIR"
+
+          sync_exit=0
+          build_exit=0
+          baseline_sha=""
+
+          BASELINE_WORKSPACE="${RUNNER_TEMP}/baseline-workspace"
+          echo "baseline_workspace=$BASELINE_WORKSPACE" >> "$GITHUB_OUTPUT"
+
+          export LOG_FILE BASELINE_WORKSPACE BASELINE_REPO_URL
+          bash -l -c '
+            BASELINE_PARENT=$(dirname "$BASELINE_WORKSPACE")
+            mkdir -p "$BASELINE_PARENT"
+            if [[ ! -d "$BASELINE_WORKSPACE/.git" ]]; then
+              git clone "$BASELINE_REPO_URL" "$BASELINE_WORKSPACE"
+            fi
+            cd "$BASELINE_WORKSPACE"
+            if git remote get-url upstream >/dev/null 2>&1; then
+              git remote set-url upstream "$BASELINE_REPO_URL"
+            else
+              git remote add upstream "$BASELINE_REPO_URL"
+            fi
+            git fetch upstream
+            if [[ -n "${{ needs.prepare_metadata.outputs.requested_baseline_id }}" ]]; then
+              git reset --hard "${{ needs.prepare_metadata.outputs.requested_baseline_id }}"
+            else
+              git reset --hard upstream/main
+            fi
+            git clean -fdx
+          ' || sync_exit=$?
+
+          if [[ "$sync_exit" == "0" ]]; then
+            baseline_sha="$(git -C "$BASELINE_WORKSPACE" rev-parse HEAD 2>/dev/null || true)"
+            export LOG_FILE BASELINE_WORKSPACE
+            bash -l -c '
+              set -o pipefail
+              export CPLUS_INCLUDE_PATH="/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:${CPLUS_INCLUDE_PATH:-}"
+              cd "$BASELINE_WORKSPACE"
+              rm -rf ./build ./dist
+              ./build.sh wheel 2>&1 | tee "$LOG_FILE"
+            ' || build_exit=$?
+          fi
+
+          echo "sync_exit=$sync_exit" >> "$GITHUB_OUTPUT"
+          echo "build_exit=$build_exit" >> "$GITHUB_OUTPUT"
+          echo "baseline_sha=$baseline_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Collect build summary
+        id: collect
+        if: always()
+        run: |
+          set -euo pipefail
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/build-baseline"
+          LOG_FILE="$JOB_LOG_DIR/build_baseline.log"
+          SUMMARY_FILE="$RUNNER_TEMP/build-baseline.md"
+          BASELINE_WORKSPACE="${{ steps.run_build.outputs.baseline_workspace }}"
+          WHEEL_PATH="$(find "$BASELINE_WORKSPACE/dist" -maxdepth 1 -name 'tensorflow_musa-*.whl' -print -quit 2>/dev/null || true)"
+          BASELINE_SHA="${{ steps.run_build.outputs.baseline_sha }}"
+          STATUS="success"
+
+          if [[ "${{ steps.run_build.outputs.sync_exit }}" != "0" || "${{ steps.run_build.outputs.build_exit }}" != "0" || -z "$WHEEL_PATH" ]]; then
+            STATUS="failure"
+          fi
+
+          WHEEL_SIZE="$(stat -c%s "$WHEEL_PATH" 2>/dev/null || echo "n/a")"
+
+          {
+            echo "## Build Baseline"
+            echo
+            echo "- Status: $STATUS"
+            echo "- Baseline commit: ${BASELINE_SHA:-unavailable}"
+            echo "- Wheel path: ${WHEEL_PATH:-not found}"
+            echo "- Wheel size: $WHEEL_SIZE"
+            echo "- Log file: $LOG_FILE"
+            echo
+            echo '```text'
+            if [[ -f "$LOG_FILE" ]]; then
+              tail -50 "$LOG_FILE" || true
+            else
+              echo "build log not found"
+            fi
+            echo '```'
+          } | tee "$SUMMARY_FILE"
+
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "baseline_sha=$BASELINE_SHA" >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload baseline wheel artifact
+        if: steps.collect.outputs.status == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BASELINE_WHEEL_ARTIFACT }}
+          path: ${{ steps.run_build.outputs.baseline_workspace }}/dist/tensorflow_musa-*.whl
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload build summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-build-baseline
+          path: ${{ steps.collect.outputs.summary_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload build baseline logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-build-baseline
+          path: ${{ needs.prepare_metadata.outputs.log_root }}/build-baseline/build_baseline.log
           if-no-files-found: warn
           retention-days: 7
 
@@ -469,140 +589,6 @@ jobs:
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
 
-  build_baseline:
-    name: Build Baseline
-    needs: prepare_metadata
-    runs-on: [self-hosted, musa-gpu]
-    timeout-minutes: 120
-    outputs:
-      status: ${{ steps.collect.outputs.status }}
-      baseline_sha: ${{ steps.collect.outputs.baseline_sha }}
-      summary_file: ${{ steps.collect.outputs.summary_file }}
-    steps:
-      - name: Sync and build baseline
-        id: run_build
-        run: |
-          set +e
-
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/build-baseline"
-          LOG_FILE="$JOB_LOG_DIR/build_baseline.log"
-          mkdir -p "$JOB_LOG_DIR"
-
-          sync_exit=0
-          build_exit=0
-          baseline_sha=""
-
-          export LOG_FILE BASELINE_WORKSPACE BASELINE_REPO_URL
-          bash -l -c '
-            BASELINE_PARENT=$(dirname "$BASELINE_WORKSPACE")
-            mkdir -p "$BASELINE_PARENT"
-            if [[ ! -d "$BASELINE_WORKSPACE/.git" ]]; then
-              git clone "$BASELINE_REPO_URL" "$BASELINE_WORKSPACE"
-            fi
-            cd "$BASELINE_WORKSPACE"
-            if git remote get-url upstream >/dev/null 2>&1; then
-              git remote set-url upstream "$BASELINE_REPO_URL"
-            else
-              git remote add upstream "$BASELINE_REPO_URL"
-            fi
-            git fetch upstream
-            if [[ -n "${{ needs.prepare_metadata.outputs.requested_baseline_id }}" ]]; then
-              git reset --hard "${{ needs.prepare_metadata.outputs.requested_baseline_id }}"
-            else
-              git reset --hard upstream/main
-            fi
-            git clean -fdx
-          ' || sync_exit=$?
-
-          if [[ "$sync_exit" == "0" ]]; then
-            baseline_sha="$(git -C "$BASELINE_WORKSPACE" rev-parse HEAD 2>/dev/null || true)"
-            export LOG_FILE BASELINE_WORKSPACE
-            bash -l -c '
-            set -o pipefail
-            export CPLUS_INCLUDE_PATH="/usr/include/c++/11:/usr/include/x86_64-linux-gnu/c++/11:${CPLUS_INCLUDE_PATH:-}"
-            cd "$BASELINE_WORKSPACE"
-            rm -rf ./build
-            ./build.sh 2>&1 | tee "$LOG_FILE"
-          ' || build_exit=$?
-          fi
-
-          echo "sync_exit=$sync_exit" >> "$GITHUB_OUTPUT"
-          echo "build_exit=$build_exit" >> "$GITHUB_OUTPUT"
-          echo "baseline_sha=$baseline_sha" >> "$GITHUB_OUTPUT"
-
-      - name: Collect baseline summary
-        id: collect
-        if: always()
-        run: |
-          set -euo pipefail
-
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/build-baseline"
-          LOG_FILE="$JOB_LOG_DIR/build_baseline.log"
-          SUMMARY_FILE="$RUNNER_TEMP/build-baseline.md"
-          PLUGIN_PATH="$BASELINE_WORKSPACE/build/libmusa_plugin.so"
-          STATUS="success"
-
-          if [[ "${{ steps.run_build.outputs.sync_exit }}" != "0" || "${{ steps.run_build.outputs.build_exit }}" != "0" || ! -f "$PLUGIN_PATH" ]]; then
-            STATUS="failure"
-          fi
-
-          PLUGIN_SIZE="$(stat -c%s "$PLUGIN_PATH" 2>/dev/null || echo "n/a")"
-          BASELINE_SHA="${{ steps.run_build.outputs.baseline_sha }}"
-
-          {
-            echo "## Build Baseline"
-            echo
-            echo "- Status: $STATUS"
-            echo "- Baseline commit: ${BASELINE_SHA:-unavailable}"
-            echo "- Plugin path: $PLUGIN_PATH"
-            echo "- Plugin size: $PLUGIN_SIZE"
-            echo "- Log file: $LOG_FILE"
-            echo
-            echo '```text'
-            if [[ -f "$LOG_FILE" ]]; then
-              tail -50 "$LOG_FILE" || true
-            else
-              echo "baseline build log not found"
-            fi
-            echo '```'
-          } | tee "$SUMMARY_FILE"
-
-          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
-          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
-          echo "baseline_sha=${BASELINE_SHA}" >> "$GITHUB_OUTPUT"
-          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
-
-      - name: Upload baseline plugin artifact
-        if: steps.collect.outputs.status == 'success'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.BASELINE_PLUGIN_ARTIFACT }}
-          path: ${{ env.BASELINE_WORKSPACE }}/build/libmusa_plugin.so
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload baseline summary artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: summary-build-baseline
-          path: ${{ steps.collect.outputs.summary_file }}
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload baseline logs artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: logs-build-baseline
-          path: ${{ needs.prepare_metadata.outputs.log_root }}/build-baseline/build_baseline.log
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Fail job if baseline build failed
-        if: always() && steps.collect.outputs.status == 'failure'
-        run: exit 1
-
   t_perf:
     name: T Performance
     needs: [prepare_metadata, build_current, build_baseline]
@@ -618,17 +604,17 @@ jobs:
       metrics_json: ${{ steps.collect.outputs.metrics_json }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
-      - name: Download current plugin
+      - name: Download baseline wheel
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
-          path: ${{ runner.temp }}/current-plugin
+          name: ${{ env.BASELINE_WHEEL_ARTIFACT }}
+          path: ${{ runner.temp }}/baseline-wheel
 
-      - name: Download baseline plugin
+      - name: Download current wheel
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.BASELINE_PLUGIN_ARTIFACT }}
-          path: ${{ runner.temp }}/baseline-plugin
+          name: ${{ env.CURRENT_WHEEL_ARTIFACT }}
+          path: ${{ runner.temp }}/current-wheel
 
       - name: Run T performance baseline/current
         id: run_perf
@@ -638,52 +624,28 @@ jobs:
           JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/t-perf"
           BASELINE_LOG="$JOB_LOG_DIR/t_perf_baseline.log"
           CURRENT_LOG="$JOB_LOG_DIR/t_perf_current.log"
-          BASELINE_PLUGIN="$RUNNER_TEMP/baseline-plugin/libmusa_plugin.so"
-          CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
           mkdir -p "$JOB_LOG_DIR"
           rm -f "$BASELINE_LOG" "$CURRENT_LOG"
 
           baseline_exit=0
           current_exit=0
           guard_failed=0
-          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
-          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
-          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
+          if [[ -z "${GPU_LOCK_FILE:-}" ]]; then
+            echo "GPU_LOCK_FILE is not set; refusing to use a global GPU lock." | tee -a "$BASELINE_LOG"
+            guard_failed=1
+            lock_file=""
+          else
+            lock_file="$GPU_LOCK_FILE"
+          fi
 
-          start_ts="$(date +%s)"
-          while true; do
-            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
-            if [[ -z "$active_procs" ]]; then
-              break
-            fi
-            now_ts="$(date +%s)"
-            if (( now_ts - start_ts >= guard_timeout )); then
-              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$BASELINE_LOG"
-              echo "$active_procs" | tee -a "$BASELINE_LOG"
-              guard_failed=1
-              break
-            fi
-            echo "Waiting for previous GPU test processes to exit before starting T performance:" | tee -a "$BASELINE_LOG"
-            echo "$active_procs" | tee -a "$BASELINE_LOG"
-            sleep 15
-          done
-
-          export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG BASELINE_PLUGIN CURRENT_PLUGIN
+          export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG
 
           if [[ "$guard_failed" == "0" ]]; then
             exec 9>"$lock_file"
             flock 9
             echo "Acquired GPU test lock: $lock_file" | tee -a "$BASELINE_LOG"
 
-            bash -l -c '
-              set -o pipefail
-              cd "$MODEL_ROOT/inference/prunedGraph"
-              timeout 20m python run_inference.py \
-                --device musa \
-                --batch-size 100 \
-                --musa-plugin "$BASELINE_PLUGIN" \
-                --infer-iters 1000 2>&1 | tee "$BASELINE_LOG"
-            ' || baseline_exit=$?
+            pip install "$RUNNER_TEMP"/baseline-wheel/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$BASELINE_LOG"
 
             bash -l -c '
               set -o pipefail
@@ -691,7 +653,17 @@ jobs:
               timeout 20m python run_inference.py \
                 --device musa \
                 --batch-size 100 \
-                --musa-plugin "$CURRENT_PLUGIN" \
+                --infer-iters 1000 2>&1 | tee "$BASELINE_LOG"
+            ' || baseline_exit=$?
+
+            pip install "$RUNNER_TEMP"/current-wheel/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$CURRENT_LOG"
+
+            bash -l -c '
+              set -o pipefail
+              cd "$MODEL_ROOT/inference/prunedGraph"
+              timeout 20m python run_inference.py \
+                --device musa \
+                --batch-size 100 \
                 --infer-iters 1000 2>&1 | tee "$CURRENT_LOG"
             ' || current_exit=$?
           else
@@ -764,7 +736,6 @@ jobs:
             echo "## T Performance"
             echo
             echo "- Status: $STATUS"
-            echo "- Baseline commit: ${{ needs.build_baseline.outputs.baseline_sha }}"
             echo "- Runner name: $RUNNER_NAME"
             echo "- Host name: $HOST_NAME"
             echo "- Host IP: $HOST_IP"
@@ -842,11 +813,14 @@ jobs:
       metrics_json: ${{ steps.collect.outputs.metrics_json }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
-      - name: Download current plugin
+      - name: Download current wheel
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
-          path: ${{ runner.temp }}/current-plugin
+          name: ${{ env.CURRENT_WHEEL_ARTIFACT }}
+          path: ${{ runner.temp }}/current-wheel
+
+      - name: Install current wheel
+        run: pip install "$RUNNER_TEMP"/current-wheel/tensorflow_musa-*.whl --no-deps --force-reinstall
 
       - name: Run T accuracy current only
         id: run_acc
@@ -855,35 +829,20 @@ jobs:
 
           JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/t-accuracy"
           CURRENT_LOG="$JOB_LOG_DIR/t_accuracy_current.log"
-          CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
           mkdir -p "$JOB_LOG_DIR"
           rm -f "$CURRENT_LOG"
 
           current_exit=0
           guard_failed=0
-          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
-          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
-          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
+          if [[ -z "${GPU_LOCK_FILE:-}" ]]; then
+            echo "GPU_LOCK_FILE is not set; refusing to use a global GPU lock." | tee -a "$CURRENT_LOG"
+            guard_failed=1
+            lock_file=""
+          else
+            lock_file="$GPU_LOCK_FILE"
+          fi
 
-          start_ts="$(date +%s)"
-          while true; do
-            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
-            if [[ -z "$active_procs" ]]; then
-              break
-            fi
-            now_ts="$(date +%s)"
-            if (( now_ts - start_ts >= guard_timeout )); then
-              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$CURRENT_LOG"
-              echo "$active_procs" | tee -a "$CURRENT_LOG"
-              guard_failed=1
-              break
-            fi
-            echo "Waiting for previous GPU test processes to exit before starting T accuracy:" | tee -a "$CURRENT_LOG"
-            echo "$active_procs" | tee -a "$CURRENT_LOG"
-            sleep 15
-          done
-
-          export MODEL_ROOT JOB_LOG_DIR CURRENT_LOG CURRENT_PLUGIN
+          export MODEL_ROOT JOB_LOG_DIR CURRENT_LOG
 
           if [[ "$guard_failed" == "0" ]]; then
             exec 9>"$lock_file"
@@ -897,7 +856,6 @@ jobs:
               timeout 20m python run_inference.py \
                 --device musa \
                 --batch-size 100 \
-                --musa-plugin "$CURRENT_PLUGIN" \
                 --check-acc \
                 --rtol 1e-2 \
                 --atol 1e-2 2>&1 | tee "$CURRENT_LOG"
@@ -1018,17 +976,17 @@ jobs:
       metrics_json: ${{ steps.collect.outputs.metrics_json }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
-      - name: Download current plugin
+      - name: Download baseline wheel
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
-          path: ${{ runner.temp }}/current-plugin
+          name: ${{ env.BASELINE_WHEEL_ARTIFACT }}
+          path: ${{ runner.temp }}/baseline-wheel
 
-      - name: Download baseline plugin
+      - name: Download current wheel
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.BASELINE_PLUGIN_ARTIFACT }}
-          path: ${{ runner.temp }}/baseline-plugin
+          name: ${{ env.CURRENT_WHEEL_ARTIFACT }}
+          path: ${{ runner.temp }}/current-wheel
 
       - name: Run model 1 baseline/current
         id: run_perf
@@ -1038,8 +996,6 @@ jobs:
           JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model1"
           BASELINE_LOG="$JOB_LOG_DIR/bd_model1_baseline.log"
           CURRENT_LOG="$JOB_LOG_DIR/bd_model1_current.log"
-          BASELINE_PLUGIN="$RUNNER_TEMP/baseline-plugin/libmusa_plugin.so"
-          CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
           SPEC_PATH="$MODEL_ROOT/inference/metaGraph/meta_graph/meta_graph_1.spec"
           mkdir -p "$JOB_LOG_DIR"
           rm -f "$BASELINE_LOG" "$CURRENT_LOG"
@@ -1048,52 +1004,25 @@ jobs:
           baseline_exit=0
           current_exit=0
           guard_failed=0
-          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
-          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
-          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
+          if [[ -z "${GPU_LOCK_FILE:-}" ]]; then
+            echo "GPU_LOCK_FILE is not set; refusing to use a global GPU lock." | tee -a "$BASELINE_LOG"
+            guard_failed=1
+            lock_file=""
+          else
+            lock_file="$GPU_LOCK_FILE"
+          fi
 
-          start_ts="$(date +%s)"
-          while true; do
-            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
-            if [[ -z "$active_procs" ]]; then
-              break
-            fi
-            now_ts="$(date +%s)"
-            if (( now_ts - start_ts >= guard_timeout )); then
-              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$BASELINE_LOG"
-              echo "$active_procs" | tee -a "$BASELINE_LOG"
-              guard_failed=1
-              break
-            fi
-            echo "Waiting for previous GPU test processes to exit before starting BD Model 1:" | tee -a "$BASELINE_LOG"
-            echo "$active_procs" | tee -a "$BASELINE_LOG"
-            sleep 15
-          done
-
-          export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG BASELINE_PLUGIN CURRENT_PLUGIN SPEC_PATH
+          export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG SPEC_PATH
 
           if [[ "$guard_failed" == "0" ]]; then
             exec 9>"$lock_file"
             flock 9
             echo "Acquired GPU test lock: $lock_file" | tee -a "$BASELINE_LOG"
 
-            bash -l -c '
-              set -o pipefail
-              [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
-              cd "$MODEL_ROOT/inference/metaGraph"
-              MUSA_PINNED_FEED=1 \
-              MUSA_PINNED_H2D_ON_COMPUTE_STREAM=1 \
-              timeout 30m python musa_run_pb_graph.py \
-                --spec "$SPEC_PATH" \
-                --bs 32,128,256,1024 \
-                --run_iters 30 \
-                --out_root "$JOB_LOG_DIR/baseline-out" \
-                --musa-plugin "$BASELINE_PLUGIN" 2>&1 | tee "$BASELINE_LOG"
-            ' || baseline_exit=$?
+            pip install "$RUNNER_TEMP"/baseline-wheel/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$BASELINE_LOG"
 
             bash -l -c '
               set -o pipefail
-              [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
               cd "$MODEL_ROOT/inference/metaGraph"
               MUSA_PINNED_FEED=1 \
               MUSA_PINNED_H2D_ON_COMPUTE_STREAM=1 \
@@ -1101,8 +1030,21 @@ jobs:
                 --spec "$SPEC_PATH" \
                 --bs 32,128,256,1024 \
                 --run_iters 30 \
-                --out_root "$JOB_LOG_DIR/current-out" \
-                --musa-plugin "$CURRENT_PLUGIN" 2>&1 | tee "$CURRENT_LOG"
+                --out_root "$JOB_LOG_DIR/baseline-out" 2>&1 | tee "$BASELINE_LOG"
+            ' || baseline_exit=$?
+
+            pip install "$RUNNER_TEMP"/current-wheel/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$CURRENT_LOG"
+
+            bash -l -c '
+              set -o pipefail
+              cd "$MODEL_ROOT/inference/metaGraph"
+              MUSA_PINNED_FEED=1 \
+              MUSA_PINNED_H2D_ON_COMPUTE_STREAM=1 \
+              timeout 30m python musa_run_pb_graph.py \
+                --spec "$SPEC_PATH" \
+                --bs 32,128,256,1024 \
+                --run_iters 30 \
+                --out_root "$JOB_LOG_DIR/current-out" 2>&1 | tee "$CURRENT_LOG"
             ' || current_exit=$?
           else
             baseline_exit=1
@@ -1407,17 +1349,17 @@ jobs:
       metrics_json: ${{ steps.collect.outputs.metrics_json }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
-      - name: Download current plugin
+      - name: Download baseline wheel
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
-          path: ${{ runner.temp }}/current-plugin
+          name: ${{ env.BASELINE_WHEEL_ARTIFACT }}
+          path: ${{ runner.temp }}/baseline-wheel
 
-      - name: Download baseline plugin
+      - name: Download current wheel
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.BASELINE_PLUGIN_ARTIFACT }}
-          path: ${{ runner.temp }}/baseline-plugin
+          name: ${{ env.CURRENT_WHEEL_ARTIFACT }}
+          path: ${{ runner.temp }}/current-wheel
 
       - name: Run model 2 baseline/current
         id: run_perf
@@ -1427,8 +1369,6 @@ jobs:
           JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model2"
           BASELINE_LOG="$JOB_LOG_DIR/bd_model2_baseline.log"
           CURRENT_LOG="$JOB_LOG_DIR/bd_model2_current.log"
-          BASELINE_PLUGIN="$RUNNER_TEMP/baseline-plugin/libmusa_plugin.so"
-          CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
           SPEC_PATH="$MODEL_ROOT/inference/metaGraph/meta_graph/meta_graph_2.spec"
           mkdir -p "$JOB_LOG_DIR"
           rm -f "$BASELINE_LOG" "$CURRENT_LOG"
@@ -1437,52 +1377,25 @@ jobs:
           baseline_exit=0
           current_exit=0
           guard_failed=0
-          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
-          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
-          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
+          if [[ -z "${GPU_LOCK_FILE:-}" ]]; then
+            echo "GPU_LOCK_FILE is not set; refusing to use a global GPU lock." | tee -a "$BASELINE_LOG"
+            guard_failed=1
+            lock_file=""
+          else
+            lock_file="$GPU_LOCK_FILE"
+          fi
 
-          start_ts="$(date +%s)"
-          while true; do
-            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
-            if [[ -z "$active_procs" ]]; then
-              break
-            fi
-            now_ts="$(date +%s)"
-            if (( now_ts - start_ts >= guard_timeout )); then
-              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$BASELINE_LOG"
-              echo "$active_procs" | tee -a "$BASELINE_LOG"
-              guard_failed=1
-              break
-            fi
-            echo "Waiting for previous GPU test processes to exit before starting BD Model 2:" | tee -a "$BASELINE_LOG"
-            echo "$active_procs" | tee -a "$BASELINE_LOG"
-            sleep 15
-          done
-
-          export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG BASELINE_PLUGIN CURRENT_PLUGIN SPEC_PATH
+          export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG SPEC_PATH
 
           if [[ "$guard_failed" == "0" ]]; then
             exec 9>"$lock_file"
             flock 9
             echo "Acquired GPU test lock: $lock_file" | tee -a "$BASELINE_LOG"
 
-            bash -l -c '
-              set -o pipefail
-              [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
-              cd "$MODEL_ROOT/inference/metaGraph"
-              MUSA_PINNED_FEED=1 \
-              MUSA_PINNED_H2D_ON_COMPUTE_STREAM=1 \
-              timeout 30m python musa_run_pb_graph.py \
-                --spec "$SPEC_PATH" \
-                --bs 32,128,256,1024 \
-                --run_iters 30 \
-                --out_root "$JOB_LOG_DIR/baseline-out" \
-                --musa-plugin "$BASELINE_PLUGIN" 2>&1 | tee "$BASELINE_LOG"
-            ' || baseline_exit=$?
+            pip install "$RUNNER_TEMP"/baseline-wheel/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$BASELINE_LOG"
 
             bash -l -c '
               set -o pipefail
-              [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
               cd "$MODEL_ROOT/inference/metaGraph"
               MUSA_PINNED_FEED=1 \
               MUSA_PINNED_H2D_ON_COMPUTE_STREAM=1 \
@@ -1490,8 +1403,21 @@ jobs:
                 --spec "$SPEC_PATH" \
                 --bs 32,128,256,1024 \
                 --run_iters 30 \
-                --out_root "$JOB_LOG_DIR/current-out" \
-                --musa-plugin "$CURRENT_PLUGIN" 2>&1 | tee "$CURRENT_LOG"
+                --out_root "$JOB_LOG_DIR/baseline-out" 2>&1 | tee "$BASELINE_LOG"
+            ' || baseline_exit=$?
+
+            pip install "$RUNNER_TEMP"/current-wheel/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$CURRENT_LOG"
+
+            bash -l -c '
+              set -o pipefail
+              cd "$MODEL_ROOT/inference/metaGraph"
+              MUSA_PINNED_FEED=1 \
+              MUSA_PINNED_H2D_ON_COMPUTE_STREAM=1 \
+              timeout 30m python musa_run_pb_graph.py \
+                --spec "$SPEC_PATH" \
+                --bs 32,128,256,1024 \
+                --run_iters 30 \
+                --out_root "$JOB_LOG_DIR/current-out" 2>&1 | tee "$CURRENT_LOG"
             ' || current_exit=$?
           else
             baseline_exit=1
@@ -1796,17 +1722,17 @@ jobs:
       metrics_json: ${{ steps.collect.outputs.metrics_json }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
-      - name: Download current plugin
+      - name: Download baseline wheel
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
-          path: ${{ runner.temp }}/current-plugin
+          name: ${{ env.BASELINE_WHEEL_ARTIFACT }}
+          path: ${{ runner.temp }}/baseline-wheel
 
-      - name: Download baseline plugin
+      - name: Download current wheel
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.BASELINE_PLUGIN_ARTIFACT }}
-          path: ${{ runner.temp }}/baseline-plugin
+          name: ${{ env.CURRENT_WHEEL_ARTIFACT }}
+          path: ${{ runner.temp }}/current-wheel
 
       - name: Run model 3 baseline/current
         id: run_perf
@@ -1816,8 +1742,6 @@ jobs:
           JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model3"
           BASELINE_LOG="$JOB_LOG_DIR/bd_model3_baseline.log"
           CURRENT_LOG="$JOB_LOG_DIR/bd_model3_current.log"
-          BASELINE_PLUGIN="$RUNNER_TEMP/baseline-plugin/libmusa_plugin.so"
-          CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
           SPEC_PATH="$MODEL_ROOT/inference/metaGraph/meta_graph/meta_graph_3.spec"
           mkdir -p "$JOB_LOG_DIR"
           rm -f "$BASELINE_LOG" "$CURRENT_LOG"
@@ -1826,52 +1750,25 @@ jobs:
           baseline_exit=0
           current_exit=0
           guard_failed=0
-          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
-          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
-          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
+          if [[ -z "${GPU_LOCK_FILE:-}" ]]; then
+            echo "GPU_LOCK_FILE is not set; refusing to use a global GPU lock." | tee -a "$BASELINE_LOG"
+            guard_failed=1
+            lock_file=""
+          else
+            lock_file="$GPU_LOCK_FILE"
+          fi
 
-          start_ts="$(date +%s)"
-          while true; do
-            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
-            if [[ -z "$active_procs" ]]; then
-              break
-            fi
-            now_ts="$(date +%s)"
-            if (( now_ts - start_ts >= guard_timeout )); then
-              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$BASELINE_LOG"
-              echo "$active_procs" | tee -a "$BASELINE_LOG"
-              guard_failed=1
-              break
-            fi
-            echo "Waiting for previous GPU test processes to exit before starting BD Model 3:" | tee -a "$BASELINE_LOG"
-            echo "$active_procs" | tee -a "$BASELINE_LOG"
-            sleep 15
-          done
-
-          export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG BASELINE_PLUGIN CURRENT_PLUGIN SPEC_PATH
+          export MODEL_ROOT JOB_LOG_DIR BASELINE_LOG CURRENT_LOG SPEC_PATH
 
           if [[ "$guard_failed" == "0" ]]; then
             exec 9>"$lock_file"
             flock 9
             echo "Acquired GPU test lock: $lock_file" | tee -a "$BASELINE_LOG"
 
-            bash -l -c '
-              set -o pipefail
-              [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
-              cd "$MODEL_ROOT/inference/metaGraph"
-              MUSA_PINNED_FEED=1 \
-              MUSA_PINNED_H2D_ON_COMPUTE_STREAM=1 \
-              timeout 30m python musa_run_pb_graph.py \
-                --spec "$SPEC_PATH" \
-                --bs 32,128,256,1024 \
-                --run_iters 30 \
-                --out_root "$JOB_LOG_DIR/baseline-out" \
-                --musa-plugin "$BASELINE_PLUGIN" 2>&1 | tee "$BASELINE_LOG"
-            ' || baseline_exit=$?
+            pip install "$RUNNER_TEMP"/baseline-wheel/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$BASELINE_LOG"
 
             bash -l -c '
               set -o pipefail
-              [[ -e /home/runner/tf_test_model ]] || ln -s "$MODEL_ROOT" /home/runner/tf_test_model
               cd "$MODEL_ROOT/inference/metaGraph"
               MUSA_PINNED_FEED=1 \
               MUSA_PINNED_H2D_ON_COMPUTE_STREAM=1 \
@@ -1879,8 +1776,21 @@ jobs:
                 --spec "$SPEC_PATH" \
                 --bs 32,128,256,1024 \
                 --run_iters 30 \
-                --out_root "$JOB_LOG_DIR/current-out" \
-                --musa-plugin "$CURRENT_PLUGIN" 2>&1 | tee "$CURRENT_LOG"
+                --out_root "$JOB_LOG_DIR/baseline-out" 2>&1 | tee "$BASELINE_LOG"
+            ' || baseline_exit=$?
+
+            pip install "$RUNNER_TEMP"/current-wheel/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$CURRENT_LOG"
+
+            bash -l -c '
+              set -o pipefail
+              cd "$MODEL_ROOT/inference/metaGraph"
+              MUSA_PINNED_FEED=1 \
+              MUSA_PINNED_H2D_ON_COMPUTE_STREAM=1 \
+              timeout 30m python musa_run_pb_graph.py \
+                --spec "$SPEC_PATH" \
+                --bs 32,128,256,1024 \
+                --run_iters 30 \
+                --out_root "$JOB_LOG_DIR/current-out" 2>&1 | tee "$CURRENT_LOG"
             ' || current_exit=$?
           else
             baseline_exit=1
@@ -2180,11 +2090,14 @@ jobs:
       status: ${{ steps.collect.outputs.status }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
-      - name: Download current plugin
+      - name: Download current wheel
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.CURRENT_PLUGIN_ARTIFACT }}
-          path: ${{ runner.temp }}/current-plugin
+          name: ${{ env.CURRENT_WHEEL_ARTIFACT }}
+          path: ${{ runner.temp }}/current-wheel
+
+      - name: Install current wheel
+        run: pip install "$RUNNER_TEMP"/current-wheel/tensorflow_musa-*.whl --no-deps --force-reinstall
 
       - name: Run training tests
         id: run_training
@@ -2194,7 +2107,6 @@ jobs:
           JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/training"
           LOG_FILE="$JOB_LOG_DIR/training_tests.log"
           ERROR_LOG_DIR="$JOB_LOG_DIR/error_logs"
-          CURRENT_PLUGIN="$RUNNER_TEMP/current-plugin/libmusa_plugin.so"
           pr_training_models=(onetrans rankmixer tokenmixer-large)
           daily_training_models=(deepfm dien din dsin esmm fgcnn flen fwfm mmoe ple wukong xdeepfm)
           mkdir -p "$JOB_LOG_DIR"
@@ -2203,9 +2115,13 @@ jobs:
 
           training_exit=0
           guard_failed=0
-          guard_pattern="${GPU_GUARD_PATTERN:-[r]un_inference.py|[m]usa_run_pb_graph.py|[r]un_all_training_tests.py|[t]est_runner.py}"
-          guard_timeout="${GPU_GUARD_TIMEOUT_SECONDS:-180}"
-          lock_file="${GPU_LOCK_FILE:-/tmp/tensorflow_musa_ci_gpu.lock}"
+          if [[ -z "${GPU_LOCK_FILE:-}" ]]; then
+            echo "GPU_LOCK_FILE is not set; refusing to use a global GPU lock." | tee -a "$LOG_FILE"
+            guard_failed=1
+            lock_file=""
+          else
+            lock_file="$GPU_LOCK_FILE"
+          fi
 
           if [[ "${{ github.event_name }}" == "schedule" ]]; then
             selected_training_models=("${daily_training_models[@]}")
@@ -2217,24 +2133,6 @@ jobs:
           TRAINING_MODELS="${selected_training_models[*]}"
           printf 'Training mode: %s\n' "$training_mode" | tee -a "$LOG_FILE"
           printf 'Selected models (%d): %s\n' "${#selected_training_models[@]}" "$TRAINING_MODELS" | tee -a "$LOG_FILE"
-
-          start_ts="$(date +%s)"
-          while true; do
-            active_procs="$(ps -eo pid=,etimes=,cmd= | grep -E "$guard_pattern" || true)"
-            if [[ -z "$active_procs" ]]; then
-              break
-            fi
-            now_ts="$(date +%s)"
-            if (( now_ts - start_ts >= guard_timeout )); then
-              echo "Timed out waiting ${guard_timeout}s for previous GPU test processes to exit." | tee -a "$LOG_FILE"
-              echo "$active_procs" | tee -a "$LOG_FILE"
-              guard_failed=1
-              break
-            fi
-            echo "Waiting for previous GPU test processes to exit before starting training:" | tee -a "$LOG_FILE"
-            echo "$active_procs" | tee -a "$LOG_FILE"
-            sleep 15
-          done
 
           LIVE_TRAINING_WRAPPER="$RUNNER_TEMP/run_training_live.py"
           cat > "$LIVE_TRAINING_WRAPPER" <<'PY'
@@ -2255,7 +2153,6 @@ jobs:
                   return _real_run(cmd, capture_output=capture_output, text=text, cwd=cwd, env=env, timeout=timeout, **kwargs)
 
               effective_timeout = int(env.get("TRAINING_MODEL_TIMEOUT_SECONDS", "3600")) if env else 3600
-              cmd = ["--musa-plugin" if arg == "--musa_plugin" else arg for arg in cmd]
               proc = subprocess.Popen(
                   cmd,
                   stdout=subprocess.PIPE,
@@ -2308,7 +2205,7 @@ jobs:
           sys.exit(runner.main())
           PY
 
-          export MODEL_ROOT LOG_FILE ERROR_LOG_DIR CURRENT_PLUGIN LIVE_TRAINING_WRAPPER TRAINING_MODELS
+          export MODEL_ROOT LOG_FILE ERROR_LOG_DIR LIVE_TRAINING_WRAPPER TRAINING_MODELS
           if [[ "$guard_failed" == "0" ]]; then
             exec 9>"$lock_file"
             flock 9
@@ -2325,8 +2222,7 @@ jobs:
                 python -u "$LIVE_TRAINING_WRAPPER" \
                   --epochs 100 \
                   --log-dir "$ERROR_LOG_DIR" \
-                  --models "${training_models[@]}" \
-                  --musa-plugin "$CURRENT_PLUGIN" 2>&1 | tee "$LOG_FILE"
+                  --models "${training_models[@]}" 2>&1 | tee "$LOG_FILE"
             ' || training_exit=$?
           else
             training_exit=1
@@ -2403,8 +2299,8 @@ jobs:
       - prepare_metadata
       - format
       - build_current
-      - integration
       - build_baseline
+      - integration
       - t_perf
       - t_accuracy
       - bd_model1
@@ -2439,11 +2335,10 @@ jobs:
           HOST_NAME: ${{ needs.prepare_metadata.outputs.host_name || 'unavailable' }}
           HOST_IP: ${{ needs.prepare_metadata.outputs.host_ip || 'unavailable' }}
           HOST_SN: ${{ needs.prepare_metadata.outputs.host_sn || 'unavailable' }}
-          BASELINE_SHA: ${{ needs.build_baseline.outputs.baseline_sha || 'unavailable' }}
           FORMAT_DISPLAY: ${{ needs.format.outputs.status == 'failure' && 'failure (non-blocking)' || needs.format.outputs.status || 'skipped' }}
           BUILD_CURRENT_STATUS: ${{ needs.build_current.outputs.status || 'skipped' }}
-          INTEGRATION_STATUS: ${{ needs.integration.outputs.status || 'skipped' }}
           BUILD_BASELINE_STATUS: ${{ needs.build_baseline.outputs.status || 'skipped' }}
+          INTEGRATION_STATUS: ${{ needs.integration.outputs.status || 'skipped' }}
           T_PERF_STATUS: ${{ needs.t_perf.outputs.status || 'skipped' }}
           T_ACC_STATUS: ${{ needs.t_accuracy.outputs.status || 'skipped' }}
           BD1_STATUS: ${{ needs.bd_model1.outputs.status || 'skipped' }}
@@ -2462,10 +2357,10 @@ jobs:
           FORMAT_DISPLAY="$FORMAT_STATUS"
           BUILD_CURRENT_STATUS="${{ needs.build_current.outputs.status || 'skipped' }}"
           BUILD_CURRENT_RESULT="${{ needs.build_current.result }}"
-          INTEGRATION_STATUS="${{ needs.integration.outputs.status || 'skipped' }}"
-          INTEGRATION_RESULT="${{ needs.integration.result }}"
           BUILD_BASELINE_STATUS="${{ needs.build_baseline.outputs.status || 'skipped' }}"
           BUILD_BASELINE_RESULT="${{ needs.build_baseline.result }}"
+          INTEGRATION_STATUS="${{ needs.integration.outputs.status || 'skipped' }}"
+          INTEGRATION_RESULT="${{ needs.integration.result }}"
           T_PERF_STATUS="${{ needs.t_perf.outputs.status || 'skipped' }}"
           T_PERF_RESULT="${{ needs.t_perf.result }}"
           T_ACC_STATUS="${{ needs.t_accuracy.outputs.status || 'skipped' }}"
@@ -2478,7 +2373,6 @@ jobs:
           BD3_RESULT="${{ needs.bd_model3.result }}"
           TRAINING_STATUS="${{ needs.training.outputs.status || 'skipped' }}"
           TRAINING_RESULT="${{ needs.training.result }}"
-          BASELINE_SHA="${{ needs.build_baseline.outputs.baseline_sha || 'unavailable' }}"
           PREPARE_METADATA_RESULT="${{ needs.prepare_metadata.result }}"
 
           if [[ "$FORMAT_STATUS" == "failure" ]]; then
@@ -2516,13 +2410,12 @@ jobs:
           host_name = os.environ["HOST_NAME"]
           host_ip = os.environ["HOST_IP"]
           host_sn = os.environ["HOST_SN"]
-          baseline_sha = os.environ["BASELINE_SHA"]
 
           jobs = [
               {"name": "Format", "result": os.environ["FORMAT_DISPLAY"], "blocking": "no"},
               {"name": "Build Current", "result": os.environ["BUILD_CURRENT_STATUS"], "blocking": "yes"},
-              {"name": "Integration", "result": os.environ["INTEGRATION_STATUS"], "blocking": "yes"},
               {"name": "Build Baseline", "result": os.environ["BUILD_BASELINE_STATUS"], "blocking": "yes"},
+              {"name": "Integration", "result": os.environ["INTEGRATION_STATUS"], "blocking": "yes"},
               {"name": "T Performance", "result": os.environ["T_PERF_STATUS"], "blocking": "yes"},
               {"name": "T Accuracy", "result": os.environ["T_ACC_STATUS"], "blocking": "yes"},
               {"name": "BD Model 1", "result": os.environ["BD1_STATUS"], "blocking": "yes"},
@@ -2551,7 +2444,6 @@ jobs:
                   "ip": host_ip,
                   "sn": host_sn,
               },
-              "baseline_commit": baseline_sha,
               "jobs": jobs,
               "metrics": metrics,
           }
@@ -2567,7 +2459,6 @@ jobs:
               f"- Host name: {host_name}",
               f"- Host IP: {host_ip}",
               f"- Host SN: {host_sn}",
-              f"- Baseline commit: {baseline_sha}",
               "",
               "## Job Status",
               "| Job | Result | Blocking |",
@@ -2620,8 +2511,8 @@ jobs:
             "$RUNNER_TEMP/ci-summary/prepare-metadata.md" \
             "$RUNNER_TEMP/ci-summary/format.md" \
             "$RUNNER_TEMP/ci-summary/build-current.md" \
-            "$RUNNER_TEMP/ci-summary/integration.md" \
             "$RUNNER_TEMP/ci-summary/build-baseline.md" \
+            "$RUNNER_TEMP/ci-summary/integration.md" \
             "$RUNNER_TEMP/ci-summary/t-perf.md" \
             "$RUNNER_TEMP/ci-summary/t-accuracy.md" \
             "$RUNNER_TEMP/ci-summary/bd-model1.md" \
@@ -2640,8 +2531,8 @@ jobs:
 
           BLOCKING_FAILURE=0
           if [[ "$BUILD_CURRENT_STATUS" == "failure" || "$BUILD_CURRENT_RESULT" == "failure" || "$BUILD_CURRENT_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
-          if [[ "$INTEGRATION_STATUS" == "failure" || "$INTEGRATION_RESULT" == "failure" || "$INTEGRATION_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
           if [[ "$BUILD_BASELINE_STATUS" == "failure" || "$BUILD_BASELINE_RESULT" == "failure" || "$BUILD_BASELINE_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$INTEGRATION_STATUS" == "failure" || "$INTEGRATION_RESULT" == "failure" || "$INTEGRATION_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
           if [[ "$T_PERF_STATUS" == "failure" || "$T_PERF_RESULT" == "failure" || "$T_PERF_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
           if [[ "$T_ACC_STATUS" == "failure" || "$T_ACC_RESULT" == "failure" || "$T_ACC_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
           if [[ "$BD1_STATUS" == "failure" || "$BD1_RESULT" == "failure" || "$BD1_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi

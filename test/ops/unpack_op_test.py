@@ -27,8 +27,8 @@ class UnpackOpTest(MUSATestCase):
 
   def _test_pack(self, inputs, axis, dtype, rtol=1e-5, atol=1e-8):
     """Test pack (tf.stack) operation."""
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
-    
+    np_dtype = dtype.as_numpy_dtype
+
     tf_inputs = []
     for item in inputs:
         if isinstance(item, (int, float, np.number)):
@@ -44,7 +44,7 @@ class UnpackOpTest(MUSATestCase):
 
   def _test_unpack(self, input_data, axis, dtype, rtol=1e-5, atol=1e-8):
     """Test unpack (tf.unstack) operation."""
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
     x_np = np.array(input_data).astype(np_dtype)
     x = tf.constant(x_np, dtype=dtype)
 
@@ -79,16 +79,16 @@ class UnpackOpTest(MUSATestCase):
     """Test Pack/Unpack inverse consistency."""
     with tf.device('/device:MUSA:0'):
         original = tf.constant([[1.0, 2.0], [3.0, 4.0]])
-        
+
         unpacked_0 = tf.unstack(original, axis=0)
         repacked_0 = tf.stack(unpacked_0, axis=0)
         self.assertAllClose(original.numpy(), repacked_0.numpy())
-        
+
   def testPackHighDim(self):
     """Test Pack with higher dimensions."""
     data = [[[1, 2]], [[3, 4]]]
     self._test_pack(data, axis=0, dtype=tf.float32)
-    
+
     m1 = [[1], [2]]
     m2 = [[3], [4]]
     self._test_pack([m1, m2], axis=1, dtype=tf.float32)
@@ -96,7 +96,7 @@ class UnpackOpTest(MUSATestCase):
   def testUnpackHighDim(self):
     """Test Unpack with higher dimensions."""
     data = [[[1, 2], [3, 4]], [[5, 6], [7, 8]]]
-    self._test_unpack(data, axis=0, dtype=tf.float32) 
+    self._test_unpack(data, axis=0, dtype=tf.float32)
 
   def testDtypes(self):
     """Test various data types."""
@@ -104,7 +104,7 @@ class UnpackOpTest(MUSATestCase):
     for dtype in [tf.float16, tf.bfloat16, tf.int64]:
         rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
         atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
-        
+
         self._test_pack(data, axis=0, dtype=dtype, rtol=rtol, atol=atol)
         self._test_unpack(data, axis=0, dtype=dtype, rtol=rtol, atol=atol)
 

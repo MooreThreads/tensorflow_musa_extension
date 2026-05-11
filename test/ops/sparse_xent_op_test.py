@@ -30,7 +30,7 @@ class SparseXentOpTest(MUSATestCase):
     batch_size, num_classes = shape
 
     # Prepare Data
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
     np_label_dtype = label_dtype.as_numpy_dtype
 
     logits_np = np.random.randn(batch_size, num_classes).astype(np_dtype)

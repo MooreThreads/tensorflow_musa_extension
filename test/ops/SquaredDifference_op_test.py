@@ -27,14 +27,14 @@ class SquaredDifferenceOpTest(MUSATestCase):
   def _test_squared_difference(self, shape_x, shape_y, dtype, rtol=1e-5, atol=1e-8):
     """Test squared_difference operation with given shapes and dtype."""
     # Prepare Data
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
-    
+    np_dtype = dtype.as_numpy_dtype
+
     x_np = np.random.randn(*shape_x).astype(np_dtype)
     y_np = np.random.randn(*shape_y).astype(np_dtype)
-    
+
     x = tf.constant(x_np, dtype=dtype)
     y = tf.constant(y_np, dtype=dtype)
-    
+
     # Compare Results
     self._compare_cpu_musa_results(tf.math.squared_difference, [x, y], dtype, rtol=rtol, atol=atol)
 
@@ -44,29 +44,29 @@ class SquaredDifferenceOpTest(MUSATestCase):
     for dtype in [tf.float32, tf.float16, tf.bfloat16]:
       rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
       atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
-      
+
       self._test_squared_difference(shape, shape, dtype, rtol=rtol, atol=atol)
 
   def testSquaredDifferenceBroadcastScalar(self):
     """Test squared difference with scalar/vector broadcasting."""
     shape_x = [5]
     shape_y = [1]
-    
+
     for dtype in [tf.float32, tf.float16, tf.bfloat16]:
       rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
       atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
-      
+
       self._test_squared_difference(shape_x, shape_y, dtype, rtol=rtol, atol=atol)
 
   def testSquaredDifferenceBroadcastCNN(self):
     """Test squared difference with typical CNN broadcasting shapes."""
     shape_x = [1, 3, 224, 224]
     shape_y = [1, 3, 1, 1]
-    
+
     for dtype in [tf.float32, tf.float16]:
       rtol = 1e-2 if dtype == tf.float16 else 1e-5
       atol = 1e-2 if dtype == tf.float16 else 1e-8
-      
+
       self._test_squared_difference(shape_x, shape_y, dtype, rtol=rtol, atol=atol)
 
   def testSquaredDifferenceDouble(self):

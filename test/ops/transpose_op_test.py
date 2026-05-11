@@ -27,13 +27,13 @@ class TransposeOpTest(MUSATestCase):
   def _test_transpose(self, shape, perm, dtype, rtol=1e-5, atol=1e-8):
     """Test transpose operation with given shape and permutation."""
     # Prepare Data
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
-    
+    np_dtype = dtype.as_numpy_dtype
+
     if np.issubdtype(np_dtype, np.integer):
         x_np = np.random.randint(-100, 100, size=shape).astype(np_dtype)
     else:
         x_np = np.random.uniform(-1, 1, size=shape).astype(np_dtype)
-        
+
     x = tf.constant(x_np, dtype=dtype)
 
     # Define Operator Wrapper
@@ -48,22 +48,22 @@ class TransposeOpTest(MUSATestCase):
     # Matches original test case: (1, 4, 4, 3) -> [0, 3, 1, 2]
     shape = [1, 4, 4, 3]
     perm = [0, 3, 1, 2]
-    
+
     for dtype in [tf.float32, tf.float16, tf.bfloat16]:
       rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
       atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
-      
+
       self._test_transpose(shape, perm, dtype, rtol=rtol, atol=atol)
 
   def testTransposeBasic(self):
     """Test basic 2D matrix transpose."""
     shape = [5, 10]
     perm = [1, 0]
-    
+
     for dtype in [tf.float32, tf.float16, tf.bfloat16]:
       rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
       atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
-      
+
       self._test_transpose(shape, perm, dtype, rtol=rtol, atol=atol)
 
   def testTransposeInt(self):
@@ -79,7 +79,7 @@ class TransposeOpTest(MUSATestCase):
     shape = [2, 3, 4]
     perm = [1, 0, 2]
     self._test_transpose(shape, perm, tf.float32)
-    
+
     # 3D: Reverse dimensions
     perm_rev = [2, 1, 0]
     self._test_transpose(shape, perm_rev, tf.float32)

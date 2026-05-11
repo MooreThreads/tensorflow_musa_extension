@@ -30,7 +30,7 @@ class VariableV2OpTest(tf.test.TestCase):
 
   def _make_value_np(self, shape, dtype):
     """Create numpy value tensor for given shape/dtype."""
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
 
     if np_dtype in [np.int32, np.int64]:
       return np.random.randint(-10, 10, size=shape).astype(np_dtype)

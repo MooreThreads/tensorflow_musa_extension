@@ -31,7 +31,7 @@ class IsNanOpTest(MUSATestCase):
 
   def _make_input(self, shape, dtype, inject_nan=True, fill_value=None, include_inf=False):
     """Create a numpy input array for a given TF dtype."""
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
 
     if fill_value is not None:
       x_np = np.full(shape, fill_value, dtype=np_dtype)

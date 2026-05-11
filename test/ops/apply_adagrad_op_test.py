@@ -36,7 +36,7 @@ class ApplyAdagradV2OpTest(MUSATestCase):
     self.musa_device = musa_devices[0]
 
   def _numpy_dtype(self, dtype):
-    return np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    return dtype.as_numpy_dtype
 
   def _assert_by_dtype(self, expected, actual, dtype):
     if dtype in [tf.float16, tf.bfloat16]:
@@ -70,34 +70,24 @@ class ApplyAdagradV2OpTest(MUSATestCase):
                                      grad_np,
                                      dtype,
                                      use_locking=False):
-    graph = tf.Graph()
-    with graph.as_default():
-      with tf.device(device):
-        var = tf.Variable(init_var_np, dtype=dtype, name="var")
-        accum = tf.Variable(init_accum_np, dtype=dtype, name="accum")
-        grad = tf.constant(grad_np, dtype=dtype, name="grad")
+    with tf.device(device):
+      var = tf.Variable(init_var_np, dtype=dtype)
+      accum = tf.Variable(init_accum_np, dtype=dtype)
+      grad = tf.constant(grad_np, dtype=dtype)
 
-      with tf.device("/CPU:0"):
-        lr = tf.constant(lr_np, dtype=dtype, name="lr")
-        epsilon = tf.constant(epsilon_np, dtype=dtype, name="epsilon")
+    with tf.device("/CPU:0"):
+      lr = tf.constant(lr_np, dtype=dtype)
+      epsilon = tf.constant(epsilon_np, dtype=dtype)
 
-      update = tf.raw_ops.ResourceApplyAdagradV2(
-          var=var.handle,
-          accum=accum.handle,
-          lr=lr,
-          epsilon=epsilon,
-          grad=grad,
-          use_locking=use_locking)
+    tf.raw_ops.ResourceApplyAdagradV2(
+        var=var.handle,
+        accum=accum.handle,
+        lr=lr,
+        epsilon=epsilon,
+        grad=grad,
+        use_locking=use_locking)
 
-      with tf.control_dependencies([update]):
-        read_var = tf.identity(var.read_value(), name="updated_var")
-        read_accum = tf.identity(accum.read_value(), name="updated_accum")
-
-      init_op = tf.compat.v1.global_variables_initializer()
-
-    with tf.compat.v1.Session(graph=graph) as sess:
-      sess.run(init_op)
-      return sess.run(read_var), sess.run(read_accum)
+    return var.numpy(), accum.numpy()
 
   def testResourceApplyAdagradV2Basic(self):
     """Test basic ResourceApplyAdagradV2 operation."""

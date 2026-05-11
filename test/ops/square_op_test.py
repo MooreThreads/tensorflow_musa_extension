@@ -27,14 +27,14 @@ class SquareOpTest(MUSATestCase):
   def _test_square_forward(self, shape, dtype, rtol=1e-5, atol=1e-8):
     """Test forward square operation."""
     # Prepare Data
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
-    
+    np_dtype = dtype.as_numpy_dtype
+
     if np.issubdtype(np_dtype, np.integer):
         x_np = np.random.randint(-1000, 1000, size=shape).astype(np_dtype)
     else:
         x_np = np.array(np.random.randn(*shape)) * 10.0
         x_np = x_np.astype(np_dtype)
-        
+
         if x_np.size > 0:
             flat_x = x_np.ravel()
             flat_x[0] = 0.0
@@ -55,8 +55,8 @@ class SquareOpTest(MUSATestCase):
     if not dtype.is_floating:
         return
 
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
-    
+    np_dtype = dtype.as_numpy_dtype
+
     x_np = np.array(np.random.randn(*shape)).astype(np_dtype)
     x = tf.constant(x_np, dtype=dtype)
 
@@ -75,7 +75,7 @@ class SquareOpTest(MUSATestCase):
         for dtype in [tf.float32, tf.float16, tf.bfloat16]:
             rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
             atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
-            
+
             self._test_square_forward(shape, dtype, rtol=rtol, atol=atol)
 
   def testSquareForwardInt(self):
@@ -96,7 +96,7 @@ class SquareOpTest(MUSATestCase):
         for dtype in [tf.float32, tf.float16, tf.bfloat16]:
             rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-4
             atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-4
-            
+
             self._test_square_grad(shape, dtype, rtol=rtol, atol=atol)
 
 

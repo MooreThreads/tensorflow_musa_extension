@@ -26,9 +26,9 @@ class SplitOpTest(MUSATestCase):
 
   def _test_split(self, shape, dtype, num_or_size_splits, axis, rtol=1e-5, atol=1e-8):
     """Test split operation with given parameters."""
-    
+
     # Prepare Data
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
     x_np = np.random.uniform(-1, 1, size=shape).astype(np_dtype)
     x = tf.constant(x_np, dtype=dtype)
 
@@ -40,8 +40,8 @@ class SplitOpTest(MUSATestCase):
 
     # Compare Results individually for each split output
     for i in range(num_outputs):
-        
-        def op_func_for_index(input_tensor, index=i): 
+
+        def op_func_for_index(input_tensor, index=i):
             return tf.split(input_tensor, num_or_size_splits=num_or_size_splits, axis=axis)[index]
 
         # print(f"  Verifying Split output index {i}/{num_outputs}...")

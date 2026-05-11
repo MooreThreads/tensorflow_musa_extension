@@ -44,7 +44,7 @@ class ShiftedAffineMapOpTest(MUSATestCase):
     def _assert_shifted_affine_map_close(self, data_left_np,
                                          mask_np, sliced_var_right_np, dtype,
                                          rtol, atol):
-        np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+        np_dtype = dtype.as_numpy_dtype
 
         data_left = tf.constant(np.array(data_left_np, dtype=np_dtype), dtype=dtype)
         mask = tf.constant(np.array(mask_np, dtype=np_dtype), dtype=dtype)

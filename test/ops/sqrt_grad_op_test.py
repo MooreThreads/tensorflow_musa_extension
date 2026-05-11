@@ -30,11 +30,11 @@ class SqrtGradOpTest(MUSATestCase):
     This matches 'test_sqrt_grad_logic' in the original script.
     """
     # Prepare Data
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
-    
+    np_dtype = dtype.as_numpy_dtype
+
     y_np = np.abs(np.random.randn(*shape).astype(np_dtype)) + 0.5
     dy_np = np.random.randn(*shape).astype(np_dtype)
-    
+
     y = tf.constant(y_np, dtype=dtype)
     dy = tf.constant(dy_np, dtype=dtype)
 
@@ -51,8 +51,8 @@ class SqrtGradOpTest(MUSATestCase):
     This matches 'test_sqrt_integration' in the original script.
     """
     # Prepare Data
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
-    
+    np_dtype = dtype.as_numpy_dtype
+
     x_np = np.abs(np.random.randn(*shape).astype(np_dtype)) + 0.1
     x = tf.constant(x_np, dtype=dtype)
 
@@ -73,7 +73,7 @@ class SqrtGradOpTest(MUSATestCase):
       # Relax tolerance for low precision types
       rtol = 3e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-3
       atol = 3e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-3
-      
+
       self._test_sqrt_grad_direct(shape, dtype, rtol=rtol, atol=atol)
 
   def testSqrtIntegrationBasic(self):
@@ -83,7 +83,7 @@ class SqrtGradOpTest(MUSATestCase):
       # Relax tolerance for low precision types
       rtol = 3e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-3
       atol = 3e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-3
-      
+
       self._test_sqrt_backprop(shape, dtype, rtol=rtol, atol=atol)
 
   def testSqrtIntegrationShapes(self):
@@ -98,4 +98,3 @@ class SqrtGradOpTest(MUSATestCase):
 
 if __name__ == "__main__":
   tf.test.main()
-

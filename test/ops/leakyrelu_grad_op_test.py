@@ -32,7 +32,7 @@ class LeakyReluGradOpTest(MUSATestCase):
       - TF 通常把 x==0 归到 <=0 分支（乘 alpha）
     """
 #Prepare Data
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
 
     x_np = np.random.randn(*shape).astype(np_dtype)
     dy_np = np.random.randn(*shape).astype(np_dtype)
@@ -58,7 +58,7 @@ class LeakyReluGradOpTest(MUSATestCase):
       dx = d(y)/d(x)
     """
 #Prepare Data
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    np_dtype = dtype.as_numpy_dtype
 
     x_np = np.random.randn(*shape).astype(np_dtype)
     x = tf.constant(x_np, dtype=dtype)

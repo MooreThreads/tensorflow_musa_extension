@@ -15,29 +15,44 @@
 
 """Tests for MusaReshapeMatMul operator."""
 
+import os
+os.environ.setdefault("MUSA_ENABLE_TF32", "0")
+
 import numpy as np
 import tensorflow as tf
 
-from musa_test_utils import load_musa_ops
-
-PLUGIN_OPS = load_musa_ops()
-tf.compat.v1.disable_eager_execution()
+from musa_test_utils import MUSATestCase, load_musa_ops
 
 
-class ReshapeMatMulOpTest(tf.test.TestCase):
+def is_tf32_enabled():
+    return int(os.environ.get("MUSA_ENABLE_TF32", "0")) != 0
+
+
+def float32_tolerance(default_rtol=1e-5, default_atol=1e-6):
+    return (1e-2, 1e-2) if is_tf32_enabled() else (default_rtol, default_atol)
+
+
+class ReshapeMatMulOpTest(MUSATestCase):
     """Functional tests for MusaReshapeMatMul."""
 
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            cls._musa_ops = load_musa_ops()
+        except Exception as e:
+            print(f"FAILED: Error loading MUSA ops: {e}")
+            cls._musa_ops = None
+
     def _run_graph(self, x_np, w_np, transpose_b=False):
-        graph = tf.Graph()
-        with graph.as_default():
-            x = tf.constant(x_np)
-            w = tf.constant(w_np)
-            with tf.device("/device:MUSA:0"):
-                actual = PLUGIN_OPS.musa_reshape_mat_mul(
-                    x=x, w=w, transpose_b=transpose_b
-                )
-        with tf.compat.v1.Session(graph=graph) as sess:
-            return sess.run(actual)
+        if self._musa_ops is None:
+            self.skipTest("MUSA ops not available")
+        x = tf.constant(x_np)
+        w = tf.constant(w_np)
+        with tf.device("/device:MUSA:0"):
+            return self._musa_ops.musa_reshape_mat_mul(
+                x=x, w=w, transpose_b=transpose_b
+            ).numpy()
 
     def _run_reference(self, x_np, w_np, transpose_b=False):
         x_shape = list(x_np.shape)
@@ -54,7 +69,8 @@ class ReshapeMatMulOpTest(tf.test.TestCase):
 
         expected = self._run_reference(x_np, w_np)
         actual = self._run_graph(x_np, w_np)
-        self.assertAllClose(expected, actual, rtol=1e-5, atol=1e-6)
+        rtol, atol = float32_tolerance()
+        self.assertAllClose(expected, actual, rtol=rtol, atol=atol)
 
     def test_rank4_float16(self):
         x_np = np.random.randn(2, 3, 4, 8).astype(np.float16)
@@ -70,7 +86,8 @@ class ReshapeMatMulOpTest(tf.test.TestCase):
 
         expected = self._run_reference(x_np, w_np, transpose_b=True)
         actual = self._run_graph(x_np, w_np, transpose_b=True)
-        self.assertAllClose(expected, actual, rtol=1e-5, atol=1e-6)
+        rtol, atol = float32_tolerance()
+        self.assertAllClose(expected, actual, rtol=rtol, atol=atol)
 
     def test_invalid_dim_mismatch(self):
         x_np = np.random.randn(2, 4, 7).astype(np.float32)

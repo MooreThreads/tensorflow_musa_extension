@@ -27,8 +27,8 @@ class SqrtOpTest(MUSATestCase):
   def _test_sqrt(self, shape, dtype, rtol=1e-5, atol=1e-8):
     """Test sqrt operation with given shapes and dtype."""
     # Prepare Data
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
-    
+    np_dtype = dtype.as_numpy_dtype
+
     x_np = np.random.uniform(1.0, 100.0, size=shape).astype(np_dtype)
     x = tf.constant(x_np, dtype=dtype)
 
@@ -45,17 +45,17 @@ class SqrtOpTest(MUSATestCase):
     for dtype in [tf.float32, tf.float16, tf.bfloat16]:
       rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
       atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
-      
+
       self._test_sqrt(shape, dtype, rtol=rtol, atol=atol)
 
   def testSqrtLarge(self):
     """Test sqrt with larger shape (from original test_sqrt.py)."""
     shape = [256, 4096]
-    
+
     for dtype in [tf.float32, tf.float16, tf.bfloat16]:
       rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
       atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
-      
+
       self._test_sqrt(shape, dtype, rtol=rtol, atol=atol)
 
   def testSqrtVector(self):
@@ -69,10 +69,10 @@ class SqrtOpTest(MUSATestCase):
     shape = [100, 100]
     dtype = tf.float32
     np_dtype = np.float32
-    
+
     x_np = np.random.uniform(1e-5, 1.0, size=shape).astype(np_dtype)
     x = tf.constant(x_np, dtype=dtype)
-    
+
     self._compare_cpu_musa_results(tf.math.sqrt, [x], dtype, rtol=1e-5, atol=1e-8)
 
 

@@ -7,8 +7,8 @@ from musa_test_utils import MUSATestCase
 class PackOpTest(MUSATestCase):
 
   def _test_pack(self, shape, axis, num_inputs, dtype, rtol=1e-5, atol=1e-8):
-    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
-    
+    np_dtype = dtype.as_numpy_dtype
+
     inputs_np = []
     for i in range(num_inputs):
       if dtype in [tf.int32, tf.int64]:
@@ -16,10 +16,10 @@ class PackOpTest(MUSATestCase):
       else:
         data = np.random.uniform(-1, 1, size=shape).astype(np_dtype)
       inputs_np.append(data)
-    
+
     def pack_func(*args):
       return tf.stack(args, axis=axis)
-    
+
     input_tensors = [tf.constant(x, dtype=dtype) for x in inputs_np]
     self._compare_cpu_musa_results(pack_func, input_tensors, dtype, rtol=rtol, atol=atol)
 
