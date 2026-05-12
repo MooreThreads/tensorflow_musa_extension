@@ -16,14 +16,14 @@ limitations under the License.
 #ifndef TENSORFLOW_MUSA_MU_MUSA_RUNTIME_REGISTRY_H_
 #define TENSORFLOW_MUSA_MU_MUSA_RUNTIME_REGISTRY_H_
 
+#include <mudnn.h>
+#include <musa_runtime.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_map>
-
-#include <musa_runtime.h>
-#include <mudnn.h>
 
 namespace tensorflow {
 namespace musa {
@@ -35,9 +35,10 @@ struct MusaSePerStreamMudnnSlot {
 
 // Per-device PluggableDevice runtime: ref-counted from
 // `plugin_create_device` / `plugin_destroy_device`. Does not map streams by
-// ordinal alone (kernels must use `DeviceContext` / GpuStreamHack). muDNN
-// handles are **per `musaStream_t` instance** on the SE path so concurrent ops
-// on different streams do not share one mutable `Handle::SetStream` binding.
+// ordinal alone (kernels must use `DeviceContext` / `GpuStreamMemberHack`).
+// muDNN handles are **per `musaStream_t` instance** on the SE path so
+// concurrent ops on different streams do not share one mutable
+// `Handle::SetStream` binding.
 
 struct MusaSeDeviceRuntimeState {
   int32_t ordinal = -1;
@@ -54,16 +55,18 @@ struct MusaSeDeviceRuntimeState {
 
 void MusaSeRegistryOnDeviceCreated(int32_t ordinal);
 void MusaSeRegistryOnDeviceDestroyed(int32_t ordinal);
+void MusaSeRegistryOnStreamDestroyed(int32_t ordinal, musaStream_t stream);
 
 // Returns nullptr if the ordinal is not tracked (no live Pluggable device
 // creation) or initialization failed. Binds `SetStream` on the **per-stream**
 // handle for this `musaStream_t`.
 ::musa::dnn::Handle* MusaSeRegistryEnsureMudnnForDevice(int32_t ordinal,
-                                                         musaStream_t stream);
+                                                        musaStream_t stream);
 
 bool MusaSeRegistryHasLiveDeviceForTest(int32_t ordinal);
 
 std::size_t MusaSeRegistrySizeForTest();
+std::size_t MusaSeRegistryMudnnSlotCountForTest(int32_t ordinal);
 
 // Test-only: clear all state (subprocess tests only).
 void MusaSeRegistryResetForTest();

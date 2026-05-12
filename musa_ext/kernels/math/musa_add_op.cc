@@ -280,6 +280,9 @@ AddFastPathResult TryLaunchAddFastPath(OpKernelContext* ctx, const Tensor& in0,
   const void* in1_ptr = in1.tensor_data().data();
   void* out_ptr = const_cast<char*>(out->tensor_data().data());
   musaStream_t stream = GetMusaStreamByCtx(ctx);
+  if (stream == nullptr) {
+    return AddFastPathResult::kNotHandled;
+  }
 
   bool launched = false;
   if (same_shape) {

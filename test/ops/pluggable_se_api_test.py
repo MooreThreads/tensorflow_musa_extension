@@ -47,43 +47,50 @@ class PluggableSeApiTest(tf.test.TestCase):
       self.skipTest("libtensorflow_framework.so.2 not found")
     return tf_lib
 
-  def test_se_init_plugin_returns_unimplemented_when_pluggable_env_disabled(self):
-    tf_fw = ctypes.CDLL(self._tf_framework_library())
-    tf_fw.TF_NewStatus.argtypes = []
-    tf_fw.TF_NewStatus.restype = ctypes.c_void_p
-    tf_fw.TF_GetCode.argtypes = [ctypes.c_void_p]
-    tf_fw.TF_GetCode.restype = ctypes.c_int
-    tf_fw.TF_DeleteStatus.argtypes = [ctypes.c_void_p]
-    tf_fw.TF_DeleteStatus.restype = None
-
-    path = _plugin_path()
-    if not path:
-      self.skipTest("libmusa_plugin.so not found")
-    prev = os.environ.pop("MUSA_ENABLE_SE_PLUGIN", None)
-    try:
-      lib = ctypes.cdll.LoadLibrary(path)
-      se_init = lib.SE_InitPlugin
-      se_init.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-      se_init.restype = None
-      params = (ctypes.c_ubyte * 256)()
-      st = tf_fw.TF_NewStatus()
-      try:
-        se_init(ctypes.addressof(params), st)
-        self.assertEqual(tf_fw.TF_GetCode(st), _TF_UNIMPLEMENTED)
-      finally:
-        tf_fw.TF_DeleteStatus(st)
-    finally:
-      if prev is not None:
-        os.environ["MUSA_ENABLE_SE_PLUGIN"] = prev
-
-  def test_se_init_plugin_succeeds_in_fresh_subprocess_with_env(self):
-    """MUSA_ENABLE_SE_PLUGIN must be set before dlopen; use isolated process."""
+  def test_se_init_plugin_returns_unimplemented_in_legacy_mode(self):
     path = _plugin_path()
     if not path:
       self.skipTest("libmusa_plugin.so not found")
     script = r"""
 import ctypes, os, sys
-os.environ['MUSA_ENABLE_SE_PLUGIN'] = '1'
+os.environ['TENSORFLOW_MUSA_USE_LEGACY_DEVICE'] = '1'
+import tensorflow as tf
+tf_lib = os.path.join(os.path.dirname(tf.__file__), 'libtensorflow_framework.so.2')
+tf_fw = ctypes.CDLL(tf_lib)
+tf_fw.TF_NewStatus.argtypes = []
+tf_fw.TF_NewStatus.restype = ctypes.c_void_p
+tf_fw.TF_GetCode.argtypes = [ctypes.c_void_p]
+tf_fw.TF_GetCode.restype = ctypes.c_int
+tf_fw.TF_DeleteStatus.argtypes = [ctypes.c_void_p]
+lib = ctypes.cdll.LoadLibrary(sys.argv[1])
+se_init = lib.SE_InitPlugin
+se_init.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+se_init.restype = None
+params = (ctypes.c_ubyte * 256)()
+st = tf_fw.TF_NewStatus()
+try:
+  se_init(ctypes.addressof(params), st)
+  print(tf_fw.TF_GetCode(st))
+finally:
+  tf_fw.TF_DeleteStatus(st)
+"""
+    proc = subprocess.run(
+        [sys.executable, "-c", script, path],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+    self.assertEqual(int((proc.stdout or "").strip().splitlines()[-1]),
+                     _TF_UNIMPLEMENTED)
+
+  def test_se_init_plugin_succeeds_in_fresh_subprocess_by_default(self):
+    """SE_InitPlugin is the default path; use isolated process before dlopen."""
+    path = _plugin_path()
+    if not path:
+      self.skipTest("libmusa_plugin.so not found")
+    script = r"""
+import ctypes, os, sys
 import tensorflow as tf
 code_ok = 0
 tf_lib = os.path.join(os.path.dirname(tf.__file__), 'libtensorflow_framework.so.2')
@@ -110,7 +117,7 @@ finally:
 sys.exit(0)
 """
     env = os.environ.copy()
-    env["MUSA_ENABLE_SE_PLUGIN"] = "1"
+    env.pop("TENSORFLOW_MUSA_USE_LEGACY_DEVICE", None)
     proc = subprocess.run(
         [sys.executable, "-c", script, path],
         env=env,
@@ -131,7 +138,6 @@ sys.exit(0)
     def run_case(strict_val):
       script = r"""
 import ctypes, os, sys
-os.environ['MUSA_ENABLE_SE_PLUGIN'] = '1'
 if sys.argv[2] == '1':
   os.environ['MUSA_STRICT_DEVICE_ENUM'] = '1'
 elif 'MUSA_STRICT_DEVICE_ENUM' in os.environ:
@@ -186,7 +192,6 @@ finally:
       self.skipTest("libmusa_plugin.so not found")
     script = r"""
 import ctypes, os, sys
-os.environ['MUSA_ENABLE_SE_PLUGIN'] = '1'
 tf_lib = os.path.join(os.path.dirname(__import__('tensorflow').__file__),
                       'libtensorflow_framework.so.2')
 tf_fw = ctypes.CDLL(tf_lib)
@@ -222,7 +227,6 @@ finally:
       self.skipTest("libmusa_plugin.so not found")
     script = r"""
 import ctypes, os, sys
-os.environ['MUSA_ENABLE_SE_PLUGIN'] = '1'
 tf_lib = os.path.join(os.path.dirname(__import__('tensorflow').__file__),
                       'libtensorflow_framework.so.2')
 tf_fw = ctypes.CDLL(tf_lib)
@@ -262,7 +266,6 @@ finally:
       self.skipTest("libmusa_plugin.so not found")
     script = r"""
 import ctypes, os, sys
-os.environ['MUSA_ENABLE_SE_PLUGIN'] = '1'
 tf_lib = os.path.join(os.path.dirname(__import__('tensorflow').__file__),
                       'libtensorflow_framework.so.2')
 tf_fw = ctypes.CDLL(tf_lib)

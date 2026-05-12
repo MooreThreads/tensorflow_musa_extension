@@ -1,13 +1,13 @@
 #include <musa_runtime.h>
 
-#include "musa_plugin_env.h"
 #include "musa_executor.h"
+#include "musa_plugin_env.h"
 #include "tensorflow/core/platform/logging.h"
-#include "tensorflow/stream_executor/platform/default/initialize.h"
 #include "tensorflow/stream_executor/executor_cache.h"
 #include "tensorflow/stream_executor/lib/error.h"
 #include "tensorflow/stream_executor/multi_platform_manager.h"
 #include "tensorflow/stream_executor/platform.h"
+#include "tensorflow/stream_executor/platform/default/initialize.h"
 #include "tensorflow/stream_executor/stream_executor_internal.h"
 
 namespace stream_executor {
@@ -28,9 +28,10 @@ class MusaPlatform : public Platform {
     musaError_t err = musaGetDeviceCount(&count);
     if (err != musaSuccess) {
       if (!::tensorflow::musa::plugin_env::StrictPhysicalDeviceEnum()) {
-        VLOG(1) << "musaGetDeviceCount failed in MusaPlatform::VisibleDeviceCount; "
-                   "returning 0 (set MUSA_STRICT_DEVICE_ENUM=1 to treat as error): "
-                << musaGetErrorString(err);
+        VLOG(1)
+            << "musaGetDeviceCount failed in MusaPlatform::VisibleDeviceCount; "
+               "returning 0 (set MUSA_STRICT_DEVICE_ENUM=1 to treat as error): "
+            << musaGetErrorString(err);
       }
       return 0;
     }
@@ -100,10 +101,10 @@ void InitializeMusaPlatform() {
 }  // namespace stream_executor
 
 // Use TensorFlow module initializer (ordered with other stream_executor
-// init) instead of a raw global static ctor; still gate on env for SE-only
-// Pluggable path.
+// init) instead of a raw global static ctor; legacy C++ registration is now
+// opt-in because the PluggableDevice SE path is the default.
 REGISTER_MODULE_INITIALIZER(musa_cxx_se_platform, {
-  if (::tensorflow::musa::plugin_env::PluggableSePathEnabled()) {
+  if (!::tensorflow::musa::plugin_env::UseLegacyCppDevicePath()) {
     return;
   }
   stream_executor::musa::InitializeMusaPlatform();

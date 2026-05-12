@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Eager float Add on SE-only path (subprocess; env before first plugin load)."""
+"""Eager float Add on default PluggableDevice path (subprocess before load)."""
 
 import ctypes
 import os
@@ -39,7 +39,7 @@ class PluggableSeEagerAddTest(tf.test.TestCase):
   """Subprocess loads Pluggable SE + kernels; validates Add on MUSA when GPU exists.
 
   **Hardware-gated**: driver count 0 or enum error ⇒ skip — does not validate
-  the full SE-only op path in CPU-only CI. Use FAIL_SE mismatch to catch broken
+  the full PluggableDevice op path in CPU-only CI. Use FAIL_SE mismatch to catch broken
   `load_pluggable_device_library` when devices exist but TF sees none.
 
   With **drv_n > 0**, ``UnimplementedError`` fails the test (migration regression).
@@ -51,7 +51,6 @@ class PluggableSeEagerAddTest(tf.test.TestCase):
       self.skipTest("libmusa_plugin.so not found")
     script = r"""
 import ctypes, os, sys
-os.environ['MUSA_ENABLE_SE_PLUGIN'] = '1'
 import numpy as np
 import tensorflow as tf
 
@@ -119,7 +118,7 @@ print('OK')
     if "SKIP_NO_MUSA_DEVICE" in out or "SKIP_DRIVER_ENUM_ERROR" in out:
       self.skipTest(
           "no MUSA device / driver enum issue "
-          "(SE-only eager Add skipped in CPU-only environment)")
+          "(PluggableDevice eager Add skipped in CPU-only environment)")
     if proc.returncode == 2 and "FAIL_SE_ENUM_MISMATCH" in out:
       self.fail(
           "driver reports devices but TensorFlow sees no MUSA physical device "

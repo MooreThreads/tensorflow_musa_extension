@@ -1,7 +1,7 @@
-# SE-only kernel expansion checklist
+# PluggableDevice kernel expansion checklist
 
 Order matches the Pure PluggableDevice migration plan; each row should add an
-**SE-only subprocess test** before broad kernel edits, then run default C++
+**PluggableDevice subprocess test** before broad kernel edits, then run legacy C++
 `MusaDevice` regression.
 
 | Phase | Category | Examples / notes |

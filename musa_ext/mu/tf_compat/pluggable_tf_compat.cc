@@ -16,6 +16,7 @@ limitations under the License.
 #include "mu/tf_compat/pluggable_tf_compat.h"
 
 #include "mu/musa_plugin_sp_stream.h"
+#include "tensorflow/c/experimental/stream_executor/stream_executor_internal.h"
 #include "tensorflow/core/framework/device_base.h"
 #include "tensorflow/stream_executor/stream.h"
 #include "tensorflow/stream_executor/stream_executor_internal.h"
@@ -26,17 +27,15 @@ namespace tf_compat {
 
 namespace {
 
-// `GpuStreamHack()` may return `(void*)musa_stream_t` (bare handle bits) for
-// native `MusaStream` — those must not be dereferenced as `SP_Stream_st`.
-// Always prefer `GpuStreamMemberHack()` when overridden (MusaStream / GpuStream):
-// it yields the handle without ambiguous pointer interpretation.
-musaStream_t ResolveStreamFromHack(void* hack) {
-  if (hack == nullptr) return nullptr;
-  const SP_Stream_st* wrapper = reinterpret_cast<const SP_Stream_st*>(hack);
-  if (wrapper->magic == kMusaPluginSpStreamMagic) {
-    return wrapper->stream;
+musaStream_t ResolvePluginCStream(
+    stream_executor::internal::StreamInterface* impl) {
+  auto* cstream = dynamic_cast<stream_executor::CStream*>(impl);
+  if (cstream == nullptr) return nullptr;
+  SP_Stream wrapper = cstream->Handle();
+  if (wrapper == nullptr || wrapper->magic != kMusaPluginSpStreamMagic) {
+    return nullptr;
   }
-  return reinterpret_cast<musaStream_t>(hack);
+  return wrapper->stream;
 }
 
 }  // namespace
@@ -45,11 +44,11 @@ musaStream_t GpuStreamFromTfStream(stream_executor::Stream* stream) {
   if (stream == nullptr) return nullptr;
   stream_executor::internal::StreamInterface* impl = stream->implementation();
   if (impl == nullptr) return nullptr;
+  musaStream_t plugin_stream = ResolvePluginCStream(impl);
+  if (plugin_stream != nullptr) return plugin_stream;
   void** member_hack = impl->GpuStreamMemberHack();
-  if (member_hack != nullptr) {
-    return *reinterpret_cast<musaStream_t*>(member_hack);
-  }
-  return ResolveStreamFromHack(impl->GpuStreamHack());
+  if (member_hack == nullptr || *member_hack == nullptr) return nullptr;
+  return *reinterpret_cast<musaStream_t*>(member_hack);
 }
 
 int GpuIdFromDeviceBase(const DeviceBase* base) {

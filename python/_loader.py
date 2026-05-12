@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 PLUGIN_LIBRARY = "libmusa_plugin.so"
 _plugin_path = None
 _op_module = None
+_device_library_loaded = False
 
 
 def _find_plugin_library():
@@ -71,6 +72,27 @@ def _find_plugin_library():
     )
 
 
+def _use_legacy_loader():
+    return os.environ.get("TENSORFLOW_MUSA_USE_LEGACY_DEVICE") == "1"
+
+
+def _load_pluggable_device_library(plugin_path):
+    try:
+        from tensorflow.python.framework.load_library import (
+            load_pluggable_device_library,
+        )
+    except ImportError as e:
+        raise RuntimeError(
+            "TensorFlow does not expose load_pluggable_device_library; "
+            "PluggableDevice loading requires a TensorFlow build with the "
+            "StreamExecutor C API loader. To use the transitional legacy path, "
+            "set TENSORFLOW_MUSA_USE_LEGACY_DEVICE=1 before importing "
+            "tensorflow_musa."
+        ) from e
+
+    load_pluggable_device_library(plugin_path)
+
+
 def load_plugin():
     """Load the MUSA plugin library into TensorFlow.
 
@@ -84,7 +106,7 @@ def load_plugin():
         FileNotFoundError: If the plugin library cannot be found
         RuntimeError: If TensorFlow cannot load the plugin
     """
-    global _plugin_path, _op_module
+    global _plugin_path, _op_module, _device_library_loaded
 
     if _plugin_path is not None and _op_module is not None:
         return _plugin_path
@@ -94,6 +116,9 @@ def load_plugin():
     plugin_path = _find_plugin_library()
 
     try:
+        if not _use_legacy_loader() and not _device_library_loaded:
+            _load_pluggable_device_library(plugin_path)
+            _device_library_loaded = True
         _op_module = tf.load_op_library(plugin_path)
         _plugin_path = plugin_path
         logger.info(f"MUSA plugin loaded successfully from: {plugin_path}")
@@ -125,33 +150,21 @@ def is_plugin_loaded():
     """
     import tensorflow as tf
 
-    # Check for MUSA device availability
     try:
-        devices = tf.config.list_physical_devices()
-        for device in devices:
-            if "MUSA" in device:
-                return True
+        return bool(tf.config.list_physical_devices("MUSA"))
     except Exception:
-        pass
-
-    return False
+        return False
 
 
 def get_musa_devices():
     """Get list of available MUSA devices.
 
     Returns:
-        list: List of MUSA device names
+        list: List of MUSA physical devices
     """
     import tensorflow as tf
 
-    musa_devices = []
     try:
-        devices = tf.config.list_physical_devices()
-        for device in devices:
-            if "MUSA" in device:
-                musa_devices.append(device)
+        return tf.config.list_physical_devices("MUSA")
     except Exception:
-        pass
-
-    return musa_devices
+        return []

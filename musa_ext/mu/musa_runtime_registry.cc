@@ -59,6 +59,14 @@ void MusaSeRegistryOnDeviceDestroyed(int32_t ordinal) {
   }
 }
 
+void MusaSeRegistryOnStreamDestroyed(int32_t ordinal, musaStream_t stream) {
+  if (stream == nullptr) return;
+  std::lock_guard<std::mutex> lock(g_mu);
+  auto it = g_devices.find(ordinal);
+  if (it == g_devices.end()) return;
+  it->second.mudnn_by_stream.erase(reinterpret_cast<uintptr_t>(stream));
+}
+
 ::musa::dnn::Handle* MusaSeRegistryEnsureMudnnForDevice(int32_t ordinal,
                                                         musaStream_t stream) {
   if (ordinal < 0 || stream == nullptr) {
@@ -78,8 +86,8 @@ void MusaSeRegistryOnDeviceDestroyed(int32_t ordinal) {
 
   musaError_t set_dev_err = musaSetDevice(ordinal);
   if (set_dev_err != musaSuccess) {
-    LOG(ERROR) << "MusaSeRegistryEnsureMudnnForDevice: musaSetDevice(" << ordinal
-               << ") failed: " << musaGetErrorString(set_dev_err);
+    LOG(ERROR) << "MusaSeRegistryEnsureMudnnForDevice: musaSetDevice("
+               << ordinal << ") failed: " << musaGetErrorString(set_dev_err);
     return nullptr;
   }
 
@@ -110,6 +118,13 @@ bool MusaSeRegistryHasLiveDeviceForTest(int32_t ordinal) {
 std::size_t MusaSeRegistrySizeForTest() {
   std::lock_guard<std::mutex> lock(g_mu);
   return g_devices.size();
+}
+
+std::size_t MusaSeRegistryMudnnSlotCountForTest(int32_t ordinal) {
+  std::lock_guard<std::mutex> lock(g_mu);
+  auto it = g_devices.find(ordinal);
+  if (it == g_devices.end()) return 0;
+  return it->second.mudnn_by_stream.size();
 }
 
 void MusaSeRegistryResetForTest() {

@@ -29,10 +29,9 @@ namespace musa {
 namespace tf_compat {
 
 // Maps TensorFlow's StreamExecutor `Stream` to the underlying MUSA stream
-// handle. Prefers `GpuStreamMemberHack()` when present; otherwise uses
-// `GpuStreamHack()` and may unwrap StreamExecutor-plugin `SP_Stream_st`
-// (magic in `mu/musa_plugin_sp_stream.h`). Must stay isolated here so kernel
-// code can depend on a single stable header.
+// handle. It safely unwraps TensorFlow PluggableDevice `CStream` handles
+// created by this plugin, then falls back to `GpuStreamMemberHack()` for legacy
+// streams. It never dereferences unknown `GpuStreamHack()` values.
 musaStream_t GpuStreamFromTfStream(stream_executor::Stream* stream);
 
 // Reads `gpu_id` from `DeviceBase::tensorflow_gpu_device_info()` when

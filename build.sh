@@ -12,23 +12,25 @@ set -e
 #   ./build.sh wheel     # Build wheel package directly (recommended for distribution)
 # ============================================================================
 
-# Required TensorFlow version
-REQUIRED_TF_VERSION="2.6.1"
+# Default TensorFlow version allowlist. Override with comma-separated values, e.g.
+# TENSORFLOW_MUSA_TARGET_TF=2.6.1,2.8.0 ./build.sh
+TARGET_TF_VERSIONS="${TENSORFLOW_MUSA_TARGET_TF:-2.6.1}"
+PYTHON_BIN="${PYTHON:-python3}"
 
 # Function to check TensorFlow version
 check_tf_version() {
     echo "Checking TensorFlow version..."
-    python3 -c "
+    "$PYTHON_BIN" -c "
 import tensorflow as tf
 version = tf.__version__
-required = '${REQUIRED_TF_VERSION}'
-if version != required:
-    print(f'ERROR: TensorFlow version mismatch!')
-    print(f'  Required: {required}')
+allowed = {v.strip() for v in '${TARGET_TF_VERSIONS}'.split(',') if v.strip()}
+if version not in allowed:
+    print('ERROR: TensorFlow version mismatch!')
+    print(f'  Allowed: {sorted(allowed)}')
     print(f'  Installed: {version}')
-    print(f'  Please install: pip install tensorflow=={required}')
+    print('  Set TENSORFLOW_MUSA_TARGET_TF to include this version, or install an allowed TensorFlow version.')
     exit(1)
-print(f'TensorFlow {version} found - OK')
+print(f'TensorFlow {version} found - OK (allowed: {sorted(allowed)})')
 " || exit 1
 }
 
@@ -77,7 +79,7 @@ case "$BUILD_TYPE" in
         rm -rf build/lib build/bdist.* dist/*.whl 2>/dev/null || true
 
         # Build wheel using setup.py (no isolation to use existing TF)
-        python3 setup.py bdist_wheel
+        "$PYTHON_BIN" setup.py bdist_wheel
 
         # Find and display the built wheel
         WHEEL_FILE=$(ls dist/*.whl 2>/dev/null | head -1)
@@ -124,7 +126,7 @@ echo ""
 
 cmake .. \
     -DCMAKE_BUILD_TYPE=$CMAKE_BUILD_TYPE \
-    -DPYTHON_EXECUTABLE=$(which python3) 2>&1 | tee cmake_output.log
+    -DPYTHON_EXECUTABLE="$PYTHON_BIN" 2>&1 | tee cmake_output.log
 
 echo ""
 echo "Building with $(nproc) parallel jobs..."

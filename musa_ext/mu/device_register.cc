@@ -8,9 +8,9 @@
 #include <vector>
 
 #include "device/musa_device.h"
-#include "musa_plugin_env.h"
 #include "mu/device/musa_telemetry.h"
 #include "mu/runtime_config_c_api.h"
+#include "musa_plugin_env.h"
 #include "tensorflow/core/common_runtime/device_factory.h"
 #include "tensorflow/core/framework/device_attributes.pb.h"
 #include "tensorflow/core/platform/env.h"
@@ -72,12 +72,13 @@ class MusaDeviceFactory : public DeviceFactory {
     musaError_t err = musaGetDeviceCount(&count);
     if (err != musaSuccess) {
       if (musa::plugin_env::StrictPhysicalDeviceEnum()) {
-        return errors::FailedPrecondition(
-            strings::StrCat("musaGetDeviceCount failed: ", musaGetErrorString(err)));
+        return errors::FailedPrecondition(strings::StrCat(
+            "musaGetDeviceCount failed: ", musaGetErrorString(err)));
       }
-      VLOG(1) << "musaGetDeviceCount failed; returning empty physical device list "
-                 "(set MUSA_STRICT_DEVICE_ENUM=1 to treat this as an error): "
-              << musaGetErrorString(err);
+      VLOG(1)
+          << "musaGetDeviceCount failed; returning empty physical device list "
+             "(set MUSA_STRICT_DEVICE_ENUM=1 to treat this as an error): "
+          << musaGetErrorString(err);
       return Status::OK();
     }
 
@@ -94,8 +95,8 @@ class MusaDeviceFactory : public DeviceFactory {
     musaError_t err = musaGetDeviceCount(&count);
     if (err != musaSuccess) {
       if (musa::plugin_env::StrictPhysicalDeviceEnum()) {
-        return errors::FailedPrecondition(
-            strings::StrCat("musaGetDeviceCount failed: ", musaGetErrorString(err)));
+        return errors::FailedPrecondition(strings::StrCat(
+            "musaGetDeviceCount failed: ", musaGetErrorString(err)));
       }
       VLOG(1) << "musaGetDeviceCount failed; skipping MUSA device creation "
                  "(set MUSA_STRICT_DEVICE_ENUM=1 to treat this as an error): "
@@ -150,9 +151,10 @@ void __attribute__((visibility("default"))) TFMusaSetAllowGrowth(int enabled) {
   ::tensorflow::musa::SetMusaAllowGrowthOverride(enabled != 0);
 }
 
-void __attribute__((visibility("default"))) TFMusaSetTelemetryConfig(
-    int enabled, const char* log_path, unsigned long long buffer_size,
-    int flush_interval_ms, int include_stack_trace) {
+void __attribute__((visibility("default")))
+TFMusaSetTelemetryConfig(int enabled, const char* log_path,
+                         unsigned long long buffer_size, int flush_interval_ms,
+                         int include_stack_trace) {
   ::tensorflow::musa::TelemetryConfig config;
   config.enabled = enabled != 0;
   if (log_path != nullptr) {
@@ -178,14 +180,13 @@ TFMusaGetTelemetryHealthSnapshot() {
 }
 
 void __attribute__((constructor)) OnMusaPluginLoad() {
-  // Single entry point: register C++ MUSA device factory unless SE-only
-  // Pluggable path is selected (MUSA_ENABLE_SE_PLUGIN=1 before dlopen).
   static std::once_flag k_register_musa_device_factory;
   std::call_once(k_register_musa_device_factory, [] {
-    if (tensorflow::musa::plugin_env::PluggableSePathEnabled()) {
+    if (!tensorflow::musa::plugin_env::UseLegacyCppDevicePath()) {
       LOG(INFO) << "[MUSA] Skipping C++ DeviceFactory::Register(\"MUSA\") "
-                   "because MUSA_ENABLE_SE_PLUGIN=1 (use SE_InitPlugin path). "
-                   "Set this env before loading libmusa_plugin.so.";
+                   "because PluggableDevice SE path is the default. Set "
+                   "TENSORFLOW_MUSA_USE_LEGACY_DEVICE=1 before loading "
+                   "libmusa_plugin.so to enable the legacy C++ path.";
       return;
     }
     tensorflow::DeviceFactory::Register(

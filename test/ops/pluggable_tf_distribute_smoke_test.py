@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""tf.distribute smoke on SE-only MUSA path (hardware-gated; selective skip)."""
+"""tf.distribute smoke on default PluggableDevice MUSA path."""
 
 import ctypes
 import os
@@ -45,7 +45,6 @@ class PluggableTfDistributeSmokeTest(tf.test.TestCase):
 
     script = r"""
 import ctypes, os, sys
-os.environ['MUSA_ENABLE_SE_PLUGIN'] = '1'
 import numpy as np
 import tensorflow as tf
 from tensorflow.python.framework.load_library import load_pluggable_device_library

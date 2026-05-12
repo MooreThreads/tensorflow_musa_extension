@@ -12,10 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Minimal compliance checks for MUSA plugin load, device visibility, and dispatch.
-
-SE_InitPlugin-only tests live in pluggable_se_api_test.py (no early plugin load).
-"""
+"""Default import path should load MUSA as a PluggableDevice."""
 
 import os
 import shutil
@@ -38,9 +35,9 @@ def _plugin_path():
       os.path.join(root, "build", "libmusa_plugin.so"),
       os.path.normpath(os.path.join(here, "..", "build", "libmusa_plugin.so")),
   ]
-  for p in candidates:
-    if os.path.isfile(p):
-      return p
+  for path in candidates:
+    if os.path.isfile(path):
+      return path
   return None
 
 
@@ -67,74 +64,43 @@ def _run_with_repo_package(script, timeout=180):
     )
 
 
-class PluggableDeviceComplianceTest(tf.test.TestCase):
-  """Runs in CI or dev when MUSA hardware + plugin are available."""
+class PluggableDefaultImportTest(tf.test.TestCase):
 
-  def test_physical_devices_name_contains_musa(self):
+  def test_import_tensorflow_musa_uses_default_pluggable_path(self):
+    if not _plugin_path():
+      self.skipTest("libmusa_plugin.so not found")
     script = r"""
 import tensorflow as tf
 import tensorflow_musa
-for d in tf.config.list_physical_devices():
-  if "MUSA" in d.name or "musa" in d.name.lower():
-    print("OK", d.name)
-    raise SystemExit(0)
-print("SKIP_NO_MUSA_DEVICE")
+musa_devs = tf.config.list_physical_devices('MUSA')
+if not musa_devs:
+  print('SKIP_NO_MUSA_DEVICE')
+  raise SystemExit(0)
+print('OK', len(musa_devs))
 """
     proc = _run_with_repo_package(script)
-    if proc is None:
-      self.skipTest("libmusa_plugin.so not found next to test/build")
     out = (proc.stdout or "") + (proc.stderr or "")
     if "SKIP_NO_MUSA_DEVICE" in out:
-      self.skipTest("No MUSA devices found")
+      self.skipTest("TensorFlow did not list MUSA physical devices")
     self.assertEqual(proc.returncode, 0, out)
     self.assertIn("OK", proc.stdout or "")
 
-  def test_se_init_plugin_symbol_exported(self):
-    path = _plugin_path()
-    if not path:
-      self.skipTest("libmusa_plugin.so not found next to test/build")
+  def test_repeated_import_default_path(self):
+    if not _plugin_path():
+      self.skipTest("libmusa_plugin.so not found")
     script = r"""
-import ctypes, sys
-lib = ctypes.cdll.LoadLibrary(sys.argv[1])
-if not hasattr(lib, "SE_InitPlugin"):
-  raise SystemExit(2)
-print("OK")
-"""
-    proc = subprocess.run(
-        [sys.executable, "-c", script, path],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    self.assertEqual(
-        proc.returncode,
-        0,
-        "SE_InitPlugin not exported from %s (stdout=%s stderr=%s)"
-        % (path, proc.stdout, proc.stderr),
-    )
-
-  def test_minimal_musa_eager_add(self):
-    script = r"""
+import importlib
 import tensorflow as tf
 import tensorflow_musa
-if not tf.config.list_physical_devices('MUSA'):
-  print('SKIP_NO_MUSA_DEVICE')
-  raise SystemExit(0)
-with tf.device('/device:MUSA:0'):
-  a = tf.constant([1.0, 2.0, 3.0])
-  b = tf.constant([4.0, 5.0, 6.0])
-  c = a + b
-values = c.numpy().tolist()
-print('OK', values)
-if values != [5.0, 7.0, 9.0]:
-  raise SystemExit(3)
+first = tensorflow_musa.load_plugin()
+second = tensorflow_musa.load_plugin()
+importlib.reload(tensorflow_musa)
+third = tensorflow_musa.load_plugin()
+print('OK', bool(first), first == second == third,
+      len(tf.config.list_physical_devices('MUSA')))
 """
     proc = _run_with_repo_package(script)
-    if proc is None:
-      self.skipTest("libmusa_plugin.so not found next to test/build")
     out = (proc.stdout or "") + (proc.stderr or "")
-    if "SKIP_NO_MUSA_DEVICE" in out:
-      self.skipTest("No MUSA devices found")
     self.assertEqual(proc.returncode, 0, out)
     self.assertIn("OK", proc.stdout or "")
 

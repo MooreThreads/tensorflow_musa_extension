@@ -29,20 +29,24 @@ else()
 endif()
 
 # Get TensorFlow parameters
-execute_process(COMMAND python3 -c "import tensorflow as tf; print(tf.sysconfig.get_include())"
+if(NOT PYTHON_EXECUTABLE)
+    set(PYTHON_EXECUTABLE python3)
+endif()
+message(STATUS "Using Python executable: ${PYTHON_EXECUTABLE}")
+execute_process(COMMAND "${PYTHON_EXECUTABLE}" -c "import tensorflow as tf; print(tf.sysconfig.get_include())"
     OUTPUT_VARIABLE TF_INC OUTPUT_STRIP_TRAILING_WHITESPACE)
-execute_process(COMMAND python3 -c "import tensorflow as tf; print(' '.join(tf.sysconfig.get_compile_flags()))"
+execute_process(COMMAND "${PYTHON_EXECUTABLE}" -c "import tensorflow as tf; print(' '.join(tf.sysconfig.get_compile_flags()))"
     OUTPUT_VARIABLE TF_COMPILE_FLAGS OUTPUT_STRIP_TRAILING_WHITESPACE)
-execute_process(COMMAND python3 -c "import tensorflow as tf; print(' '.join(tf.sysconfig.get_link_flags()))"
+execute_process(COMMAND "${PYTHON_EXECUTABLE}" -c "import tensorflow as tf; print(' '.join(tf.sysconfig.get_link_flags()))"
     OUTPUT_VARIABLE TF_LINK_FLAGS OUTPUT_STRIP_TRAILING_WHITESPACE)
-execute_process(COMMAND python3 -c "import tensorflow as tf; import os; print(os.path.dirname(tf.__file__))"
+execute_process(COMMAND "${PYTHON_EXECUTABLE}" -c "import tensorflow as tf; import os; print(os.path.dirname(tf.__file__))"
     OUTPUT_VARIABLE TF_LIB_DIR OUTPUT_STRIP_TRAILING_WHITESPACE)
-execute_process(COMMAND python3 -c "import sysconfig; print(sysconfig.get_path('include') or '')"
+execute_process(COMMAND "${PYTHON_EXECUTABLE}" -c "import sysconfig; print(sysconfig.get_path('include') or '')"
     OUTPUT_VARIABLE PYTHON_INCLUDE OUTPUT_STRIP_TRAILING_WHITESPACE)
-execute_process(COMMAND python3 -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX') or '.so')"
+execute_process(COMMAND "${PYTHON_EXECUTABLE}" -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX') or '.so')"
     OUTPUT_VARIABLE PYTHON_EXTENSION_SUFFIX OUTPUT_STRIP_TRAILING_WHITESPACE)
 execute_process(
-    COMMAND python3 -c "import pybind11; print(pybind11.get_include())"
+    COMMAND "${PYTHON_EXECUTABLE}" -c "import pybind11; print(pybind11.get_include())"
     OUTPUT_VARIABLE PYBIND11_INCLUDE OUTPUT_STRIP_TRAILING_WHITESPACE
     ERROR_QUIET
     RESULT_VARIABLE PYBIND11_RESULT)

@@ -114,17 +114,16 @@ class MusaAssignVariableOp : public OpKernel {
             DataTypeString(dtype_), " and ", DataTypeString(value.dtype())));
 
     // Must run before LookupOrCreateResource: the create lambda can initialize
-    // the variable; fail first on SE-only / non-MusaDevice paths with no
-    // side effects on the resource.
+    // the variable; fail first on PluggableDevice / non-MusaDevice paths with
+    // no side effects on the resource.
     OP_REQUIRES(ctx, TryGetMusaDeviceFromContext(ctx) != nullptr,
                 MusaCppDevicePathRequiredError());
     MusaDeviceContext* musa_device_context =
         dynamic_cast<MusaDeviceContext*>(ctx->op_device_context());
-    OP_REQUIRES(
-        ctx, musa_device_context != nullptr,
-        errors::Unimplemented(
-            "MUSA variable assign requires MusaDeviceContext; SE-only "
-            "PluggableDevice is not supported for this op yet."));
+    OP_REQUIRES(ctx, musa_device_context != nullptr,
+                errors::Unimplemented(
+                    "MUSA variable assign requires MusaDeviceContext; "
+                    "PluggableDevice is not supported for this op yet."));
 
     if (ctx->num_outputs() > 0) {
       ctx->set_output(0, ctx->input(0));
@@ -221,11 +220,10 @@ class MusaReadVariableOp : public OpKernel {
                   MusaCppDevicePathRequiredError());
       MusaDeviceContext* musa_device_context =
           dynamic_cast<MusaDeviceContext*>(ctx->op_device_context());
-      OP_REQUIRES(
-          ctx, musa_device_context != nullptr,
-          errors::Unimplemented(
-              "MUSA read variable requires MusaDeviceContext; SE-only "
-              "PluggableDevice is not supported for this op yet."));
+      OP_REQUIRES(ctx, musa_device_context != nullptr,
+                  errors::Unimplemented(
+                      "MUSA read variable requires MusaDeviceContext; "
+                      "PluggableDevice is not supported for this op yet."));
       musaStream_t stream = GetMusaStreamByCtx(ctx);
       MusaMemcpyAsyncD2D(const_cast<char*>(out->tensor_data().data()),
                          t.tensor_data().data(), t.TotalBytes(), stream);
