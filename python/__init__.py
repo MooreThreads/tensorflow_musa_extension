@@ -58,6 +58,7 @@ from ._runtime_config import (
     set_musa_allow_growth,
     set_musa_telemetry_config,
 )
+from . import ops, raw_ops
 
 # Package version
 __version__ = "0.1.0"
@@ -78,6 +79,8 @@ except Exception as e:
 # Public API
 __all__ = [
     "__version__",
+    "ops",
+    "raw_ops",
     "load_plugin",
     "get_musa_ops",
     "is_plugin_loaded",
