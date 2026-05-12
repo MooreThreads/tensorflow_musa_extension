@@ -39,8 +39,6 @@ env:
   LOG_BASE: /home/runner/ci_logs
   MODEL_ROOT: /home/runner/tf_test_model_wheel
   BASELINE_REPO_URL: https://github.com/MooreThreads/tensorflow_musa_extension.git
-  BASELINE_WHEEL_ARTIFACT: baseline-wheel
-  CURRENT_WHEEL_ARTIFACT: current-wheel
   EMPTY_TEST_RESULT_PATTERN: 'No tests found|No test files found|Total Tests:[[:space:]]*0|Total Tests[[:space:]]*│[[:space:]]*0|总计:[[:space:]]*0|no average_time_summary entries|report path missing|log not found'
   MIN_INTEGRATION_TESTS: 500
 
@@ -93,7 +91,8 @@ jobs:
           WORKFLOW_RUN_ATTEMPT="${{ github.run_attempt }}"
           LOG_ROOT="$LOG_BASE/$RUN_KIND/$RUN_ID/run-$WORKFLOW_RUN_ID/attempt-$WORKFLOW_RUN_ATTEMPT"
           JOB_LOG_DIR="$LOG_ROOT/prepare-metadata"
-          SUMMARY_FILE="$RUNNER_TEMP/prepare-metadata.md"
+          mkdir -p "$LOG_ROOT/summaries"
+          SUMMARY_FILE="$LOG_ROOT/summaries/prepare-metadata.md"
           HOST_NAME="$(hostname)"
           HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
           if [[ -z "$HOST_IP" ]]; then
@@ -136,13 +135,6 @@ jobs:
           echo "host_sn=$HOST_SN" >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: Upload summary artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: summary-prepare-metadata
-          path: ${{ steps.collect.outputs.summary_file }}
-          if-no-files-found: error
-          retention-days: 7
 
   format:
     name: Format Check
@@ -193,7 +185,9 @@ jobs:
 
           JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/format"
           LOG_FILE="$JOB_LOG_DIR/format_check.log"
-          SUMMARY_FILE="$RUNNER_TEMP/format.md"
+          LOG_ROOT="${{ needs.prepare_metadata.outputs.log_root }}"
+          mkdir -p "$LOG_ROOT/summaries"
+          SUMMARY_FILE="$LOG_ROOT/summaries/format.md"
           STATUS="success"
           JOB_RESULT="success (non-blocking)"
 
@@ -223,23 +217,6 @@ jobs:
           echo "status=$STATUS" >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: Upload format artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: summary-format
-          path: ${{ steps.collect.outputs.summary_file }}
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload format logs artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: logs-format
-          path: ${{ needs.prepare_metadata.outputs.log_root }}/format/format_check.log
-          if-no-files-found: warn
-          retention-days: 7
 
   build_current:
     name: Build Current
@@ -283,14 +260,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/build-current"
+          LOG_ROOT="${{ needs.prepare_metadata.outputs.log_root }}"
+          JOB_LOG_DIR="$LOG_ROOT/build-current"
           LOG_FILE="$JOB_LOG_DIR/build_current.log"
-          SUMMARY_FILE="$RUNNER_TEMP/build-current.md"
+          mkdir -p "$LOG_ROOT/summaries"
+          SUMMARY_FILE="$LOG_ROOT/summaries/build-current.md"
           WHEEL_PATH="$(find "$GITHUB_WORKSPACE/dist" -maxdepth 1 -name 'tensorflow_musa-*.whl' -print -quit 2>/dev/null || true)"
           STATUS="success"
 
           if [[ "${{ steps.run_build.outputs.build_exit }}" != "0" || -z "$WHEEL_PATH" ]]; then
             STATUS="failure"
+          else
+            WHEEL_DEST="$LOG_ROOT/wheels/current"
+            mkdir -p "$WHEEL_DEST"
+            cp "$WHEEL_PATH" "$WHEEL_DEST/"
           fi
 
           WHEEL_SIZE="$(stat -c%s "$WHEEL_PATH" 2>/dev/null || echo "n/a")"
@@ -315,33 +298,6 @@ jobs:
           cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
           echo "status=$STATUS" >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
-
-      - name: Upload current wheel artifact
-        if: steps.collect.outputs.status == 'success'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.CURRENT_WHEEL_ARTIFACT }}
-          path: ${{ github.workspace }}/dist/tensorflow_musa-*.whl
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload build summary artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: summary-build-current
-          path: ${{ steps.collect.outputs.summary_file }}
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload build current logs artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: logs-build-current
-          path: ${{ needs.prepare_metadata.outputs.log_root }}/build-current/build_current.log
-          if-no-files-found: warn
-          retention-days: 7
 
       - name: Fail job if build failed
         if: always() && steps.collect.outputs.status == 'failure'
@@ -418,9 +374,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/build-baseline"
+          LOG_ROOT="${{ needs.prepare_metadata.outputs.log_root }}"
+          JOB_LOG_DIR="$LOG_ROOT/build-baseline"
           LOG_FILE="$JOB_LOG_DIR/build_baseline.log"
-          SUMMARY_FILE="$RUNNER_TEMP/build-baseline.md"
+          mkdir -p "$LOG_ROOT/summaries"
+          SUMMARY_FILE="$LOG_ROOT/summaries/build-baseline.md"
           BASELINE_WORKSPACE="${{ steps.run_build.outputs.baseline_workspace }}"
           WHEEL_PATH="$(find "$BASELINE_WORKSPACE/dist" -maxdepth 1 -name 'tensorflow_musa-*.whl' -print -quit 2>/dev/null || true)"
           BASELINE_SHA="${{ steps.run_build.outputs.baseline_sha }}"
@@ -428,6 +386,10 @@ jobs:
 
           if [[ "${{ steps.run_build.outputs.sync_exit }}" != "0" || "${{ steps.run_build.outputs.build_exit }}" != "0" || -z "$WHEEL_PATH" ]]; then
             STATUS="failure"
+          else
+            WHEEL_DEST="$LOG_ROOT/wheels/baseline"
+            mkdir -p "$WHEEL_DEST"
+            cp "$WHEEL_PATH" "$WHEEL_DEST/"
           fi
 
           WHEEL_SIZE="$(stat -c%s "$WHEEL_PATH" 2>/dev/null || echo "n/a")"
@@ -455,33 +417,6 @@ jobs:
           echo "baseline_sha=$BASELINE_SHA" >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: Upload baseline wheel artifact
-        if: steps.collect.outputs.status == 'success'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.BASELINE_WHEEL_ARTIFACT }}
-          path: ${{ steps.run_build.outputs.baseline_workspace }}/dist/tensorflow_musa-*.whl
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload build summary artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: summary-build-baseline
-          path: ${{ steps.collect.outputs.summary_file }}
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload build baseline logs artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: logs-build-baseline
-          path: ${{ needs.prepare_metadata.outputs.log_root }}/build-baseline/build_baseline.log
-          if-no-files-found: warn
-          retention-days: 7
-
       - name: Fail job if build failed
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
@@ -502,12 +437,6 @@ jobs:
           fetch-depth: 0
           ref: ${{ needs.prepare_metadata.outputs.commit_id }}
 
-      - name: Download current wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.CURRENT_WHEEL_ARTIFACT }}
-          path: ${{ runner.temp }}/current-wheel
-
       - name: Run integration tests
         id: run_test
         run: |
@@ -518,7 +447,7 @@ jobs:
           mkdir -p "$JOB_LOG_DIR"
 
           test_exit=0
-          export LOG_FILE WHEEL_DIR="$RUNNER_TEMP/current-wheel"
+          export LOG_FILE WHEEL_DIR="${{ needs.prepare_metadata.outputs.log_root }}/wheels/current"
           bash -l <<'BASH' || test_exit=$?
           set -e -o pipefail
           cd "$GITHUB_WORKSPACE"
@@ -571,9 +500,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/integration"
+          LOG_ROOT="${{ needs.prepare_metadata.outputs.log_root }}"
+          JOB_LOG_DIR="$LOG_ROOT/integration"
           LOG_FILE="$JOB_LOG_DIR/integration_fusion_tests.log"
-          SUMMARY_FILE="$RUNNER_TEMP/integration.md"
+          mkdir -p "$LOG_ROOT/summaries"
+          SUMMARY_FILE="$LOG_ROOT/summaries/integration.md"
           STATUS="success"
 
           if [[ "${{ steps.run_test.outputs.test_exit }}" != "0" ]]; then
@@ -609,24 +540,6 @@ jobs:
           echo "status=$STATUS" >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: Upload integration summary artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: summary-integration
-          path: ${{ steps.collect.outputs.summary_file }}
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload integration logs artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: logs-integration
-          path: ${{ needs.prepare_metadata.outputs.log_root }}/integration/integration_fusion_tests.log
-          if-no-files-found: warn
-          retention-days: 7
-
       - name: Fail job if integration failed
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
@@ -646,18 +559,6 @@ jobs:
       metrics_json: ${{ steps.collect.outputs.metrics_json }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
-      - name: Download baseline wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.BASELINE_WHEEL_ARTIFACT }}
-          path: ${{ runner.temp }}/baseline-wheel
-
-      - name: Download current wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.CURRENT_WHEEL_ARTIFACT }}
-          path: ${{ runner.temp }}/current-wheel
-
       - name: Run T performance baseline/current
         id: run_perf
         run: |
@@ -687,7 +588,7 @@ jobs:
             flock 9
             echo "Acquired GPU test lock: $lock_file" | tee -a "$BASELINE_LOG"
 
-            pip install "$RUNNER_TEMP"/baseline-wheel/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$BASELINE_LOG"
+            pip install "${{ needs.prepare_metadata.outputs.log_root }}"/wheels/baseline/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$BASELINE_LOG"
 
             bash -l -c '
               set -o pipefail
@@ -698,7 +599,7 @@ jobs:
                 --infer-iters 1000 2>&1 | tee "$BASELINE_LOG"
             ' || baseline_exit=$?
 
-            pip install "$RUNNER_TEMP"/current-wheel/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$CURRENT_LOG"
+            pip install "${{ needs.prepare_metadata.outputs.log_root }}"/wheels/current/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$CURRENT_LOG"
 
             bash -l -c '
               set -o pipefail
@@ -722,10 +623,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/t-perf"
+          LOG_ROOT="${{ needs.prepare_metadata.outputs.log_root }}"
+          JOB_LOG_DIR="$LOG_ROOT/t-perf"
           BASELINE_LOG="$JOB_LOG_DIR/t_perf_baseline.log"
           CURRENT_LOG="$JOB_LOG_DIR/t_perf_current.log"
-          SUMMARY_FILE="$RUNNER_TEMP/t-perf.md"
+          mkdir -p "$LOG_ROOT/summaries"
+          SUMMARY_FILE="$LOG_ROOT/summaries/t-perf.md"
           STATUS="success"
           BASELINE_MS=""
           CURRENT_MS=""
@@ -819,26 +722,6 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: Upload T performance summary artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: summary-t-perf
-          path: ${{ steps.collect.outputs.summary_file }}
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload T performance logs artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: logs-t-perf
-          path: |
-            ${{ needs.prepare_metadata.outputs.log_root }}/t-perf/t_perf_baseline.log
-            ${{ needs.prepare_metadata.outputs.log_root }}/t-perf/t_perf_current.log
-          if-no-files-found: warn
-          retention-days: 7
-
       - name: Fail job if T performance regressed
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
@@ -855,14 +738,8 @@ jobs:
       metrics_json: ${{ steps.collect.outputs.metrics_json }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
-      - name: Download current wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.CURRENT_WHEEL_ARTIFACT }}
-          path: ${{ runner.temp }}/current-wheel
-
       - name: Install current wheel
-        run: pip install "$RUNNER_TEMP"/current-wheel/tensorflow_musa-*.whl --no-deps --force-reinstall
+        run: pip install "${{ needs.prepare_metadata.outputs.log_root }}"/wheels/current/tensorflow_musa-*.whl --no-deps --force-reinstall
 
       - name: Run T accuracy current only
         id: run_acc
@@ -914,9 +791,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/t-accuracy"
+          LOG_ROOT="${{ needs.prepare_metadata.outputs.log_root }}"
+          JOB_LOG_DIR="$LOG_ROOT/t-accuracy"
           CURRENT_LOG="$JOB_LOG_DIR/t_accuracy_current.log"
-          SUMMARY_FILE="$RUNNER_TEMP/t-accuracy.md"
+          mkdir -p "$LOG_ROOT/summaries"
+          SUMMARY_FILE="$LOG_ROOT/summaries/t-accuracy.md"
           STATUS="success"
           CURRENT_ACC="$(grep -E "整体状态:.*(PASSED|FAILED)" "$CURRENT_LOG" | tail -1 | grep -oE "PASSED|FAILED" || echo "n/a")"
           METRICS_JSON=""
@@ -981,24 +860,6 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: Upload T accuracy summary artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: summary-t-accuracy
-          path: ${{ steps.collect.outputs.summary_file }}
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload T accuracy logs artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: logs-t-accuracy
-          path: ${{ needs.prepare_metadata.outputs.log_root }}/t-accuracy/t_accuracy_current.log
-          if-no-files-found: warn
-          retention-days: 7
-
       - name: Fail job if T accuracy failed
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
@@ -1018,18 +879,6 @@ jobs:
       metrics_json: ${{ steps.collect.outputs.metrics_json }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
-      - name: Download baseline wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.BASELINE_WHEEL_ARTIFACT }}
-          path: ${{ runner.temp }}/baseline-wheel
-
-      - name: Download current wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.CURRENT_WHEEL_ARTIFACT }}
-          path: ${{ runner.temp }}/current-wheel
-
       - name: Run model 1 baseline/current
         id: run_perf
         run: |
@@ -1061,7 +910,7 @@ jobs:
             flock 9
             echo "Acquired GPU test lock: $lock_file" | tee -a "$BASELINE_LOG"
 
-            pip install "$RUNNER_TEMP"/baseline-wheel/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$BASELINE_LOG"
+            pip install "${{ needs.prepare_metadata.outputs.log_root }}"/wheels/baseline/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$BASELINE_LOG"
 
             bash -l -c '
               set -o pipefail
@@ -1075,7 +924,7 @@ jobs:
                 --out_root "$JOB_LOG_DIR/baseline-out" 2>&1 | tee "$BASELINE_LOG"
             ' || baseline_exit=$?
 
-            pip install "$RUNNER_TEMP"/current-wheel/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$CURRENT_LOG"
+            pip install "${{ needs.prepare_metadata.outputs.log_root }}"/wheels/current/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$CURRENT_LOG"
 
             bash -l -c '
               set -o pipefail
@@ -1105,7 +954,9 @@ jobs:
           JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model1"
           BASELINE_LOG="$JOB_LOG_DIR/bd_model1_baseline.log"
           CURRENT_LOG="$JOB_LOG_DIR/bd_model1_current.log"
-          SUMMARY_FILE="$RUNNER_TEMP/bd-model1.md"
+          LOG_ROOT="${{ needs.prepare_metadata.outputs.log_root }}"
+          mkdir -p "$LOG_ROOT/summaries"
+          SUMMARY_FILE="$LOG_ROOT/summaries/bd-model1.md"
           COMPARE_JSON="$RUNNER_TEMP/bd-model1-compare.json"
           DETAIL_FILE="$RUNNER_TEMP/bd-model1-details.md"
           STATUS="success"
@@ -1348,30 +1199,6 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: Upload model 1 summary artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: summary-bd-model1
-          path: ${{ steps.collect.outputs.summary_file }}
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload model 1 logs artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: logs-bd-model1
-          path: |
-            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model1/bd_model1_baseline.log
-            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model1/bd_model1_current.log
-            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model1/baseline-out
-            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model1/current-out
-            ${{ runner.temp }}/bd-model1-details.md
-            ${{ runner.temp }}/bd-model1-compare.json
-          if-no-files-found: warn
-          retention-days: 7
-
       - name: Fail job if model 1 regressed
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
@@ -1391,18 +1218,6 @@ jobs:
       metrics_json: ${{ steps.collect.outputs.metrics_json }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
-      - name: Download baseline wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.BASELINE_WHEEL_ARTIFACT }}
-          path: ${{ runner.temp }}/baseline-wheel
-
-      - name: Download current wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.CURRENT_WHEEL_ARTIFACT }}
-          path: ${{ runner.temp }}/current-wheel
-
       - name: Run model 2 baseline/current
         id: run_perf
         run: |
@@ -1434,7 +1249,7 @@ jobs:
             flock 9
             echo "Acquired GPU test lock: $lock_file" | tee -a "$BASELINE_LOG"
 
-            pip install "$RUNNER_TEMP"/baseline-wheel/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$BASELINE_LOG"
+            pip install "${{ needs.prepare_metadata.outputs.log_root }}"/wheels/baseline/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$BASELINE_LOG"
 
             bash -l -c '
               set -o pipefail
@@ -1448,7 +1263,7 @@ jobs:
                 --out_root "$JOB_LOG_DIR/baseline-out" 2>&1 | tee "$BASELINE_LOG"
             ' || baseline_exit=$?
 
-            pip install "$RUNNER_TEMP"/current-wheel/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$CURRENT_LOG"
+            pip install "${{ needs.prepare_metadata.outputs.log_root }}"/wheels/current/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$CURRENT_LOG"
 
             bash -l -c '
               set -o pipefail
@@ -1478,7 +1293,9 @@ jobs:
           JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model2"
           BASELINE_LOG="$JOB_LOG_DIR/bd_model2_baseline.log"
           CURRENT_LOG="$JOB_LOG_DIR/bd_model2_current.log"
-          SUMMARY_FILE="$RUNNER_TEMP/bd-model2.md"
+          LOG_ROOT="${{ needs.prepare_metadata.outputs.log_root }}"
+          mkdir -p "$LOG_ROOT/summaries"
+          SUMMARY_FILE="$LOG_ROOT/summaries/bd-model2.md"
           COMPARE_JSON="$RUNNER_TEMP/bd-model2-compare.json"
           DETAIL_FILE="$RUNNER_TEMP/bd-model2-details.md"
           STATUS="success"
@@ -1721,30 +1538,6 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: Upload model 2 summary artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: summary-bd-model2
-          path: ${{ steps.collect.outputs.summary_file }}
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload model 2 logs artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: logs-bd-model2
-          path: |
-            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model2/bd_model2_baseline.log
-            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model2/bd_model2_current.log
-            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model2/baseline-out
-            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model2/current-out
-            ${{ runner.temp }}/bd-model2-details.md
-            ${{ runner.temp }}/bd-model2-compare.json
-          if-no-files-found: warn
-          retention-days: 7
-
       - name: Fail job if model 2 regressed
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
@@ -1764,18 +1557,6 @@ jobs:
       metrics_json: ${{ steps.collect.outputs.metrics_json }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
-      - name: Download baseline wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.BASELINE_WHEEL_ARTIFACT }}
-          path: ${{ runner.temp }}/baseline-wheel
-
-      - name: Download current wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.CURRENT_WHEEL_ARTIFACT }}
-          path: ${{ runner.temp }}/current-wheel
-
       - name: Run model 3 baseline/current
         id: run_perf
         run: |
@@ -1807,7 +1588,7 @@ jobs:
             flock 9
             echo "Acquired GPU test lock: $lock_file" | tee -a "$BASELINE_LOG"
 
-            pip install "$RUNNER_TEMP"/baseline-wheel/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$BASELINE_LOG"
+            pip install "${{ needs.prepare_metadata.outputs.log_root }}"/wheels/baseline/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$BASELINE_LOG"
 
             bash -l -c '
               set -o pipefail
@@ -1821,7 +1602,7 @@ jobs:
                 --out_root "$JOB_LOG_DIR/baseline-out" 2>&1 | tee "$BASELINE_LOG"
             ' || baseline_exit=$?
 
-            pip install "$RUNNER_TEMP"/current-wheel/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$CURRENT_LOG"
+            pip install "${{ needs.prepare_metadata.outputs.log_root }}"/wheels/current/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$CURRENT_LOG"
 
             bash -l -c '
               set -o pipefail
@@ -1851,7 +1632,9 @@ jobs:
           JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/bd-model3"
           BASELINE_LOG="$JOB_LOG_DIR/bd_model3_baseline.log"
           CURRENT_LOG="$JOB_LOG_DIR/bd_model3_current.log"
-          SUMMARY_FILE="$RUNNER_TEMP/bd-model3.md"
+          LOG_ROOT="${{ needs.prepare_metadata.outputs.log_root }}"
+          mkdir -p "$LOG_ROOT/summaries"
+          SUMMARY_FILE="$LOG_ROOT/summaries/bd-model3.md"
           COMPARE_JSON="$RUNNER_TEMP/bd-model3-compare.json"
           DETAIL_FILE="$RUNNER_TEMP/bd-model3-details.md"
           STATUS="success"
@@ -2094,30 +1877,6 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: Upload model 3 summary artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: summary-bd-model3
-          path: ${{ steps.collect.outputs.summary_file }}
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload model 3 logs artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: logs-bd-model3
-          path: |
-            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model3/bd_model3_baseline.log
-            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model3/bd_model3_current.log
-            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model3/baseline-out
-            ${{ needs.prepare_metadata.outputs.log_root }}/bd-model3/current-out
-            ${{ runner.temp }}/bd-model3-details.md
-            ${{ runner.temp }}/bd-model3-compare.json
-          if-no-files-found: warn
-          retention-days: 7
-
       - name: Fail job if model 3 regressed
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
@@ -2132,14 +1891,8 @@ jobs:
       status: ${{ steps.collect.outputs.status }}
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
-      - name: Download current wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.CURRENT_WHEEL_ARTIFACT }}
-          path: ${{ runner.temp }}/current-wheel
-
       - name: Install current wheel
-        run: pip install "$RUNNER_TEMP"/current-wheel/tensorflow_musa-*.whl --no-deps --force-reinstall
+        run: pip install "${{ needs.prepare_metadata.outputs.log_root }}"/wheels/current/tensorflow_musa-*.whl --no-deps --force-reinstall
 
       - name: Run training tests
         id: run_training
@@ -2280,7 +2033,9 @@ jobs:
 
           JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/training"
           LOG_FILE="$JOB_LOG_DIR/training_tests.log"
-          SUMMARY_FILE="$RUNNER_TEMP/training.md"
+          LOG_ROOT="${{ needs.prepare_metadata.outputs.log_root }}"
+          mkdir -p "$LOG_ROOT/summaries"
+          SUMMARY_FILE="$LOG_ROOT/summaries/training.md"
           STATUS="success"
 
           if [[ "${{ steps.run_training.outputs.training_exit }}" != "0" ]]; then
@@ -2311,26 +2066,6 @@ jobs:
           echo "status=$STATUS" >> "$GITHUB_OUTPUT"
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: Upload training summary artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: summary-training
-          path: ${{ steps.collect.outputs.summary_file }}
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload training logs artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: logs-training
-          path: |
-            ${{ needs.prepare_metadata.outputs.log_root }}/training/training_tests.log
-            ${{ needs.prepare_metadata.outputs.log_root }}/training/error_logs
-          if-no-files-found: warn
-          retention-days: 7
-
       - name: Fail job if training failed
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
@@ -2359,12 +2094,6 @@ jobs:
       BD2_JSON: ${{ needs.bd_model2.outputs.metrics_json || '' }}
       BD3_JSON: ${{ needs.bd_model3.outputs.metrics_json || '' }}
     steps:
-      - name: Download summary artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: summary-*
-          merge-multiple: true
-          path: ${{ runner.temp }}/ci-summary
 
       - name: Generate final summary
         id: final_summary
@@ -2390,6 +2119,7 @@ jobs:
         run: |
           set -euo pipefail
 
+          LOG_ROOT="${{ needs.prepare_metadata.outputs.log_root }}"
           SUMMARY_DIR="$RUNNER_TEMP/final-summary"
           SUMMARY_FILE="$SUMMARY_DIR/final-summary.md"
           SUMMARY_JSON="$SUMMARY_DIR/final-summary.json"
@@ -2550,17 +2280,17 @@ jobs:
           PY
 
           for file in \
-            "$RUNNER_TEMP/ci-summary/prepare-metadata.md" \
-            "$RUNNER_TEMP/ci-summary/format.md" \
-            "$RUNNER_TEMP/ci-summary/build-current.md" \
-            "$RUNNER_TEMP/ci-summary/build-baseline.md" \
-            "$RUNNER_TEMP/ci-summary/integration.md" \
-            "$RUNNER_TEMP/ci-summary/t-perf.md" \
-            "$RUNNER_TEMP/ci-summary/t-accuracy.md" \
-            "$RUNNER_TEMP/ci-summary/bd-model1.md" \
-            "$RUNNER_TEMP/ci-summary/bd-model2.md" \
-            "$RUNNER_TEMP/ci-summary/bd-model3.md" \
-            "$RUNNER_TEMP/ci-summary/training.md"; do
+            "$LOG_ROOT/summaries/prepare-metadata.md" \
+            "$LOG_ROOT/summaries/format.md" \
+            "$LOG_ROOT/summaries/build-current.md" \
+            "$LOG_ROOT/summaries/build-baseline.md" \
+            "$LOG_ROOT/summaries/integration.md" \
+            "$LOG_ROOT/summaries/t-perf.md" \
+            "$LOG_ROOT/summaries/t-accuracy.md" \
+            "$LOG_ROOT/summaries/bd-model1.md" \
+            "$LOG_ROOT/summaries/bd-model2.md" \
+            "$LOG_ROOT/summaries/bd-model3.md" \
+            "$LOG_ROOT/summaries/training.md"; do
             if [[ -f "$file" ]]; then
               echo >> "$SUMMARY_FILE"
               cat "$file" >> "$SUMMARY_FILE"
