@@ -50,7 +50,21 @@ with tf.device("/device:MUSA:0"):
     b = tf.matmul(a, a)
 ```
 
-### MUSA 显存按需增长
+### Python 算子 API
+
+`tensorflow_musa` 提供两层自定义算子入口：
+
+- `tf_musa.ops`：稳定的高层 wrapper，如 `gelu`、`layer_norm`、`clip`、`dropout`、`reshape_mat_mul`、`matmul_bias_add` 等。
+- `tf_musa.raw_ops`：动态代理到底层插件生成的全部 raw op，适合调试或调用暂未封装到 `ops` 的算子。
+
+```python
+import tensorflow as tf
+import tensorflow_musa as tf_musa
+
+x = tf.constant([-2.0, 0.5, 3.0])
+y = tf_musa.ops.clip(x, 0.0, 1.0)
+z = tf_musa.ops.gelu(y)
+```
 
 `tensorflow_musa` 支持控制 MUSA BFC allocator 的 `allow_growth` 行为。默认值与 TensorFlow 原生 GPU 保持一致，为 `False`；启用后，MUSA 显存池会按需增长，而不是在设备初始化时一次性申请完整显存池。请在 MUSA 设备初始化前设置：
 
