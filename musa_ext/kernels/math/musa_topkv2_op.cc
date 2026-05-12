@@ -101,13 +101,32 @@ class MusaTopKV2Op : public MusaOpKernel {
 
     const T* input_ptr = input.flat<T>().data();
     T* values_ptr = values->flat<T>().data();
-    int32* indices_ptr = indices->flat<int32>().data();
 
     auto* device = GetDeviceByCtx(ctx);
     auto stream = device->GetStream();
 
-    LaunchTopKV2<T, int32>(input_ptr, values_ptr, indices_ptr, rows, cols, k,
-                           sorted_, stream);
+    switch (indices->dtype()) {
+      case DT_INT16:
+        LaunchTopKV2<T, int16>(input_ptr, values_ptr,
+                               indices->flat<int16>().data(), rows, cols, k,
+                               sorted_, stream);
+        break;
+      case DT_INT32:
+        LaunchTopKV2<T, int32>(input_ptr, values_ptr,
+                               indices->flat<int32>().data(), rows, cols, k,
+                               sorted_, stream);
+        break;
+      case DT_INT64:
+        LaunchTopKV2<T, int64>(input_ptr, values_ptr,
+                               indices->flat<int64>().data(), rows, cols, k,
+                               sorted_, stream);
+        break;
+      default:
+        ctx->CtxFailure(errors::InvalidArgument(
+            "TopKV2: unsupported index output dtype ",
+            DataTypeString(indices->dtype())));
+        return;
+    }
   }
 
  private:
@@ -122,6 +141,9 @@ class MusaTopKV2Op : public MusaOpKernel {
                           MusaTopKV2Op<T>)
 
 REGISTER_MUSA_TOPK(float);
+REGISTER_MUSA_TOPK(double);
+REGISTER_MUSA_TOPK(int32);
+REGISTER_MUSA_TOPK(int64);
 REGISTER_MUSA_TOPK(Eigen::half);
 REGISTER_MUSA_TOPK(bfloat16);
 

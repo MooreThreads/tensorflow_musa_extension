@@ -111,5 +111,20 @@ class MultiplyOpTest(MUSATestCase):
     self.assertAllClose(result.numpy(), expected)
 
 
+  def testMultiplyFastPathHotShapes(self):
+    """Multiply hot shapes covered by custom fast paths."""
+    test_cases = [
+        ([1024, 1024], [1024, 1024]),
+        ([1024, 1024], []),
+        ([1024, 1024], [1024]),
+    ]
+    for dtype in [tf.float32, tf.float16, tf.bfloat16, tf.int32, tf.int64]:
+      rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
+      atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
+      for shape_x, shape_y in test_cases:
+        with self.subTest(shape_x=shape_x, shape_y=shape_y, dtype=dtype):
+          self._test_multiply(shape_x, shape_y, dtype, rtol=rtol, atol=atol)
+
+
 if __name__ == "__main__":
   tf.test.main()

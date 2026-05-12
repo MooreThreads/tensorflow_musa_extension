@@ -201,5 +201,20 @@ class SelectOpTest(MUSATestCase):
             tf.int32
         )
 
+    def testFastPathHotShapes(self):
+        """Select hot shapes covered by custom fast paths."""
+        cond_same = np.random.rand(512, 512) > 0.5
+        cond_scalar = np.array(True)
+        cond_rank1 = np.random.rand(512) > 0.5
+        x = np.random.uniform(-1, 1, size=(512, 512)).astype(np.float32)
+        y = np.random.uniform(-1, 1, size=(512, 512)).astype(np.float32)
+
+        for cond in [cond_same, cond_scalar, cond_rank1]:
+            self._compare_cpu_musa_results(
+                tf.where,
+                [tf.constant(cond), tf.constant(x, dtype=tf.float32), tf.constant(y, dtype=tf.float32)],
+                tf.float32
+            )
+
 if __name__ == "__main__":
     tf.test.main()

@@ -16,14 +16,62 @@ namespace musa {
 namespace {
 
 extern "C" {
-void LaunchMusaAddContiguousFloat(const float* lhs, const float* rhs,
-                                  float* output, int64_t size,
-                                  musaStream_t stream);
-void LaunchMusaAddScalarFloat(const float* dense, const float* scalar,
-                              float* output, int64_t size, musaStream_t stream);
-void LaunchMusaAddTailVectorFloat(const float* dense, const float* tail_vector,
-                                  float* output, int64_t size, int64_t width,
-                                  musaStream_t stream);
+void LaunchMusaBinaryAddContiguousFloat(const void* lhs, const void* rhs,
+                                        void* output, int64_t size,
+                                        musaStream_t stream);
+void LaunchMusaBinaryAddScalarFloat(const void* dense, const void* scalar,
+                                    void* output, int64_t size,
+                                    bool scalar_on_left, musaStream_t stream);
+void LaunchMusaBinaryAddTailVectorFloat(const void* dense,
+                                        const void* tail_vector, void* output,
+                                        int64_t size, int64_t width,
+                                        bool vector_on_left,
+                                        musaStream_t stream);
+void LaunchMusaBinaryAddContiguousHalf(const void* lhs, const void* rhs,
+                                       void* output, int64_t size,
+                                       musaStream_t stream);
+void LaunchMusaBinaryAddScalarHalf(const void* dense, const void* scalar,
+                                   void* output, int64_t size,
+                                   bool scalar_on_left, musaStream_t stream);
+void LaunchMusaBinaryAddTailVectorHalf(const void* dense,
+                                       const void* tail_vector, void* output,
+                                       int64_t size, int64_t width,
+                                       bool vector_on_left,
+                                       musaStream_t stream);
+void LaunchMusaBinaryAddContiguousBFloat16(const void* lhs, const void* rhs,
+                                           void* output, int64_t size,
+                                           musaStream_t stream);
+void LaunchMusaBinaryAddScalarBFloat16(const void* dense, const void* scalar,
+                                       void* output, int64_t size,
+                                       bool scalar_on_left,
+                                       musaStream_t stream);
+void LaunchMusaBinaryAddTailVectorBFloat16(const void* dense,
+                                           const void* tail_vector,
+                                           void* output, int64_t size,
+                                           int64_t width, bool vector_on_left,
+                                           musaStream_t stream);
+void LaunchMusaBinaryAddContiguousInt32(const void* lhs, const void* rhs,
+                                        void* output, int64_t size,
+                                        musaStream_t stream);
+void LaunchMusaBinaryAddScalarInt32(const void* dense, const void* scalar,
+                                    void* output, int64_t size,
+                                    bool scalar_on_left, musaStream_t stream);
+void LaunchMusaBinaryAddTailVectorInt32(const void* dense,
+                                        const void* tail_vector, void* output,
+                                        int64_t size, int64_t width,
+                                        bool vector_on_left,
+                                        musaStream_t stream);
+void LaunchMusaBinaryAddContiguousInt64(const void* lhs, const void* rhs,
+                                        void* output, int64_t size,
+                                        musaStream_t stream);
+void LaunchMusaBinaryAddScalarInt64(const void* dense, const void* scalar,
+                                    void* output, int64_t size,
+                                    bool scalar_on_left, musaStream_t stream);
+void LaunchMusaBinaryAddTailVectorInt64(const void* dense,
+                                        const void* tail_vector, void* output,
+                                        int64_t size, int64_t width,
+                                        bool vector_on_left,
+                                        musaStream_t stream);
 }
 
 enum class AddFastPathResult {
@@ -109,14 +157,38 @@ bool IsSmallRepeatedBroadcast(const Tensor& tensor,
   return tensor.dims() > 0 && tensor.dim_size(0) == 1;
 }
 
-bool UseAddCustomKernelFastPath() {
-  const char* env = std::getenv("MUSA_ADDV2_ENABLE_CUSTOM_KERNEL");
-  if (env == nullptr || std::string(env).empty()) {
+bool IsTailVectorBroadcast(const Tensor& tensor,
+                           const TensorShape& output_shape, int64_t* width);
+
+constexpr int64_t kAddCustomFastPathMaxElements = 8192;
+
+template <typename T>
+bool ShouldUseAddCustomKernelFastPath(const Tensor& in0, const Tensor& in1,
+                                      const TensorShape& output_shape,
+                                      bool same_shape) {
+  const int64_t output_elements = output_shape.num_elements();
+  if (output_elements <= 0 || output_elements > kAddCustomFastPathMaxElements) {
+    return false;
+  }
+  if (same_shape) {
     return true;
   }
-  const std::string value(env);
-  return !(value == "0" || value == "false" || value == "FALSE" ||
-           value == "off" || value == "OFF" || value == "no" || value == "NO");
+  if (in0.NumElements() == output_elements && in1.NumElements() == 1) {
+    return true;
+  }
+  if (in1.NumElements() == output_elements && in0.NumElements() == 1) {
+    return true;
+  }
+  int64_t width = 0;
+  if (in0.NumElements() == output_elements &&
+      IsTailVectorBroadcast(in1, output_shape, &width)) {
+    return true;
+  }
+  if (in1.NumElements() == output_elements &&
+      IsTailVectorBroadcast(in0, output_shape, &width)) {
+    return true;
+  }
+  return false;
 }
 
 bool IsTailVectorBroadcast(const Tensor& tensor,
@@ -148,20 +220,54 @@ bool IsTailVectorBroadcast(const Tensor& tensor,
 }
 
 template <typename T>
+struct AddFastPathLauncher {
+  static constexpr bool kSupported = false;
+  static void Contiguous(const void*, const void*, void*, int64_t,
+                         musaStream_t) {}
+  static void Scalar(const void*, const void*, void*, int64_t, bool,
+                     musaStream_t) {}
+  static void TailVector(const void*, const void*, void*, int64_t, int64_t,
+                         bool, musaStream_t) {}
+};
+
+#define DEFINE_ADD_FAST_PATH_LAUNCHER(T, suffix)                              \
+  template <>                                                                 \
+  struct AddFastPathLauncher<T> {                                             \
+    static constexpr bool kSupported = true;                                  \
+    static void Contiguous(const void* lhs, const void* rhs, void* output,    \
+                           int64_t size, musaStream_t stream) {               \
+      LaunchMusaBinaryAddContiguous##suffix(lhs, rhs, output, size, stream);  \
+    }                                                                         \
+    static void Scalar(const void* dense, const void* scalar, void* output,   \
+                       int64_t size, bool scalar_on_left,                     \
+                       musaStream_t stream) {                                 \
+      LaunchMusaBinaryAddScalar##suffix(dense, scalar, output, size,          \
+                                        scalar_on_left, stream);              \
+    }                                                                         \
+    static void TailVector(const void* dense, const void* tail_vector,        \
+                           void* output, int64_t size, int64_t width,         \
+                           bool vector_on_left, musaStream_t stream) {        \
+      LaunchMusaBinaryAddTailVector##suffix(dense, tail_vector, output, size, \
+                                            width, vector_on_left, stream);   \
+    }                                                                         \
+  };
+
+DEFINE_ADD_FAST_PATH_LAUNCHER(float, Float)
+DEFINE_ADD_FAST_PATH_LAUNCHER(Eigen::half, Half)
+DEFINE_ADD_FAST_PATH_LAUNCHER(bfloat16, BFloat16)
+DEFINE_ADD_FAST_PATH_LAUNCHER(int32, Int32)
+DEFINE_ADD_FAST_PATH_LAUNCHER(int64, Int64)
+
+#undef DEFINE_ADD_FAST_PATH_LAUNCHER
+
+template <typename T>
 AddFastPathResult TryLaunchAddFastPath(OpKernelContext* ctx, const Tensor& in0,
                                        const Tensor& in1,
                                        const TensorShape& output_shape,
                                        bool same_shape, Tensor* out) {
-  return AddFastPathResult::kNotHandled;
-}
-
-template <>
-AddFastPathResult TryLaunchAddFastPath<float>(OpKernelContext* ctx,
-                                              const Tensor& in0,
-                                              const Tensor& in1,
-                                              const TensorShape& output_shape,
-                                              bool same_shape, Tensor* out) {
-  if (!UseAddCustomKernelFastPath()) {
+  if (!AddFastPathLauncher<T>::kSupported ||
+      !ShouldUseAddCustomKernelFastPath<T>(in0, in1, output_shape,
+                                           same_shape)) {
     return AddFastPathResult::kNotHandled;
   }
 
@@ -170,9 +276,9 @@ AddFastPathResult TryLaunchAddFastPath<float>(OpKernelContext* ctx,
     return AddFastPathResult::kNotHandled;
   }
 
-  const float* in0_ptr = in0.flat<float>().data();
-  const float* in1_ptr = in1.flat<float>().data();
-  float* out_ptr = out->flat<float>().data();
+  const void* in0_ptr = in0.tensor_data().data();
+  const void* in1_ptr = in1.tensor_data().data();
+  void* out_ptr = const_cast<char*>(out->tensor_data().data());
   musaStream_t stream = GetMusaStreamByCtx(ctx);
   if (stream == nullptr) {
     return AddFastPathResult::kNotHandled;
@@ -180,29 +286,29 @@ AddFastPathResult TryLaunchAddFastPath<float>(OpKernelContext* ctx,
 
   bool launched = false;
   if (same_shape) {
-    LaunchMusaAddContiguousFloat(in0_ptr, in1_ptr, out_ptr, output_elements,
-                                 stream);
+    AddFastPathLauncher<T>::Contiguous(in0_ptr, in1_ptr, out_ptr,
+                                       output_elements, stream);
     launched = true;
   } else if (in0.NumElements() == output_elements && in1.NumElements() == 1) {
-    LaunchMusaAddScalarFloat(in0_ptr, in1_ptr, out_ptr, output_elements,
-                             stream);
+    AddFastPathLauncher<T>::Scalar(in0_ptr, in1_ptr, out_ptr, output_elements,
+                                   false, stream);
     launched = true;
   } else if (in1.NumElements() == output_elements && in0.NumElements() == 1) {
-    LaunchMusaAddScalarFloat(in1_ptr, in0_ptr, out_ptr, output_elements,
-                             stream);
+    AddFastPathLauncher<T>::Scalar(in1_ptr, in0_ptr, out_ptr, output_elements,
+                                   true, stream);
     launched = true;
   } else if (in0.NumElements() == output_elements) {
     int64_t width = 0;
     if (IsTailVectorBroadcast(in1, output_shape, &width)) {
-      LaunchMusaAddTailVectorFloat(in0_ptr, in1_ptr, out_ptr, output_elements,
-                                   width, stream);
+      AddFastPathLauncher<T>::TailVector(in0_ptr, in1_ptr, out_ptr,
+                                         output_elements, width, false, stream);
       launched = true;
     }
   } else if (in1.NumElements() == output_elements) {
     int64_t width = 0;
     if (IsTailVectorBroadcast(in0, output_shape, &width)) {
-      LaunchMusaAddTailVectorFloat(in1_ptr, in0_ptr, out_ptr, output_elements,
-                                   width, stream);
+      AddFastPathLauncher<T>::TailVector(in1_ptr, in0_ptr, out_ptr,
+                                         output_elements, width, true, stream);
       launched = true;
     }
   }
@@ -297,12 +403,16 @@ class MusaAddOp : public MusaOpKernel {
       output_shape = BCast::ToShape(bcast.output_shape());
     }
 
-    // Reuse the left input buffer when TensorFlow determines it is safe.
-    // This particularly helps the common [N, C] + [C] broadcast pattern where
-    // the output shape matches input 0.
     Tensor* out = nullptr;
-    OP_REQUIRES_OK(
-        ctx, ctx->forward_input_or_allocate_output({0}, 0, output_shape, &out));
+    const bool fast_path_possible =
+        AddFastPathLauncher<T>::kSupported && output_shape.num_elements() > 0 &&
+        ShouldUseAddCustomKernelFastPath<T>(in0, in1, output_shape, same_shape);
+    if (fast_path_possible) {
+      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &out));
+    } else {
+      OP_REQUIRES_OK(ctx, ctx->forward_input_or_allocate_output(
+                              {0}, 0, output_shape, &out));
+    }
 
     if (in0.NumElements() == 0 || in1.NumElements() == 0 ||
         output_shape.num_elements() == 0) {

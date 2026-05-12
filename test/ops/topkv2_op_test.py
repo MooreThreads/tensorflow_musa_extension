@@ -120,6 +120,32 @@ class TopKV2OpTest(MUSATestCase):
         rtol=1e-4,
         atol=1e-4)
 
+  def testTopKV2Int32(self):
+    x_np = np.array(
+        [[3, 1, 4, 1, 5, 9], [2, 6, 5, 3, 5, 8]], dtype=np.int32)
+    x = tf.constant(x_np, dtype=tf.int32)
+    k_tensor = tf.constant(3, dtype=tf.int32)
+
+    cpu_values, cpu_indices = self._run_topk_on_device(
+        x, k_tensor, True, '/CPU:0')
+    musa_values, musa_indices = self._run_topk_on_device(
+        x, k_tensor, True, '/device:MUSA:0')
+
+    self.assertAllEqual(cpu_values.numpy(), musa_values.numpy())
+    self.assertAllEqual(cpu_indices.numpy(), musa_indices.numpy())
+
+  def testSortInt32UsesTopKV2CompatiblePath(self):
+    x_np = np.array(
+        [[[4, 1, 3, 2], [8, 6, 7, 5]]], dtype=np.int32)
+    x = tf.constant(x_np, dtype=tf.int32)
+
+    with tf.device('/CPU:0'):
+      cpu_sorted = tf.sort(x, axis=-1)
+    with tf.device('/device:MUSA:0'):
+      musa_sorted = tf.sort(x, axis=-1)
+
+    self.assertAllEqual(cpu_sorted.numpy(), musa_sorted.numpy())
+
 
 if __name__ == "__main__":
   tf.test.main()

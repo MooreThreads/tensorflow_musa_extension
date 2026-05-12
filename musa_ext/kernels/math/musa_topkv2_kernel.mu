@@ -1,4 +1,3 @@
-#include <float.h>
 #include <math.h>
 #include <stdint.h>
 
@@ -20,20 +19,27 @@ constexpr int kTopKMaxK = 1024;
 
 // ===================== Load / Store Helpers =====================
 
-__device__ __forceinline__ float LoadAsFloat(const float* p) { return *p; }
-__device__ __forceinline__ void StoreFromFloat(float v, float* p) { *p = v; }
+template <typename T>
+__device__ __forceinline__ T LoadForTopK(const T* p) {
+  return *p;
+}
 
-__device__ __forceinline__ float LoadAsFloat(const Eigen::half* p) {
+template <typename T>
+__device__ __forceinline__ void StoreTopKValue(T v, T* p) {
+  *p = v;
+}
+
+__device__ __forceinline__ float LoadForTopK(const Eigen::half* p) {
   const __half* h_ptr = reinterpret_cast<const __half*>(p);
   return __half2float(*h_ptr);
 }
 
-__device__ __forceinline__ void StoreFromFloat(float v, Eigen::half* p) {
+__device__ __forceinline__ void StoreTopKValue(float v, Eigen::half* p) {
   __half hv = __float2half(v);
   *reinterpret_cast<__half*>(p) = hv;
 }
 
-__device__ __forceinline__ float LoadAsFloat(const bfloat16* p) {
+__device__ __forceinline__ float LoadForTopK(const bfloat16* p) {
   float res = 0.0f;
   const uint16_t* b_ptr = reinterpret_cast<const uint16_t*>(p);
   uint32_t* f_ptr = reinterpret_cast<uint32_t*>(&res);
@@ -41,7 +47,7 @@ __device__ __forceinline__ float LoadAsFloat(const bfloat16* p) {
   return res;
 }
 
-__device__ __forceinline__ void StoreFromFloat(float v, bfloat16* p) {
+__device__ __forceinline__ void StoreTopKValue(float v, bfloat16* p) {
   const uint32_t* src = reinterpret_cast<const uint32_t*>(&v);
   uint16_t* dst = reinterpret_cast<uint16_t*>(p);
   *dst = static_cast<uint16_t>((*src) >> 16);
@@ -52,10 +58,9 @@ __device__ __forceinline__ Tidx CastIndex(int v) {
   return static_cast<Tidx>(v);
 }
 
-template <typename T>
-__device__ __forceinline__ bool IsBetterCandidate(float cand_val, int cand_idx,
-                                                  float best_val,
-                                                  int best_idx) {
+template <typename V>
+__device__ __forceinline__ bool IsBetterCandidate(V cand_val, int cand_idx,
+                                                  V best_val, int best_idx) {
   return (cand_val > best_val) ||
          ((cand_val == best_val) && (cand_idx < best_idx));
 }
@@ -76,7 +81,7 @@ __global__ void TopKV2Kernel(const T* input, T* values, Tidx* indices, int rows,
 
   #pragma unroll 1
   for (int out_i = 0; out_i < k; ++out_i) {
-    float best_val = -FLT_MAX;
+    decltype(LoadForTopK(row_in)) best_val{};
     int best_idx = -1;
 
     for (int col = 0; col < cols; ++col) {
@@ -90,15 +95,15 @@ __global__ void TopKV2Kernel(const T* input, T* values, Tidx* indices, int rows,
       }
       if (already_selected) continue;
 
-      const float v = LoadAsFloat(&row_in[col]);
-      if (best_idx < 0 || IsBetterCandidate<T>(v, col, best_val, best_idx)) {
+      const auto v = LoadForTopK(&row_in[col]);
+      if (best_idx < 0 || IsBetterCandidate(v, col, best_val, best_idx)) {
         best_val = v;
         best_idx = col;
       }
     }
 
     selected_idx[out_i] = best_idx;
-    StoreFromFloat(best_val, &row_out_val[out_i]);
+    StoreTopKValue(best_val, &row_out_val[out_i]);
     row_out_idx[out_i] = CastIndex<Tidx>(best_idx);
   }
 
@@ -132,15 +137,40 @@ template void LaunchTopKV2<float, int32>(const float*, float*, int32*, int, int,
                                          int, bool, musaStream_t);
 template void LaunchTopKV2<float, int64>(const float*, float*, int64*, int, int,
                                          int, bool, musaStream_t);
+template void LaunchTopKV2<float, int16>(const float*, float*, int16*, int, int,
+                                         int, bool, musaStream_t);
+template void LaunchTopKV2<double, int32>(const double*, double*, int32*, int,
+                                          int, int, bool, musaStream_t);
+template void LaunchTopKV2<double, int64>(const double*, double*, int64*, int,
+                                          int, int, bool, musaStream_t);
+template void LaunchTopKV2<double, int16>(const double*, double*, int16*, int,
+                                          int, int, bool, musaStream_t);
+template void LaunchTopKV2<int32, int32>(const int32*, int32*, int32*, int, int,
+                                         int, bool, musaStream_t);
+template void LaunchTopKV2<int32, int64>(const int32*, int32*, int64*, int, int,
+                                         int, bool, musaStream_t);
+template void LaunchTopKV2<int32, int16>(const int32*, int32*, int16*, int, int,
+                                         int, bool, musaStream_t);
+template void LaunchTopKV2<int64, int32>(const int64*, int64*, int32*, int, int,
+                                         int, bool, musaStream_t);
+template void LaunchTopKV2<int64, int64>(const int64*, int64*, int64*, int, int,
+                                         int, bool, musaStream_t);
+template void LaunchTopKV2<int64, int16>(const int64*, int64*, int16*, int, int,
+                                         int, bool, musaStream_t);
 template void LaunchTopKV2<Eigen::half, int32>(const Eigen::half*, Eigen::half*,
                                                int32*, int, int, int, bool,
                                                musaStream_t);
 template void LaunchTopKV2<Eigen::half, int64>(const Eigen::half*, Eigen::half*,
                                                int64*, int, int, int, bool,
                                                musaStream_t);
+template void LaunchTopKV2<Eigen::half, int16>(const Eigen::half*, Eigen::half*,
+                                               int16*, int, int, int, bool,
+                                               musaStream_t);
 template void LaunchTopKV2<bfloat16, int32>(const bfloat16*, bfloat16*, int32*,
                                             int, int, int, bool, musaStream_t);
 template void LaunchTopKV2<bfloat16, int64>(const bfloat16*, bfloat16*, int64*,
+                                            int, int, int, bool, musaStream_t);
+template void LaunchTopKV2<bfloat16, int16>(const bfloat16*, bfloat16*, int16*,
                                             int, int, int, bool, musaStream_t);
 
 }  // namespace musa

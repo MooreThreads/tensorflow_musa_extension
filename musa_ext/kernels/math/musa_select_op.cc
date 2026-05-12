@@ -1,5 +1,8 @@
 #include <mudnn.h>
 
+#include <cstdint>
+#include <vector>
+
 #include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -9,30 +12,204 @@ namespace tensorflow {
 namespace musa {
 
 namespace {
-mType GetMusaTypeLocal(DataType t) {
-  switch (t) {
-    case DataType::DT_FLOAT:
-      return mType::FLOAT;
-    case DataType::DT_HALF:
-      return mType::HALF;
-    case DataType::DT_BFLOAT16:
-      return mType::BFLOAT16;
-    case DataType::DT_INT32:
-      return mType::INT32;
-    case DataType::DT_INT64:
-      return mType::INT64;
-    case DataType::DT_DOUBLE:
-      return mType::DOUBLE;
-    case DataType::DT_BOOL:
-      return mType::BOOL;
-    case DataType::DT_INT8:
-      return mType::INT8;
-    case DataType::DT_UINT8:
-      return mType::UINT8;
-    default:
-      return mType::FLOAT;
-  }
+
+extern "C" {
+void LaunchMusaSelectSameShapeFloat(const void* cond, const void* then_t,
+                                    const void* else_t, void* output,
+                                    int64_t size, musaStream_t stream);
+void LaunchMusaSelectScalarCondFloat(const void* cond, const void* then_t,
+                                     const void* else_t, void* output,
+                                     int64_t size, musaStream_t stream);
+void LaunchMusaSelectRank1CondFloat(const void* cond, const void* then_t,
+                                    const void* else_t, void* output,
+                                    int64_t size, int64_t inner_size,
+                                    musaStream_t stream);
+void LaunchMusaSelectSameShapeHalf(const void* cond, const void* then_t,
+                                   const void* else_t, void* output,
+                                   int64_t size, musaStream_t stream);
+void LaunchMusaSelectScalarCondHalf(const void* cond, const void* then_t,
+                                    const void* else_t, void* output,
+                                    int64_t size, musaStream_t stream);
+void LaunchMusaSelectRank1CondHalf(const void* cond, const void* then_t,
+                                   const void* else_t, void* output,
+                                   int64_t size, int64_t inner_size,
+                                   musaStream_t stream);
+void LaunchMusaSelectSameShapeBFloat16(const void* cond, const void* then_t,
+                                       const void* else_t, void* output,
+                                       int64_t size, musaStream_t stream);
+void LaunchMusaSelectScalarCondBFloat16(const void* cond, const void* then_t,
+                                        const void* else_t, void* output,
+                                        int64_t size, musaStream_t stream);
+void LaunchMusaSelectRank1CondBFloat16(const void* cond, const void* then_t,
+                                       const void* else_t, void* output,
+                                       int64_t size, int64_t inner_size,
+                                       musaStream_t stream);
+void LaunchMusaSelectSameShapeInt32(const void* cond, const void* then_t,
+                                    const void* else_t, void* output,
+                                    int64_t size, musaStream_t stream);
+void LaunchMusaSelectScalarCondInt32(const void* cond, const void* then_t,
+                                     const void* else_t, void* output,
+                                     int64_t size, musaStream_t stream);
+void LaunchMusaSelectRank1CondInt32(const void* cond, const void* then_t,
+                                    const void* else_t, void* output,
+                                    int64_t size, int64_t inner_size,
+                                    musaStream_t stream);
+void LaunchMusaSelectSameShapeInt64(const void* cond, const void* then_t,
+                                    const void* else_t, void* output,
+                                    int64_t size, musaStream_t stream);
+void LaunchMusaSelectScalarCondInt64(const void* cond, const void* then_t,
+                                     const void* else_t, void* output,
+                                     int64_t size, musaStream_t stream);
+void LaunchMusaSelectRank1CondInt64(const void* cond, const void* then_t,
+                                    const void* else_t, void* output,
+                                    int64_t size, int64_t inner_size,
+                                    musaStream_t stream);
+void LaunchMusaSelectSameShapeBool(const void* cond, const void* then_t,
+                                   const void* else_t, void* output,
+                                   int64_t size, musaStream_t stream);
+void LaunchMusaSelectScalarCondBool(const void* cond, const void* then_t,
+                                    const void* else_t, void* output,
+                                    int64_t size, musaStream_t stream);
+void LaunchMusaSelectRank1CondBool(const void* cond, const void* then_t,
+                                   const void* else_t, void* output,
+                                   int64_t size, int64_t inner_size,
+                                   musaStream_t stream);
 }
+
+enum class SelectFastPathResult {
+  kNotHandled = 0,
+  kLaunched,
+  kFailed,
+};
+
+bool ShouldUseSelectCustomKernelFastPath(const Tensor& cond,
+                                         const Tensor& then_t,
+                                         const Tensor& else_t,
+                                         const TensorShape& output_shape,
+                                         bool use_legacy_broadcast);
+
+bool SameShape(const TensorShape& lhs, const TensorShape& rhs) {
+  if (lhs.dims() != rhs.dims()) return false;
+  for (int i = 0; i < lhs.dims(); ++i) {
+    if (lhs.dim_size(i) != rhs.dim_size(i)) return false;
+  }
+  return true;
+}
+
+template <typename T>
+struct SelectFastPathLauncher {
+  static constexpr bool kSupported = false;
+  static void SameShape(const void*, const void*, const void*, void*, int64_t,
+                        musaStream_t) {}
+  static void ScalarCond(const void*, const void*, const void*, void*, int64_t,
+                         musaStream_t) {}
+  static void Rank1Cond(const void*, const void*, const void*, void*, int64_t,
+                        int64_t, musaStream_t) {}
+};
+
+#define DEFINE_SELECT_FAST_PATH_LAUNCHER(T, suffix)                          \
+  template <>                                                                \
+  struct SelectFastPathLauncher<T> {                                         \
+    static constexpr bool kSupported = true;                                 \
+    static void SameShape(const void* cond, const void* then_t,              \
+                          const void* else_t, void* output, int64_t size,    \
+                          musaStream_t stream) {                             \
+      LaunchMusaSelectSameShape##suffix(cond, then_t, else_t, output, size,  \
+                                        stream);                             \
+    }                                                                        \
+    static void ScalarCond(const void* cond, const void* then_t,             \
+                           const void* else_t, void* output, int64_t size,   \
+                           musaStream_t stream) {                            \
+      LaunchMusaSelectScalarCond##suffix(cond, then_t, else_t, output, size, \
+                                         stream);                            \
+    }                                                                        \
+    static void Rank1Cond(const void* cond, const void* then_t,              \
+                          const void* else_t, void* output, int64_t size,    \
+                          int64_t inner_size, musaStream_t stream) {         \
+      LaunchMusaSelectRank1Cond##suffix(cond, then_t, else_t, output, size,  \
+                                        inner_size, stream);                 \
+    }                                                                        \
+  };
+
+DEFINE_SELECT_FAST_PATH_LAUNCHER(float, Float)
+DEFINE_SELECT_FAST_PATH_LAUNCHER(Eigen::half, Half)
+DEFINE_SELECT_FAST_PATH_LAUNCHER(Eigen::bfloat16, BFloat16)
+DEFINE_SELECT_FAST_PATH_LAUNCHER(int32, Int32)
+DEFINE_SELECT_FAST_PATH_LAUNCHER(int64, Int64)
+DEFINE_SELECT_FAST_PATH_LAUNCHER(bool, Bool)
+
+#undef DEFINE_SELECT_FAST_PATH_LAUNCHER
+
+bool ShouldUseSelectCustomKernelFastPath(const Tensor& cond,
+                                         const Tensor& then_t,
+                                         const Tensor& else_t,
+                                         const TensorShape& output_shape,
+                                         bool use_legacy_broadcast) {
+  if (!SameShape(then_t.shape(), output_shape) ||
+      !SameShape(else_t.shape(), output_shape)) {
+    return false;
+  }
+  if (SameShape(cond.shape(), output_shape) || cond.NumElements() == 1) {
+    return true;
+  }
+  return use_legacy_broadcast && cond.dims() == 1 && output_shape.dims() > 1 &&
+         cond.dim_size(0) == output_shape.dim_size(0);
+}
+
+template <typename T>
+SelectFastPathResult TryLaunchSelectFastPath(
+    OpKernelContext* ctx, const Tensor& cond, const Tensor& then_t,
+    const Tensor& else_t, const TensorShape& output_shape,
+    bool use_legacy_broadcast, Tensor* output) {
+  if (!SelectFastPathLauncher<T>::kSupported ||
+      !ShouldUseSelectCustomKernelFastPath(cond, then_t, else_t, output_shape,
+                                           use_legacy_broadcast)) {
+    return SelectFastPathResult::kNotHandled;
+  }
+
+  const int64_t output_elements = output_shape.num_elements();
+  if (output_elements <= 0) return SelectFastPathResult::kNotHandled;
+  if (!SameShape(then_t.shape(), output_shape) ||
+      !SameShape(else_t.shape(), output_shape)) {
+    return SelectFastPathResult::kNotHandled;
+  }
+
+  const void* cond_ptr = cond.tensor_data().data();
+  const void* then_ptr = then_t.tensor_data().data();
+  const void* else_ptr = else_t.tensor_data().data();
+  void* out_ptr = const_cast<char*>(output->tensor_data().data());
+  musaStream_t stream = GetMusaStreamByCtx(ctx);
+
+  bool launched = false;
+  if (SameShape(cond.shape(), output_shape)) {
+    SelectFastPathLauncher<T>::SameShape(cond_ptr, then_ptr, else_ptr, out_ptr,
+                                         output_elements, stream);
+    launched = true;
+  } else if (cond.NumElements() == 1) {
+    SelectFastPathLauncher<T>::ScalarCond(cond_ptr, then_ptr, else_ptr, out_ptr,
+                                          output_elements, stream);
+    launched = true;
+  } else if (use_legacy_broadcast && cond.dims() == 1 &&
+             output_shape.dims() > 1 &&
+             cond.dim_size(0) == output_shape.dim_size(0)) {
+    const int64_t inner_size = output_elements / cond.dim_size(0);
+    SelectFastPathLauncher<T>::Rank1Cond(cond_ptr, then_ptr, else_ptr, out_ptr,
+                                         output_elements, inner_size, stream);
+    launched = true;
+  }
+
+  if (!launched) return SelectFastPathResult::kNotHandled;
+
+  auto launch_status = musaGetLastError();
+  if (launch_status != musaSuccess) {
+    ctx->CtxFailure(errors::Internal("MUSA Select fast path launch failed: ",
+                                     musaGetErrorString(launch_status)));
+    return SelectFastPathResult::kFailed;
+  }
+
+  return SelectFastPathResult::kLaunched;
+}
+
 }  // namespace
 
 template <typename T>
@@ -74,8 +251,13 @@ class MusaSelectOp : public MusaOpKernel {
     }
 
     Tensor* output = nullptr;
-    // ==: 合并output&&input
-    if (then_t.shape() == output_shape) {
+    const bool fast_path_possible =
+        SelectFastPathLauncher<T>::kSupported &&
+        ShouldUseSelectCustomKernelFastPath(cond, then_t, else_t, output_shape,
+                                            use_legacy_broadcast);
+    if (fast_path_possible) {
+      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
+    } else if (then_t.shape() == output_shape) {
       const std::vector<int> forwardable_input_indices = {1};
       OP_REQUIRES_OK(
           ctx, ctx->forward_input_or_allocate_output(forwardable_input_indices,
@@ -84,6 +266,12 @@ class MusaSelectOp : public MusaOpKernel {
       OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
     }
     if (output->NumElements() == 0) return;
+
+    const auto fast_path_status = TryLaunchSelectFastPath<T>(
+        ctx, cond, then_t, else_t, output_shape, use_legacy_broadcast, output);
+    if (fast_path_status != SelectFastPathResult::kNotHandled) {
+      return;
+    }
 
     MusaDevice* device = reinterpret_cast<MusaDevice*>(ctx->device());
     auto& handle = device->mudnn_handle();

@@ -228,7 +228,21 @@ class DualOutput:
 # ============================================================================
 # PrettyTable-based Summary Generator
 # ============================================================================
-from prettytable import PrettyTable
+try:
+    from prettytable import PrettyTable
+except ImportError:
+    PrettyTable = None
+
+
+def _plain_summary_table(rows):
+    key_width = max(len(str(k)) for k, _ in rows)
+    value_width = max(len(str(v)) for _, v in rows)
+    border = f"+-{'-' * key_width}-+-{'-' * value_width}-+"
+    lines = [border, f"| {'Metric'.ljust(key_width)} | {'Value'.ljust(value_width)} |", border]
+    for key, value in rows:
+        lines.append(f"| {str(key).ljust(key_width)} | {str(value).rjust(value_width)} |")
+    lines.append(border)
+    return "\n".join(lines)
 
 def create_pretty_summary(result, elapsed_time, quiet=True, detail_mode=False):
     """Create a beautiful summary using prettytable.
@@ -252,12 +266,6 @@ def create_pretty_summary(result, elapsed_time, quiet=True, detail_mode=False):
     # Calculate pass rate
     pass_rate = (passed / total * 100) if total > 0 else 0
 
-    # Create main summary table
-    summary_table = PrettyTable()
-    summary_table.field_names = ["Metric", "Value"]
-    summary_table.align["Metric"] = "l"
-    summary_table.align["Value"] = "r"
-
     # Add rows with colored values
     def format_count(count, status):
         if count == 0:
@@ -269,18 +277,15 @@ def create_pretty_summary(result, elapsed_time, quiet=True, detail_mode=False):
         else:
             return yellow(str(count))
 
-    summary_table.add_row(["Total Tests", total])
-    summary_table.add_row(["Passed", format_count(passed, 'PASS')])
-    summary_table.add_row(["Failed", format_count(failed, 'FAIL')])
-    summary_table.add_row(["Errors", format_count(errors, 'ERROR')])
-    summary_table.add_row(["Skipped", format_count(skipped, 'SKIP')])
-    summary_table.add_row(["Pass Rate", f"{pass_rate:.1f}%"])
-    summary_table.add_row(["Execution Time", f"{elapsed_time:.2f}s"])
-
-    # Set table style
-    summary_table.border = True
-    summary_table.header = True
-    summary_table.padding_width = 1
+    summary_rows = [
+        ("Total Tests", total),
+        ("Passed", format_count(passed, 'PASS')),
+        ("Failed", format_count(failed, 'FAIL')),
+        ("Errors", format_count(errors, 'ERROR')),
+        ("Skipped", format_count(skipped, 'SKIP')),
+        ("Pass Rate", f"{pass_rate:.1f}%"),
+        ("Execution Time", f"{elapsed_time:.2f}s"),
+    ]
 
     # Create status header
     if failed == 0 and errors == 0:
@@ -298,52 +303,69 @@ def create_pretty_summary(result, elapsed_time, quiet=True, detail_mode=False):
     output_lines.append(bold(cyan("=" * 72)))
     output_lines.append(status_text.center(72))
     output_lines.append("")
-    output_lines.append(summary_table.get_string())
+    if PrettyTable is not None:
+        summary_table = PrettyTable()
+        summary_table.field_names = ["Metric", "Value"]
+        summary_table.align["Metric"] = "l"
+        summary_table.align["Value"] = "r"
+        for key, value in summary_rows:
+            summary_table.add_row([key, value])
+        summary_table.border = True
+        summary_table.header = True
+        summary_table.padding_width = 1
+        output_lines.append(summary_table.get_string())
+    else:
+        output_lines.append(_plain_summary_table(summary_rows))
     output_lines.append("")
 
     # Add failed/error tests section if needed
     # This is shown when there are failures/errors, regardless of mode
     if failed > 0 or errors > 0:
-        fail_table = PrettyTable()
-        fail_table.field_names = ["Status", "Test Name"]
-        fail_table.align["Status"] = "c"
-        fail_table.align["Test Name"] = "l"
-
-        for test_status, full_test_str, msg in result.test_results:
-            if test_status in ['FAIL', 'ERROR']:
-                # full_test_str is now in format 'module.class.method'
-                status_icon = red('✗') if test_status == 'FAIL' else red('⚠')
-                fail_table.add_row([status_icon, full_test_str])
-
-        fail_table.border = True
-        fail_table.header = True
-        fail_table.padding_width = 1
-
         output_lines.append(bold(red("FAILED/ERROR TESTS".center(72))))
         output_lines.append("")
-        output_lines.append(fail_table.get_string())
+        if PrettyTable is not None:
+            fail_table = PrettyTable()
+            fail_table.field_names = ["Status", "Test Name"]
+            fail_table.align["Status"] = "c"
+            fail_table.align["Test Name"] = "l"
+            for test_status, full_test_str, msg in result.test_results:
+                if test_status in ['FAIL', 'ERROR']:
+                    status_icon = red('✗') if test_status == 'FAIL' else red('⚠')
+                    fail_table.add_row([status_icon, full_test_str])
+            fail_table.border = True
+            fail_table.header = True
+            fail_table.padding_width = 1
+            output_lines.append(fail_table.get_string())
+        else:
+            for test_status, full_test_str, msg in result.test_results:
+                if test_status in ['FAIL', 'ERROR']:
+                    status_icon = red('✗') if test_status == 'FAIL' else red('⚠')
+                    output_lines.append(f"{status_icon} {full_test_str}")
         output_lines.append("")
 
     # Add all test results detail section ONLY in detail mode
     # In quiet mode, skip the full test list to keep output concise
     if detail_mode and hasattr(result, 'progress_bar') and result.progress_bar and result.progress_bar.test_details:
-        detail_table = PrettyTable()
-        detail_table.field_names = ["Status", "Test Name"]
-        detail_table.align["Status"] = "c"
-        detail_table.align["Test Name"] = "l"
-
-        for test_name, status in result.progress_bar.test_details:
-            status_icons = {'PASS': green('✓'), 'FAIL': red('✗'), 'ERROR': red('⚠'), 'SKIP': yellow('○')}
-            status_icon = status_icons.get(status, '?')
-            detail_table.add_row([status_icon, test_name])
-
-        detail_table.border = True
-        detail_table.header = True
-        detail_table.padding_width = 1
-
         output_lines.append(bold(cyan("ALL TEST RESULTS".center(72))))
         output_lines.append("")
-        output_lines.append(detail_table.get_string())
+        if PrettyTable is not None:
+            detail_table = PrettyTable()
+            detail_table.field_names = ["Status", "Test Name"]
+            detail_table.align["Status"] = "c"
+            detail_table.align["Test Name"] = "l"
+            for test_name, status in result.progress_bar.test_details:
+                status_icons = {'PASS': green('✓'), 'FAIL': red('✗'), 'ERROR': red('⚠'), 'SKIP': yellow('○')}
+                status_icon = status_icons.get(status, '?')
+                detail_table.add_row([status_icon, test_name])
+            detail_table.border = True
+            detail_table.header = True
+            detail_table.padding_width = 1
+            output_lines.append(detail_table.get_string())
+        else:
+            for test_name, status in result.progress_bar.test_details:
+                status_icons = {'PASS': green('✓'), 'FAIL': red('✗'), 'ERROR': red('⚠'), 'SKIP': yellow('○')}
+                status_icon = status_icons.get(status, '?')
+                output_lines.append(f"{status_icon} {test_name}")
         output_lines.append("")
 
     return "\n".join(output_lines)
@@ -423,9 +445,7 @@ class CustomTestRunner(unittest.TextTestRunner):
                 if self.original_stdout:
                     sys.stdout = self.original_stdout
 
-        # Exit with error code if any tests failed
-        if result.failures or result.errors:
-            sys.exit(1)
+        return result
 
 
 # ============================================================================
@@ -466,8 +486,7 @@ def discover_and_run_tests(test_pattern="*_op_test.py", test_dir_name="ops",
             if detail_mode:
                 print(f"  {green('✓')} Loaded tests from: {test_dir_name}/{module_name}")
         except Exception as e:
-            if detail_mode:
-                print(f"  {red('✗')} Failed to load {module_name}: {e}")
+            print(f"  {red('✗')} Failed to load {module_name}: {e}", file=sys.stderr)
 
     if suite.countTestCases() == 0:
         print(f"{red('✗')} No tests found!")
@@ -513,8 +532,8 @@ Examples:
                        help="Detail mode - show progress bar and individual results")
     parser.add_argument("--quiet", "-q", action="store_true",
                        help="Quiet mode - show progress bar and summary only (no individual test details)")
-    parser.add_argument("--log-file", default="test_results.log",
-                       help="Log file path for detail mode (default: test_results.log)")
+    parser.add_argument("--log-file", default=None,
+                       help="Log file path for detail mode (default: disabled)")
 
     args = parser.parse_args()
 
