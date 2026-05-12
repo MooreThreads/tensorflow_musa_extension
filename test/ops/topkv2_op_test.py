@@ -41,7 +41,7 @@ class TopKV2OpTest(MUSATestCase):
                  atol=1e-5):
     np_dtype = dtype.as_numpy_dtype
     if dtype == tf.bfloat16:
-      
+
       np_dtype = np.float32
 
     if dtype == tf.float16:

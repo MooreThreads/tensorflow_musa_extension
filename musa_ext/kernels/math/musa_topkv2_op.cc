@@ -62,9 +62,9 @@ class MusaTopKV2Op : public MusaOpKernel {
         errors::InvalidArgument("TopKV2: k must not exceed last dim. k=", k64,
                                 ", last_dim=", last_dim64));
 
-    OP_REQUIRES(
-        ctx, k64 <= static_cast<int64_t>(std::numeric_limits<int>::max()),
-        errors::InvalidArgument("TopKV2: k too large, k=", k64));
+    OP_REQUIRES(ctx,
+                k64 <= static_cast<int64_t>(std::numeric_limits<int>::max()),
+                errors::InvalidArgument("TopKV2: k too large, k=", k64));
 
     TensorShape output_shape = input.shape();
     output_shape.set_dim(input.dims() - 1, k64);
@@ -85,8 +85,8 @@ class MusaTopKV2Op : public MusaOpKernel {
     auto* musa_device = static_cast<MusaDevice*>(ctx->device());
 
     std::vector<Tensor> workspace_tensors;
-    auto mem_alloc_func = [ctx, &workspace_tensors](
-                              size_t size) -> ::musa::dnn::MemoryHandler {
+    auto mem_alloc_func =
+        [ctx, &workspace_tensors](size_t size) -> ::musa::dnn::MemoryHandler {
       if (size == 0) return nullptr;
       Tensor temp;
       Status s = ctx->allocate_temp(
@@ -107,9 +107,9 @@ class MusaTopKV2Op : public MusaOpKernel {
     MTOP_CHECK_OK(topk_op.SetDim(dim), "TopKV2 SetDim", ctx);
     MTOP_CHECK_OK(topk_op.SetLargest(true), "TopKV2 SetLargest", ctx);
     MTOP_CHECK_OK(topk_op.SetSorted(sorted_), "TopKV2 SetSorted", ctx);
-    MTOP_CHECK_OK(topk_op.Run(handle, values_mt, indices_mt, input_mt,
-                              maintainer),
-                 "TopKV2 Run", ctx);
+    MTOP_CHECK_OK(
+        topk_op.Run(handle, values_mt, indices_mt, input_mt, maintainer),
+        "TopKV2 Run", ctx);
   }
 
  private:
