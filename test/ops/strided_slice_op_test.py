@@ -202,5 +202,56 @@ class StridedSliceOpTest(MUSATestCase):
     self._test_slice((slice(-100, 100), slice(2, 10)), shape=shape)
 
 
+class StridedSliceGradOpTest(MUSATestCase):
+  """Tests for MUSA StridedSliceGrad operator."""
+
+  def _test_slice_grad(self, slice_spec, shape, dtype=tf.float32):
+    """Compare CPU and MUSA gradients for a strided slice."""
+    np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+    x_np = np.arange(np.prod(shape)).reshape(shape).astype(np_dtype)
+    x = tf.constant(x_np, dtype=dtype)
+
+    def op_func(input_tensor):
+      with tf.GradientTape() as tape:
+        tape.watch(input_tensor)
+        sliced = input_tensor[slice_spec]
+        loss = tf.reduce_sum(tf.cast(sliced, tf.float32))
+      return tape.gradient(loss, input_tensor)
+
+    rtol = 1e-2 if dtype == tf.bfloat16 else 1e-5
+    atol = 1e-2 if dtype == tf.bfloat16 else 1e-8
+    self._compare_cpu_musa_results(op_func, [x], dtype, rtol=rtol, atol=atol)
+
+  def testBiasNewAxisLikeCCPM(self):
+    """Gradient of bias[None, None, :, :] used by CCPM row-wise conv."""
+    self._test_slice_grad(
+        (np.newaxis, np.newaxis, slice(None), slice(None)), [11, 4])
+    self._test_slice_grad(
+        (np.newaxis, np.newaxis, slice(None), slice(None)), [11, 2])
+
+  def testRank1ContiguousSlice(self):
+    """Rank-1 contiguous slice gradient."""
+    self._test_slice_grad(slice(3, 11), [16])
+
+  def testRank2InnerSlice(self):
+    """Rank-2 slice gradient with a contiguous inner window."""
+    self._test_slice_grad((slice(None), slice(1, 5)), [4, 6])
+
+  def testRank4CCPMLikeTensorSlice(self):
+    """Rank-4 CCPM activation-shaped slice gradient."""
+    self._test_slice_grad((slice(None), slice(2, 20), slice(None), slice(None)),
+                          [8, 24, 11, 4])
+
+  def testRank4StridedTensorSlice(self):
+    """Rank-4 strided slice gradient."""
+    self._test_slice_grad((slice(None), slice(1, 7, 2), slice(None),
+                           slice(None)), [2, 7, 11, 4])
+
+  def testBfloat16Grad(self):
+    """bfloat16 gradient path uses the same specialized launch dispatch."""
+    self._test_slice_grad((slice(None), slice(1, 4)), [3, 5],
+                          dtype=tf.bfloat16)
+
+
 if __name__ == "__main__":
   tf.test.main()
