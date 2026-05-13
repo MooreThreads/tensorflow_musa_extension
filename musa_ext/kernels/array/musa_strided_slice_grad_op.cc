@@ -1,6 +1,7 @@
 #include <musa_runtime.h>
 
 #include <cstdint>
+#include <limits>
 
 #include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
@@ -19,6 +20,8 @@ constexpr int kMaxStridedSliceGradDims = 8;
 
 struct StridedSliceGradLaunchParams {
   int rank;
+  int use_64bit_index;
+  int64_t inner_size;
   int64_t processing_shape[kMaxStridedSliceGradDims];
   int64_t output_strides[kMaxStridedSliceGradDims];
   int64_t begin[kMaxStridedSliceGradDims];
@@ -76,12 +79,62 @@ Status ShapeTensorToTensorShape(const Tensor& shape_tensor,
   return Status::OK();
 }
 
+inline bool FitsInt32(int64_t value) {
+  return value >= std::numeric_limits<int32_t>::min() &&
+         value <= std::numeric_limits<int32_t>::max();
+}
+
+inline bool CanUseInt32Index(
+    const TensorShape& output_shape, const TensorShape& processing_shape,
+    const gtl::InlinedVector<int64_t, 4>& begin,
+    const gtl::InlinedVector<int64_t, 4>& strides) {
+  if (!FitsInt32(output_shape.num_elements()) ||
+      !FitsInt32(processing_shape.num_elements())) {
+    return false;
+  }
+
+  for (int dim = 0; dim < output_shape.dims(); ++dim) {
+    if (!FitsInt32(output_shape.dim_size(dim)) ||
+        !FitsInt32(processing_shape.dim_size(dim)) ||
+        !FitsInt32(begin[dim]) || !FitsInt32(strides[dim])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+inline int FindContiguousSuffixStart(
+    const TensorShape& output_shape, const TensorShape& processing_shape,
+    const gtl::InlinedVector<int64_t, 4>& begin,
+    const gtl::InlinedVector<int64_t, 4>& strides) {
+  int suffix_start = output_shape.dims();
+  while (suffix_start > 0) {
+    const int dim = suffix_start - 1;
+    if (begin[dim] != 0 || strides[dim] != 1 ||
+        processing_shape.dim_size(dim) != output_shape.dim_size(dim)) {
+      break;
+    }
+    --suffix_start;
+  }
+  return suffix_start;
+}
+
 inline void FillLaunchParams(const TensorShape& output_shape,
                              const TensorShape& processing_shape,
                              const gtl::InlinedVector<int64_t, 4>& begin,
                              const gtl::InlinedVector<int64_t, 4>& strides,
                              StridedSliceGradLaunchParams* params) {
-  params->rank = output_shape.dims();
+  const int compact_rank =
+      FindContiguousSuffixStart(output_shape, processing_shape, begin, strides);
+
+  params->rank = compact_rank;
+  params->use_64bit_index =
+      CanUseInt32Index(output_shape, processing_shape, begin, strides) ? 0 : 1;
+
+  params->inner_size = 1;
+  for (int dim = compact_rank; dim < output_shape.dims(); ++dim) {
+    params->inner_size *= output_shape.dim_size(dim);
+  }
 
   int64_t stride = 1;
   for (int dim = output_shape.dims() - 1; dim >= 0; --dim) {
@@ -89,7 +142,7 @@ inline void FillLaunchParams(const TensorShape& output_shape,
     stride *= output_shape.dim_size(dim);
   }
 
-  for (int dim = 0; dim < output_shape.dims(); ++dim) {
+  for (int dim = 0; dim < compact_rank; ++dim) {
     params->processing_shape[dim] = processing_shape.dim_size(dim);
     params->begin[dim] = begin[dim];
     params->strides[dim] = strides[dim];
