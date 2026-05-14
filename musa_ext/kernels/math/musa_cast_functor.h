@@ -25,7 +25,7 @@ static Status CastFunctor(OpKernelContext* ctx, const mTensor& input_mt,
     return errors::Internal("CastTensor Run failed. Status: ",
                             static_cast<int>(status));
   }
-  return Status::OK();
+  return OkStatus();
 }
 
 }  // namespace musa

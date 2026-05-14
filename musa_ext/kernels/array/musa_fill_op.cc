@@ -46,7 +46,7 @@ struct is_any<T, First, Rest...>
 //     return errors::Internal("mtdnn run op error!");
 //   }
 
-//   return Status::OK();
+//   return OkStatus();
 // }
 
 }  // namespace

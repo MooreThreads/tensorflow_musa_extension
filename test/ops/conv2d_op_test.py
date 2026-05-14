@@ -169,13 +169,19 @@ class Conv2DOpTest(MUSATestCase):
 
   def testConv2DEmptyBatch(self):
     """Empty batch should return empty output."""
-    self._test_conv2d(
+    x, w = self._make_input_and_filter(
         input_shape=[0, 8, 8, 3],
         filter_shape=[3, 3, 3, 4],
-        dtype=tf.float32,
-        strides=[1, 1, 1, 1],
-        padding="SAME",
-        data_format="NHWC")
+        dtype=tf.float32)
+    with tf.device('/device:MUSA:0'):
+      musa_result = tf.nn.conv2d(
+          x,
+          w,
+          strides=[1, 1, 1, 1],
+          padding="SAME",
+          data_format="NHWC")
+    self.assertAllEqual(musa_result.shape.as_list(), [0, 8, 8, 4])
+    self.assertEqual(musa_result.numpy().size, 0)
 
   def testConv2DAsymmetricSamePaddingUnsupported(self):
     """Current MUSA implementation rejects asymmetric SAME padding."""

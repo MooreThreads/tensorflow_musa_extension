@@ -73,7 +73,7 @@ REGISTER_OP("MusaReshapeMatMul")
       }
       out_dims.push_back(w_n);
       c->set_output(0, c->MakeShape(out_dims));
-      return Status::OK();
+      return OkStatus();
     });
 
 template <typename T>

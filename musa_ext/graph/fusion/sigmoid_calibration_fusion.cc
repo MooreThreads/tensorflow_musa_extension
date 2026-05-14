@@ -165,12 +165,12 @@ Status MusaSigmoidCalibrationFusion::Apply(
   VLOG(1) << "Applying MusaSigmoidCalibrationFusion fusion";
 
   if (!match_result.IsValid()) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Invalid FusedSigmoidCalibration match result");
+    return errors::InvalidArgument(
+        "Invalid FusedSigmoidCalibration match result");
   }
 
   if (!IsKernelAvailable()) {
-    return Status::OK();
+    return OkStatus();
   }
 
   const NodeDef* real_div_node = match_result.matched_nodes[0];
@@ -241,7 +241,7 @@ Status MusaSigmoidCalibrationFusion::Apply(
     graph->mutable_node()->DeleteSubrange(idx, 1);
   }
 
-  return Status::OK();
+  return OkStatus();
 }
 
 std::string MusaSigmoidCalibrationFusion::sigmoid_node_input_name(

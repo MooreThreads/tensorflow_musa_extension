@@ -40,7 +40,7 @@ Status BroadcastShapes(const TensorShape& lhs, const TensorShape& rhs,
                                    " vs ", rhs.DebugString());
   }
   *output = BCast::ToShape(bcast.output_shape());
-  return Status::OK();
+  return OkStatus();
 }
 
 PlnCascadeBlockShape BuildKernelShape(const TensorShape& output_shape) {
@@ -172,7 +172,7 @@ REGISTER_OP("MusaPlnCascadeBlock")
 
         std::reverse(dims.begin(), dims.end());
         *out = c->MakeShape(dims);
-        return Status::OK();
+        return OkStatus();
       };
 
       auto LeftAlignBatchMask = [&](ShapeHandle base, ShapeHandle mask,
@@ -195,20 +195,20 @@ REGISTER_OP("MusaPlnCascadeBlock")
           dims.push_back(c->Dim(base, i));
         }
         *out = c->MakeShape(dims);
-        return Status::OK();
+        return OkStatus();
       };
 
       ShapeHandle out = c->input(0);
       if (!c->RankKnown(out)) {
         c->set_output(0, c->UnknownShape());
-        return Status::OK();
+        return OkStatus();
       }
 
       for (int i = 3; i < c->num_inputs(); ++i) {
         ShapeHandle gate = c->input(i);
         if (!c->RankKnown(gate)) {
           c->set_output(0, c->UnknownShape());
-          return Status::OK();
+          return OkStatus();
         }
 
         Status bcast_status = BroadcastTwoShapes(out, gate, &out);
@@ -223,7 +223,7 @@ REGISTER_OP("MusaPlnCascadeBlock")
       }
 
       c->set_output(0, out);
-      return Status::OK();
+      return OkStatus();
     });
 
 class MusaPlnCascadeBlockOp : public MusaOpKernel {
@@ -374,7 +374,8 @@ class MusaPlnCascadeBlockOp : public MusaOpKernel {
             BuildLeftAligned1DStrides(gate_shape, output_shape);
       } else if (IsScalarBroadcast(gates[step])) {
         meta.gate_modes[step] = kPlnCascadeBlockGateModeScalar;
-        meta.gate_strides[step] = BuildBroadcastStrides(gate_shape, output_shape);
+        meta.gate_strides[step] =
+            BuildBroadcastStrides(gate_shape, output_shape);
       } else {
         meta.use_fast_path = 0;
         meta.gate_strides[step] =

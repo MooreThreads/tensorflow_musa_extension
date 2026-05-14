@@ -18,8 +18,14 @@ limitations under the License.
 #include "mu/musa_plugin_sp_stream.h"
 #include "tensorflow/c/experimental/stream_executor/stream_executor_internal.h"
 #include "tensorflow/core/framework/device_base.h"
+#include "tensorflow/core/public/version.h"
+#if __has_include("tensorflow/stream_executor/stream.h")
 #include "tensorflow/stream_executor/stream.h"
 #include "tensorflow/stream_executor/stream_executor_internal.h"
+#else
+#include "xla/stream_executor/stream.h"
+#include "xla/stream_executor/stream_executor_internal.h"
+#endif
 
 namespace tensorflow {
 namespace musa {
@@ -53,7 +59,11 @@ musaStream_t GpuStreamFromTfStream(stream_executor::Stream* stream) {
 
 int GpuIdFromDeviceBase(const DeviceBase* base) {
   if (base == nullptr) return -1;
+#if TF_MAJOR_VERSION > 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION >= 10)
+  auto* ginfo = base->tensorflow_accelerator_device_info();
+#else
   auto* ginfo = base->tensorflow_gpu_device_info();
+#endif
   if (ginfo == nullptr) return -1;
   return ginfo->gpu_id;
 }

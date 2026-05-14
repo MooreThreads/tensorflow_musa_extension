@@ -58,8 +58,7 @@ bool HasOriginalSuffix(const std::string& node_name) {
                            kOriginalSuffix.size(), kOriginalSuffix) == 0;
 }
 
-bool TryGetStaticTensorShape(const NodeDef& node,
-                             std::vector<int64_t>* dims) {
+bool TryGetStaticTensorShape(const NodeDef& node, std::vector<int64_t>* dims) {
   if (!dims) {
     return false;
   }
@@ -211,12 +210,11 @@ FusionMatchResult MatMulBiasAddFusion::Match(const GraphDef& graph,
 Status MatMulBiasAddFusion::Apply(GraphDef* graph,
                                   const FusionMatchResult& match_result) const {
   if (!match_result.IsValid()) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Invalid MatMulBiasAdd match result");
+    return errors::InvalidArgument("Invalid MatMulBiasAdd match result");
   }
 
   if (!IsKernelAvailable()) {
-    return Status::OK();
+    return OkStatus();
   }
 
   auto output_it = match_result.captured_nodes.find("output");
@@ -228,8 +226,8 @@ Status MatMulBiasAddFusion::Apply(GraphDef* graph,
       matmul_it == match_result.captured_nodes.end() ||
       bias_it == match_result.captured_nodes.end() ||
       bias_add_it == match_result.captured_nodes.end()) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Missing required nodes in MatMulBiasAdd pattern");
+    return errors::InvalidArgument(
+        "Missing required nodes in MatMulBiasAdd pattern");
   }
 
   const NodeDef* output_node = output_it->second;
@@ -245,7 +243,7 @@ Status MatMulBiasAddFusion::Apply(GraphDef* graph,
     if (node.name() == original_name && node.op() == "MusaMatMulBiasAdd") {
       VLOG(1) << "MusaMatMulBiasAdd: Output node " << original_name
               << " is already a fused node, skipping";
-      return Status::OK();
+      return OkStatus();
     }
   }
 
@@ -258,8 +256,8 @@ Status MatMulBiasAddFusion::Apply(GraphDef* graph,
   }
 
   if (output_node_idx < 0) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Failed to find output node in graph: " + original_name);
+    return errors::InvalidArgument("Failed to find output node in graph: " +
+                                   original_name);
   }
 
   VLOG(1) << "MatMulBiasAddFusion: Replacing " << original_name
@@ -305,9 +303,9 @@ Status MatMulBiasAddFusion::Apply(GraphDef* graph,
   const bool input1_is_matmul = input1_name == matmul_node->name();
 
   if (input0_is_matmul == input1_is_matmul) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Failed to determine bias input for MatMulBiasAdd fusion: " +
-                      original_name);
+    return errors::InvalidArgument(
+        "Failed to determine bias input for MatMulBiasAdd fusion: " +
+        original_name);
   }
 
   fused_node->add_input(bias_add_node->input(input0_is_matmul ? 1 : 0));
@@ -339,7 +337,7 @@ Status MatMulBiasAddFusion::Apply(GraphDef* graph,
   VLOG(1) << "MatMulBiasAddFusion: Successfully replaced '" << original_name
           << "' with MusaMatMulBiasAdd";
 
-  return Status::OK();
+  return OkStatus();
 }
 
 // Register the pattern

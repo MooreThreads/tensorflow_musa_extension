@@ -144,8 +144,7 @@ Status WriteGraphDefPbtxt(const GraphDef& graph_def,
                           const std::string& filepath) {
   std::ofstream file(filepath, std::ios::out | std::ios::trunc);
   if (!file.is_open()) {
-    return Status(tensorflow::error::INTERNAL,
-                  "Failed to open file for writing: " + filepath);
+    return errors::Internal("Failed to open file for writing: " + filepath);
   }
 
   {
@@ -157,22 +156,20 @@ Status WriteGraphDefPbtxt(const GraphDef& graph_def,
     protobuf::io::OstreamOutputStream output_stream(&file);
     protobuf::TextFormat::Printer printer;
     if (!printer.Print(graph_def, &output_stream)) {
-      return Status(tensorflow::error::INTERNAL,
-                    "Failed to serialize GraphDef to text format");
+      return errors::Internal("Failed to serialize GraphDef to text format");
     }
   }
 
   file.flush();
   if (!file.good()) {
-    return Status(tensorflow::error::INTERNAL,
-                  "Failed to flush GraphDef text to file: " + filepath);
+    return errors::Internal("Failed to flush GraphDef text to file: " +
+                            filepath);
   }
   file.close();
   if (file.fail()) {
-    return Status(tensorflow::error::INTERNAL,
-                  "Failed to close GraphDef text file: " + filepath);
+    return errors::Internal("Failed to close GraphDef text file: " + filepath);
   }
-  return Status::OK();
+  return OkStatus();
 }
 
 Status WriteGraphDefBinary(const GraphDef& graph_def,
@@ -180,28 +177,26 @@ Status WriteGraphDefBinary(const GraphDef& graph_def,
   std::ofstream file(filepath,
                      std::ios::out | std::ios::binary | std::ios::trunc);
   if (!file.is_open()) {
-    return Status(tensorflow::error::INTERNAL,
-                  "Failed to open file for writing: " + filepath);
+    return errors::Internal("Failed to open file for writing: " + filepath);
   }
 
   if (!graph_def.SerializeToOstream(&file)) {
-    return Status(tensorflow::error::INTERNAL,
-                  "Failed to serialize GraphDef to binary format");
+    return errors::Internal("Failed to serialize GraphDef to binary format");
   }
 
   file.close();
-  return Status::OK();
+  return OkStatus();
 }
 
 void ClearKnownFieldIfPresent(protobuf::Message* message,
-                              const char* field_name,
-                              int* cleared_count) {
+                              const char* field_name, int* cleared_count) {
   if (message == nullptr) {
     return;
   }
   const protobuf::Descriptor* descriptor = message->GetDescriptor();
   const protobuf::Reflection* reflection = message->GetReflection();
-  const protobuf::FieldDescriptor* field = descriptor->FindFieldByName(field_name);
+  const protobuf::FieldDescriptor* field =
+      descriptor->FindFieldByName(field_name);
   if (field == nullptr || field->is_repeated() ||
       !reflection->HasField(*message, field)) {
     return;
@@ -350,7 +345,8 @@ bool MaybeTruncateTensorProto(TensorProto* tensor) {
   }
   if (ApproximateTensorPayloadBytes(*tensor) <=
           kSlimConstTensorContentBytesThreshold &&
-      ApproximateTensorPayloadItems(*tensor) <= kSlimConstPayloadItemThreshold) {
+      ApproximateTensorPayloadItems(*tensor) <=
+          kSlimConstPayloadItemThreshold) {
     return false;
   }
 
@@ -378,7 +374,8 @@ void SlimNodeDef(NodeDef* node, SlimGraphStats* stats) {
     }
   }
 
-  ClearKnownFieldIfPresent(node, "experimental_type", &stats->debug_fields_cleared);
+  ClearKnownFieldIfPresent(node, "experimental_type",
+                           &stats->debug_fields_cleared);
   ClearKnownFieldIfPresent(node, "experimental_debug_info",
                            &stats->debug_fields_cleared);
 
@@ -428,7 +425,7 @@ bool IsGraphDefDumpingEnabled() {
 Status DumpGraphDef(const GraphDef& graph_def, const std::string& prefix,
                     const std::string& stage_description) {
   if (!IsGraphDefDumpingEnabled()) {
-    return Status::OK();
+    return OkStatus();
   }
 
   std::string dump_dir = GetDumpDirectory();
@@ -472,8 +469,8 @@ Status DumpGraphDef(const GraphDef& graph_def, const std::string& prefix,
                 << ", consts_truncated: " << slim_stats.consts_truncated
                 << ", attrs_removed: " << slim_stats.attrs_removed
                 << ", devices_cleared: " << slim_stats.devices_cleared
-                << ", debug_fields_cleared: "
-                << slim_stats.debug_fields_cleared << ")";
+                << ", debug_fields_cleared: " << slim_stats.debug_fields_cleared
+                << ")";
     } else {
       LOG(WARNING) << "MusaGraphOptimizer: slim pb dump failed (non-fatal): "
                    << slim_status;
@@ -500,7 +497,7 @@ Status DumpGraphDef(const GraphDef& graph_def, const std::string& prefix,
     }
   }
 
-  return Status::OK();
+  return OkStatus();
 }
 
 // Initialize static member
@@ -551,8 +548,9 @@ void GraphDefDumper::DumpFinal(const GraphDef& graph) {
 
 extern "C" {
 
-void __attribute__((visibility("default"))) TFMusaSetGraphDumpConfig(
-    int enabled, const char* dump_dir, int dump_text, int dump_slim) {
+void __attribute__((visibility("default")))
+TFMusaSetGraphDumpConfig(int enabled, const char* dump_dir, int dump_text,
+                         int dump_slim) {
   std::lock_guard<std::mutex> lock(
       ::tensorflow::grappler::musa::GraphDumpConfigMutex());
   auto& config = ::tensorflow::grappler::musa::MutableGraphDumpConfig();
@@ -589,5 +587,4 @@ int __attribute__((visibility("default"))) TFMusaGraphDumpTextIsEnabled() {
 int __attribute__((visibility("default"))) TFMusaGraphDumpSlimIsEnabled() {
   return ::tensorflow::grappler::musa::IsSlimGraphDefDumpEnabled() ? 1 : 0;
 }
-
 }

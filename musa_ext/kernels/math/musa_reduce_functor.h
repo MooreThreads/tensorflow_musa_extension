@@ -44,7 +44,7 @@ struct ReduceFunctor {
     if (status != ::musa::dnn::Status::SUCCESS) {
       return errors::Internal(error_prefix, static_cast<int>(status));
     }
-    return Status::OK();
+    return OkStatus();
   }
 };
 

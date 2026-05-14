@@ -1,11 +1,12 @@
+#include <musa_runtime.h>
+
 #include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <string>
 #include <vector>
 
-#include <musa_runtime.h>
-
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -14,7 +15,6 @@
 #include "tensorflow/core/platform/errors.h"
 #include "tensorflow/core/platform/types.h"
 #include "tensorflow/core/util/padding.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -33,10 +33,9 @@ inline bool FitsInInt64Add(int64_t a, int64_t b) {
 Status ComputeOutputAndPadding2D(int64_t in_rows, int64_t in_cols,
                                  int64_t ksize_rows, int64_t ksize_cols,
                                  int stride_rows, int stride_cols,
-                                 int rate_rows, int rate_cols,
-                                 Padding padding, int64_t* out_rows,
-                                 int64_t* out_cols, int* pad_top,
-                                 int* pad_left) {
+                                 int rate_rows, int rate_cols, Padding padding,
+                                 int64_t* out_rows, int64_t* out_cols,
+                                 int* pad_top, int* pad_left) {
   const int64_t effective_rows = (ksize_rows - 1) * rate_rows + 1;
   const int64_t effective_cols = (ksize_cols - 1) * rate_cols + 1;
 
@@ -49,7 +48,7 @@ Status ComputeOutputAndPadding2D(int64_t in_rows, int64_t in_cols,
                     : (in_cols - effective_cols) / stride_cols + 1;
     *pad_top = 0;
     *pad_left = 0;
-    return Status::OK();
+    return OkStatus();
   }
 
   if (padding == Padding::SAME) {
@@ -88,7 +87,7 @@ Status ComputeOutputAndPadding2D(int64_t in_rows, int64_t in_cols,
 
     *pad_top = static_cast<int>(pad_rows / 2);
     *pad_left = static_cast<int>(pad_cols / 2);
-    return Status::OK();
+    return OkStatus();
   }
 
   return errors::InvalidArgument(
@@ -98,12 +97,14 @@ Status ComputeOutputAndPadding2D(int64_t in_rows, int64_t in_cols,
 }  // namespace
 
 template <typename T>
-musaError_t LaunchExtractImagePatches(
-    const T* input, T* output, int64_t total_elements, int64_t in_rows,
-    int64_t in_cols, int64_t depth, int64_t out_rows, int64_t out_cols,
-    int ksize_rows, int ksize_cols, int stride_rows, int stride_cols,
-    int rate_rows, int rate_cols, int pad_top, int pad_left,
-    musaStream_t stream);
+musaError_t LaunchExtractImagePatches(const T* input, T* output,
+                                      int64_t total_elements, int64_t in_rows,
+                                      int64_t in_cols, int64_t depth,
+                                      int64_t out_rows, int64_t out_cols,
+                                      int ksize_rows, int ksize_cols,
+                                      int stride_rows, int stride_cols,
+                                      int rate_rows, int rate_cols, int pad_top,
+                                      int pad_left, musaStream_t stream);
 
 template <typename T>
 class MusaExtractImagePatchesOp : public MusaOpKernel {
@@ -115,18 +116,15 @@ class MusaExtractImagePatchesOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("rates", &rates_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("padding", &padding_str_));
 
-    OP_REQUIRES(
-        ctx, ksizes_.size() == 4,
-        errors::InvalidArgument(
-            "ExtractImagePatches ksizes attr must have 4 elements."));
-    OP_REQUIRES(
-        ctx, strides_.size() == 4,
-        errors::InvalidArgument(
-            "ExtractImagePatches strides attr must have 4 elements."));
-    OP_REQUIRES(
-        ctx, rates_.size() == 4,
-        errors::InvalidArgument(
-            "ExtractImagePatches rates attr must have 4 elements."));
+    OP_REQUIRES(ctx, ksizes_.size() == 4,
+                errors::InvalidArgument(
+                    "ExtractImagePatches ksizes attr must have 4 elements."));
+    OP_REQUIRES(ctx, strides_.size() == 4,
+                errors::InvalidArgument(
+                    "ExtractImagePatches strides attr must have 4 elements."));
+    OP_REQUIRES(ctx, rates_.size() == 4,
+                errors::InvalidArgument(
+                    "ExtractImagePatches rates attr must have 4 elements."));
 
     OP_REQUIRES_OK(ctx, GetPaddingFromString(padding_str_, &padding_));
     OP_REQUIRES(ctx, padding_ == Padding::SAME || padding_ == Padding::VALID,
@@ -183,17 +181,18 @@ class MusaExtractImagePatchesOp : public MusaOpKernel {
     int64_t out_cols = 0;
     int pad_top = 0;
     int pad_left = 0;
-    OP_REQUIRES_OK(ctx, ComputeOutputAndPadding2D(
-                            in_rows, in_cols, ksize_rows_, ksize_cols_,
-                            stride_rows_, stride_cols_, rate_rows_, rate_cols_,
-                            padding_, &out_rows, &out_cols, &pad_top,
-                            &pad_left));
+    OP_REQUIRES_OK(
+        ctx, ComputeOutputAndPadding2D(
+                 in_rows, in_cols, ksize_rows_, ksize_cols_, stride_rows_,
+                 stride_cols_, rate_rows_, rate_cols_, padding_, &out_rows,
+                 &out_cols, &pad_top, &pad_left));
 
     OP_REQUIRES(
-        ctx, FitsInInt64Mul(ksize_rows_, ksize_cols_) &&
-                 FitsInInt64Mul(static_cast<int64_t>(ksize_rows_) *
-                                    static_cast<int64_t>(ksize_cols_),
-                                depth),
+        ctx,
+        FitsInInt64Mul(ksize_rows_, ksize_cols_) &&
+            FitsInInt64Mul(static_cast<int64_t>(ksize_rows_) *
+                               static_cast<int64_t>(ksize_cols_),
+                           depth),
         errors::InvalidArgument("ExtractImagePatches output depth overflow."));
     const int64_t out_depth =
         static_cast<int64_t>(ksize_rows_) * ksize_cols_ * depth;
@@ -217,8 +216,8 @@ class MusaExtractImagePatchesOp : public MusaOpKernel {
 
     musaError_t launch_status = LaunchExtractImagePatches<T>(
         input_ptr, output_ptr, total_elements, in_rows, in_cols, depth,
-        out_rows, out_cols, ksize_rows_, ksize_cols_, stride_rows_, stride_cols_,
-        rate_rows_, rate_cols_, pad_top, pad_left, stream);
+        out_rows, out_cols, ksize_rows_, ksize_cols_, stride_rows_,
+        stride_cols_, rate_rows_, rate_cols_, pad_top, pad_left, stream);
     OP_REQUIRES(ctx, launch_status == musaSuccess,
                 errors::Internal("ExtractImagePatches MUSA kernel launch "
                                  "failed: ",
@@ -240,10 +239,10 @@ class MusaExtractImagePatchesOp : public MusaOpKernel {
   int rate_cols_ = 1;
 };
 
-#define REGISTER_MUSA_EXTRACT_IMAGE_PATCHES(TYPE)                 \
-  REGISTER_KERNEL_BUILDER(Name("ExtractImagePatches")             \
-                              .Device(DEVICE_MTGPU)               \
-                              .TypeConstraint<TYPE>("T"),         \
+#define REGISTER_MUSA_EXTRACT_IMAGE_PATCHES(TYPE)         \
+  REGISTER_KERNEL_BUILDER(Name("ExtractImagePatches")     \
+                              .Device(DEVICE_MTGPU)       \
+                              .TypeConstraint<TYPE>("T"), \
                           MusaExtractImagePatchesOp<TYPE>)
 
 REGISTER_MUSA_EXTRACT_IMAGE_PATCHES(float);

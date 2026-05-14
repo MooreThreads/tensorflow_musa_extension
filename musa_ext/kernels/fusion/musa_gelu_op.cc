@@ -76,7 +76,7 @@ REGISTER_OP("MusaGelu")
     .Attr("approximate: bool = false")
     .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
       c->set_output(0, c->input(0));
-      return Status::OK();
+      return OkStatus();
     });
 
 }  // namespace tensorflow

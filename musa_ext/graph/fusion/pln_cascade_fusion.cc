@@ -832,10 +832,10 @@ bool MusaPlnCascadeFusion::BuildGroupTables(GraphDef* graph,
 Status MusaPlnCascadeFusion::Apply(
     GraphDef* graph, const FusionMatchResult& match_result) const {
   if (!match_result.IsValid()) {
-    return Status(error::INVALID_ARGUMENT, "Invalid PlnCascade match result");
+    return errors::InvalidArgument("Invalid PlnCascade match result");
   }
   if (!IsKernelAvailable()) {
-    return Status::OK();
+    return OkStatus();
   }
 
   // Fusion pattern instances are reused across optimizer runs. Reset table
@@ -849,8 +849,8 @@ Status MusaPlnCascadeFusion::Apply(
   auto affine_it = match_result.captured_nodes.find("affine");
   if (select_it == match_result.captured_nodes.end() ||
       affine_it == match_result.captured_nodes.end()) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Missing captured select/affine node for PlnCascade");
+    return errors::InvalidArgument(
+        "Missing captured select/affine node for PlnCascade");
   }
 
   const std::string select_name = select_it->second->name();
@@ -858,8 +858,8 @@ Status MusaPlnCascadeFusion::Apply(
 
   auto select_on_true_it = match_result.captured_attrs.find("select_on_true");
   if (select_on_true_it == match_result.captured_attrs.end()) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Missing select_on_true attr in PlnCascade match result");
+    return errors::InvalidArgument(
+        "Missing select_on_true attr in PlnCascade match result");
   }
   const bool select_on_true = (select_on_true_it->second == "1");
 
@@ -876,31 +876,31 @@ Status MusaPlnCascadeFusion::Apply(
 
   auto group_it = match_result.captured_attrs.find("group");
   if (group_it == match_result.captured_attrs.end()) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Missing group attr in PlnCascade match result");
+    return errors::InvalidArgument(
+        "Missing group attr in PlnCascade match result");
   }
   const std::string group = group_it->second;
 
   const NodeDef* select_node = FindNode(*graph, select_name);
   if (!select_node || !IsOp(*select_node, "Select") ||
       select_node->input_size() != 3) {
-    return Status::OK();
+    return OkStatus();
   }
 
   const NodeDef* affine_node = FindProducer(
       *graph, select_on_true ? select_node->input(1) : select_node->input(2));
   if (!affine_node || affine_node->name() != expected_affine_name) {
-    return Status::OK();
+    return OkStatus();
   }
 
   if (is_pending_affine) {
     if (!IsOp(*affine_node, "AddV2")) {
-      return Status::OK();
+      return OkStatus();
     }
   } else {
     if (!IsOp(*affine_node, "MusaShiftedAffineMap") ||
         affine_node->input_size() != 3) {
-      return Status::OK();
+      return OkStatus();
     }
   }
 
@@ -925,7 +925,7 @@ Status MusaPlnCascadeFusion::Apply(
 
   if (add_input_edge.empty() || bias_input_edge.empty()) {
     if (is_pending_affine) {
-      return Status::OK();
+      return OkStatus();
     }
     add_input_edge = affine_node->input(0);
     bias_input_edge = affine_node->input(2);
@@ -950,7 +950,7 @@ Status MusaPlnCascadeFusion::Apply(
   }
 
   if (add_name.empty() || bias_name.empty()) {
-    return Status::OK();
+    return OkStatus();
   }
   const std::string gate_input = select_node->input(0);
 
@@ -971,7 +971,7 @@ Status MusaPlnCascadeFusion::Apply(
 
   const int select_idx = FusionGraphUtils::FindNodeIndex(*graph, select_name);
   if (select_idx < 0) {
-    return Status::OK();
+    return OkStatus();
   }
   const std::string output_device = select_node->device();
   FusionGraphUtils::RemoveNode(graph, select_idx);
@@ -1010,7 +1010,7 @@ Status MusaPlnCascadeFusion::Apply(
           << "' (use_table=" << use_table << ", table_index=" << table_index
           << ")";
 
-  return Status::OK();
+  return OkStatus();
 }
 
 REGISTER_FUSION_PATTERN(MusaPlnCascadeFusion);

@@ -118,11 +118,11 @@ FusionMatchResult MusaClipFusion::MatchFromMaximumNode(
 Status MusaClipFusion::Apply(GraphDef* graph,
                              const FusionMatchResult& match_result) const {
   if (!match_result.IsValid()) {
-    return Status(error::INVALID_ARGUMENT, "Invalid Clip match result");
+    return errors::InvalidArgument("Invalid Clip match result");
   }
 
   if (!IsKernelAvailable()) {
-    return Status::OK();
+    return OkStatus();
   }
 
   auto output_it = match_result.captured_nodes.find("output");
@@ -135,15 +135,15 @@ Status MusaClipFusion::Apply(GraphDef* graph,
       x_input_it == match_result.captured_attrs.end() ||
       lo_input_it == match_result.captured_attrs.end() ||
       hi_input_it == match_result.captured_attrs.end()) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Missing captured nodes for MusaClip fusion");
+    return errors::InvalidArgument(
+        "Missing captured nodes for MusaClip fusion");
   }
 
   const NodeDef* output_node = output_it->second;
   const NodeDef* inner_node = inner_it->second;
   if (!output_node || !inner_node) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Missing output/inner nodes for MusaClip fusion");
+    return errors::InvalidArgument(
+        "Missing output/inner nodes for MusaClip fusion");
   }
 
   const std::string original_name = output_node->name();
@@ -197,7 +197,7 @@ Status MusaClipFusion::Apply(GraphDef* graph,
     FusionGraphUtils::RemoveNode(graph, idx);
   }
 
-  return Status::OK();
+  return OkStatus();
 }
 
 REGISTER_FUSION_PATTERN(MusaClipFusion);

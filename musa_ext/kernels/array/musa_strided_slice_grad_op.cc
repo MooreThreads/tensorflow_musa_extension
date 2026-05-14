@@ -76,7 +76,7 @@ Status ShapeTensorToTensorShape(const Tensor& shape_tensor,
     }
     output_shape->AddDim(dim);
   }
-  return Status::OK();
+  return OkStatus();
 }
 
 inline bool FitsInt32(int64_t value) {

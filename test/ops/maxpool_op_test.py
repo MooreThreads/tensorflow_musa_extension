@@ -123,7 +123,7 @@ class MaxPoolOpTest(tf.test.TestCase):
 
   def testMaxPoolDifferentStrides(self):
     """MaxPool test with different stride values."""
-    input_data = [[[ [float(i * 6 + j + 1) for j in range(6)] ] for i in range(6)]]
+    input_data = [[[[float(i * 6 + j + 1)] for j in range(6)] for i in range(6)]]
     ksize = [1, 3, 3, 1]
     strides = [1, 2, 2, 1]
     padding = 'VALID'

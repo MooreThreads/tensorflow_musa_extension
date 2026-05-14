@@ -105,11 +105,11 @@ FusionMatchResult ConcatMatMulFusion::Match(const GraphDef& graph,
 Status ConcatMatMulFusion::Apply(GraphDef* graph,
                                  const FusionMatchResult& match_result) const {
   if (!match_result.IsValid()) {
-    return Status(error::INVALID_ARGUMENT, "Invalid ConcatMatMul match result");
+    return errors::InvalidArgument("Invalid ConcatMatMul match result");
   }
 
   if (!IsKernelAvailable()) {
-    return Status::OK();
+    return OkStatus();
   }
 
   // Get captured nodes
@@ -118,8 +118,8 @@ Status ConcatMatMulFusion::Apply(GraphDef* graph,
 
   if (matmul_it == match_result.captured_nodes.end() ||
       concat_it == match_result.captured_nodes.end()) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Missing required nodes in ConcatMatMul pattern");
+    return errors::InvalidArgument(
+        "Missing required nodes in ConcatMatMul pattern");
   }
 
   const NodeDef* matmul_node = matmul_it->second;
@@ -132,7 +132,7 @@ Status ConcatMatMulFusion::Apply(GraphDef* graph,
   // Check if this node has already been fused
   for (const auto& node : graph->node()) {
     if (node.name() == original_name && node.op() == "MusaConcatMatMul") {
-      return Status::OK();
+      return OkStatus();
     }
   }
 
@@ -145,8 +145,8 @@ Status ConcatMatMulFusion::Apply(GraphDef* graph,
   }
 
   if (matmul_node_idx < 0) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Failed to find MatMul node in graph: " + original_name);
+    return errors::InvalidArgument("Failed to find MatMul node in graph: " +
+                                   original_name);
   }
 
   VLOG(1) << "ConcatMatMulFusion: Replacing " << original_name
@@ -187,9 +187,9 @@ Status ConcatMatMulFusion::Apply(GraphDef* graph,
     }
   }
   if (concat_in_matmul_idx < 0) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Failed to determine ConcatV2 input position for MatMul: " +
-                      original_name);
+    return errors::InvalidArgument(
+        "Failed to determine ConcatV2 input position for MatMul: " +
+        original_name);
   }
   fused_node->add_input(matmul_inputs[1 - concat_in_matmul_idx]);
 
@@ -211,7 +211,7 @@ Status ConcatMatMulFusion::Apply(GraphDef* graph,
           << "' with MusaConcatMatMul and removed " << removed_count
           << " obsolete node(s)";
 
-  return Status::OK();
+  return OkStatus();
 }
 
 REGISTER_FUSION_PATTERN(ConcatMatMulFusion);

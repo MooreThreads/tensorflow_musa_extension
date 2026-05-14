@@ -39,6 +39,8 @@ execute_process(COMMAND "${PYTHON_EXECUTABLE}" -c "import tensorflow as tf; prin
     OUTPUT_VARIABLE TF_COMPILE_FLAGS OUTPUT_STRIP_TRAILING_WHITESPACE)
 execute_process(COMMAND "${PYTHON_EXECUTABLE}" -c "import tensorflow as tf; print(' '.join(tf.sysconfig.get_link_flags()))"
     OUTPUT_VARIABLE TF_LINK_FLAGS OUTPUT_STRIP_TRAILING_WHITESPACE)
+execute_process(COMMAND "${PYTHON_EXECUTABLE}" -c "import tensorflow as tf; print(getattr(tf.sysconfig, 'CXX11_ABI_FLAG', 0))"
+    OUTPUT_VARIABLE TF_CXX11_ABI_FLAG OUTPUT_STRIP_TRAILING_WHITESPACE)
 execute_process(COMMAND "${PYTHON_EXECUTABLE}" -c "import tensorflow as tf; import os; print(os.path.dirname(tf.__file__))"
     OUTPUT_VARIABLE TF_LIB_DIR OUTPUT_STRIP_TRAILING_WHITESPACE)
 execute_process(COMMAND "${PYTHON_EXECUTABLE}" -c "import sysconfig; print(sysconfig.get_path('include') or '')"
@@ -75,11 +77,14 @@ if(NOT EXISTS "${PYBIND11_INCLUDE}/pybind11/pybind11.h")
     message(FATAL_ERROR "Failed to find pybind11 headers. Please install pybind11 or use a TensorFlow package that includes pybind11 headers.")
 endif()
 
-# Clean ABI conflicts in TF_COMPILE_FLAGS
+# Match the C++ std::string ABI used by the TensorFlow wheel.
 string(REPLACE "-D_GLIBCXX_USE_CXX11_ABI=0" "" TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS}")
 string(REPLACE "-D_GLIBCXX_USE_CXX11_ABI=1" "" TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS}")
-# Re-add the safest definition
-set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=0")
+if(TF_CXX11_ABI_FLAG STREQUAL "1")
+    set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=1")
+else()
+    set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=0")
+endif()
 
 # Configure debug/logging-related compile definitions.
 #
@@ -91,7 +96,7 @@ set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=0")
 # refcount aborts during session/resource destruction.
 #
 # Keep NDEBUG enabled in every build to match the TensorFlow wheel.
-set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_DISABLE_DEBUG_LOGGING -DNDEBUG -DMUSA_DISABLE_AUTO_TRACE")
+set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_DISABLE_DEBUG_LOGGING -DNDEBUG -DMUSA_DISABLE_AUTO_TRACE -include ${CMAKE_CURRENT_SOURCE_DIR}/musa_ext/tf_status_compat.h")
 
 # Include paths
 include_directories("${TF_INC}" "${MUSA_PATH}/include")

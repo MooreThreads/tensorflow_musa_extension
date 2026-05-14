@@ -59,7 +59,7 @@ inline Status SparseSlicePrefixSum(OpKernelContext* ctx, const Tensor& marks,
     return errors::Internal("SparseSlice: muDNN CumSum failed with status ",
                             static_cast<int>(status));
   }
-  return Status::OK();
+  return OkStatus();
 }
 
 }  // namespace musa

@@ -150,7 +150,7 @@ class MusaBiasAddReluMatMulOp : public MusaOpKernel {
     *out_shape = bcast.output_batch_shape();
     out_shape->AddDim(m);
     out_shape->AddDim(n);
-    return Status::OK();
+    return OkStatus();
   }
 
   void RunBiasAddRelu(OpKernelContext* ctx, const Tensor& input,
@@ -333,7 +333,7 @@ REGISTER_OP("MusaBiasAddReluMatMul")
       TF_RETURN_IF_ERROR(c->Concatenate(batch_out, c->Vector(lhs_rows), &out));
       TF_RETURN_IF_ERROR(c->Concatenate(out, c->Vector(rhs_cols), &out));
       c->set_output(0, out);
-      return Status::OK();
+      return OkStatus();
     });
 
 }  // namespace tensorflow

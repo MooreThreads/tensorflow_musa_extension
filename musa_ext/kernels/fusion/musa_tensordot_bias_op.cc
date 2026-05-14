@@ -55,7 +55,7 @@ REGISTER_OP("MusaTensorDotBias")
 
       if (!c->RankKnown(a_shape) || !c->RankKnown(b_shape)) {
         c->set_output(0, c->UnknownShape());
-        return Status::OK();
+        return OkStatus();
       }
 
       std::vector<int> axes_a, axes_b;
@@ -92,7 +92,7 @@ REGISTER_OP("MusaTensorDotBias")
       }
 
       c->set_output(0, c->MakeShape(output_dims));
-      return Status::OK();
+      return OkStatus();
     });
 
 // =============================================================================
@@ -198,7 +198,7 @@ Status ComputeTensorDotDims(const TensorShape& a_shape,
     }
   }
 
-  return Status::OK();
+  return OkStatus();
 }
 
 template <typename T>
@@ -349,7 +349,7 @@ class MusaTensorDotBiasOp : public MusaOpKernel {
           static_cast<int>(status));
     }
 
-    return Status::OK();
+    return OkStatus();
   }
 
   Status DoTensorDotBias(OpKernelContext* ctx, const Tensor& a, const Tensor& b,
@@ -396,12 +396,12 @@ class MusaTensorDotBiasOp : public MusaOpKernel {
       if (!output->CopyFrom(matmul_temp, output_shape)) {
         return errors::Internal("Failed to reshape matmul result to output");
       }
-      return Status::OK();
+      return OkStatus();
     }
 
     TF_RETURN_IF_ERROR(
         DoMatMulWithBias(ctx, a_2d, b_2d, bias_2d, &matmul_view));
-    return Status::OK();
+    return OkStatus();
   }
 
   // 准备张量：transpose + reshape 为 2D
@@ -440,7 +440,7 @@ class MusaTensorDotBiasOp : public MusaOpKernel {
       }
     }
 
-    return Status::OK();
+    return OkStatus();
   }
 
   // 准备 bias 张量：reshape 为 1D 向量 (N 维度)
@@ -454,7 +454,7 @@ class MusaTensorDotBiasOp : public MusaOpKernel {
       if (!output->CopyFrom(bias, bias.shape())) {
         return errors::Internal("Failed to copy bias");
       }
-      return Status::OK();
+      return OkStatus();
     }
 
     // 如果 bias 是标量，需要 broadcast 到向量
@@ -463,7 +463,7 @@ class MusaTensorDotBiasOp : public MusaOpKernel {
       TF_RETURN_IF_ERROR(
           ctx->allocate_temp(bias.dtype(), target_shape, output));
       // TODO: 实现标量到向量的 broadcast
-      return Status::OK();
+      return OkStatus();
     }
 
     // 如果 bias 是 2D [M, N]，需要提取 N 维度作为向量
@@ -473,7 +473,7 @@ class MusaTensorDotBiasOp : public MusaOpKernel {
       TF_RETURN_IF_ERROR(
           ctx->allocate_temp(bias.dtype(), target_shape, output));
       // TODO: 实现从 2D 提取 1D 的逻辑
-      return Status::OK();
+      return OkStatus();
     }
 
     // 尝试直接 reshape
@@ -484,7 +484,7 @@ class MusaTensorDotBiasOp : public MusaOpKernel {
                               target_shape.DebugString());
     }
 
-    return Status::OK();
+    return OkStatus();
   }
 };
 

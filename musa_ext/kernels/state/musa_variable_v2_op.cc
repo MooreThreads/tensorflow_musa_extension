@@ -37,7 +37,7 @@ class MusaVariableV2Op : public OpKernel {
                             container_, shared_name_, &var,
                             [dtype, this](Var** ptr) -> Status {
                               *ptr = new Var(dtype);
-                              return Status::OK();
+                              return OkStatus();
                             }));
 
     core::ScopedUnref unref(var);
@@ -50,10 +50,10 @@ class MusaVariableV2Op : public OpKernel {
       // Treat that sentinel state as "unallocated" for VariableV2 so the first
       // execution can materialize the requested shape instead of spuriously
       // failing with "Existing: [0]".
-      const bool has_placeholder_shape =
-          var->tensor()->dtype() == dtype &&
-          var->tensor()->shape().dims() == 1 &&
-          var->tensor()->dim_size(0) == 0 && !var->is_initialized;
+      const bool has_placeholder_shape = var->tensor()->dtype() == dtype &&
+                                         var->tensor()->shape().dims() == 1 &&
+                                         var->tensor()->dim_size(0) == 0 &&
+                                         !var->is_initialized;
 
       // If first time, allocate storage tensor with required shape.
       if (var->tensor()->dtype() == DT_INVALID || has_placeholder_shape) {

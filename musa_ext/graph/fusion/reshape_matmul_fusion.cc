@@ -447,12 +447,11 @@ FusionMatchResult MusaReshapeMatMulFusion::Match(const GraphDef& graph,
 Status MusaReshapeMatMulFusion::Apply(
     GraphDef* graph, const FusionMatchResult& match_result) const {
   if (!match_result.IsValid()) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Invalid MusaReshapeMatMul match result");
+    return errors::InvalidArgument("Invalid MusaReshapeMatMul match result");
   }
 
   if (!IsKernelAvailable()) {
-    return Status::OK();
+    return OkStatus();
   }
 
   auto output_it = match_result.captured_nodes.find("output");
@@ -465,8 +464,8 @@ Status MusaReshapeMatMulFusion::Apply(
       weight_it == match_result.captured_attrs.end() ||
       transpose_b_it == match_result.captured_attrs.end() ||
       shape_nodes_it == match_result.captured_attrs.end()) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Missing required captured fields for MusaReshapeMatMul");
+    return errors::InvalidArgument(
+        "Missing required captured fields for MusaReshapeMatMul");
   }
 
   const NodeDef* output_node = output_it->second;
@@ -474,14 +473,14 @@ Status MusaReshapeMatMulFusion::Apply(
 
   for (const auto& node : graph->node()) {
     if (node.name() == output_name && node.op() == "MusaReshapeMatMul") {
-      return Status::OK();
+      return OkStatus();
     }
   }
 
   const int output_idx = FusionGraphUtils::FindNodeIndex(*graph, output_name);
   if (output_idx < 0) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Failed to locate output node for MusaReshapeMatMul fusion");
+    return errors::InvalidArgument(
+        "Failed to locate output node for MusaReshapeMatMul fusion");
   }
 
   NodeDef* original_output_node = graph->mutable_node(output_idx);
@@ -518,8 +517,8 @@ Status MusaReshapeMatMulFusion::Apply(
   try {
     num_shape_nodes = std::stoi(shape_nodes_it->second);
   } catch (...) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Invalid num_shape_nodes for MusaReshapeMatMul");
+    return errors::InvalidArgument(
+        "Invalid num_shape_nodes for MusaReshapeMatMul");
   }
   for (int i = 0; i < num_shape_nodes; ++i) {
     auto it =
@@ -538,7 +537,7 @@ Status MusaReshapeMatMulFusion::Apply(
   VLOG(1) << "MusaReshapeMatMulFusion: fused output=" << output_name
           << ", removed=" << removed;
 
-  return Status::OK();
+  return OkStatus();
 }
 
 REGISTER_FUSION_PATTERN(MusaReshapeMatMulFusion);

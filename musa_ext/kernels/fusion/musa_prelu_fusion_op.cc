@@ -114,7 +114,7 @@ REGISTER_OP("MusaPRelu")
     .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
       // Output shape matches input shape (broadcasting handled by muDNN)
       c->set_output(0, c->input(0));
-      return Status::OK();
+      return OkStatus();
     });
 
 }  // namespace tensorflow

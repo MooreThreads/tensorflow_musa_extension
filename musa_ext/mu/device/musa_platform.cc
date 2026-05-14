@@ -1,5 +1,9 @@
 #include <musa_runtime.h>
 
+#include "tensorflow/core/public/version.h"
+
+#if TF_MAJOR_VERSION < 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION < 10)
+
 #include "musa_executor.h"
 #include "musa_plugin_env.h"
 #include "tensorflow/core/platform/logging.h"
@@ -109,3 +113,6 @@ REGISTER_MODULE_INITIALIZER(musa_cxx_se_platform, {
   }
   stream_executor::musa::InitializeMusaPlatform();
 });
+
+#endif  // TF_MAJOR_VERSION < 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION <
+        // 10)

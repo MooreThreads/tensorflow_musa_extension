@@ -144,7 +144,7 @@ class MusaResourceApplyAdagradV2Op : public MusaOpKernel {
         return errors::Internal("ResourceApplyAdagradV2 ", op_name,
                                 " failed. Status: ", static_cast<int>(status));
       }
-      return Status::OK();
+      return OkStatus();
     };
 
     auto fill_scalar = [&](T val, const TensorShape& shape,
@@ -292,7 +292,7 @@ class MusaApplyAdagradV2Op : public MusaOpKernel {
         return errors::Internal("ApplyAdagradV2 ", op_name,
                                 " failed. Status: ", static_cast<int>(status));
       }
-      return Status::OK();
+      return OkStatus();
     };
 
     auto fill_scalar = [&](T val, const TensorShape& shape,

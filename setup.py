@@ -38,7 +38,7 @@ RUNTIME_CONFIG_BINDINGS_PATTERN = f"{RUNTIME_CONFIG_BINDINGS}*.so"
 BUILD_DIR = "build"
 
 # Default TensorFlow version (used if TENSORFLOW_MUSA_TARGET_TF is unset)
-_DEFAULT_TF_VERSION = "2.6.1"
+_DEFAULT_TF_VERSION = "2.6.1,2.15.1"
 
 
 def _supported_tf_versions():

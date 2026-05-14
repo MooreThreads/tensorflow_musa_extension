@@ -28,6 +28,7 @@ limitations under the License.
 #include <memory>
 #include <string>
 
+#include "mu/device/musa_memset.h"
 #include "mu/musa_plugin_sp_stream.h"
 #include "mu/musa_runtime_adapter.h"
 #include "mu/musa_runtime_registry.h"
@@ -556,6 +557,53 @@ void plugin_se_memcpy_dtod(const SP_Device* device, SP_Stream stream,
                                                  "musaMemcpyAsync D2D");
 }
 
+void plugin_se_memset(const SP_Device* device, SP_Stream stream,
+                      SP_DeviceMemoryBase* location, uint8_t pattern,
+                      uint64_t size, TF_Status* status) {
+  if (!ValidStream(stream, status, "memset") ||
+      !ValidDeviceMemory(location, size, status, "location", "memset")) {
+    return;
+  }
+  if (size == 0) {
+    TF_SetStatus(status, TF_OK, "");
+    return;
+  }
+  ::tensorflow::musa::runtime::SetMusaDeviceOrStatus(Ordinal(device), status);
+  if (TF_GetCode(status) != TF_OK) return;
+  musaError_t err =
+      musaMemsetAsync(location->opaque, pattern, size, stream->stream);
+  ::tensorflow::musa::runtime::SetStatusFromMusa(status, err,
+                                                 "musaMemsetAsync");
+}
+
+void plugin_se_mem_zero(const SP_Device* device, SP_Stream stream,
+                        SP_DeviceMemoryBase* location, uint64_t size,
+                        TF_Status* status) {
+  plugin_se_memset(device, stream, location, 0, size, status);
+}
+
+void plugin_se_memset32(const SP_Device* device, SP_Stream stream,
+                        SP_DeviceMemoryBase* location, uint32_t pattern,
+                        uint64_t size, TF_Status* status) {
+  if (!ValidStream(stream, status, "memset32") ||
+      !ValidDeviceMemory(location, size, status, "location", "memset32")) {
+    return;
+  }
+  if (size == 0) {
+    TF_SetStatus(status, TF_OK, "");
+    return;
+  }
+  ::tensorflow::musa::runtime::SetMusaDeviceOrStatus(Ordinal(device), status);
+  if (TF_GetCode(status) != TF_OK) return;
+  auto result = ::tensorflow::musa::Memset32Async(location->opaque, pattern,
+                                                  size, stream->stream);
+  if (result == ::musa::dnn::Status::SUCCESS) {
+    TF_SetStatus(status, TF_OK, "");
+  } else {
+    TF_SetStatus(status, TF_INTERNAL, "musa Memset32Async failed");
+  }
+}
+
 void plugin_se_sync_memcpy_dtoh(const SP_Device* device, void* host_dst,
                                 const SP_DeviceMemoryBase* device_src,
                                 uint64_t size, TF_Status* status) {
@@ -1047,6 +1095,9 @@ void plugin_create_stream_executor(const SP_Platform*,
   se->sync_memcpy_dtoh = plugin_se_sync_memcpy_dtoh;
   se->sync_memcpy_htod = plugin_se_sync_memcpy_htod;
   se->sync_memcpy_dtod = plugin_se_sync_memcpy_dtod;
+  se->mem_zero = plugin_se_mem_zero;
+  se->memset = plugin_se_memset;
+  se->memset32 = plugin_se_memset32;
   se->block_host_for_event = plugin_se_block_host_for_event;
   se->block_host_until_done = plugin_se_block_host_until_done;
   se->synchronize_all_activity = plugin_se_synchronize_all_activity;

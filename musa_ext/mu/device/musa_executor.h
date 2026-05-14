@@ -8,9 +8,26 @@
 #include "musa_memcpy.h"
 #include "musa_memset.h"
 #include "musa_stream.h"
+#if __has_include("tensorflow/stream_executor/lib/status.h")
 #include "tensorflow/stream_executor/lib/status.h"
 #include "tensorflow/stream_executor/lib/statusor.h"
 #include "tensorflow/stream_executor/stream_executor_internal.h"
+#else
+#include "absl/status/status.h"
+#include "tsl/platform/status.h"
+#include "tsl/platform/statusor.h"
+#include "xla/stream_executor/stream_executor_internal.h"
+namespace stream_executor {
+namespace port {
+using Status = tsl::Status;
+template <typename T>
+using StatusOr = tsl::StatusOr<T>;
+namespace error {
+constexpr absl::StatusCode INTERNAL = absl::StatusCode::kInternal;
+}  // namespace error
+}  // namespace port
+}  // namespace stream_executor
+#endif
 namespace stream_executor {
 namespace musa {
 
@@ -191,7 +208,8 @@ class MusaExecutor : public internal::StreamExecutorInterface {
     // Execute callback asynchronously via a host function
     // This ensures the callback runs after all preceding stream operations
     musaStream_t musa_stream = GetMusaStream(stream);
-    musaError_t err = musaLaunchHostFunc(musa_stream,
+    musaError_t err = musaLaunchHostFunc(
+        musa_stream,
         [](void* user_data) {
           auto* cb = static_cast<std::function<port::Status()>*>(user_data);
           (*cb)();

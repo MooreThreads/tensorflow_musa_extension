@@ -227,13 +227,12 @@ Status MusaShiftedAffineMapFusion::Apply(
   VLOG(2) << "[ShiftedAffineMap::Apply] ENTER";
 
   if (!match_result.IsValid()) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Invalid ShiftedAffineMap match result");
+    return errors::InvalidArgument("Invalid ShiftedAffineMap match result");
   }
 
   if (!IsKernelAvailable()) {
     VLOG(2) << "[ShiftedAffineMap::Apply] kernel not available, skipping";
-    return Status::OK();
+    return OkStatus();
   }
 
   // -----------------------------------------------------------------------
@@ -241,8 +240,7 @@ Status MusaShiftedAffineMapFusion::Apply(
   // -----------------------------------------------------------------------
   auto it = match_result.captured_nodes.find("output_add");
   if (it == match_result.captured_nodes.end() || !it->second) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Missing output_add node in captured_nodes");
+    return errors::InvalidArgument("Missing output_add node in captured_nodes");
   }
   const NodeDef* output_add = it->second;
   const std::string output_name = output_add->name();
@@ -252,7 +250,7 @@ Status MusaShiftedAffineMapFusion::Apply(
   for (const auto& node : graph->node()) {
     if (node.name() == output_name && node.op() == "MusaShiftedAffineMap") {
       VLOG(2) << "[ShiftedAffineMap::Apply] already fused: " << output_name;
-      return Status(error::ALREADY_EXISTS, "Already fused");
+      return errors::AlreadyExists("Already fused");
     }
   }
 
@@ -271,8 +269,8 @@ Status MusaShiftedAffineMapFusion::Apply(
   if (data_left_input.empty() || mask_input.empty() ||
       sliced_var_right_input.empty()) {
     VLOG(2) << "[ShiftedAffineMap::Apply] FAIL: missing input edges";
-    return Status(error::INVALID_ARGUMENT,
-                  "Cannot determine all inputs for ShiftedAffineMap fusion");
+    return errors::InvalidArgument(
+        "Cannot determine all inputs for ShiftedAffineMap fusion");
   }
 
   // DataType from output AddV2
@@ -317,7 +315,7 @@ Status MusaShiftedAffineMapFusion::Apply(
   VLOG(1) << "[ShiftedAffineMap::Apply] SUCCESS -> " << output_name
           << " device=" << output_device;
 
-  return Status::OK();
+  return OkStatus();
 }
 
 REGISTER_FUSION_PATTERN(MusaShiftedAffineMapFusion);

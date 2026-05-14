@@ -1,6 +1,10 @@
 #include <musa_runtime.h>
 #include <stdio.h>
 
+#include "tensorflow/core/public/version.h"
+
+#if TF_MAJOR_VERSION < 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION < 10)
+
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
@@ -79,13 +83,13 @@ class MusaDeviceFactory : public DeviceFactory {
           << "musaGetDeviceCount failed; returning empty physical device list "
              "(set MUSA_STRICT_DEVICE_ENUM=1 to treat this as an error): "
           << musaGetErrorString(err);
-      return Status::OK();
+      return OkStatus();
     }
 
     for (int i = 0; i < count; ++i) {
       devices->push_back(strings::StrCat("/physical_device:MUSA:", i));
     }
-    return Status::OK();
+    return OkStatus();
   }
 
   Status CreateDevices(const SessionOptions& options, const string& name_prefix,
@@ -101,7 +105,7 @@ class MusaDeviceFactory : public DeviceFactory {
       VLOG(1) << "musaGetDeviceCount failed; skipping MUSA device creation "
                  "(set MUSA_STRICT_DEVICE_ENUM=1 to treat this as an error): "
               << musaGetErrorString(err);
-      return Status::OK();
+      return OkStatus();
     }
 
     auto platform_status =
@@ -139,7 +143,7 @@ class MusaDeviceFactory : public DeviceFactory {
       devices->push_back(std::unique_ptr<Device>(
           new MusaDevice(Env::Default(), attr, i, executor, allow_growth)));
     }
-    return Status::OK();
+    return OkStatus();
   }
 };
 
@@ -214,3 +218,6 @@ void __attribute__((destructor)) OnMusaPluginUnload() {
 }
 }
 // extern "C" void ForceLinkMusaAmpOptimizer();
+
+#endif  // TF_MAJOR_VERSION < 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION <
+        // 10)

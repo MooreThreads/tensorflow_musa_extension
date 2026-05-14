@@ -50,7 +50,7 @@ struct NumTrue {
 
     if (input.size() == 0) {
       *num_true_data = static_cast<TIndex>(0);
-      return Status::OK();
+      return OkStatus();
     }
 
     // Use the new LaunchIsNonZeroCount operator which directly counts
@@ -74,7 +74,7 @@ struct NumTrue {
                               musaGetErrorString(m_err));
     }
 
-    return Status::OK();
+    return OkStatus();
   }
 };
 
@@ -103,7 +103,7 @@ struct Where {
                         typename TTypes<T, NDIM>::ConstTensor input,
                         typename TTypes<TIndex>::Matrix output) {
     if (output.dimension(0) == 0) {
-      return Status::OK();
+      return OkStatus();
     }
 
     musaStream_t stream = GetMusaStreamByCtx(ctx);
@@ -179,7 +179,7 @@ struct Where {
     LaunchPropagateWhereIndicesKernel<NDIM, TIndex>(
         output_rows, strides.data(), selected_indices, output.data(), stream);
 
-    return Status::OK();
+    return OkStatus();
   }
 };
 

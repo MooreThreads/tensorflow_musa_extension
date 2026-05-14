@@ -705,13 +705,13 @@ Status MusaTensorDotFusion::Apply(GraphDef* graph,
 
   if (!match_result.IsValid()) {
     VLOG(2) << "[TensorDot::Apply] RETURN: invalid match result";
-    return Status(error::INVALID_ARGUMENT, "Invalid TensorDot match result");
+    return errors::InvalidArgument("Invalid TensorDot match result");
   }
 
   if (!IsKernelAvailable()) {
     VLOG(2)
         << "[TensorDot::Apply] RETURN: kernel not available, skipping fusion";
-    return Status::OK();
+    return OkStatus();
   }
 
   // 获取关键节点
@@ -721,8 +721,7 @@ Status MusaTensorDotFusion::Apply(GraphDef* graph,
   if (output_it == match_result.captured_nodes.end()) {
     VLOG(2)
         << "[TensorDot::Apply] RETURN: missing output node in captured_nodes";
-    return Status(error::INVALID_ARGUMENT,
-                  "Missing output node in TensorDot pattern");
+    return errors::InvalidArgument("Missing output node in TensorDot pattern");
   }
 
   const NodeDef* output_node = output_it->second;
@@ -735,7 +734,7 @@ Status MusaTensorDotFusion::Apply(GraphDef* graph,
     if (node.name() == output_name && node.op() == "MusaTensorDot") {
       VLOG(2) << "[TensorDot::Apply] RETURN: already fused, node="
               << output_name;
-      return Status(error::ALREADY_EXISTS, "Already fused");
+      return errors::AlreadyExists("Already fused");
     }
   }
 
@@ -749,8 +748,7 @@ Status MusaTensorDotFusion::Apply(GraphDef* graph,
     input_a_name = original_input_it->second;
   } else {
     VLOG(2) << "[TensorDot::Apply] RETURN: cannot determine input A";
-    return Status(error::INVALID_ARGUMENT,
-                  "Cannot determine TensorDot input A");
+    return errors::InvalidArgument("Cannot determine TensorDot input A");
   }
 
   auto weight_input_it = match_result.captured_attrs.find("weight_input");
@@ -762,8 +760,8 @@ Status MusaTensorDotFusion::Apply(GraphDef* graph,
     input_b_name = weight_it->second->name();
   } else {
     VLOG(2) << "[TensorDot::Apply] RETURN: cannot determine input B (weight)";
-    return Status(error::INVALID_ARGUMENT,
-                  "Cannot determine TensorDot input B (weight)");
+    return errors::InvalidArgument(
+        "Cannot determine TensorDot input B (weight)");
   }
 
   // 获取数据类型
@@ -938,7 +936,7 @@ Status MusaTensorDotFusion::Apply(GraphDef* graph,
           << ", removed=" << removed_count
           << ", graph_nodes=" << graph->node_size();
 
-  return Status::OK();
+  return OkStatus();
 }
 
 // 注册融合模式
