@@ -89,8 +89,12 @@ namespace musa {
 
 template <typename T>
 void* GetStream(OpKernelContext* ctx) {
-  auto* device = GetDeviceByCtx(ctx);
-  return device ? device->GetStream() : nullptr;
+  musaStream_t stream = GetMusaStreamByCtx(ctx);
+  if (stream == nullptr) {
+    ctx->CtxFailure(
+        errors::Internal("MUSA stream is unavailable for random op"));
+  }
+  return stream;
 }
 
 // ==========================================
@@ -122,6 +126,7 @@ class MusaRandomUniformOp : public MusaOpKernel {
     if (num_blocks > 1024) num_blocks = 1024;
 
     void* stream = GetStream<T>(ctx);
+    if (stream == nullptr) return;
     if (std::is_same<T, float>::value) {
       LaunchRandomUniform_float(stream, n, num_blocks, block_size, state,
                                 output->flat<float>().data());
@@ -173,6 +178,7 @@ class MusaRandomUniformIntOp : public MusaOpKernel {
     if (num_blocks > 1024) num_blocks = 1024;
 
     void* stream = GetStream<T>(ctx);
+    if (stream == nullptr) return;
     if (std::is_same<T, int32>::value) {
       LaunchRandomUniformInt_int(
           stream, n, num_blocks, block_size, state, static_cast<int>(minval),

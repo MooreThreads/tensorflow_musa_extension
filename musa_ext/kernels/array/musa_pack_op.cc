@@ -111,6 +111,8 @@ class MusaPackOp : public MusaOpKernel {
     if (output->NumElements() == 0) return;
 
     musaStream_t stream = GetMusaStreamByCtx(ctx);
+    OP_REQUIRES(ctx, stream != nullptr,
+                errors::Internal("MUSA stream is unavailable for Pack"));
     const size_t input_bytes = ctx->input(0).TotalBytes();
 
     // Fast path: axis=0 stack is just block-wise concatenation of contiguous
@@ -118,10 +120,10 @@ class MusaPackOp : public MusaOpKernel {
     if (axis == 0) {
       char* dst = const_cast<char*>(output->tensor_data().data());
       for (int i = 0; i < N; ++i) {
-        musaError_t err = musaMemcpyAsync(
-            dst + static_cast<size_t>(i) * input_bytes,
-            ctx->input(i).tensor_data().data(), input_bytes,
-            musaMemcpyDeviceToDevice, stream);
+        musaError_t err =
+            musaMemcpyAsync(dst + static_cast<size_t>(i) * input_bytes,
+                            ctx->input(i).tensor_data().data(), input_bytes,
+                            musaMemcpyDeviceToDevice, stream);
         OP_REQUIRES(ctx, err == musaSuccess,
                     errors::Internal("musaMemcpyAsync failed in Pack axis=0 "
                                      "fast path: ",
@@ -145,6 +147,7 @@ class MusaPackOp : public MusaOpKernel {
     }
 
     // Use muDNN Concat with expanded dimension metadata
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
 
     // Create mTensor views with expanded dimension at axis
@@ -164,8 +167,7 @@ class MusaPackOp : public MusaOpKernel {
     OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
                 errors::Internal("MUSA Concat Run failed for Pack. Status: ",
                                  static_cast<int>(status)));
-    SyncPackStreamIfNeeded(ctx, reinterpret_cast<musaStream_t>(handle.GetStream()),
-                           NeedsHostVisiblePackSync<T>());
+    SyncPackStreamIfNeeded(ctx, stream, NeedsHostVisiblePackSync<T>());
   }
 
  private:
@@ -249,6 +251,8 @@ class MusaUnpackOp : public MusaOpKernel {
     // Handle single output - just copy
     if (N == 1) {
       musaStream_t stream = GetMusaStreamByCtx(ctx);
+      OP_REQUIRES(ctx, stream != nullptr,
+                  errors::Internal("MUSA stream is unavailable for Unpack"));
       musaError_t err =
           musaMemcpyAsync(const_cast<char*>(outputs[0]->tensor_data().data()),
                           input.tensor_data().data(), input.TotalBytes(),
@@ -272,6 +276,8 @@ class MusaUnpackOp : public MusaOpKernel {
     }
 
     musaStream_t stream = GetMusaStreamByCtx(ctx);
+    OP_REQUIRES(ctx, stream != nullptr,
+                errors::Internal("MUSA stream is unavailable for Unpack"));
 
     // Fast path for axis=0: use async memcpy for contiguous copies
     // Input layout [N, d0, d1, ...] means each output is a contiguous slice

@@ -199,6 +199,7 @@ MulFastPathResult TryLaunchMulFastPath(OpKernelContext* ctx, const Tensor& in0,
   const void* in1_ptr = in1.tensor_data().data();
   void* out_ptr = const_cast<char*>(out->tensor_data().data());
   musaStream_t stream = GetMusaStreamByCtx(ctx);
+  if (stream == nullptr) return MulFastPathResult::kNotHandled;
 
   bool launched = false;
   if (same_shape) {
@@ -293,6 +294,7 @@ class MusaMultiplyOp : public MusaOpKernel {
       return;
     }
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
 
     mBinary binary_op;
