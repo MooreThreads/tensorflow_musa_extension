@@ -1,13 +1,13 @@
 #include <iostream>
 #include <vector>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_shape.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -57,6 +57,7 @@ class MusaLayerNormOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(x.dtype(), stat_shape, &mean));
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(x.dtype(), stat_shape, &inv_var));
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
 
     mTensor mt_x = CreateMTensor(x, format_);

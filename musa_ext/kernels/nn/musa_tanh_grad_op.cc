@@ -1,8 +1,8 @@
+#include "../utils_op.h"
 #include "tensorflow/core/framework/common_shape_fns.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/shape_inference.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -24,6 +24,7 @@ class MusaTanhGradOp : public MusaOpKernel {
 
     if (y.NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     auto y_mt = CreateMTensor(y, format_);
     auto dy_mt = CreateMTensor(dy, format_);

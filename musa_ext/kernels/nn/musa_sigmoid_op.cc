@@ -21,6 +21,7 @@ class MusaSigmoidOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &output));
     if (input.NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     auto in_mt = CreateMTensor(input, format_);
     auto out_mt = CreateMTensor(*output, format_);
@@ -50,6 +51,7 @@ class MusaSigmoidGradOp : public MusaOpKernel {
 
     if (y.NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     auto y_mt = CreateMTensor(y, format_);
     auto dy_mt = CreateMTensor(dy, format_);
@@ -63,17 +65,17 @@ class MusaSigmoidGradOp : public MusaOpKernel {
                       "Sigmoid_BW Native Run", ctx);
   }
 };
-#define REGISTER_MUSA_SIGMOID(type)                                  \
-  REGISTER_KERNEL_BUILDER(                                           \
-      Name("Sigmoid").Device("MUSA").TypeConstraint<type>("T"),      \
-      MusaSigmoidOp<type>);                                          \
-  REGISTER_KERNEL_BUILDER(                                           \
+#define REGISTER_MUSA_SIGMOID(type)                                 \
+  REGISTER_KERNEL_BUILDER(                                          \
+      Name("Sigmoid").Device("MUSA").TypeConstraint<type>("T"),     \
+      MusaSigmoidOp<type>);                                         \
+  REGISTER_KERNEL_BUILDER(                                          \
       Name("SigmoidGrad").Device("MUSA").TypeConstraint<type>("T"), \
       MusaSigmoidGradOp<type>);
 
 REGISTER_MUSA_SIGMOID(float);
 REGISTER_MUSA_SIGMOID(Eigen::half);
-REGISTER_MUSA_SIGMOID(bfloat16);  
+REGISTER_MUSA_SIGMOID(bfloat16);
 
 }  // namespace musa
 }  // namespace tensorflow

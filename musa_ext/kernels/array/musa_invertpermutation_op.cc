@@ -1,8 +1,8 @@
+#include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_shape.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -26,6 +26,7 @@ class MusaInvertPermutationOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &output));
     if (n == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 

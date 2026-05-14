@@ -30,6 +30,7 @@ class MusaGeluOp : public MusaOpKernel {
     }
 
     const int64 num_elements = input.NumElements();
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     mTensor mt_input = CreateMTensor(input, format_);
     mTensor mt_output = CreateMTensor(*output, format_);

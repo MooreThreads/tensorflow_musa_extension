@@ -1,13 +1,13 @@
 #include <algorithm>
 #include <vector>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/util/bcast.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -48,6 +48,7 @@ class MusaClipOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
     if (output->NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
 
     mTensor mt_x = CreateMTensor(input_x, format_);
@@ -94,8 +95,8 @@ REGISTER_OP("MusaClip")
         return Status::OK();
       }
 
-      auto BroadcastTwoShapes =
-          [&](ShapeHandle a, ShapeHandle b, ShapeHandle* out) -> Status {
+      auto BroadcastTwoShapes = [&](ShapeHandle a, ShapeHandle b,
+                                    ShapeHandle* out) -> Status {
         const int rank_a = c->Rank(a);
         const int rank_b = c->Rank(b);
         const int out_rank = std::max(rank_a, rank_b);
@@ -148,9 +149,9 @@ REGISTER_OP("MusaClip")
 
 }  // namespace tensorflow
 
-#define REGISTER_MUSA_CLIP(TYPE)                                             \
-  REGISTER_KERNEL_BUILDER(                                                   \
-      Name("MusaClip").Device(DEVICE_MTGPU).TypeConstraint<TYPE>("T"),       \
+#define REGISTER_MUSA_CLIP(TYPE)                                       \
+  REGISTER_KERNEL_BUILDER(                                             \
+      Name("MusaClip").Device(DEVICE_MTGPU).TypeConstraint<TYPE>("T"), \
       ::tensorflow::musa::MusaClipOp<TYPE>)
 
 REGISTER_MUSA_CLIP(float);

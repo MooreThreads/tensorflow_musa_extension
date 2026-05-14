@@ -98,6 +98,7 @@ class MusaSumOp : public MusaOpKernel {
 
     if (reduce_elements == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 

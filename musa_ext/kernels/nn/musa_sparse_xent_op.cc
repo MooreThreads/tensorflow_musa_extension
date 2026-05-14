@@ -1,8 +1,8 @@
+#include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_shape.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -40,6 +40,7 @@ class MusaSparseSoftMaxCrossEntroyWithLogitsOp : public MusaOpKernel {
 
     if (logits.NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(context);
     mHandle& h = GetHandleByCtx(context);
 
     Tensor log_probs_t, gathered_log_t, ones_t;

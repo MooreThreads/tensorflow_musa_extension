@@ -122,6 +122,7 @@ class MusaReshapeMatMulOp : public MusaOpKernel {
 
     const int64_t m = x.NumElements() / k;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     handle.SetAllowTF32(tf32_enabled_);
 

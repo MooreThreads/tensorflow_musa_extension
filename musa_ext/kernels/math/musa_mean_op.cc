@@ -83,6 +83,7 @@ class MusaMeanOp : public MusaOpKernel {
 
     if (reduce_elements == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
 
     if (reduce_elements == 1) {

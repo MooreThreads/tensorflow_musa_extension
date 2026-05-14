@@ -95,6 +95,7 @@ class MusaMatMulOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, out_shape, &out));
     if (out->NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
 
     // When inner dim k == 0, inputs have NumElements == 0 but the output

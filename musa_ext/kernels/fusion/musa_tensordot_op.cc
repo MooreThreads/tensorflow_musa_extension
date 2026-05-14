@@ -262,6 +262,7 @@ class MusaTensorDotOp : public MusaOpKernel {
     }
 
     // 设置 TF32
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     handle.SetAllowTF32(tf32_enabled_);
 
@@ -288,6 +289,9 @@ class MusaTensorDotOp : public MusaOpKernel {
   // 执行 MatMul 操作
   Status DoMatMul(OpKernelContext* ctx, const Tensor& a, const Tensor& b,
                   Tensor* output) {
+    if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+      return MusaMudnnHandleRequiredError();
+    }
     mHandle& handle = GetHandleByCtx(ctx);
 
     mTensor mt_a = CreateMTensor(a);

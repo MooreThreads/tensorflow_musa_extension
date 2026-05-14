@@ -31,6 +31,9 @@ Status PermuteTensorOnMusa(OpKernelContext* ctx, const Tensor& input,
                                    input.dims(), ", perm_size=", perm.size());
   }
 
+  if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+    return MusaMudnnHandleRequiredError();
+  }
   auto& handle = GetHandleByCtx(ctx);
 
   mTensor in_mt = CreateMTensor(input);
@@ -93,6 +96,9 @@ template <typename T>
 Status RunMusaMaxPool(OpKernelContext* ctx, const Tensor& input, Tensor* output,
                       TensorFormat data_format, int window_h, int window_w,
                       int stride_h, int stride_w, int pad_top, int pad_left) {
+  if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+    return MusaMudnnHandleRequiredError();
+  }
   auto& handle = GetHandleByCtx(ctx);
 
   mTensor x = CreateMTensor(input, mFormat::NHWC);

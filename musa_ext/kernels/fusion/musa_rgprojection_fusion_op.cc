@@ -155,6 +155,7 @@ class MusaBiasAddReluMatMulOp : public MusaOpKernel {
 
   void RunBiasAddRelu(OpKernelContext* ctx, const Tensor& input,
                       const Tensor& bias_input, Tensor& bias_relu_tensor) {
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
 
     mTensor mt_input = CreateMTensor(input);
@@ -207,6 +208,7 @@ class MusaBiasAddReluMatMulOp : public MusaOpKernel {
         ctx, k == k_check,
         errors::InvalidArgument("Matrix size-incompatible: lhs mismatch rhs"));
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     handle.SetAllowTF32(tf32_enabled_);
 

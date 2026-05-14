@@ -238,7 +238,6 @@ class MusaTensorDotBiasOp : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
-
     const Tensor& a = ctx->input(0);
     const Tensor& b = ctx->input(1);
     const Tensor& bias = ctx->input(2);
@@ -264,12 +263,12 @@ class MusaTensorDotBiasOp : public MusaOpKernel {
 
     if (bias.NumElements() != n_dim && bias.NumElements() != 1) {
       // bias 元素数不匹配，检查是否可以 broadcast
-      OP_REQUIRES(ctx,
-          bias.dims() == 2 && bias.dim_size(1) == n_dim,
-          errors::InvalidArgument(
-              "Bias shape ", bias.shape().DebugString(),
-              " is incompatible with output width N=", n_dim,
-              ". Expected 1D vector of size ", n_dim, " or shape compatible with it"));
+      OP_REQUIRES(ctx, bias.dims() == 2 && bias.dim_size(1) == n_dim,
+                  errors::InvalidArgument(
+                      "Bias shape ", bias.shape().DebugString(),
+                      " is incompatible with output width N=", n_dim,
+                      ". Expected 1D vector of size ", n_dim,
+                      " or shape compatible with it"));
     }
 
     VLOG(2) << "MusaTensorDotBias: bias shape validated, n_dim=" << n_dim
@@ -285,6 +284,7 @@ class MusaTensorDotBiasOp : public MusaOpKernel {
     }
 
     // 设置 TF32
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     handle.SetAllowTF32(tf32_enabled_);
 
@@ -311,6 +311,9 @@ class MusaTensorDotBiasOp : public MusaOpKernel {
   // 执行带 Bias 的 MatMul 操作
   Status DoMatMulWithBias(OpKernelContext* ctx, const Tensor& a,
                           const Tensor& b, const Tensor& bias, Tensor* output) {
+    if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+      return MusaMudnnHandleRequiredError();
+    }
     mHandle& handle = GetHandleByCtx(ctx);
 
     mTensor mt_a = CreateMTensor(a);
@@ -341,8 +344,9 @@ class MusaTensorDotBiasOp : public MusaOpKernel {
     auto status = op.RunWithBiasAdd(handle, mt_out, mt_a, mt_b, mt_bias, mm);
 
     if (status != ::musa::dnn::Status::SUCCESS) {
-      return errors::Internal("MUSA TensorDotBias MatMul with bias failed. Status: ",
-                              static_cast<int>(status));
+      return errors::Internal(
+          "MUSA TensorDotBias MatMul with bias failed. Status: ",
+          static_cast<int>(status));
     }
 
     return Status::OK();
@@ -384,7 +388,8 @@ class MusaTensorDotBiasOp : public MusaOpKernel {
       Tensor matmul_temp;
       TF_RETURN_IF_ERROR(
           ctx->allocate_temp(a.dtype(), matmul_shape, &matmul_temp));
-      TF_RETURN_IF_ERROR(DoMatMulWithBias(ctx, a_2d, b_2d, bias_2d, &matmul_temp));
+      TF_RETURN_IF_ERROR(
+          DoMatMulWithBias(ctx, a_2d, b_2d, bias_2d, &matmul_temp));
 
       TensorShape output_shape;
       for (int64_t dim : dims.output_dims) output_shape.AddDim(dim);
@@ -394,7 +399,8 @@ class MusaTensorDotBiasOp : public MusaOpKernel {
       return Status::OK();
     }
 
-    TF_RETURN_IF_ERROR(DoMatMulWithBias(ctx, a_2d, b_2d, bias_2d, &matmul_view));
+    TF_RETURN_IF_ERROR(
+        DoMatMulWithBias(ctx, a_2d, b_2d, bias_2d, &matmul_view));
     return Status::OK();
   }
 
@@ -454,7 +460,8 @@ class MusaTensorDotBiasOp : public MusaOpKernel {
     // 如果 bias 是标量，需要 broadcast 到向量
     if (bias.NumElements() == 1) {
       TensorShape target_shape({n_dim});
-      TF_RETURN_IF_ERROR(ctx->allocate_temp(bias.dtype(), target_shape, output));
+      TF_RETURN_IF_ERROR(
+          ctx->allocate_temp(bias.dtype(), target_shape, output));
       // TODO: 实现标量到向量的 broadcast
       return Status::OK();
     }
@@ -463,7 +470,8 @@ class MusaTensorDotBiasOp : public MusaOpKernel {
     if (bias.dims() == 2 && bias.dim_size(1) == n_dim) {
       // 假设 bias 沿 M 维度是相同的，取第一行作为向量
       TensorShape target_shape({n_dim});
-      TF_RETURN_IF_ERROR(ctx->allocate_temp(bias.dtype(), target_shape, output));
+      TF_RETURN_IF_ERROR(
+          ctx->allocate_temp(bias.dtype(), target_shape, output));
       // TODO: 实现从 2D 提取 1D 的逻辑
       return Status::OK();
     }
@@ -471,9 +479,9 @@ class MusaTensorDotBiasOp : public MusaOpKernel {
     // 尝试直接 reshape
     TensorShape target_shape({n_dim});
     if (!output->CopyFrom(bias, target_shape)) {
-      return errors::Internal(
-          "Failed to reshape bias from ", bias.shape().DebugString(),
-          " to ", target_shape.DebugString());
+      return errors::Internal("Failed to reshape bias from ",
+                              bias.shape().DebugString(), " to ",
+                              target_shape.DebugString());
     }
 
     return Status::OK();
@@ -484,8 +492,8 @@ class MusaTensorDotBiasOp : public MusaOpKernel {
 // Kernel Registration
 // =============================================================================
 
-#define REGISTER_MUSA_TENSORDOT_BIAS(TYPE)                            \
-  REGISTER_KERNEL_BUILDER(                                            \
+#define REGISTER_MUSA_TENSORDOT_BIAS(TYPE)                                \
+  REGISTER_KERNEL_BUILDER(                                                \
       Name("MusaTensorDotBias").Device("MUSA").TypeConstraint<TYPE>("T"), \
       MusaTensorDotBiasOp<TYPE>);
 

@@ -85,6 +85,7 @@ class MusaNormalizeOp : public MusaOpKernel {
     const T* input_ptr = x.flat<T>().data();
     T* output_ptr = y->flat<T>().data();
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 

@@ -1,8 +1,8 @@
 #include <mudnn.h>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -23,6 +23,7 @@ class MusaSquareOp : public MusaOpKernel {
 
     if (input.NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
 
     auto mt_in = CreateMTensor(input, format_);

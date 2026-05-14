@@ -2,10 +2,10 @@
 
 #include <vector>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/util/bcast.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -37,6 +37,7 @@ class MusaPowOp : public MusaOpKernel {
 
     if (output_shape.num_elements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
 
     mTensor t0 = CreateMTensor(in0, format_);

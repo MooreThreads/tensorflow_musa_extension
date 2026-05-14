@@ -19,6 +19,7 @@ template <typename T>
 struct ErfRunner {
   static void Run(OpKernelContext* ctx, const Tensor& input, Tensor* output,
                   mFormat format) {
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     mTensor t_input = CreateMTensor(input, format);
     mTensor t_output = CreateMTensor(*output, format);

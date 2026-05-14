@@ -109,6 +109,7 @@ class MusaTensorListFromTensorOp : public MusaOpKernel {
     output_list.element_shape = element_shape;
     output_list.tensors().reserve(input_tensor.shape().dim_size(0));
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& h = GetHandleByCtx(ctx);
     musaStream_t stream = reinterpret_cast<musaStream_t>(h.GetStream());
 

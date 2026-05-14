@@ -299,6 +299,9 @@ struct EinsumHelper {
     std::vector<int64_t> diagonal_strides_vec(diagonal_strides.begin(),
                                               diagonal_strides.end());
 
+    if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+      return MusaMudnnHandleRequiredError();
+    }
     auto& handle = GetHandleByCtx(ctx);
     auto input_mt = CreateMTensor(input);
     auto output_mt = CreateMTensor(*output);
@@ -366,6 +369,9 @@ struct EinsumHelper {
 
     if (output->NumElements() == 0) return Status::OK();
 
+    if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+      return MusaMudnnHandleRequiredError();
+    }
     auto& handle = GetHandleByCtx(ctx);
     handle.SetAllowTF32(false);
     // Use TF32 setting if needed, but here we can just default or use env like
@@ -595,6 +601,9 @@ struct EinsumHelper {
           static_cast<int>(status));
     }
 
+    if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+      return MusaMudnnHandleRequiredError();
+    }
     auto& handle = GetHandleByCtx(ctx);
     ::musa::dnn::Unary op;
     status = op.SetMode(::musa::dnn::Unary::Mode::IDENTITY);

@@ -126,6 +126,7 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
   OP_REQUIRES(ctx, num_inputs >= 1,
               errors::InvalidArgument("AddN requires at least one input."));
 
+  MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
   auto& handle = GetHandleByCtx(ctx);
   musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 
@@ -187,6 +188,7 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
       mTensor t0 = CreateMTensor(ctx->input(0), format);
       mTensor t1 = CreateMTensor(ctx->input(1), format);
       mTensor t_out = CreateMTensor(*output, format);
+      MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
       auto& handle = GetHandleByCtx(ctx);
 
       ::musa::dnn::Binary op;

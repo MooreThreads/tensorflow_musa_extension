@@ -1,6 +1,6 @@
+#include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -19,6 +19,7 @@ class MusaRsqrtOp : public MusaOpKernel {
     if (input.NumElements() > 0) {
       auto in_mt = CreateMTensor(input, format_);
       auto out_mt = CreateMTensor(*output, format_);
+      MUSA_OP_REQUIRES_MUDNN_HANDLE(context);
       auto& h = GetHandleByCtx(context);
 
       ::musa::dnn::Unary op;
@@ -47,6 +48,7 @@ class MusaRsqrtGradOp : public MusaOpKernel {
       auto y_mt = CreateMTensor(y, format_);
       auto dy_mt = CreateMTensor(dy, format_);
       auto dx_mt = CreateMTensor(*dx, format_);
+      MUSA_OP_REQUIRES_MUDNN_HANDLE(context);
       auto& h = GetHandleByCtx(context);
 
       ::musa::dnn::Binary op;

@@ -34,6 +34,7 @@ class MusaSigmoidCalibrationOp : public MusaOpKernel {
 
     if (input.NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     mTensor in_mt = CreateMTensor(input);
     mTensor scale_mt = CreateMTensor(scale);

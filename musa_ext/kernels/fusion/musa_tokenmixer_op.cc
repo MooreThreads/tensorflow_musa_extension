@@ -64,6 +64,7 @@ class MusaTokenMixerOp : public MusaOpKernel {
     mTensor in_mt = CreateMTensor(input_4d);
     mTensor out_mt = CreateMTensor(output_4d);
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     ::musa::dnn::Permute permute_op;
     std::vector<int64_t> perm = {0, 2, 1, 3};

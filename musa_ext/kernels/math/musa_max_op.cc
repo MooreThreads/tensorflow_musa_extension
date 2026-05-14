@@ -33,6 +33,7 @@ class MusaMaxOp : public MusaOpKernel {
       OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &out));
       if (out->NumElements() == 0) return;
 
+      MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
       auto& handle = GetHandleByCtx(ctx);
       musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
       MusaMemcpyAsyncD2D(const_cast<char*>(out->tensor_data().data()),
@@ -86,6 +87,7 @@ class MusaMaxOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &out));
     if (out->NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 

@@ -35,6 +35,7 @@ class MusaFloorModOp : public MusaOpKernel {
       return;
     }
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
 
     mTensor t0 = CreateMTensor(in0, format_);

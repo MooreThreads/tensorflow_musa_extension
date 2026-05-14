@@ -46,6 +46,7 @@ class MusaBitwiseAndOp : public MusaOpKernel {
     const int64_t size = output->NumElements();
     if (size == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     musaStream_t stream = (musaStream_t)handle.GetStream();
 

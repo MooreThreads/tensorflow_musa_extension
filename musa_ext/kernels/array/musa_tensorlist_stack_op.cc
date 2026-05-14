@@ -124,6 +124,7 @@ class MusaTensorListStackOp : public MusaOpKernel {
       return;
     }
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& h = GetHandleByCtx(ctx);
     musaStream_t stream = reinterpret_cast<musaStream_t>(h.GetStream());
 

@@ -16,14 +16,17 @@ limitations under the License.
 // GatherV2 op implementation using muDNN GatherX for proper batch_dims support.
 //
 // TensorFlow GatherV2 op specification:
-// - batch_dims is an explicit ATTRIBUTE (defaults to 0), not inferred from shapes
+// - batch_dims is an explicit ATTRIBUTE (defaults to 0), not inferred from
+// shapes
 // - When batch_dims > 0, the first batch_dims dimensions of indices and params
 //   are treated as batch dimensions (must match in size)
 // - axis must be >= batch_dims
-// - Output shape: params.shape[:batch_dims] + indices.shape[batch_dims:] + params.shape[axis+1:]
+// - Output shape: params.shape[:batch_dims] + indices.shape[batch_dims:] +
+// params.shape[axis+1:]
 //
 // MuDNN GatherX API:
-// - SetAxis(axis): the axis in params to gather from (relative to full params shape)
+// - SetAxis(axis): the axis in params to gather from (relative to full params
+// shape)
 // - SetBatchDims(batch_dims): number of leading batch dimensions in indices
 // - Run(handle, output, indices, params): execute the gather operation
 
@@ -44,8 +47,9 @@ class MusaGatherV2Op : public MusaOpKernel {
  public:
   explicit MusaGatherV2Op(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {
     // Read batch_dims as an explicit attribute from the op definition
-    // This is the correct way to get batch_dims - it should NOT be inferred from shapes
-    // TensorFlow GatherV2 op passes batch_dims as an attribute, not as input
+    // This is the correct way to get batch_dims - it should NOT be inferred
+    // from shapes TensorFlow GatherV2 op passes batch_dims as an attribute, not
+    // as input
     OP_REQUIRES_OK(ctx, ctx->GetAttr("batch_dims", &batch_dims_));
   }
 
@@ -87,15 +91,20 @@ class MusaGatherV2Op : public MusaOpKernel {
       batch_dims += indices_dims;
     }
 
-    OP_REQUIRES(ctx, axis >= 0 && axis < params_dims,
-                errors::InvalidArgument("Expected axis in range [", -params_dims,
-                                        ", ", params_dims, "), but got ", axis));
+    OP_REQUIRES(
+        ctx, axis >= 0 && axis < params_dims,
+        errors::InvalidArgument("Expected axis in range [", -params_dims, ", ",
+                                params_dims, "), but got ", axis));
 
     // batch_dims must be in range [0, min(axis, indices_dims)]
-    OP_REQUIRES(ctx, batch_dims >= 0 && batch_dims <= std::min(axis, static_cast<int64_t>(indices_dims)),
-                errors::InvalidArgument("batch_dims must be in range [0, min(axis, indices.dims())], "
-                                        "got batch_dims=", batch_dims, ", axis=", axis,
-                                        ", indices.dims()=", indices_dims));
+    OP_REQUIRES(
+        ctx,
+        batch_dims >= 0 &&
+            batch_dims <= std::min(axis, static_cast<int64_t>(indices_dims)),
+        errors::InvalidArgument(
+            "batch_dims must be in range [0, min(axis, indices.dims())], "
+            "got batch_dims=",
+            batch_dims, ", axis=", axis, ", indices.dims()=", indices_dims));
 
     // Validate indices dtype
     OP_REQUIRES(ctx, indices.dtype() == DT_INT32 || indices.dtype() == DT_INT64,
@@ -103,21 +112,26 @@ class MusaGatherV2Op : public MusaOpKernel {
                                         DataTypeString(indices.dtype())));
 
     // Validate batch dimension sizes match between params and indices
-    // When batch_dims > 0, params.shape[:batch_dims] must equal indices.shape[:batch_dims]
+    // When batch_dims > 0, params.shape[:batch_dims] must equal
+    // indices.shape[:batch_dims]
     for (int i = 0; i < batch_dims; ++i) {
       OP_REQUIRES(ctx, params.dim_size(i) == indices.dim_size(i),
-                  errors::InvalidArgument("batch dimension ", i, " must match: "
-                                          "params.dim_size(", i, ")=", params.dim_size(i),
-                                          " != indices.dim_size(", i, ")=", indices.dim_size(i)));
+                  errors::InvalidArgument("batch dimension ", i,
+                                          " must match: "
+                                          "params.dim_size(",
+                                          i, ")=", params.dim_size(i),
+                                          " != indices.dim_size(", i,
+                                          ")=", indices.dim_size(i)));
     }
 
     // Build output shape according to TensorFlow GatherV2 specification:
-    // output_shape = params.shape[:axis] + indices.shape[batch_dims:] + params.shape[axis+1:]
+    // output_shape = params.shape[:axis] + indices.shape[batch_dims:] +
+    // params.shape[axis+1:]
     //
     // Note: The formula is params.shape[:AXIS] not params.shape[:batch_dims]
     // This is the key difference that was causing the bug.
-    // When batch_dims > 0, the batch dimensions from params[:batch_dims] are included
-    // in params[:axis] since axis >= batch_dims is required.
+    // When batch_dims > 0, the batch dimensions from params[:batch_dims] are
+    // included in params[:axis] since axis >= batch_dims is required.
     TensorShape output_shape;
 
     // Add all params dimensions before axis (including batch dimensions)
@@ -143,6 +157,7 @@ class MusaGatherV2Op : public MusaOpKernel {
     }
 
     // Use muDNN GatherX for the operation
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
 
     mTensor params_mt = CreateMTensor(params, format_);
@@ -152,7 +167,8 @@ class MusaGatherV2Op : public MusaOpKernel {
     ::musa::dnn::GatherX gather_op;
     gather_op.SetMode(::musa::dnn::GatherX::Mode::GATHER);
     // Note: SetAxis takes the axis relative to params shape
-    // MuDNN GatherX internally handles batch_dims by treating first batch_dims dims as batch
+    // MuDNN GatherX internally handles batch_dims by treating first batch_dims
+    // dims as batch
     gather_op.SetAxis(static_cast<int>(axis));
     gather_op.SetBatchDims(batch_dims);
 
@@ -170,8 +186,8 @@ class MusaGatherV2Op : public MusaOpKernel {
 };
 
 // Registration macros
-#define REGISTER_GATHER_V2_MUDNN(T, IndexT)                        \
-  REGISTER_KERNEL_BUILDER(Name("GatherV2")                         \
+#define REGISTER_GATHER_V2_MUDNN(T, IndexT)                       \
+  REGISTER_KERNEL_BUILDER(Name("GatherV2")                        \
                               .Device(DEVICE_MTGPU)               \
                               .TypeConstraint<T>("Tparams")       \
                               .TypeConstraint<IndexT>("Tindices") \
@@ -196,10 +212,10 @@ REGISTER_GATHER_V2_MUDNN(bfloat16, int64);
 
 // Also register Gather (v1) for backward compatibility
 // Note: Gather v1 does NOT have batch_dims attribute, so we use batch_dims=0
-#define REGISTER_GATHER_V1_MUDNN(T, IndexT)      \
-  REGISTER_KERNEL_BUILDER(Name("Gather")        \
-                              .Device(DEVICE_MTGPU) \
-                              .TypeConstraint<T>("Tparams") \
+#define REGISTER_GATHER_V1_MUDNN(T, IndexT)                        \
+  REGISTER_KERNEL_BUILDER(Name("Gather")                           \
+                              .Device(DEVICE_MTGPU)                \
+                              .TypeConstraint<T>("Tparams")        \
                               .TypeConstraint<IndexT>("Tindices"), \
                           MusaGatherV2Op<T, IndexT>);
 

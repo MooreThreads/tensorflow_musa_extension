@@ -36,8 +36,9 @@ Status CopyTensorForUpdateRMSProp(OpKernelContext* ctx, const Tensor& src,
   musaError_t err = musaMemcpyAsync(dst->data(), src.data(), src.TotalBytes(),
                                     musaMemcpyDeviceToDevice, stream);
   if (err != musaSuccess) {
-    return errors::Internal("CopyTensorForUpdateRMSProp: musaMemcpyAsync failed: ",
-                            musaGetErrorString(err));
+    return errors::Internal(
+        "CopyTensorForUpdateRMSProp: musaMemcpyAsync failed: ",
+        musaGetErrorString(err));
   }
 
   return Status::OK();
@@ -125,6 +126,7 @@ class MusaResourceApplyRMSPropOp : public MusaOpKernel {
     Tensor ms_t = *ms->tensor();
     Tensor mom_t = *mom->tensor();
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     std::list<Tensor> temp_storage;
     ::musa::dnn::Binary b_op;
@@ -176,8 +178,9 @@ class MusaResourceApplyRMSPropOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
                                            grad.shape(), &temp_storage.back()));
     mTensor t_grad_sq = CreateMTensor(temp_storage.back(), format_);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_grad_sq, t_grad, t_grad),
-                                        "MUL grad_sq"));
+    OP_REQUIRES_OK(ctx,
+                   require_success(b_op.Run(handle, t_grad_sq, t_grad, t_grad),
+                                   "MUL grad_sq"));
 
     // Third: (1-rho) * grad^2
     mTensor t_one_minus_rho;
@@ -187,23 +190,24 @@ class MusaResourceApplyRMSPropOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
                                            grad.shape(), &temp_storage.back()));
     mTensor t_grad_sq_scaled = CreateMTensor(temp_storage.back(), format_);
-    OP_REQUIRES_OK(ctx,
-                   require_success(b_op.Run(handle, t_grad_sq_scaled, t_grad_sq,
-                                            t_one_minus_rho),
-                                   "MUL grad_sq_scaled"));
+    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_grad_sq_scaled,
+                                                 t_grad_sq, t_one_minus_rho),
+                                        "MUL grad_sq_scaled"));
 
     // Fourth: ms <- ms + (1-rho) * grad^2
     b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_ms, t_ms, t_grad_sq_scaled),
-                                        "ADD ms"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_ms, t_ms, t_grad_sq_scaled),
+                             "ADD ms"));
 
     // Step 2: mom <- momentum * mom + lr * grad / sqrt(ms + epsilon)
     // First: momentum * mom
     mTensor t_momentum;
     OP_REQUIRES_OK(ctx, fill_scalar(momentum, mom_t.shape(), &t_momentum));
     b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_mom, t_mom, t_momentum),
-                                        "MUL momentum_mom"));
+    OP_REQUIRES_OK(ctx,
+                   require_success(b_op.Run(handle, t_mom, t_mom, t_momentum),
+                                   "MUL momentum_mom"));
 
     // Second: ms + epsilon (must add epsilon BEFORE sqrt for correct formula)
     mTensor t_eps;
@@ -213,8 +217,9 @@ class MusaResourceApplyRMSPropOp : public MusaOpKernel {
                                            ms_t.shape(), &temp_storage.back()));
     mTensor t_ms_plus_eps = CreateMTensor(temp_storage.back(), format_);
     b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_ms_plus_eps, t_ms, t_eps),
-                                        "ADD ms_epsilon"));
+    OP_REQUIRES_OK(ctx,
+                   require_success(b_op.Run(handle, t_ms_plus_eps, t_ms, t_eps),
+                                   "ADD ms_epsilon"));
 
     // Third: sqrt(ms + epsilon)
     temp_storage.emplace_back();
@@ -222,8 +227,9 @@ class MusaResourceApplyRMSPropOp : public MusaOpKernel {
                                            ms_t.shape(), &temp_storage.back()));
     mTensor t_sqrt_ms = CreateMTensor(temp_storage.back(), format_);
     u_op.SetMode(::musa::dnn::Unary::Mode::SQRT);
-    OP_REQUIRES_OK(ctx, require_success(u_op.Run(handle, t_sqrt_ms, t_ms_plus_eps),
-                                        "SQRT ms_plus_eps"));
+    OP_REQUIRES_OK(ctx,
+                   require_success(u_op.Run(handle, t_sqrt_ms, t_ms_plus_eps),
+                                   "SQRT ms_plus_eps"));
 
     // Fourth: grad / sqrt(ms + epsilon)
     temp_storage.emplace_back();
@@ -231,8 +237,9 @@ class MusaResourceApplyRMSPropOp : public MusaOpKernel {
                                            grad.shape(), &temp_storage.back()));
     mTensor t_grad_div = CreateMTensor(temp_storage.back(), format_);
     b_op.SetMode(::musa::dnn::Binary::Mode::DIV);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_grad_div, t_grad, t_sqrt_ms),
-                                        "DIV grad_sqrt"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_grad_div, t_grad, t_sqrt_ms),
+                             "DIV grad_sqrt"));
 
     // Fifth: lr * grad / sqrt(ms + epsilon)
     mTensor t_lr;
@@ -242,18 +249,20 @@ class MusaResourceApplyRMSPropOp : public MusaOpKernel {
                                            grad.shape(), &temp_storage.back()));
     mTensor t_lr_grad_div = CreateMTensor(temp_storage.back(), format_);
     b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_lr_grad_div, t_grad_div, t_lr),
-                                        "MUL lr_grad"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_lr_grad_div, t_grad_div, t_lr),
+                             "MUL lr_grad"));
 
     // Sixth: mom <- momentum * mom + lr * grad / sqrt(ms + epsilon)
     b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_mom, t_mom, t_lr_grad_div),
-                                        "ADD mom"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_mom, t_mom, t_lr_grad_div),
+                             "ADD mom"));
 
     // Step 3: var <- var - mom
     b_op.SetMode(::musa::dnn::Binary::Mode::SUB);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_var, t_var, t_mom),
-                                        "SUB var"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_var, t_var, t_mom), "SUB var"));
 
     musaStream_t stream = GetMusaStreamByCtx(ctx);
     musaError_t sync_err = musaStreamSynchronize(stream);
@@ -304,6 +313,7 @@ class MusaApplyRMSPropKernelOp : public MusaOpKernel {
     const T epsilon = ctx->input(6).scalar<T>()();
     const Tensor& grad = ctx->input(7);
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     std::list<Tensor> temp_storage;
 
@@ -407,27 +417,27 @@ class MusaApplyRMSPropKernelOp : public MusaOpKernel {
   bool use_exclusive_lock_;
 };
 
-#define REGISTER_RESOURCE_RMSPROP(T)                        \
-  REGISTER_KERNEL_BUILDER(Name("ResourceApplyRMSProp")      \
-                              .Device(DEVICE_MTGPU)         \
-                              .HostMemory("var")            \
-                              .HostMemory("ms")             \
-                              .HostMemory("mom")            \
-                              .TypeConstraint<T>("T")       \
-                              .HostMemory("lr")             \
-                              .HostMemory("rho")            \
-                              .HostMemory("momentum")       \
-                              .HostMemory("epsilon"),       \
+#define REGISTER_RESOURCE_RMSPROP(T)                   \
+  REGISTER_KERNEL_BUILDER(Name("ResourceApplyRMSProp") \
+                              .Device(DEVICE_MTGPU)    \
+                              .HostMemory("var")       \
+                              .HostMemory("ms")        \
+                              .HostMemory("mom")       \
+                              .TypeConstraint<T>("T")  \
+                              .HostMemory("lr")        \
+                              .HostMemory("rho")       \
+                              .HostMemory("momentum")  \
+                              .HostMemory("epsilon"),  \
                           MusaResourceApplyRMSPropOp<T>);
 
-#define REGISTER_APPLY_RMSPROP(T)                           \
-  REGISTER_KERNEL_BUILDER(Name("ApplyRMSProp")              \
-                              .Device(DEVICE_MTGPU)         \
-                              .TypeConstraint<T>("T")       \
-                              .HostMemory("lr")             \
-                              .HostMemory("rho")            \
-                              .HostMemory("momentum")       \
-                              .HostMemory("epsilon"),       \
+#define REGISTER_APPLY_RMSPROP(T)                     \
+  REGISTER_KERNEL_BUILDER(Name("ApplyRMSProp")        \
+                              .Device(DEVICE_MTGPU)   \
+                              .TypeConstraint<T>("T") \
+                              .HostMemory("lr")       \
+                              .HostMemory("rho")      \
+                              .HostMemory("momentum") \
+                              .HostMemory("epsilon"), \
                           MusaApplyRMSPropKernelOp<T>);
 
 REGISTER_RESOURCE_RMSPROP(float);
@@ -490,13 +500,12 @@ class MusaResourceApplyCenteredRMSPropOp : public MusaOpKernel {
       locks.emplace_back(mu);
     }
 
-    OP_REQUIRES(ctx,
-                var->tensor()->IsInitialized() &&
-                    mg->tensor()->IsInitialized() &&
-                    ms->tensor()->IsInitialized() &&
-                    mom->tensor()->IsInitialized(),
-                errors::FailedPrecondition(
-                    "CenteredRMSProp variables (var/mg/ms/mom) not initialized."));
+    OP_REQUIRES(
+        ctx,
+        var->tensor()->IsInitialized() && mg->tensor()->IsInitialized() &&
+            ms->tensor()->IsInitialized() && mom->tensor()->IsInitialized(),
+        errors::FailedPrecondition(
+            "CenteredRMSProp variables (var/mg/ms/mom) not initialized."));
 
     OP_REQUIRES_OK(ctx, PrepareTensorForMusaUpdateRMSProp(ctx, var.get()));
     OP_REQUIRES_OK(ctx, PrepareTensorForMusaUpdateRMSProp(ctx, mg.get()));
@@ -508,6 +517,7 @@ class MusaResourceApplyCenteredRMSPropOp : public MusaOpKernel {
     Tensor ms_t = *ms->tensor();
     Tensor mom_t = *mom->tensor();
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     std::list<Tensor> temp_storage;
     ::musa::dnn::Binary b_op;
@@ -561,14 +571,14 @@ class MusaResourceApplyCenteredRMSPropOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
                                            grad.shape(), &temp_storage.back()));
     mTensor t_grad_scaled = CreateMTensor(temp_storage.back(), format_);
-    OP_REQUIRES_OK(ctx,
-                   require_success(b_op.Run(handle, t_grad_scaled, t_grad,
-                                            t_one_minus_rho),
-                                   "MUL grad_scaled"));
+    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_grad_scaled, t_grad,
+                                                 t_one_minus_rho),
+                                        "MUL grad_scaled"));
 
     b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_mg, t_mg, t_grad_scaled),
-                                        "ADD mg"));
+    OP_REQUIRES_OK(
+        ctx,
+        require_success(b_op.Run(handle, t_mg, t_mg, t_grad_scaled), "ADD mg"));
 
     // Step 2: ms <- rho * ms + (1-rho) * grad^2
     b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
@@ -579,29 +589,31 @@ class MusaResourceApplyCenteredRMSPropOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
                                            grad.shape(), &temp_storage.back()));
     mTensor t_grad_sq = CreateMTensor(temp_storage.back(), format_);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_grad_sq, t_grad, t_grad),
-                                        "MUL grad_sq"));
+    OP_REQUIRES_OK(ctx,
+                   require_success(b_op.Run(handle, t_grad_sq, t_grad, t_grad),
+                                   "MUL grad_sq"));
 
     temp_storage.emplace_back();
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
                                            grad.shape(), &temp_storage.back()));
     mTensor t_grad_sq_scaled = CreateMTensor(temp_storage.back(), format_);
-    OP_REQUIRES_OK(ctx,
-                   require_success(b_op.Run(handle, t_grad_sq_scaled, t_grad_sq,
-                                            t_one_minus_rho),
-                                   "MUL grad_sq_scaled"));
+    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_grad_sq_scaled,
+                                                 t_grad_sq, t_one_minus_rho),
+                                        "MUL grad_sq_scaled"));
 
     b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_ms, t_ms, t_grad_sq_scaled),
-                                        "ADD ms"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_ms, t_ms, t_grad_sq_scaled),
+                             "ADD ms"));
 
     // Step 3: mom <- momentum * mom + lr * grad / sqrt(ms - mg^2 + epsilon)
     // First: momentum * mom
     mTensor t_momentum;
     OP_REQUIRES_OK(ctx, fill_scalar(momentum, mom_t.shape(), &t_momentum));
     b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_mom, t_mom, t_momentum),
-                                        "MUL momentum_mom"));
+    OP_REQUIRES_OK(ctx,
+                   require_success(b_op.Run(handle, t_mom, t_mom, t_momentum),
+                                   "MUL momentum_mom"));
 
     // Second: mg^2
     temp_storage.emplace_back();
@@ -617,17 +629,17 @@ class MusaResourceApplyCenteredRMSPropOp : public MusaOpKernel {
                                            ms_t.shape(), &temp_storage.back()));
     mTensor t_ms_minus_mg_sq = CreateMTensor(temp_storage.back(), format_);
     b_op.SetMode(::musa::dnn::Binary::Mode::SUB);
-    OP_REQUIRES_OK(ctx,
-                   require_success(b_op.Run(handle, t_ms_minus_mg_sq, t_ms, t_mg_sq),
-                                   "SUB ms_mg_sq"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_ms_minus_mg_sq, t_ms, t_mg_sq),
+                             "SUB ms_mg_sq"));
 
     // Fourth: ms - mg^2 + epsilon
     mTensor t_eps;
     OP_REQUIRES_OK(ctx, fill_scalar(epsilon, ms_t.shape(), &t_eps));
     b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(ctx,
-                   require_success(b_op.Run(handle, t_ms_minus_mg_sq, t_ms_minus_mg_sq, t_eps),
-                                   "ADD epsilon_centered"));
+    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_ms_minus_mg_sq,
+                                                 t_ms_minus_mg_sq, t_eps),
+                                        "ADD epsilon_centered"));
 
     // Fifth: sqrt(ms - mg^2 + epsilon)
     temp_storage.emplace_back();
@@ -635,8 +647,9 @@ class MusaResourceApplyCenteredRMSPropOp : public MusaOpKernel {
                                            ms_t.shape(), &temp_storage.back()));
     mTensor t_sqrt_denom = CreateMTensor(temp_storage.back(), format_);
     u_op.SetMode(::musa::dnn::Unary::Mode::SQRT);
-    OP_REQUIRES_OK(ctx, require_success(u_op.Run(handle, t_sqrt_denom, t_ms_minus_mg_sq),
-                                        "SQRT centered_denom"));
+    OP_REQUIRES_OK(
+        ctx, require_success(u_op.Run(handle, t_sqrt_denom, t_ms_minus_mg_sq),
+                             "SQRT centered_denom"));
 
     // Sixth: grad / sqrt(ms - mg^2 + epsilon)
     temp_storage.emplace_back();
@@ -644,8 +657,9 @@ class MusaResourceApplyCenteredRMSPropOp : public MusaOpKernel {
                                            grad.shape(), &temp_storage.back()));
     mTensor t_grad_div = CreateMTensor(temp_storage.back(), format_);
     b_op.SetMode(::musa::dnn::Binary::Mode::DIV);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_grad_div, t_grad, t_sqrt_denom),
-                                        "DIV grad_centered"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_grad_div, t_grad, t_sqrt_denom),
+                             "DIV grad_centered"));
 
     // Seventh: lr * grad / sqrt(ms - mg^2 + epsilon)
     mTensor t_lr;
@@ -655,13 +669,15 @@ class MusaResourceApplyCenteredRMSPropOp : public MusaOpKernel {
                                            grad.shape(), &temp_storage.back()));
     mTensor t_lr_grad_div = CreateMTensor(temp_storage.back(), format_);
     b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_lr_grad_div, t_grad_div, t_lr),
-                                        "MUL lr_grad_centered"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_lr_grad_div, t_grad_div, t_lr),
+                             "MUL lr_grad_centered"));
 
     // Eighth: mom <- momentum * mom + lr * grad / sqrt(ms - mg^2 + epsilon)
     b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_mom, t_mom, t_lr_grad_div),
-                                        "ADD mom_centered"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_mom, t_mom, t_lr_grad_div),
+                             "ADD mom_centered"));
 
     // Step 4: var <- var - mom
     b_op.SetMode(::musa::dnn::Binary::Mode::SUB);
@@ -670,10 +686,11 @@ class MusaResourceApplyCenteredRMSPropOp : public MusaOpKernel {
 
     musaStream_t stream = GetMusaStreamByCtx(ctx);
     musaError_t sync_err = musaStreamSynchronize(stream);
-    OP_REQUIRES(ctx, sync_err == musaSuccess,
-                errors::Internal("ResourceApplyCenteredRMSProp: musaStreamSynchronize "
-                                 "failed: ",
-                                 musaGetErrorString(sync_err)));
+    OP_REQUIRES(
+        ctx, sync_err == musaSuccess,
+        errors::Internal("ResourceApplyCenteredRMSProp: musaStreamSynchronize "
+                         "failed: ",
+                         musaGetErrorString(sync_err)));
   }
 
  private:
@@ -700,18 +717,20 @@ class MusaApplyCenteredRMSPropKernelOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 1), &mg));
     OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 2), &ms));
     OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 3), &mom));
-    core::ScopedUnref var_unref(var), mg_unref(mg), ms_unref(ms), mom_unref(mom);
+    core::ScopedUnref var_unref(var), mg_unref(mg), ms_unref(ms),
+        mom_unref(mom);
 
     Tensor* var_t = var->tensor();
     Tensor* mg_t = mg->tensor();
     Tensor* ms_t = ms->tensor();
     Tensor* mom_t = mom->tensor();
 
-    OP_REQUIRES(ctx,
-                var_t->IsInitialized() && mg_t->IsInitialized() &&
-                    ms_t->IsInitialized() && mom_t->IsInitialized(),
-                errors::FailedPrecondition(
-                    "CenteredRMSProp variables (var/mg/ms/mom) not initialized."));
+    OP_REQUIRES(
+        ctx,
+        var_t->IsInitialized() && mg_t->IsInitialized() &&
+            ms_t->IsInitialized() && mom_t->IsInitialized(),
+        errors::FailedPrecondition(
+            "CenteredRMSProp variables (var/mg/ms/mom) not initialized."));
 
     // Inputs: lr (4), rho (5), momentum (6), epsilon (7), grad (8)
     const T lr = ctx->input(4).scalar<T>()();
@@ -720,6 +739,7 @@ class MusaApplyCenteredRMSPropKernelOp : public MusaOpKernel {
     const T epsilon = ctx->input(7).scalar<T>()();
     const Tensor& grad = ctx->input(8);
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     std::list<Tensor> temp_storage;
 
@@ -844,28 +864,28 @@ class MusaApplyCenteredRMSPropKernelOp : public MusaOpKernel {
   bool use_exclusive_lock_;
 };
 
-#define REGISTER_RESOURCE_CENTERED_RMSPROP(T)                        \
-  REGISTER_KERNEL_BUILDER(Name("ResourceApplyCenteredRMSProp")       \
-                              .Device(DEVICE_MTGPU)                  \
-                              .HostMemory("var")                     \
-                              .HostMemory("mg")                      \
-                              .HostMemory("ms")                      \
-                              .HostMemory("mom")                     \
-                              .TypeConstraint<T>("T")                \
-                              .HostMemory("lr")                      \
-                              .HostMemory("rho")                     \
-                              .HostMemory("momentum")                \
-                              .HostMemory("epsilon"),                \
+#define REGISTER_RESOURCE_CENTERED_RMSPROP(T)                  \
+  REGISTER_KERNEL_BUILDER(Name("ResourceApplyCenteredRMSProp") \
+                              .Device(DEVICE_MTGPU)            \
+                              .HostMemory("var")               \
+                              .HostMemory("mg")                \
+                              .HostMemory("ms")                \
+                              .HostMemory("mom")               \
+                              .TypeConstraint<T>("T")          \
+                              .HostMemory("lr")                \
+                              .HostMemory("rho")               \
+                              .HostMemory("momentum")          \
+                              .HostMemory("epsilon"),          \
                           MusaResourceApplyCenteredRMSPropOp<T>);
 
-#define REGISTER_APPLY_CENTERED_RMSPROP(T)                           \
-  REGISTER_KERNEL_BUILDER(Name("ApplyCenteredRMSProp")               \
-                              .Device(DEVICE_MTGPU)                  \
-                              .TypeConstraint<T>("T")                \
-                              .HostMemory("lr")                      \
-                              .HostMemory("rho")                     \
-                              .HostMemory("momentum")                \
-                              .HostMemory("epsilon"),                \
+#define REGISTER_APPLY_CENTERED_RMSPROP(T)             \
+  REGISTER_KERNEL_BUILDER(Name("ApplyCenteredRMSProp") \
+                              .Device(DEVICE_MTGPU)    \
+                              .TypeConstraint<T>("T")  \
+                              .HostMemory("lr")        \
+                              .HostMemory("rho")       \
+                              .HostMemory("momentum")  \
+                              .HostMemory("epsilon"),  \
                           MusaApplyCenteredRMSPropKernelOp<T>);
 
 REGISTER_RESOURCE_CENTERED_RMSPROP(float);

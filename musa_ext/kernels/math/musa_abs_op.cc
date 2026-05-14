@@ -22,6 +22,7 @@ class MusaAbsOp : public MusaOpKernel {
 
     if (input.NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
 
     mUnary unary_op;

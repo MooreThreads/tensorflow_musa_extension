@@ -144,6 +144,7 @@ class MusaResourceApplyAdamOp : public MusaOpKernel {
     m_t = *m->tensor();
     v_t = *v->tensor();
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     std::list<Tensor> temp_storage;
     ::musa::dnn::Binary b_op;
@@ -275,9 +276,8 @@ class MusaResourceApplyAdamOp : public MusaOpKernel {
                                            v_t.shape(), &temp_storage.back()));
     mTensor t_sqrt_v = CreateMTensor(temp_storage.back(), format_);
     u_op.SetMode(::musa::dnn::Unary::Mode::SQRT);
-    OP_REQUIRES_OK(
-        ctx,
-        require_success(u_op.Run(handle, t_sqrt_v, t_v), "SQRT v"));
+    OP_REQUIRES_OK(ctx,
+                   require_success(u_op.Run(handle, t_sqrt_v, t_v), "SQRT v"));
 
     temp_storage.emplace_back();
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
@@ -387,6 +387,7 @@ class MusaApplyAdamKernelOp : public MusaOpKernel {
     const T epsilon = ctx->input(8).scalar<T>()();
     // grad already declared above for shape validation
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     std::list<Tensor> temp_storage;
 

@@ -1,8 +1,8 @@
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/types.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -49,6 +49,7 @@ class MusaFloorDivOp : public MusaOpKernel {
       return;
     }
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     mTensor t0 = CreateMTensor(in0, format_);
     mTensor t1 = CreateMTensor(in1, format_);

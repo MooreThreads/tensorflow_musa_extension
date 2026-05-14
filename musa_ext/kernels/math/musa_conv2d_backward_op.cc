@@ -30,6 +30,9 @@ Status PermuteTensorOnMusa(OpKernelContext* ctx, const Tensor& input,
                                    input.dims(), ", perm_size=", perm.size());
   }
 
+  if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+    return MusaMudnnHandleRequiredError();
+  }
   auto& handle = GetHandleByCtx(ctx);
 
   mTensor in_mt = CreateMTensor(input);
@@ -99,6 +102,9 @@ Status RunMusaConv2DBackpropInput(OpKernelContext* ctx,
                                   TensorFormat data_format, int stride_h,
                                   int stride_w, int dilation_h, int dilation_w,
                                   int pad_top, int pad_left) {
+  if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+    return MusaMudnnHandleRequiredError();
+  }
   auto& handle = GetHandleByCtx(ctx);
 
   handle.SetAllowTF32(false);
@@ -207,6 +213,9 @@ Status RunMusaConv2DBackpropFilter(OpKernelContext* ctx,
                                    TensorFormat data_format, int stride_h,
                                    int stride_w, int dilation_h, int dilation_w,
                                    int pad_top, int pad_left) {
+  if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+    return MusaMudnnHandleRequiredError();
+  }
   auto& handle = GetHandleByCtx(ctx);
 
   handle.SetAllowTF32(false);

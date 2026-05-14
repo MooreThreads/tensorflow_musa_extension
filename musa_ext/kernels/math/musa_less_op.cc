@@ -1,7 +1,7 @@
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -51,6 +51,7 @@ class MusaLessOp : public MusaOpKernel {
       return;
     }
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     mTensor t0 = CreateMTensor(in0, format_);
     mTensor t1 = CreateMTensor(in1, format_);
@@ -65,9 +66,9 @@ class MusaLessOp : public MusaOpKernel {
   }
 };
 
-#define REGISTER_MUSA_LESS(TYPE)                               \
-  REGISTER_KERNEL_BUILDER(                                     \
-      Name("Less").Device("MUSA").TypeConstraint<TYPE>("T"),   \
+#define REGISTER_MUSA_LESS(TYPE)                             \
+  REGISTER_KERNEL_BUILDER(                                   \
+      Name("Less").Device("MUSA").TypeConstraint<TYPE>("T"), \
       MusaLessOp<TYPE>);
 
 REGISTER_MUSA_LESS(float);

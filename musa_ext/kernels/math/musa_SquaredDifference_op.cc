@@ -1,7 +1,7 @@
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -51,6 +51,7 @@ class MusaSquaredDifferenceOp : public MusaOpKernel {
       return;
     }
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     // CreateMTensor 会自动处理 float/half/bfloat16 的类型映射
     mTensor t0 = CreateMTensor(in0, format_);

@@ -84,10 +84,10 @@ inline bool FitsInt32(int64_t value) {
          value <= std::numeric_limits<int32_t>::max();
 }
 
-inline bool CanUseInt32Index(
-    const TensorShape& output_shape, const TensorShape& processing_shape,
-    const gtl::InlinedVector<int64_t, 4>& begin,
-    const gtl::InlinedVector<int64_t, 4>& strides) {
+inline bool CanUseInt32Index(const TensorShape& output_shape,
+                             const TensorShape& processing_shape,
+                             const gtl::InlinedVector<int64_t, 4>& begin,
+                             const gtl::InlinedVector<int64_t, 4>& strides) {
   if (!FitsInt32(output_shape.num_elements()) ||
       !FitsInt32(processing_shape.num_elements())) {
     return false;
@@ -95,8 +95,8 @@ inline bool CanUseInt32Index(
 
   for (int dim = 0; dim < output_shape.dims(); ++dim) {
     if (!FitsInt32(output_shape.dim_size(dim)) ||
-        !FitsInt32(processing_shape.dim_size(dim)) ||
-        !FitsInt32(begin[dim]) || !FitsInt32(strides[dim])) {
+        !FitsInt32(processing_shape.dim_size(dim)) || !FitsInt32(begin[dim]) ||
+        !FitsInt32(strides[dim])) {
       return false;
     }
   }
@@ -149,10 +149,10 @@ inline void FillLaunchParams(const TensorShape& output_shape,
   }
 }
 
-inline bool CanUseDenseGradCopy(
-    const TensorShape& output_shape, const TensorShape& processing_shape,
-    const gtl::InlinedVector<int64_t, 4>& begin,
-    const gtl::InlinedVector<int64_t, 4>& strides) {
+inline bool CanUseDenseGradCopy(const TensorShape& output_shape,
+                                const TensorShape& processing_shape,
+                                const gtl::InlinedVector<int64_t, 4>& begin,
+                                const gtl::InlinedVector<int64_t, 4>& strides) {
   if (output_shape.num_elements() <= 0 ||
       output_shape.num_elements() != processing_shape.num_elements()) {
     return false;
@@ -299,6 +299,7 @@ class MusaStridedSliceGradOp : public OpKernel {
     OP_REQUIRES_OK(context, context->allocate_output(0, output_shape, &output));
     if (output->NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(context);
     mHandle& handle = GetHandleByCtx(context);
     musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 
@@ -308,9 +309,8 @@ class MusaStridedSliceGradOp : public OpKernel {
           musaMemcpyAsync(output->data(), dy.data(), dy.TotalBytes(),
                           musaMemcpyDeviceToDevice, stream);
       OP_REQUIRES(context, err == musaSuccess,
-                  errors::Internal(
-                      "MUSA StridedSliceGrad dense copy failed: ",
-                      musaGetErrorString(err)));
+                  errors::Internal("MUSA StridedSliceGrad dense copy failed: ",
+                                   musaGetErrorString(err)));
       return;
     }
 

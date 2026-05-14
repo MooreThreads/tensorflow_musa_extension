@@ -1,10 +1,10 @@
 #include <mudnn.h>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/util/bcast.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -42,6 +42,7 @@ class MusaMaximumOp : public MusaOpKernel {
 
     if (output->NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
 
     mBinary binary_op;

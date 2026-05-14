@@ -1,9 +1,9 @@
 #include <mudnn.h>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -23,6 +23,7 @@ class MusaLogOp : public MusaOpKernel {
 
     if (input.NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
 
     ::musa::dnn::Tensor mudnn_input = CreateMTensor(input, format_);

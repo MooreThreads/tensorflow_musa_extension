@@ -17,12 +17,13 @@ namespace {
 Status CopyHostInt64ToDevice(OpKernelContext* ctx, const Tensor& src,
                              Tensor* dst, musaStream_t stream) {
   TF_RETURN_IF_ERROR(ctx->allocate_temp(DT_INT64, src.shape(), dst));
-  auto err = musaMemcpyAsync(dst->flat<int64>().data(), src.flat<int64>().data(),
-                             src.NumElements() * sizeof(int64),
-                             musaMemcpyHostToDevice, stream);
+  auto err = musaMemcpyAsync(
+      dst->flat<int64>().data(), src.flat<int64>().data(),
+      src.NumElements() * sizeof(int64), musaMemcpyHostToDevice, stream);
   if (err != musaSuccess) {
-    return errors::Internal("SparseSlice: musaMemcpyAsync host to device failed: ",
-                            musaGetErrorString(err));
+    return errors::Internal(
+        "SparseSlice: musaMemcpyAsync host to device failed: ",
+        musaGetErrorString(err));
   }
   return Status::OK();
 }
@@ -69,25 +70,30 @@ class MusaSparseSliceOp : public MusaOpKernel {
 
     const int64_t nnz = indices.dim_size(0);
     const int64_t rank64 = indices.dim_size(1);
-    OP_REQUIRES(ctx, rank64 <= static_cast<int64_t>(std::numeric_limits<int>::max()),
+    OP_REQUIRES(ctx,
+                rank64 <= static_cast<int64_t>(std::numeric_limits<int>::max()),
                 errors::InvalidArgument("rank is too large: ", rank64));
     const int rank = static_cast<int>(rank64);
 
-    OP_REQUIRES(ctx, values.dim_size(0) == nnz,
-                errors::InvalidArgument("values length must match indices rows"));
-    OP_REQUIRES(ctx, shape.dim_size(0) == rank64,
-                errors::InvalidArgument("shape length must match indices rank"));
-    OP_REQUIRES(ctx, start.dim_size(0) == rank64,
-                errors::InvalidArgument("start length must match indices rank"));
+    OP_REQUIRES(
+        ctx, values.dim_size(0) == nnz,
+        errors::InvalidArgument("values length must match indices rows"));
+    OP_REQUIRES(
+        ctx, shape.dim_size(0) == rank64,
+        errors::InvalidArgument("shape length must match indices rank"));
+    OP_REQUIRES(
+        ctx, start.dim_size(0) == rank64,
+        errors::InvalidArgument("start length must match indices rank"));
     OP_REQUIRES(ctx, size.dim_size(0) == rank64,
                 errors::InvalidArgument("size length must match indices rank"));
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 
     Tensor* output_shape = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(2, TensorShape({rank64}),
-                                             &output_shape));
+    OP_REQUIRES_OK(
+        ctx, ctx->allocate_output(2, TensorShape({rank64}), &output_shape));
     auto output_shape_flat = output_shape->flat<int64>();
     auto size_flat = size.flat<int64>();
     for (int64_t i = 0; i < rank64; ++i) {
@@ -99,18 +105,20 @@ class MusaSparseSliceOp : public MusaOpKernel {
       Tensor* output_values = nullptr;
       OP_REQUIRES_OK(ctx, ctx->allocate_output(0, TensorShape({0, rank64}),
                                                &output_indices));
-      OP_REQUIRES_OK(ctx, ctx->allocate_output(1, TensorShape({0}),
-                                               &output_values));
+      OP_REQUIRES_OK(ctx,
+                     ctx->allocate_output(1, TensorShape({0}), &output_values));
       return;
     }
 
     Tensor start_device;
     Tensor size_device;
-    OP_REQUIRES_OK(ctx, CopyHostInt64ToDevice(ctx, start, &start_device, stream));
+    OP_REQUIRES_OK(ctx,
+                   CopyHostInt64ToDevice(ctx, start, &start_device, stream));
     OP_REQUIRES_OK(ctx, CopyHostInt64ToDevice(ctx, size, &size_device, stream));
 
     Tensor marks;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_INT64, TensorShape({nnz}), &marks));
+    OP_REQUIRES_OK(ctx,
+                   ctx->allocate_temp(DT_INT64, TensorShape({nnz}), &marks));
 
     LaunchSparseSliceMarkKernel(indices.flat<int64>().data(),
                                 start_device.flat<int64>().data(),
@@ -127,22 +135,23 @@ class MusaSparseSliceOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, SparseSlicePrefixSum(ctx, marks, &scanned));
 
     int64_t output_nnz = 0;
-    auto err = musaMemcpyAsync(&output_nnz,
-                               scanned.flat<int64>().data() + nnz - 1,
-                               sizeof(int64), musaMemcpyDeviceToHost, stream);
+    auto err =
+        musaMemcpyAsync(&output_nnz, scanned.flat<int64>().data() + nnz - 1,
+                        sizeof(int64), musaMemcpyDeviceToHost, stream);
     OP_REQUIRES(ctx, err == musaSuccess,
                 errors::Internal("SparseSlice: copying output count failed: ",
                                  musaGetErrorString(err)));
     err = musaStreamSynchronize(stream);
-    OP_REQUIRES(ctx, err == musaSuccess,
-                errors::Internal("SparseSlice: synchronizing output count failed: ",
-                                 musaGetErrorString(err)));
+    OP_REQUIRES(
+        ctx, err == musaSuccess,
+        errors::Internal("SparseSlice: synchronizing output count failed: ",
+                         musaGetErrorString(err)));
 
     Tensor* output_indices = nullptr;
     Tensor* output_values = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(
-                            0, TensorShape({output_nnz, rank64}),
-                            &output_indices));
+    OP_REQUIRES_OK(ctx,
+                   ctx->allocate_output(0, TensorShape({output_nnz, rank64}),
+                                        &output_indices));
     OP_REQUIRES_OK(ctx, ctx->allocate_output(1, TensorShape({output_nnz}),
                                              &output_values));
 
@@ -160,13 +169,13 @@ class MusaSparseSliceOp : public MusaOpKernel {
   }
 };
 
-#define REGISTER_MUSA_SPARSE_SLICE(type)                 \
-  REGISTER_KERNEL_BUILDER(Name("SparseSlice")            \
-                              .Device(DEVICE_MTGPU)      \
-                              .TypeConstraint<type>("T") \
-                              .HostMemory("start")        \
-                              .HostMemory("size")         \
-                              .HostMemory("output_shape"),\
+#define REGISTER_MUSA_SPARSE_SLICE(type)                   \
+  REGISTER_KERNEL_BUILDER(Name("SparseSlice")              \
+                              .Device(DEVICE_MTGPU)        \
+                              .TypeConstraint<type>("T")   \
+                              .HostMemory("start")         \
+                              .HostMemory("size")          \
+                              .HostMemory("output_shape"), \
                           MusaSparseSliceOp<type>);
 
 REGISTER_MUSA_SPARSE_SLICE(float);

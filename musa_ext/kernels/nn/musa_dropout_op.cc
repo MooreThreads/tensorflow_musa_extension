@@ -44,6 +44,7 @@ class MusaDropoutOp : public MusaOpKernel {
 
     if (x.NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
 
     mTensor mt_x = CreateMTensor(x, format_);
@@ -107,6 +108,7 @@ class MusaDropoutGradOp : public MusaOpKernel {
 
     if (grad.NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
 
     mTensor mt_grad = CreateMTensor(grad, format_);

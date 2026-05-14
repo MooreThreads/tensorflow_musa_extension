@@ -38,7 +38,7 @@ namespace musa {
 
 // Helper function declarations (defined in musa_applyadam_op.cc)
 extern Status CopyTensorForUpdate(OpKernelContext* ctx, const Tensor& src,
-                                   Tensor* dst);
+                                  Tensor* dst);
 extern Status PrepareTensorForMusaUpdate(OpKernelContext* ctx, Var* var);
 
 class MutexUnlocker {
@@ -79,15 +79,15 @@ inline Status ValidateAdaMaxHyperParams(OpKernelContext* ctx) {
 inline Status ValidateAdaMaxShapes(const Tensor& var_t, const Tensor& m_t,
                                    const Tensor& v_t, const Tensor& grad_t) {
   if (!var_t.shape().IsSameSize(m_t.shape())) {
-    return errors::InvalidArgument(
-        "var and m must have the same shape. var: ",
-        var_t.shape().DebugString(), " m: ", m_t.shape().DebugString());
+    return errors::InvalidArgument("var and m must have the same shape. var: ",
+                                   var_t.shape().DebugString(),
+                                   " m: ", m_t.shape().DebugString());
   }
 
   if (!var_t.shape().IsSameSize(v_t.shape())) {
-    return errors::InvalidArgument(
-        "var and v must have the same shape. var: ",
-        var_t.shape().DebugString(), " v: ", v_t.shape().DebugString());
+    return errors::InvalidArgument("var and v must have the same shape. var: ",
+                                   var_t.shape().DebugString(),
+                                   " v: ", v_t.shape().DebugString());
   }
 
   if (!var_t.shape().IsSameSize(grad_t.shape())) {
@@ -104,6 +104,9 @@ Status RunAdaMaxUpdate(OpKernelContext* ctx, mFormat format, Tensor* var_t,
                        Tensor* m_t, Tensor* v_t, const Tensor& grad,
                        T beta1_power, T lr, T beta1, T beta2, T epsilon,
                        const char* op_name) {
+  if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+    return MusaMudnnHandleRequiredError();
+  }
   auto& handle = GetHandleByCtx(ctx);
   std::list<Tensor> temp_storage;
   ::musa::dnn::Binary b_op;
@@ -113,8 +116,7 @@ Status RunAdaMaxUpdate(OpKernelContext* ctx, mFormat format, Tensor* var_t,
                              const char* step) -> Status {
     if (status != ::musa::dnn::Status::SUCCESS) {
       return errors::Internal(op_name, " ", step,
-                              " failed. Status: ",
-                              static_cast<int>(status));
+                              " failed. Status: ", static_cast<int>(status));
     }
     return Status::OK();
   };
@@ -143,8 +145,8 @@ Status RunAdaMaxUpdate(OpKernelContext* ctx, mFormat format, Tensor* var_t,
   mTensor t_beta1;
   mTensor t_inv_beta1;
   TF_RETURN_IF_ERROR(fill_scalar(beta1, m_t->shape(), &t_beta1));
-  TF_RETURN_IF_ERROR(fill_scalar(static_cast<T>(1.0) - beta1, grad.shape(),
-                                 &t_inv_beta1));
+  TF_RETURN_IF_ERROR(
+      fill_scalar(static_cast<T>(1.0) - beta1, grad.shape(), &t_inv_beta1));
 
   b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
   TF_RETURN_IF_ERROR(
@@ -171,8 +173,7 @@ Status RunAdaMaxUpdate(OpKernelContext* ctx, mFormat format, Tensor* var_t,
   mTensor t_v_scaled = CreateMTensor(temp_storage.back(), format);
   b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
   TF_RETURN_IF_ERROR(
-      require_success(b_op.Run(handle, t_v_scaled, t_v, t_beta2),
-                      "MUL beta2"));
+      require_success(b_op.Run(handle, t_v_scaled, t_v, t_beta2), "MUL beta2"));
 
   temp_storage.emplace_back();
   TF_RETURN_IF_ERROR(ctx->allocate_temp(DataTypeToEnum<T>::value, grad.shape(),
@@ -187,9 +188,8 @@ Status RunAdaMaxUpdate(OpKernelContext* ctx, mFormat format, Tensor* var_t,
                                         &temp_storage.back()));
   mTensor t_diff = CreateMTensor(temp_storage.back(), format);
   b_op.SetMode(::musa::dnn::Binary::Mode::SUB);
-  TF_RETURN_IF_ERROR(
-      require_success(b_op.Run(handle, t_diff, t_v_scaled, t_abs_grad),
-                      "SUB diff"));
+  TF_RETURN_IF_ERROR(require_success(
+      b_op.Run(handle, t_diff, t_v_scaled, t_abs_grad), "SUB diff"));
 
   temp_storage.emplace_back();
   TF_RETURN_IF_ERROR(ctx->allocate_temp(DataTypeToEnum<T>::value, v_t->shape(),
@@ -204,12 +204,10 @@ Status RunAdaMaxUpdate(OpKernelContext* ctx, mFormat format, Tensor* var_t,
                                         &temp_storage.back()));
   mTensor t_sum = CreateMTensor(temp_storage.back(), format);
   b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
+  TF_RETURN_IF_ERROR(require_success(
+      b_op.Run(handle, t_sum, t_v_scaled, t_abs_grad), "ADD sum1"));
   TF_RETURN_IF_ERROR(
-      require_success(b_op.Run(handle, t_sum, t_v_scaled, t_abs_grad),
-                      "ADD sum1"));
-  TF_RETURN_IF_ERROR(
-      require_success(b_op.Run(handle, t_sum, t_sum, t_abs_diff),
-                      "ADD sum2"));
+      require_success(b_op.Run(handle, t_sum, t_sum, t_abs_diff), "ADD sum2"));
 
   mTensor t_half;
   TF_RETURN_IF_ERROR(fill_scalar(static_cast<T>(0.5), v_t->shape(), &t_half));
@@ -239,9 +237,8 @@ Status RunAdaMaxUpdate(OpKernelContext* ctx, mFormat format, Tensor* var_t,
   mTensor t_lr_t;
   TF_RETURN_IF_ERROR(fill_scalar(lr_t, m_t->shape(), &t_lr_t));
   b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-  TF_RETURN_IF_ERROR(
-      require_success(b_op.Run(handle, t_update, t_update, t_lr_t),
-                      "MUL lr_t"));
+  TF_RETURN_IF_ERROR(require_success(
+      b_op.Run(handle, t_update, t_update, t_lr_t), "MUL lr_t"));
 
   b_op.SetMode(::musa::dnn::Binary::Mode::SUB);
   TF_RETURN_IF_ERROR(
@@ -319,10 +316,9 @@ class MusaResourceApplyAdaMaxOp : public MusaOpKernel {
     const T beta2 = ctx->input(6).scalar<T>()();
     const T epsilon = ctx->input(7).scalar<T>()();
 
-    OP_REQUIRES_OK(ctx,
-                   RunAdaMaxUpdate(ctx, format_, &var_t, &m_t, &v_t, grad,
-                                   beta1_power, lr, beta1, beta2, epsilon,
-                                   "ResourceApplyAdaMax"));
+    OP_REQUIRES_OK(ctx, RunAdaMaxUpdate(ctx, format_, &var_t, &m_t, &v_t, grad,
+                                        beta1_power, lr, beta1, beta2, epsilon,
+                                        "ResourceApplyAdaMax"));
   }
 
  private:
@@ -375,11 +371,11 @@ class MusaApplyAdaMaxKernelOp : public MusaOpKernel {
     const Tensor& grad = ctx->input(8);
 
     // Unified initialization check (consistent with Resource version)
-    OP_REQUIRES(ctx,
-                var_t.IsInitialized() && m_t.IsInitialized() &&
-                    v_t.IsInitialized(),
-                errors::FailedPrecondition(
-                    "AdaMax variables (var/m/v) not initialized."));
+    OP_REQUIRES(
+        ctx,
+        var_t.IsInitialized() && m_t.IsInitialized() && v_t.IsInitialized(),
+        errors::FailedPrecondition(
+            "AdaMax variables (var/m/v) not initialized."));
 
     OP_REQUIRES_OK(ctx, ValidateAdaMaxShapes(var_t, m_t, v_t, grad));
 
@@ -390,36 +386,35 @@ class MusaApplyAdaMaxKernelOp : public MusaOpKernel {
     const T epsilon = ctx->input(7).scalar<T>()();
 
     // Calculate learning rate decay
-    OP_REQUIRES_OK(ctx,
-                   RunAdaMaxUpdate(ctx, format_, &var_t, &m_t, &v_t, grad,
-                                   beta1_power, lr, beta1, beta2, epsilon,
-                                   "ApplyAdaMax"));
+    OP_REQUIRES_OK(ctx, RunAdaMaxUpdate(ctx, format_, &var_t, &m_t, &v_t, grad,
+                                        beta1_power, lr, beta1, beta2, epsilon,
+                                        "ApplyAdaMax"));
   }
 
  private:
   bool use_exclusive_lock_;
 };
 
-#define REGISTER_RESOURCE_ADAMAX(T)                       \
-  REGISTER_KERNEL_BUILDER(Name("ResourceApplyAdaMax")     \
-                              .Device(DEVICE_MTGPU)       \
-                              .TypeConstraint<T>("T")     \
-                              .HostMemory("beta1_power")  \
-                              .HostMemory("lr")           \
-                              .HostMemory("beta1")        \
-                              .HostMemory("beta2")        \
-                              .HostMemory("epsilon"),     \
+#define REGISTER_RESOURCE_ADAMAX(T)                      \
+  REGISTER_KERNEL_BUILDER(Name("ResourceApplyAdaMax")    \
+                              .Device(DEVICE_MTGPU)      \
+                              .TypeConstraint<T>("T")    \
+                              .HostMemory("beta1_power") \
+                              .HostMemory("lr")          \
+                              .HostMemory("beta1")       \
+                              .HostMemory("beta2")       \
+                              .HostMemory("epsilon"),    \
                           MusaResourceApplyAdaMaxOp<T>);
 
-#define REGISTER_APPLY_ADAMAX(T)                          \
-  REGISTER_KERNEL_BUILDER(Name("ApplyAdaMax")             \
-                              .Device(DEVICE_MTGPU)       \
-                              .TypeConstraint<T>("T")     \
-                              .HostMemory("beta1_power")  \
-                              .HostMemory("lr")           \
-                              .HostMemory("beta1")        \
-                              .HostMemory("beta2")        \
-                              .HostMemory("epsilon"),     \
+#define REGISTER_APPLY_ADAMAX(T)                         \
+  REGISTER_KERNEL_BUILDER(Name("ApplyAdaMax")            \
+                              .Device(DEVICE_MTGPU)      \
+                              .TypeConstraint<T>("T")    \
+                              .HostMemory("beta1_power") \
+                              .HostMemory("lr")          \
+                              .HostMemory("beta1")       \
+                              .HostMemory("beta2")       \
+                              .HostMemory("epsilon"),    \
                           MusaApplyAdaMaxKernelOp<T>);
 
 // Note: We don't register double/float64 as MuDNN Binary operations may not

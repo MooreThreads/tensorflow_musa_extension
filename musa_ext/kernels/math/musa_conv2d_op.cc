@@ -44,6 +44,9 @@ Status PermuteTensorOnMusa(OpKernelContext* ctx, const Tensor& input,
                                    input.dims(), ", perm_size=", perm.size());
   }
 
+  if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+    return MusaMudnnHandleRequiredError();
+  }
   auto& handle = GetHandleByCtx(ctx);
 
   // Use raw ND descriptors for permutation to avoid coupling to a specific
@@ -114,6 +117,9 @@ Status RunMusaConv2D(OpKernelContext* ctx, const Tensor& input,
                      TensorFormat data_format, int stride_h, int stride_w,
                      int dilation_h, int dilation_w, int pad_top, int pad_left,
                      bool tf32_enabled) {
+  if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+    return MusaMudnnHandleRequiredError();
+  }
   auto& handle = GetHandleByCtx(ctx);
 
   handle.SetAllowTF32(tf32_enabled);

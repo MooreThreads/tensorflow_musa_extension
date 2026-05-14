@@ -17,19 +17,19 @@ limitations under the License.
 /// Uses muDNN Binary::Mode::PRELU for efficient computation
 #include <mudnn.h>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/framework/tensor.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
 
- template <typename T> 
+template <typename T>
 void MusaNegKernelLauncher(const void* in, void* out, int size,
-                        musaStream_t stream);
+                           musaStream_t stream);
 template <typename T>
 class MusaPReluOp : public MusaOpKernel {
  public:
@@ -40,10 +40,9 @@ class MusaPReluOp : public MusaOpKernel {
 
   // Forward declaration of neg kernel launcher
 
-
   void Compute(OpKernelContext* ctx) override {
-    const Tensor& input = ctx->input(0);   // x
-    const Tensor& alpha = ctx->input(1);    // alpha (slope for negative part)
+    const Tensor& input = ctx->input(0);  // x
+    const Tensor& alpha = ctx->input(1);  // alpha (slope for negative part)
 
     // Output has the same shape as input
     Tensor* output = nullptr;
@@ -51,6 +50,7 @@ class MusaPReluOp : public MusaOpKernel {
 
     if (input.NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     musaStream_t stream = (musaStream_t)handle.GetStream();
 
@@ -64,7 +64,8 @@ class MusaPReluOp : public MusaOpKernel {
                                const_cast<char*>(output->tensor_data().data()),
                                alpha.NumElements(), stream);
 
-      // Run PRELU with output as neg_alpha (will be overwritten with final result)
+      // Run PRELU with output as neg_alpha (will be overwritten with final
+      // result)
       ::musa::dnn::Binary prelu_op;
       prelu_op.SetMode(::musa::dnn::Binary::Mode::PRELU);
       auto run_status = prelu_op.Run(handle, t_output, t_input, t_output);
@@ -73,11 +74,13 @@ class MusaPReluOp : public MusaOpKernel {
     } else {
       // Broadcasting case: need temporary tensor for neg_alpha
       Tensor neg_alpha;
-      OP_REQUIRES_OK(ctx, ctx->allocate_temp(alpha.dtype(), alpha.shape(), &neg_alpha));
+      OP_REQUIRES_OK(
+          ctx, ctx->allocate_temp(alpha.dtype(), alpha.shape(), &neg_alpha));
 
-      MusaNegKernelLauncher<T>(alpha.tensor_data().data(),
-                               const_cast<char*>(neg_alpha.tensor_data().data()),
-                               alpha.NumElements(), stream);
+      MusaNegKernelLauncher<T>(
+          alpha.tensor_data().data(),
+          const_cast<char*>(neg_alpha.tensor_data().data()),
+          alpha.NumElements(), stream);
 
       mTensor t_neg_alpha = CreateMTensor(neg_alpha, format_);
 
@@ -87,7 +90,6 @@ class MusaPReluOp : public MusaOpKernel {
       OP_REQUIRES(ctx, run_status == ::musa::dnn::Status::SUCCESS,
                   errors::Internal("muDNN PRelu Run failed"));
     }
-
   }
 };
 
