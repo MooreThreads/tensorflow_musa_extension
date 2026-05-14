@@ -35,12 +35,11 @@ class MusaTensorListPushBackOp : public MusaOpKernel {
 
   void Compute(OpKernelContext* ctx) override {
     const Tensor& input_element = ctx->input(1);
-    OP_REQUIRES(
-        ctx, element_dtype_ == input_element.dtype(),
-        errors::InvalidArgument("Invalid data types; list elements ",
-                                DataTypeString(element_dtype_),
-                                " but tried to append ",
-                                DataTypeString(input_element.dtype())));
+    OP_REQUIRES(ctx, element_dtype_ == input_element.dtype(),
+                errors::InvalidArgument("Invalid data types; list elements ",
+                                        DataTypeString(element_dtype_),
+                                        " but tried to append ",
+                                        DataTypeString(input_element.dtype())));
 
     const Variant& variant = ctx->input(0).scalar<Variant>()();
     const TensorList* l = variant.get<TensorList>();
@@ -48,12 +47,11 @@ class MusaTensorListPushBackOp : public MusaOpKernel {
         ctx, l != nullptr,
         errors::InvalidArgument("input_handle is not a valid TensorList."));
 
-    OP_REQUIRES(
-        ctx, element_dtype_ == l->element_dtype,
-        errors::InvalidArgument("Invalid data types; op elements ",
-                                DataTypeString(element_dtype_),
-                                " but list elements ",
-                                DataTypeString(l->element_dtype)));
+    OP_REQUIRES(ctx, element_dtype_ == l->element_dtype,
+                errors::InvalidArgument("Invalid data types; op elements ",
+                                        DataTypeString(element_dtype_),
+                                        " but list elements ",
+                                        DataTypeString(l->element_dtype)));
 
     OP_REQUIRES(
         ctx, l->element_shape.IsCompatibleWith(input_element.shape()),
@@ -65,12 +63,10 @@ class MusaTensorListPushBackOp : public MusaOpKernel {
 
     if (l->max_num_elements != -1) {
       OP_REQUIRES(
-          ctx,
-          static_cast<int64_t>(l->tensors().size()) < l->max_num_elements,
+          ctx, static_cast<int64_t>(l->tensors().size()) < l->max_num_elements,
           errors::InvalidArgument("Tried to push item into a full list",
                                   " list size: ", l->tensors().size(),
-                                  " max_num_elements: ",
-                                  l->max_num_elements));
+                                  " max_num_elements: ", l->max_num_elements));
     }
 
     Tensor* output_tensor = nullptr;

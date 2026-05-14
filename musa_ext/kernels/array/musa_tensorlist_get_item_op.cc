@@ -77,20 +77,18 @@ class MusaTensorListGetItemOp : public MusaOpKernel {
         ctx, l != nullptr,
         errors::InvalidArgument("input_handle is not a valid TensorList."));
 
-    OP_REQUIRES(
-        ctx, element_dtype_ == l->element_dtype,
-        errors::InvalidArgument("Invalid data types; op elements ",
-                                DataTypeString(element_dtype_),
-                                " but list elements ",
-                                DataTypeString(l->element_dtype)));
+    OP_REQUIRES(ctx, element_dtype_ == l->element_dtype,
+                errors::InvalidArgument("Invalid data types; op elements ",
+                                        DataTypeString(element_dtype_),
+                                        " but list elements ",
+                                        DataTypeString(l->element_dtype)));
 
     const int32 index = ctx->input(1).scalar<int32>()();
-    OP_REQUIRES(
-        ctx,
-        index >= 0 && static_cast<size_t>(index) < l->tensors().size(),
-        errors::InvalidArgument("Trying to access element ", index,
-                                " in a list with ", l->tensors().size(),
-                                " elements."));
+    OP_REQUIRES(ctx,
+                index >= 0 && static_cast<size_t>(index) < l->tensors().size(),
+                errors::InvalidArgument("Trying to access element ", index,
+                                        " in a list with ", l->tensors().size(),
+                                        " elements."));
 
     if (l->tensors()[index].dtype() != DT_INVALID) {
       // Element has been written; forward the device tensor directly.
@@ -112,8 +110,8 @@ class MusaTensorListGetItemOp : public MusaOpKernel {
         for (const Tensor& t : l->tensors()) {
           if (t.dtype() != DT_INVALID) {
             PartialTensorShape tmp = partial_element_shape;
-            OP_REQUIRES_OK(
-                ctx, tmp.MergeWith(t.shape(), &partial_element_shape));
+            OP_REQUIRES_OK(ctx,
+                           tmp.MergeWith(t.shape(), &partial_element_shape));
           }
         }
       }
@@ -132,8 +130,7 @@ class MusaTensorListGetItemOp : public MusaOpKernel {
 
       if (result->NumElements() > 0) {
         auto& h = GetHandleByCtx(ctx);
-        musaStream_t stream =
-            reinterpret_cast<musaStream_t>(h.GetStream());
+        musaStream_t stream = reinterpret_cast<musaStream_t>(h.GetStream());
         OP_REQUIRES(ctx, stream != nullptr,
                     errors::Internal("Failed to get valid MUSA stream."));
         auto err = musaMemsetAsync(result->flat<T>().data(), 0,
@@ -152,13 +149,13 @@ class MusaTensorListGetItemOp : public MusaOpKernel {
 };
 
 // TensorListGetItem: templated because zero-initialization requires T.
-#define REGISTER_MUSA_TENSOR_LIST_GET_ITEM(TYPE)                          \
-  REGISTER_KERNEL_BUILDER(Name("TensorListGetItem")                       \
-                              .Device("MUSA")                             \
-                              .TypeConstraint<TYPE>("element_dtype")      \
-                              .HostMemory("input_handle")                 \
-                              .HostMemory("index")                        \
-                              .HostMemory("element_shape"),               \
+#define REGISTER_MUSA_TENSOR_LIST_GET_ITEM(TYPE)                     \
+  REGISTER_KERNEL_BUILDER(Name("TensorListGetItem")                  \
+                              .Device("MUSA")                        \
+                              .TypeConstraint<TYPE>("element_dtype") \
+                              .HostMemory("input_handle")            \
+                              .HostMemory("index")                   \
+                              .HostMemory("element_shape"),          \
                           MusaTensorListGetItemOp<TYPE>)
 
 REGISTER_MUSA_TENSOR_LIST_GET_ITEM(float);

@@ -77,12 +77,11 @@ class MusaTensorListPopBackOp : public MusaOpKernel {
         ctx, l != nullptr,
         errors::InvalidArgument("input_handle is not a valid TensorList."));
 
-    OP_REQUIRES(
-        ctx, element_dtype_ == l->element_dtype,
-        errors::InvalidArgument("Invalid data types; op elements ",
-                                DataTypeString(element_dtype_),
-                                " but list elements ",
-                                DataTypeString(l->element_dtype)));
+    OP_REQUIRES(ctx, element_dtype_ == l->element_dtype,
+                errors::InvalidArgument("Invalid data types; op elements ",
+                                        DataTypeString(element_dtype_),
+                                        " but list elements ",
+                                        DataTypeString(l->element_dtype)));
 
     OP_REQUIRES(ctx, !l->tensors().empty(),
                 errors::InvalidArgument("Trying to pop from an empty list."));
@@ -115,8 +114,7 @@ class MusaTensorListPopBackOp : public MusaOpKernel {
 
       if (result->NumElements() > 0) {
         auto& h = GetHandleByCtx(ctx);
-        musaStream_t stream =
-            reinterpret_cast<musaStream_t>(h.GetStream());
+        musaStream_t stream = reinterpret_cast<musaStream_t>(h.GetStream());
         OP_REQUIRES(ctx, stream != nullptr,
                     errors::Internal("Failed to get valid MUSA stream."));
         auto err = musaMemsetAsync(result->flat<T>().data(), 0,
@@ -145,13 +143,13 @@ class MusaTensorListPopBackOp : public MusaOpKernel {
 };
 
 // TensorListPopBack: templated because zero-initialization requires T.
-#define REGISTER_MUSA_TENSOR_LIST_POP_BACK(TYPE)                          \
-  REGISTER_KERNEL_BUILDER(Name("TensorListPopBack")                       \
-                              .Device("MUSA")                             \
-                              .TypeConstraint<TYPE>("element_dtype")      \
-                              .HostMemory("input_handle")                 \
-                              .HostMemory("element_shape")                \
-                              .HostMemory("output_handle"),               \
+#define REGISTER_MUSA_TENSOR_LIST_POP_BACK(TYPE)                     \
+  REGISTER_KERNEL_BUILDER(Name("TensorListPopBack")                  \
+                              .Device("MUSA")                        \
+                              .TypeConstraint<TYPE>("element_dtype") \
+                              .HostMemory("input_handle")            \
+                              .HostMemory("element_shape")           \
+                              .HostMemory("output_handle"),          \
                           MusaTensorListPopBackOp<TYPE>)
 
 REGISTER_MUSA_TENSOR_LIST_POP_BACK(float);

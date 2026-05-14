@@ -41,20 +41,18 @@ class MusaTensorListSetItemOp : public MusaOpKernel {
         ctx, l != nullptr,
         errors::InvalidArgument("input_handle is not a valid TensorList."));
 
-    OP_REQUIRES(
-        ctx, element_dtype_ == l->element_dtype,
-        errors::InvalidArgument("Invalid data types; op elements ",
-                                DataTypeString(element_dtype_),
-                                " but list elements ",
-                                DataTypeString(l->element_dtype)));
+    OP_REQUIRES(ctx, element_dtype_ == l->element_dtype,
+                errors::InvalidArgument("Invalid data types; op elements ",
+                                        DataTypeString(element_dtype_),
+                                        " but list elements ",
+                                        DataTypeString(l->element_dtype)));
 
     const int32 index = ctx->input(1).scalar<int32>()();
-    OP_REQUIRES(
-        ctx,
-        index >= 0 && static_cast<size_t>(index) < l->tensors().size(),
-        errors::InvalidArgument("Trying to modify element ", index,
-                                " in a list with ", l->tensors().size(),
-                                " elements."));
+    OP_REQUIRES(ctx,
+                index >= 0 && static_cast<size_t>(index) < l->tensors().size(),
+                errors::InvalidArgument("Trying to modify element ", index,
+                                        " in a list with ", l->tensors().size(),
+                                        " elements."));
 
     const Tensor& value = ctx->input(2);
     OP_REQUIRES(
@@ -80,13 +78,13 @@ class MusaTensorListSetItemOp : public MusaOpKernel {
 };
 
 // TensorListSetItem: non-templated class registered per element_dtype.
-#define REGISTER_MUSA_TENSOR_LIST_SET_ITEM(TYPE)                          \
-  REGISTER_KERNEL_BUILDER(Name("TensorListSetItem")                       \
-                              .Device("MUSA")                             \
-                              .TypeConstraint<TYPE>("element_dtype")      \
-                              .HostMemory("input_handle")                 \
-                              .HostMemory("index")                        \
-                              .HostMemory("output_handle"),               \
+#define REGISTER_MUSA_TENSOR_LIST_SET_ITEM(TYPE)                     \
+  REGISTER_KERNEL_BUILDER(Name("TensorListSetItem")                  \
+                              .Device("MUSA")                        \
+                              .TypeConstraint<TYPE>("element_dtype") \
+                              .HostMemory("input_handle")            \
+                              .HostMemory("index")                   \
+                              .HostMemory("output_handle"),          \
                           MusaTensorListSetItemOp)
 
 REGISTER_MUSA_TENSOR_LIST_SET_ITEM(float);

@@ -56,7 +56,8 @@ class MusaTensorListReserveOp : public MusaOpKernel {
 
     // Handle both scalar (-1 for unknown shape) and vector element_shape
     PartialTensorShape element_shape;
-    OP_REQUIRES_OK(ctx, TensorShapeFromTensorReserve(element_shape_tensor, &element_shape));
+    OP_REQUIRES_OK(ctx, TensorShapeFromTensorReserve(element_shape_tensor,
+                                                     &element_shape));
 
     OP_REQUIRES(
         ctx, TensorShapeUtils::IsScalar(num_elements_tensor.shape()),
