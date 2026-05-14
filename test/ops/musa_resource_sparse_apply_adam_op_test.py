@@ -24,26 +24,12 @@ sys.path.insert(0, test_dir)
 
 import numpy as np
 import tensorflow as tf
-from musa_test_utils import MUSATestCase, load_musa_ops
+import tensorflow_musa as tf_musa
+from musa_test_utils import MUSATestCase
 
 
 class MusaResourceSparseApplyAdamTest(MUSATestCase):
     """Tests for MUSA fused sparse Adam operator."""
-
-    @classmethod
-    def setUpClass(cls):
-        """Load the custom op module from the installed tensorflow_musa wheel."""
-        super(MusaResourceSparseApplyAdamTest, cls).setUpClass()
-
-        try:
-            cls._musa_ops = load_musa_ops()
-        except Exception as e:
-            print(f"FAILED: Error loading MUSA ops from tensorflow_musa wheel: {e}")
-            cls._musa_ops = None
-
-        if cls._musa_ops is not None and not hasattr(cls._musa_ops, 'musa_resource_sparse_apply_adam'):
-            print("MUSA ops module loaded but musa_resource_sparse_apply_adam not found")
-            print("Available ops:", [op for op in dir(cls._musa_ops) if not op.startswith('_')])
 
     def _compute_expected(self, var_np, m_np, v_np, lr_np, beta1_np, beta2_np,
                          epsilon_np, beta1_power_np, beta2_power_np,
@@ -87,9 +73,6 @@ class MusaResourceSparseApplyAdamTest(MUSATestCase):
                     epsilon_np, beta1_power_np, beta2_power_np,
                     grad_np, indices_np, dtype, index_dtype):
         """Test sparse Adam update on MUSA device."""
-        if self._musa_ops is None or not hasattr(self._musa_ops, 'musa_resource_sparse_apply_adam'):
-            self.skipTest("MUSA sparse Adam op not available")
-
         expected_var, expected_m, expected_v = self._compute_expected(
             var_np, m_np, v_np, lr_np, beta1_np, beta2_np,
             epsilon_np, beta1_power_np, beta2_power_np,
@@ -116,8 +99,7 @@ class MusaResourceSparseApplyAdamTest(MUSATestCase):
             grad = tf.constant(grad_np, dtype=dtype)
             indices = tf.constant(indices_np, dtype=index_dtype)
 
-            # Call the custom op via the ops module
-            self._musa_ops.musa_resource_sparse_apply_adam(
+            tf_musa.ops.resource_sparse_apply_adam(
                 var=var.handle,
                 m=m.handle,
                 v=v.handle,

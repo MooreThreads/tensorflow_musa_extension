@@ -1,22 +1,12 @@
 import numpy as np
 import tensorflow as tf
+import tensorflow_musa as tf_musa
 
-from musa_test_utils import MUSATestCase, load_musa_ops
+from musa_test_utils import MUSATestCase
 
 
 class ClipOpTest(MUSATestCase):
     """Unit tests for custom MUSA Clip operator."""
-
-    @classmethod
-    def setUpClass(cls):
-        """Load the custom op module so MusaClip is callable from Python."""
-        super(ClipOpTest, cls).setUpClass()
-
-        try:
-            cls._musa_ops = load_musa_ops()
-        except Exception as e:
-            print(f"FAILED: Error loading MUSA ops from tensorflow_musa wheel: {e}")
-            cls._musa_ops = None
 
     def _run_reference_cpu(self, x, lo, hi):
         """Reference path on CPU using TensorFlow native clip_by_value."""
@@ -25,14 +15,8 @@ class ClipOpTest(MUSATestCase):
 
     def _run_musa_clip(self, x, lo, hi):
         """Run custom MusaClip op on MUSA device."""
-        if self._musa_ops is None or not hasattr(self._musa_ops, "musa_clip"):
-            self.skipTest(
-                "MUSA clip op module is not available. "
-                "Make sure REGISTER_OP(\"MusaClip\") is compiled and the plugin is loaded."
-            )
-
         with tf.device("/device:MUSA:0"):
-            return self._musa_ops.musa_clip(x=x, lo=lo, hi=hi)
+            return tf_musa.ops.clip(x=x, lo=lo, hi=hi)
 
     def _assert_clip_close(self, x_np, lo_np, hi_np, dtype, rtol=1e-5, atol=1e-8):
         """Compare CPU reference vs custom MUSA clip op."""

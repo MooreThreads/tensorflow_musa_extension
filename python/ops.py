@@ -157,8 +157,10 @@ def resource_apply_nadam(
 __all__ = [
     "clip",
     "dropout",
+    "dropout_grad",
     "gelu",
     "interact",
+    "layer_norm",
     "matmul_bias_add",
     "reshape_mat_mul",
     "resource_apply_nadam",

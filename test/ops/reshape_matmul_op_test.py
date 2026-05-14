@@ -21,7 +21,8 @@ os.environ.setdefault("MUSA_ENABLE_TF32", "0")
 import numpy as np
 import tensorflow as tf
 
-from musa_test_utils import MUSATestCase, load_musa_ops, require_musa_op
+import tensorflow_musa as tf_musa
+from musa_test_utils import MUSATestCase
 
 
 def is_tf32_enabled():
@@ -35,22 +36,11 @@ def float32_tolerance(default_rtol=1e-5, default_atol=1e-6):
 class ReshapeMatMulOpTest(MUSATestCase):
     """Functional tests for MusaReshapeMatMul."""
 
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-        try:
-            cls._musa_ops = load_musa_ops()
-        except Exception as e:
-            print(f"FAILED: Error loading MUSA ops: {e}")
-            cls._musa_ops = None
-
     def _run_graph(self, x_np, w_np, transpose_b=False):
-        if self._musa_ops is None:
-            self.skipTest("MUSA ops not available")
         x = tf.constant(x_np)
         w = tf.constant(w_np)
         with tf.device("/device:MUSA:0"):
-            return require_musa_op(self._musa_ops, "musa_reshape_mat_mul")(
+            return tf_musa.ops.reshape_mat_mul(
                 x=x, w=w, transpose_b=transpose_b
             ).numpy()
 

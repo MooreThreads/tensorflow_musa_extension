@@ -45,14 +45,6 @@ def load_musa_ops():
   return tensorflow_musa.get_musa_ops()
 
 
-def require_musa_op(ops, name):
-  """Return a custom op wrapper or skip when the wrapper is unavailable."""
-  if not hasattr(ops, name):
-    raise unittest.SkipTest(
-        f"MUSA custom-op wrapper {name} is only available through the "
-        "legacy tf.load_op_library path")
-  return getattr(ops, name)
-
 
 # Import tensorflow first (load_musa_plugin needs it)
 import tensorflow as tf

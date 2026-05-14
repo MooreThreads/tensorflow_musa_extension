@@ -116,10 +116,10 @@ def load_plugin():
     plugin_path = _find_plugin_library()
 
     try:
+        _op_module = tf.load_op_library(plugin_path)
         if not _use_legacy_loader() and not _device_library_loaded:
             _load_pluggable_device_library(plugin_path)
             _device_library_loaded = True
-        _op_module = tf.load_op_library(plugin_path)
         _plugin_path = plugin_path
         logger.info(f"MUSA plugin loaded successfully from: {plugin_path}")
         return plugin_path
