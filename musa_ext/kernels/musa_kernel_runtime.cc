@@ -15,7 +15,11 @@ limitations under the License.
 
 #include "kernels/musa_kernel_runtime.h"
 
+#include <mublas.h>
 #include <musa_runtime.h>
+
+#include <mutex>
+#include <unordered_map>
 
 #include "mu/musa_runtime_registry.h"
 #include "mu/tf_compat/pluggable_tf_compat.h"
@@ -25,6 +29,51 @@ limitations under the License.
 
 namespace tensorflow {
 namespace musa {
+
+namespace {
+
+struct MublasHandleEntry {
+  mublasHandle_t handle = nullptr;
+  musaStream_t stream = nullptr;
+};
+
+std::mutex& MublasHandleMutex() {
+  static std::mutex* mu = new std::mutex();
+  return *mu;
+}
+
+std::unordered_map<int, MublasHandleEntry>& MublasHandleMap() {
+  static auto* handles = new std::unordered_map<int, MublasHandleEntry>();
+  return *handles;
+}
+
+mublasHandle_t EnsureMublasHandleForDevice(int device_id, musaStream_t stream) {
+  if (device_id < 0 || stream == nullptr) {
+    return nullptr;
+  }
+
+  std::lock_guard<std::mutex> lock(MublasHandleMutex());
+  auto& entry = MublasHandleMap()[device_id];
+  if (entry.handle == nullptr) {
+    if (musaSetDevice(device_id) != musaSuccess) {
+      return nullptr;
+    }
+    if (mublasCreate(&entry.handle) != MUBLAS_STATUS_SUCCESS) {
+      entry.handle = nullptr;
+      return nullptr;
+    }
+  }
+
+  if (entry.stream != stream) {
+    if (mublasSetStream(entry.handle, stream) != MUBLAS_STATUS_SUCCESS) {
+      return nullptr;
+    }
+    entry.stream = stream;
+  }
+  return entry.handle;
+}
+
+}  // namespace
 
 MusaKernelRuntimeView QueryMusaKernelRuntimeView(OpKernelContext* context) {
   MusaKernelRuntimeView v;
@@ -44,6 +93,7 @@ MusaKernelRuntimeView QueryMusaKernelRuntimeView(OpKernelContext* context) {
     v.device_id = v.musa_device->get_device_id();
     v.stream = v.musa_device->GetStream();
     v.mudnn_handle = &v.musa_device->mudnn_handle();
+    v.mublas_handle = v.musa_device->mublas_handle();
     return v;
   }
 
@@ -59,6 +109,7 @@ MusaKernelRuntimeView QueryMusaKernelRuntimeView(OpKernelContext* context) {
     ::musa::dnn::Handle* h =
         MusaSeRegistryEnsureMudnnForDevice(v.device_id, v.stream);
     v.mudnn_handle = h;
+    v.mublas_handle = EnsureMublasHandleForDevice(v.device_id, v.stream);
   }
 
   return v;

@@ -16,6 +16,7 @@ limitations under the License.
 #ifndef TENSORFLOW_MUSA_KERNELS_MUSA_KERNEL_RUNTIME_H_
 #define TENSORFLOW_MUSA_KERNELS_MUSA_KERNEL_RUNTIME_H_
 
+#include <mublas.h>
 #include <musa_runtime.h>
 
 #include "mu/device/musa_device.h"
@@ -52,6 +53,7 @@ struct MusaKernelRuntimeView {
   Allocator* allocator = nullptr;
   // Valid when non-null: either C++ `MusaDevice` handle or SE registry handle.
   ::musa::dnn::Handle* mudnn_handle = nullptr;
+  mublasHandle_t mublas_handle = nullptr;
 };
 
 // Resolves the custom C++ `MusaDevice` registered by this plugin's historical
@@ -60,7 +62,8 @@ struct MusaKernelRuntimeView {
 // TensorFlow's PluggableDevice path uses a different `Device` implementation;
 // for those devices this returns nullptr. Kernels that need muDNN must ensure
 // `MusaKernelRuntimeView::mudnn_handle` is populated (via C++ MusaDevice or SE
-// registry initialization) rather than blindly casting `Device*` to `MusaDevice*`.
+// registry initialization) rather than blindly casting `Device*` to
+// `MusaDevice*`.
 inline MusaDevice* TryGetMusaDeviceFromContext(OpKernelContext* context) {
   if (context == nullptr) return nullptr;
   DeviceBase* base = context->device();

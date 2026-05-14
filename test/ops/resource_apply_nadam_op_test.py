@@ -17,7 +17,7 @@
 
 import numpy as np
 import tensorflow as tf
-from musa_test_utils import MUSATestCase, load_musa_ops
+from musa_test_utils import MUSATestCase, load_musa_ops, require_musa_op
 from tensorflow.python.ops import gen_training_ops
 
 musa_ops = load_musa_ops()
@@ -90,7 +90,7 @@ class ResourceApplyNadamOpTest(MUSATestCase):
                     m.assign(m_new)
                     v.assign(v_new)
                 else:
-                    op_func = musa_ops.ResourceApplyNadam
+                    op_func = require_musa_op(musa_ops, "ResourceApplyNadam")
                     op_func(
                         var=var.handle, m=m.handle, v=v.handle,
                         beta1_power=beta1_power, beta2_power=beta2_power,

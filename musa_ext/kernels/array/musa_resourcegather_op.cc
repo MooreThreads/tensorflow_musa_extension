@@ -149,8 +149,10 @@ class MusaResourceGatherOp : public MusaOpKernel {
       const int64_t params_stride = params.dim_size(batch_dims_) * inner_size;
       const Index limit = static_cast<Index>(params.dim_size(batch_dims_));
 
-      // Get stream
       musaStream_t stream = GetMusaStreamByCtx(c);
+      OP_REQUIRES(
+          c, stream != nullptr,
+          errors::Internal("MUSA stream is unavailable for ResourceGather"));
 
       // Launch optimized kernel
       LaunchKernel(params.flat<T>().data(), indices.flat<Index>().data(),
@@ -227,11 +229,13 @@ class MusaResourceScatterAddOp : public MusaOpKernel {
     const Tensor& updates = c->input(2);
 
     if (indices.NumElements() > 0) {
-      MUSA_OP_REQUIRES_CPP_MUSA_DEVICE(c);
+      if (QueryMusaKernelRuntimeView(c).mudnn_handle == nullptr) {
+        c->CtxFailure(MusaMudnnHandleRequiredError());
+        return;
+      }
       auto& h = GetHandleByCtx(c);
-      auto* device = TryGetMusaDeviceFromContext(c);
-      auto maintainer = device->GetMemMaintainer(
-          [](size_t s) { return ::musa::dnn::MemoryHandler(); });
+      ::musa::dnn::MemoryMaintainer maintainer(
+          [](size_t) { return ::musa::dnn::MemoryHandler(); });
 
       mScatterND op;
       MTOP_CHECK_OK(op.SetMode(mScatterND::Mode::ADD), "SetModeAdd", c);
@@ -267,7 +271,10 @@ class MusaAssignUpdateVariableOp : public MusaOpKernel {
     const Tensor& value = c->input(1);
 
     if (var_tensor->NumElements() > 0) {
-      MUSA_OP_REQUIRES_CPP_MUSA_DEVICE(c);
+      if (QueryMusaKernelRuntimeView(c).mudnn_handle == nullptr) {
+        c->CtxFailure(MusaMudnnHandleRequiredError());
+        return;
+      }
       auto& h = GetHandleByCtx(c);
       mBinary op;
       MTOP_CHECK_OK(op.SetMode(BMODE), "SetMode", c);

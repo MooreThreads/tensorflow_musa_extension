@@ -1,3 +1,5 @@
+#include "../utils_op.h"
+#include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/bounds_check.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -6,7 +8,6 @@
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/platform/env.h"
-#include "tensorflow/core/platform/stream_executor.h"
 #include "tensorflow/core/util/saved_tensor_slice_util.h"
 #include "tensorflow/core/util/tensor_bundle/tensor_bundle.h"
 
@@ -41,9 +42,9 @@ class MusaRestoreV2Op : public OpKernel {
     BundleReader reader(ctx->env(), prefix_str);
     OP_REQUIRES_OK(ctx, reader.status());
 
-    auto* stream = ctx->op_device_context()->stream();
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
     OP_REQUIRES(ctx, stream != nullptr,
-                errors::Internal("No MUSA stream available"));
+                errors::Internal("MUSA stream is unavailable for RestoreV2"));
 
     for (int i = 0; i < num_tensors; ++i) {
       const string& name = names_flat(i);
@@ -107,10 +108,15 @@ class MusaRestoreV2Op : public OpKernel {
       uint64 copy_size_bytes =
           target_shape.num_elements() * DataTypeSize(dtype);
 
-      se::DeviceMemoryBase dst_mem(dst_ptr, copy_size_bytes);
-      stream->ThenMemcpy(&dst_mem, src_ptr, copy_size_bytes);
-
-      OP_REQUIRES_OK(ctx, stream->BlockHostUntilDone());
+      mStatus copy_status =
+          MusaMemcpyAsyncH2D(dst_ptr, src_ptr, copy_size_bytes, stream);
+      OP_REQUIRES(ctx, copy_status == mStatus::SUCCESS,
+                  errors::Internal("RestoreV2: MUSA copy failed with status ",
+                                   static_cast<int>(copy_status)));
+      musaError_t sync_status = musaStreamSynchronize(stream);
+      OP_REQUIRES(ctx, sync_status == musaSuccess,
+                  errors::Internal("RestoreV2: musaStreamSynchronize failed: ",
+                                   musaGetErrorString(sync_status)));
     }
   }
 

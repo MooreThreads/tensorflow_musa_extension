@@ -3,12 +3,11 @@
 #include <type_traits>
 #include <vector>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/framework/tensor_types.h"
-
-#include "../utils_op.h"
 
 #ifndef MAX_DIM
 #define MAX_DIM 4  // NHWC 4d support only
@@ -184,6 +183,8 @@ class MusaPadOp : public OpKernel {
         ctx, ctx->allocate_temp(DT_INT64, TensorShape({dims}), &pad_out_dims));
 
     musaStream_t stream = GetMusaStreamByCtx(ctx);
+    OP_REQUIRES(ctx, stream != nullptr,
+                errors::Internal("MUSA stream is unavailable for Pad"));
     musaMemcpyAsync(pad_before_dev.flat<int64_t>().data(), pad_before,
                     dims * sizeof(int64_t), musaMemcpyHostToDevice, stream);
     musaMemcpyAsync(pad_after_dev.flat<int64_t>().data(), pad_after,
@@ -200,11 +201,10 @@ class MusaPadOp : public OpKernel {
                        pad_after_dev.flat<int64_t>().data(), pad_value,
                        out_size, stream);
 
-    MusaDeviceContext *musa_device_context =
-        static_cast<MusaDeviceContext *>(ctx->op_device_context());
-    musa_device_context->ThenExecute(
-        stream,
-        [pad_before_dev, pad_after_dev, pad_input_dims, pad_out_dims]() {});
+    musaError_t sync_err = musaStreamSynchronize(stream);
+    OP_REQUIRES(ctx, sync_err == musaSuccess,
+                errors::Internal("MUSA Pad stream synchronize failed: ",
+                                 musaGetErrorString(sync_err)));
 
     musaError_t err = musaGetLastError();
     OP_REQUIRES(ctx, err == musaSuccess,

@@ -1,3 +1,4 @@
+#include <list>
 #include <vector>
 
 #include "../utils_op.h"
@@ -58,23 +59,26 @@ class MusaFusedBatchNormOp : public MusaOpKernel {
     // muDNN does not populate this field; zero-initialise for safety.
     OP_REQUIRES_OK(ctx, ctx->allocate_output(5, TensorShape({}), &reserve_3));
 
-    auto* device = GetDeviceByCtx(ctx);
-    auto& handle = device->mudnn_handle();
-    auto stream = device->GetStream();
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
+    auto& handle = GetHandleByCtx(ctx);
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
+    OP_REQUIRES(
+        ctx, stream != nullptr,
+        errors::Internal("MUSA stream is unavailable for FusedBatchNorm"));
     handle.SetAllowTF32(false);
 
-    std::vector<Tensor> workspace_holder;
+    std::list<Tensor> workspace_holder;
     auto internal_maintainer = [&](size_t size) -> ::musa::dnn::MemoryHandler {
       if (size == 0) return ::musa::dnn::MemoryHandler(nullptr, [](void*) {});
-      Tensor temp;
+      workspace_holder.emplace_back();
+      Tensor& temp = workspace_holder.back();
       Status s = ctx->allocate_temp(
           DT_UINT8, TensorShape({static_cast<int64_t>(size)}), &temp);
       if (!s.ok()) return ::musa::dnn::MemoryHandler(nullptr, [](void*) {});
-      workspace_holder.push_back(temp);
       return ::musa::dnn::MemoryHandler(temp.flat<uint8_t>().data(),
                                         [](void*) {});
     };
-    auto maintainer = device->GetMemMaintainer(internal_maintainer);
+    ::musa::dnn::MemoryMaintainer maintainer(internal_maintainer);
 
     mFormat data_fmt = is_nhwc_ ? mFormat::NHWC : mFormat::NCHW;
 
@@ -216,9 +220,12 @@ class MusaFusedBatchNormGradOp : public MusaOpKernel {
     Tensor* d_var = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(4, scale.shape(), &d_var));
 
-    auto* device = GetDeviceByCtx(ctx);
-    auto& handle = device->mudnn_handle();
-    auto stream = device->GetStream();
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
+    auto& handle = GetHandleByCtx(ctx);
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
+    OP_REQUIRES(
+        ctx, stream != nullptr,
+        errors::Internal("MUSA stream is unavailable for FusedBatchNormGrad"));
     handle.SetAllowTF32(false);
 
     musaMemsetAsync(const_cast<char*>(dx->tensor_data().data()), 0,
@@ -232,17 +239,18 @@ class MusaFusedBatchNormGradOp : public MusaOpKernel {
     musaMemsetAsync(d_var->flat<float>().data(), 0,
                     d_var->NumElements() * sizeof(float), stream);
 
-    std::vector<Tensor> workspace_holder;
+    std::list<Tensor> workspace_holder;
     auto maintainer_func = [&](size_t size) -> ::musa::dnn::MemoryHandler {
       if (size == 0) return ::musa::dnn::MemoryHandler(nullptr, [](void*) {});
-      Tensor temp;
-      ctx->allocate_temp(DT_UINT8, TensorShape({static_cast<int64_t>(size)}),
-                         &temp);
-      workspace_holder.push_back(temp);
+      workspace_holder.emplace_back();
+      Tensor& temp = workspace_holder.back();
+      Status s = ctx->allocate_temp(
+          DT_UINT8, TensorShape({static_cast<int64_t>(size)}), &temp);
+      if (!s.ok()) return ::musa::dnn::MemoryHandler(nullptr, [](void*) {});
       return ::musa::dnn::MemoryHandler(temp.flat<uint8_t>().data(),
                                         [](void*) {});
     };
-    auto maintainer = device->GetMemMaintainer(maintainer_func);
+    ::musa::dnn::MemoryMaintainer maintainer(maintainer_func);
 
     mFormat data_fmt = is_nhwc_ ? mFormat::NHWC : mFormat::NCHW;
 

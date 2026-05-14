@@ -17,7 +17,7 @@
 
 import numpy as np
 import tensorflow as tf
-from musa_test_utils import MUSATestCase, load_musa_ops
+from musa_test_utils import MUSATestCase, load_musa_ops, require_musa_op
 
 
 def interact_ref(input_tensor):
@@ -64,7 +64,7 @@ class InteractOpTest(MUSATestCase):
 
         # Test on MUSA using custom op
         with tf.device('/device:MUSA:0'):
-            musa_result = self._musa_ops.musa_interact(input=input_tensor)
+            musa_result = require_musa_op(self._musa_ops, "musa_interact")(input=input_tensor)
 
         # Compare results
         if dtype in [tf.float16, tf.bfloat16]:

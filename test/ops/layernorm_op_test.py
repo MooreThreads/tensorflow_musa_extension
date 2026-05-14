@@ -5,7 +5,7 @@
 
 import numpy as np
 import tensorflow as tf
-from musa_test_utils import MUSATestCase, load_musa_ops
+from musa_test_utils import MUSATestCase, load_musa_ops, require_musa_op
 
 
 def layernorm_ref(x, gamma, beta, eps=1e-5):
@@ -59,7 +59,7 @@ class LayerNormOpTest(MUSATestCase):
 
         # Test on MUSA using custom op
         with tf.device('/device:MUSA:0'):
-            musa_result = self._musa_ops.musa_layer_norm(x=x, gamma=gamma, beta=beta, epsilon=eps)
+            musa_result = require_musa_op(self._musa_ops, "musa_layer_norm")(x=x, gamma=gamma, beta=beta, epsilon=eps)
 
         # Compare results
         if dtype in [tf.float16, tf.bfloat16]:
@@ -132,7 +132,7 @@ class LayerNormOpTest(MUSATestCase):
 
                 # Test on MUSA using custom op
                 with tf.device('/device:MUSA:0'):
-                    musa_result = self._musa_ops.musa_layer_norm(x=x, gamma=gamma, beta=beta, epsilon=eps)
+                    musa_result = require_musa_op(self._musa_ops, "musa_layer_norm")(x=x, gamma=gamma, beta=beta, epsilon=eps)
 
                 self.assertAllClose(cpu_result.numpy(), musa_result.numpy(),
                                    rtol=1e-5, atol=1e-5)

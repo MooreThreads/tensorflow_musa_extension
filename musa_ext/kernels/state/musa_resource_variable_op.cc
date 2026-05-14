@@ -1,5 +1,4 @@
 #include "../utils_op.h"
-#include "mu/device/musa_device.h"
 #include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -12,6 +11,19 @@ namespace musa {
 
 using Var = ::tensorflow::Var;
 
+Status SyncMusaStream(OpKernelContext* ctx, const char* op_name) {
+  musaStream_t stream = GetMusaStreamByCtx(ctx);
+  if (stream == nullptr) {
+    return errors::Internal("MUSA stream is unavailable for ", op_name);
+  }
+  musaError_t err = musaStreamSynchronize(stream);
+  if (err != musaSuccess) {
+    return errors::Internal(
+        op_name, ": musaStreamSynchronize failed: ", musaGetErrorString(err));
+  }
+  return Status::OK();
+}
+
 Status CopyTensorWithDeviceContext(OpKernelContext* ctx, const Tensor& src,
                                    Tensor* dst) {
   if (src.TotalBytes() == 0) {
@@ -20,8 +32,10 @@ Status CopyTensorWithDeviceContext(OpKernelContext* ctx, const Tensor& src,
 
   auto* device_context = ctx->op_device_context();
   if (device_context == nullptr) {
-    // Fall back to direct MUSA memcpy if device context is not available
     musaStream_t stream = GetMusaStreamByCtx(ctx);
+    if (stream == nullptr) {
+      return errors::Internal("MUSA stream is unavailable for variable copy");
+    }
     MusaMemcpyAsyncD2D(const_cast<char*>(dst->tensor_data().data()),
                        src.tensor_data().data(), src.TotalBytes(), stream);
     return Status::OK();
@@ -113,18 +127,6 @@ class MusaAssignVariableOp : public OpKernel {
             "Variable and value dtypes don't match; respectively, ",
             DataTypeString(dtype_), " and ", DataTypeString(value.dtype())));
 
-    // Must run before LookupOrCreateResource: the create lambda can initialize
-    // the variable; fail first on PluggableDevice / non-MusaDevice paths with
-    // no side effects on the resource.
-    OP_REQUIRES(ctx, TryGetMusaDeviceFromContext(ctx) != nullptr,
-                MusaCppDevicePathRequiredError());
-    MusaDeviceContext* musa_device_context =
-        dynamic_cast<MusaDeviceContext*>(ctx->op_device_context());
-    OP_REQUIRES(ctx, musa_device_context != nullptr,
-                errors::Unimplemented(
-                    "MUSA variable assign requires MusaDeviceContext; "
-                    "PluggableDevice is not supported for this op yet."));
-
     if (ctx->num_outputs() > 0) {
       ctx->set_output(0, ctx->input(0));
     }
@@ -164,7 +166,7 @@ class MusaAssignVariableOp : public OpKernel {
     } else {
       *var->tensor() = value;
     }
-    musa_device_context->ThenExecute(GetMusaStreamByCtx(ctx), [value]() {});
+    OP_REQUIRES_OK(ctx, SyncMusaStream(ctx, "AssignVariableOp"));
 
     var->is_initialized = true;
   }
@@ -216,18 +218,13 @@ class MusaReadVariableOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, t.shape(), &out));
 
     if (t.TotalBytes() > 0) {
-      OP_REQUIRES(ctx, TryGetMusaDeviceFromContext(ctx) != nullptr,
-                  MusaCppDevicePathRequiredError());
-      MusaDeviceContext* musa_device_context =
-          dynamic_cast<MusaDeviceContext*>(ctx->op_device_context());
-      OP_REQUIRES(ctx, musa_device_context != nullptr,
-                  errors::Unimplemented(
-                      "MUSA read variable requires MusaDeviceContext; "
-                      "PluggableDevice is not supported for this op yet."));
       musaStream_t stream = GetMusaStreamByCtx(ctx);
+      OP_REQUIRES(
+          ctx, stream != nullptr,
+          errors::Internal("MUSA stream is unavailable for ReadVariableOp"));
       MusaMemcpyAsyncD2D(const_cast<char*>(out->tensor_data().data()),
                          t.tensor_data().data(), t.TotalBytes(), stream);
-      musa_device_context->ThenExecute(stream, [t]() {});
+      OP_REQUIRES_OK(ctx, SyncMusaStream(ctx, "ReadVariableOp"));
     }
   }
 

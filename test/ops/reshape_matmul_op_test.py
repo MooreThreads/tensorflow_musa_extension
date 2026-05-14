@@ -21,7 +21,7 @@ os.environ.setdefault("MUSA_ENABLE_TF32", "0")
 import numpy as np
 import tensorflow as tf
 
-from musa_test_utils import MUSATestCase, load_musa_ops
+from musa_test_utils import MUSATestCase, load_musa_ops, require_musa_op
 
 
 def is_tf32_enabled():
@@ -50,7 +50,7 @@ class ReshapeMatMulOpTest(MUSATestCase):
         x = tf.constant(x_np)
         w = tf.constant(w_np)
         with tf.device("/device:MUSA:0"):
-            return self._musa_ops.musa_reshape_mat_mul(
+            return require_musa_op(self._musa_ops, "musa_reshape_mat_mul")(
                 x=x, w=w, transpose_b=transpose_b
             ).numpy()
 
