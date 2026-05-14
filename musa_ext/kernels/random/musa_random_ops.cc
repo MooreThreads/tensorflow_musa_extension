@@ -41,8 +41,6 @@
 // This implementation uses Philox random number generator (same as CUDA)
 // to ensure bit-wise identical results with CUDA when possible.
 
-
-
 #include <cstring>
 
 #include "../utils_op.h"
