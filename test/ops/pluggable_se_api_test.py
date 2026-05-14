@@ -297,6 +297,51 @@ finally:
         "LIFE 0",
         proc.stderr + proc.stdout)
 
+  def test_device_metadata_export(self):
+    path = _plugin_path()
+    if not path:
+      self.skipTest("libmusa_plugin.so not found")
+    script = r"""
+import ctypes, os, sys
+tf_lib = os.path.join(os.path.dirname(__import__('tensorflow').__file__),
+                      'libtensorflow_framework.so.2')
+tf_fw = ctypes.CDLL(tf_lib)
+tf_fw.TF_NewStatus.argtypes = []
+tf_fw.TF_NewStatus.restype = ctypes.c_void_p
+tf_fw.TF_GetCode.argtypes = [ctypes.c_void_p]
+tf_fw.TF_GetCode.restype = ctypes.c_int
+tf_fw.TF_DeleteStatus.argtypes = [ctypes.c_void_p]
+lib = ctypes.cdll.LoadLibrary(sys.argv[1])
+fn = lib.MUSA_TestDeviceMetadata
+fn.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int),
+               ctypes.POINTER(ctypes.c_int), ctypes.c_void_p]
+fn.restype = None
+has_hw = ctypes.c_int(0)
+has_vendor = ctypes.c_int(0)
+has_pci = ctypes.c_int(0)
+st = tf_fw.TF_NewStatus()
+try:
+  fn(ctypes.byref(has_hw), ctypes.byref(has_vendor), ctypes.byref(has_pci), st)
+  print('META', tf_fw.TF_GetCode(st), has_hw.value, has_vendor.value,
+        has_pci.value)
+finally:
+  tf_fw.TF_DeleteStatus(st)
+"""
+    proc = subprocess.run(
+        [sys.executable, "-c", script, path],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+    line = (proc.stdout or "").strip().splitlines()[-1]
+    prefix, code, has_hw, has_vendor, has_pci = line.split()
+    self.assertEqual(prefix, "META")
+    self.assertEqual(int(code), 0)
+    self.assertEqual(int(has_hw), 1)
+    self.assertEqual(int(has_vendor), 1)
+    self.assertIn(int(has_pci), (0, 1))
+
 
 if __name__ == "__main__":
   tf.test.main()

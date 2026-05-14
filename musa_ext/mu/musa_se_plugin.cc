@@ -58,6 +58,11 @@ static const char kPlatformName[] = "MUSA";
 static const char kPlatformType[] = "MUSA";
 static const char kVendorMthreads[] = "MooreThreads";
 
+struct DeviceMetadata {
+  std::string hardware_name;
+  std::string pci_bus_id;
+};
+
 static musaStream_t StreamPtr(SP_Stream s) {
   if (!s || s->magic != kMusaPluginSpStreamMagic) return nullptr;
   return s->stream;
@@ -133,11 +138,16 @@ void plugin_se_deallocate(const SP_Device* device, SP_DeviceMemoryBase* mem) {
   if (!mem || !mem->opaque) return;
   const int ordinal = Ordinal(device);
   musaError_t set_dev_err = musaSetDevice(ordinal);
-  if (set_dev_err == musaSuccess) {
-    (void)musaFree(mem->opaque);
-  } else {
+  if (set_dev_err != musaSuccess) {
     LOG(ERROR) << "plugin_se_deallocate: musaSetDevice(" << ordinal
                << ") failed: " << musaGetErrorString(set_dev_err);
+    return;
+  }
+  musaError_t free_err = musaFree(mem->opaque);
+  if (free_err != musaSuccess) {
+    LOG(ERROR) << "plugin_se_deallocate: musaFree failed: "
+               << musaGetErrorString(free_err);
+    return;
   }
   mem->opaque = nullptr;
   mem->size = 0;
@@ -176,7 +186,12 @@ void* plugin_se_unified_memory_allocate(const SP_Device*, uint64_t) {
 
 void plugin_se_unified_memory_deallocate(const SP_Device*, void*) {}
 
-TF_Bool plugin_se_get_allocator_stats(const SP_Device*, SP_AllocatorStats*) {
+TF_Bool plugin_se_get_allocator_stats(const SP_Device*,
+                                      SP_AllocatorStats* stats) {
+  if (stats) {
+    std::memset(stats, 0, sizeof(*stats));
+    stats->struct_size = SP_ALLOCATORSTATS_STRUCT_SIZE;
+  }
   return 0;
 }
 
@@ -886,7 +901,6 @@ void plugin_create_device(const SP_Platform*, SE_CreateDeviceParams* params,
   dev->struct_size = SP_DEVICE_STRUCT_SIZE;
   dev->ext = nullptr;
   dev->ordinal = params->ordinal;
-  // Own a copy of ordinal for get_device
   int* h = new (std::nothrow) int(params->ordinal);
   if (!h) {
     MallocOrBadAlloc(status);
@@ -896,6 +910,33 @@ void plugin_create_device(const SP_Platform*, SE_CreateDeviceParams* params,
   dev->hardware_name = kPlatformName;
   dev->device_vendor = kVendorMthreads;
   dev->pci_bus_id = nullptr;
+
+  auto* metadata = new (std::nothrow) DeviceMetadata();
+  if (metadata) {
+    musaDeviceProp prop;
+    std::memset(&prop, 0, sizeof(prop));
+    musaError_t prop_err = musaGetDeviceProperties(&prop, params->ordinal);
+    if (prop_err == musaSuccess) {
+      if (prop.name[0] != '\0') {
+        metadata->hardware_name = prop.name;
+        dev->hardware_name = metadata->hardware_name.c_str();
+      }
+      char pci_bus_id[32];
+      std::memset(pci_bus_id, 0, sizeof(pci_bus_id));
+      musaError_t pci_err = musaDeviceGetPCIBusId(
+          pci_bus_id, static_cast<int>(sizeof(pci_bus_id)), params->ordinal);
+      if (pci_err == musaSuccess && pci_bus_id[0] != '\0') {
+        metadata->pci_bus_id = pci_bus_id;
+        dev->pci_bus_id = metadata->pci_bus_id.c_str();
+      }
+    }
+    if (!metadata->hardware_name.empty() || !metadata->pci_bus_id.empty()) {
+      dev->ext = metadata;
+    } else {
+      delete metadata;
+    }
+  }
+
   ::tensorflow::musa::MusaSeRegistryOnDeviceCreated(
       static_cast<int32_t>(params->ordinal));
   TF_SetStatus(status, TF_OK, "");
@@ -905,10 +946,16 @@ void plugin_destroy_device(const SP_Platform*, SP_Device* device) {
   if (!device) return;
   const int32_t ord = static_cast<int32_t>(device->ordinal);
   ::tensorflow::musa::MusaSeRegistryOnDeviceDestroyed(ord);
+  if (device->ext) {
+    delete static_cast<DeviceMetadata*>(device->ext);
+    device->ext = nullptr;
+  }
   if (device->device_handle) {
     delete static_cast<int*>(device->device_handle);
     device->device_handle = nullptr;
   }
+  device->hardware_name = nullptr;
+  device->pci_bus_id = nullptr;
 }
 
 int32_t plugin_get_numa_node(const SP_Device*) { return -1; }
@@ -916,6 +963,34 @@ int32_t plugin_get_numa_node(const SP_Device*) { return -1; }
 int64_t plugin_get_memory_bandwidth(const SP_Device*) { return -1; }
 
 double plugin_get_gflops(const SP_Device*) { return -1.0; }
+
+void MUSA_TestDeviceMetadata(int* has_hardware_name, int* has_vendor,
+                             int* has_pci_bus_id, TF_Status* status) {
+  if (!has_hardware_name || !has_vendor || !has_pci_bus_id) {
+    TF_SetStatus(status, TF_INVALID_ARGUMENT, "null metadata output");
+    return;
+  }
+  *has_hardware_name = 0;
+  *has_vendor = 0;
+  *has_pci_bus_id = 0;
+  SP_Device device;
+  std::memset(&device, 0, sizeof(device));
+  SE_CreateDeviceParams params;
+  std::memset(&params, 0, sizeof(params));
+  params.struct_size = SE_CREATE_DEVICE_PARAMS_STRUCT_SIZE;
+  params.ordinal = 0;
+  params.device = &device;
+  plugin_create_device(nullptr, &params, status);
+  if (TF_GetCode(status) != TF_OK) return;
+  *has_hardware_name =
+      device.hardware_name != nullptr && device.hardware_name[0] != '\0';
+  *has_vendor =
+      device.device_vendor != nullptr && device.device_vendor[0] != '\0';
+  *has_pci_bus_id =
+      device.pci_bus_id != nullptr && device.pci_bus_id[0] != '\0';
+  plugin_destroy_device(nullptr, &device);
+  TF_SetStatus(status, TF_OK, "");
+}
 
 void plugin_create_device_fns(const SP_Platform*,
                               SE_CreateDeviceFnsParams* params,
