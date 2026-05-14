@@ -151,6 +151,42 @@ __global__ void RandomStandardNormalKernel(int64_t n, MusaPhiloxState state, T* 
     }
 }
 
+// Each output element is assigned kMaxTrials consecutive Philox groups for
+// rejection sampling. P(all kMaxTrials pairs rejected) < 0.046^kMaxTrials,
+// which is negligible for kMaxTrials >= 5. Elements whose every candidate is
+// out of range receive 0 (practically never occurs).
+template <typename T>
+__global__ void TruncatedNormalKernel(int64_t n, MusaPhiloxState state, T* output) {
+    constexpr int kMaxTrials = 10;
+    const int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
+    const int total_thread_count = gridDim.x * blockDim.x;
+
+    const uint4_ base_ctr = {state.counter[0], state.counter[1],
+                              state.counter[2], state.counter[3]};
+    const uint2_ key = {state.key[0], state.key[1]};
+
+    for (int64_t idx = (int64_t)thread_id; idx < n; idx += total_thread_count) {
+        // Give each element its own exclusive block of kMaxTrials Philox groups.
+        uint4_ ctr = skip_philox(base_ctr, (uint64_t)idx * kMaxTrials);
+        T sample = static_cast<T>(0);
+        for (int trial = 0; trial < kMaxTrials; ++trial) {
+            uint4_ res = ComputePhilox10(ctr, key);
+            ctr = skip_philox(ctr, 1);
+            T z0, z1;
+            BoxMuller<T>(res.x, res.y, &z0, &z1);
+            if (z0 >= static_cast<T>(-2.0) && z0 <= static_cast<T>(2.0)) {
+                sample = z0;
+                break;
+            }
+            if (z1 >= static_cast<T>(-2.0) && z1 <= static_cast<T>(2.0)) {
+                sample = z1;
+                break;
+            }
+        }
+        output[idx] = sample;
+    }
+}
+
 extern "C" {
 void LaunchRandomUniform_float(void* stream, int64_t n, int num_blocks, int block_size, MusaPhiloxState state, float* output) {
     RandomUniformKernel<float><<<num_blocks, block_size, 0, (musaStream_t)stream>>>(n, state, output);
@@ -170,5 +206,11 @@ void LaunchRandomStandardNormal_float(void* stream, int64_t n, int num_blocks, i
 }
 void LaunchRandomStandardNormal_double(void* stream, int64_t n, int num_blocks, int block_size, MusaPhiloxState state, double* output) {
     RandomStandardNormalKernel<double><<<num_blocks, block_size, 0, (musaStream_t)stream>>>(n, state, output);
+}
+void LaunchTruncatedNormal_float(void* stream, int64_t n, int num_blocks, int block_size, MusaPhiloxState state, float* output) {
+    TruncatedNormalKernel<float><<<num_blocks, block_size, 0, (musaStream_t)stream>>>(n, state, output);
+}
+void LaunchTruncatedNormal_double(void* stream, int64_t n, int num_blocks, int block_size, MusaPhiloxState state, double* output) {
+    TruncatedNormalKernel<double><<<num_blocks, block_size, 0, (musaStream_t)stream>>>(n, state, output);
 }
 }
