@@ -88,7 +88,7 @@ class MusaTensorListReserveOp : public MusaOpKernel {
     output_list.element_dtype = element_dtype_;
     output_list.element_shape = element_shape;
 
-    output_list.tensors().resize(num_elements);
+    output_list.tensors().resize(num_elements, Tensor(DT_INVALID));
 
     output_handle->scalar<Variant>()() = std::move(output_list);
   }
