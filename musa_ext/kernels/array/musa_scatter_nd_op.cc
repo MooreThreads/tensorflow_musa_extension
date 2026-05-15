@@ -17,12 +17,14 @@ limitations under the License.
 //
 // Supported ops:
 //   - ScatterNd              : out = zeros(shape); out[indices] = updates
-//   - TensorScatterUpdate    : out = tensor; out[indices] = updates  (UPDATE_ONLY)
+//   - TensorScatterUpdate    : out = tensor; out[indices] = updates
+//   (UPDATE_ONLY)
 //   - TensorScatterAdd       : out = tensor; out[indices] += updates (ADD)
 //   - TensorScatterSub       : out = tensor; out[indices] -= updates
-//                              (implemented as ADD(-updates) via Unary::SUB_BY_ALPHA,
-//                               because mScatterND::Mode::SUB is unimplemented in the
-//                               current mudnn runtime)
+//                              (implemented as ADD(-updates) via
+//                              Unary::SUB_BY_ALPHA,
+//                               because mScatterND::Mode::SUB is unimplemented
+//                               in the current mudnn runtime)
 //
 // muDNN ScatterND API:
 //   SetMode(Mode)  : UPDATE_ONLY / ADD
@@ -76,8 +78,8 @@ Status ZeroInitTensor(Tensor* t, mFormat fmt, OpKernelContext* ctx) {
 
 // Run muDNN ScatterND with the given mode on pre-constructed tensors.
 Status RunScatterND(OpKernelContext* ctx, mTensor& self_mt,
-                   const mTensor& idx_mt, const mTensor& upd_mt,
-                   mScatterND::Mode mode) {
+                    const mTensor& idx_mt, const mTensor& upd_mt,
+                    mScatterND::Mode mode) {
   auto& h = GetHandleByCtx(ctx);
   mScatterND scatter_nd;
   auto st = scatter_nd.SetMode(mode);
@@ -139,9 +141,8 @@ class MusaScatterNdOp : public MusaOpKernel {
     mTensor idx_mt = CreateMTensor(indices, format_);
     mTensor upd_mt = CreateMTensor(updates, format_);
 
-    OP_REQUIRES_OK(
-        ctx, RunScatterND(ctx, out_mt, idx_mt, upd_mt,
-                          mScatterND::Mode::UPDATE_ONLY));
+    OP_REQUIRES_OK(ctx, RunScatterND(ctx, out_mt, idx_mt, upd_mt,
+                                     mScatterND::Mode::UPDATE_ONLY));
   }
 };
 
@@ -170,11 +171,11 @@ class MusaTensorScatterNdOp : public MusaOpKernel {
     // Copy input tensor to output (device-to-device).
     if (tensor.NumElements() > 0) {
       auto stream = GetMusaStreamByCtx(ctx);
-      musaError_t err = musaMemcpyAsync(
-          output->data(), tensor.data(),
-          static_cast<size_t>(tensor.NumElements()) *
-              DataTypeSize(tensor.dtype()),
-          musaMemcpyDeviceToDevice, stream);
+      musaError_t err =
+          musaMemcpyAsync(output->data(), tensor.data(),
+                          static_cast<size_t>(tensor.NumElements()) *
+                              DataTypeSize(tensor.dtype()),
+                          musaMemcpyDeviceToDevice, stream);
       OP_REQUIRES(ctx, err == musaSuccess,
                   errors::Internal("TensorScatterNd musaMemcpyAsync failed: ",
                                    musaGetErrorString(err)));
@@ -229,11 +230,11 @@ class MusaTensorScatterSubOp : public MusaOpKernel {
     // Copy input tensor to output (device-to-device).
     if (tensor.NumElements() > 0) {
       auto stream = GetMusaStreamByCtx(ctx);
-      musaError_t err = musaMemcpyAsync(
-          output->data(), tensor.data(),
-          static_cast<size_t>(tensor.NumElements()) *
-              DataTypeSize(tensor.dtype()),
-          musaMemcpyDeviceToDevice, stream);
+      musaError_t err =
+          musaMemcpyAsync(output->data(), tensor.data(),
+                          static_cast<size_t>(tensor.NumElements()) *
+                              DataTypeSize(tensor.dtype()),
+                          musaMemcpyDeviceToDevice, stream);
       OP_REQUIRES(ctx, err == musaSuccess,
                   errors::Internal("TensorScatterSub musaMemcpyAsync failed: ",
                                    musaGetErrorString(err)));
@@ -241,11 +242,11 @@ class MusaTensorScatterSubOp : public MusaOpKernel {
 
     if (indices.NumElements() == 0 || updates.NumElements() == 0) return;
 
-    // Negate updates via Unary::SUB_BY_ALPHA(alpha=0): out = 0 - updates = -updates.
+    // Negate updates via Unary::SUB_BY_ALPHA(alpha=0): out = 0 - updates =
+    // -updates.
     Tensor neg_updates;
-    OP_REQUIRES_OK(ctx,
-                   ctx->allocate_temp(updates.dtype(), updates.shape(),
-                                      &neg_updates));
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(updates.dtype(), updates.shape(),
+                                           &neg_updates));
 
     auto& h = GetHandleByCtx(ctx);
     mUnary neg_op;
@@ -261,9 +262,8 @@ class MusaTensorScatterSubOp : public MusaOpKernel {
     // Scatter-add negated updates into output.
     mTensor out_mt = CreateMTensor(*output, format_);
     mTensor idx_mt = CreateMTensor(indices, format_);
-    OP_REQUIRES_OK(
-        ctx, RunScatterND(ctx, out_mt, idx_mt, neg_upd_mt,
-                          mScatterND::Mode::ADD));
+    OP_REQUIRES_OK(ctx, RunScatterND(ctx, out_mt, idx_mt, neg_upd_mt,
+                                     mScatterND::Mode::ADD));
   }
 };
 
@@ -272,16 +272,16 @@ class MusaTensorScatterSubOp : public MusaOpKernel {
 // ---------------------------------------------------------------------------
 
 // ScatterNd: shape is provided as HostMemory (CPU tensor)
-#define REGISTER_SCATTER_ND(T, IndexT)                              \
-  REGISTER_KERNEL_BUILDER(Name("ScatterNd")                         \
-                              .Device(DEVICE_MTGPU)                 \
-                              .TypeConstraint<T>("T")               \
-                              .TypeConstraint<IndexT>("Tindices")   \
-                              .HostMemory("shape"),                 \
+#define REGISTER_SCATTER_ND(T, IndexT)                            \
+  REGISTER_KERNEL_BUILDER(Name("ScatterNd")                       \
+                              .Device(DEVICE_MTGPU)               \
+                              .TypeConstraint<T>("T")             \
+                              .TypeConstraint<IndexT>("Tindices") \
+                              .HostMemory("shape"),               \
                           MusaScatterNdOp<T, IndexT>);
 
-#define REGISTER_SCATTER_ND_INDEX(T)     \
-  REGISTER_SCATTER_ND(T, int32)          \
+#define REGISTER_SCATTER_ND_INDEX(T) \
+  REGISTER_SCATTER_ND(T, int32)      \
   REGISTER_SCATTER_ND(T, int64)
 
 REGISTER_SCATTER_ND_INDEX(float)
@@ -295,11 +295,11 @@ REGISTER_SCATTER_ND_INDEX(bfloat16)
 #undef REGISTER_SCATTER_ND
 
 // TensorScatterUpdate
-#define REGISTER_TENSOR_SCATTER_UPDATE(T, IndexT)                         \
-  REGISTER_KERNEL_BUILDER(Name("TensorScatterUpdate")                     \
-                              .Device(DEVICE_MTGPU)                       \
-                              .TypeConstraint<T>("T")                     \
-                              .TypeConstraint<IndexT>("Tindices"),        \
+#define REGISTER_TENSOR_SCATTER_UPDATE(T, IndexT)                  \
+  REGISTER_KERNEL_BUILDER(Name("TensorScatterUpdate")              \
+                              .Device(DEVICE_MTGPU)                \
+                              .TypeConstraint<T>("T")              \
+                              .TypeConstraint<IndexT>("Tindices"), \
                           MusaTensorScatterUpdateOp<T, IndexT>);
 
 #define REGISTER_TENSOR_SCATTER_UPDATE_INDEX(T) \
@@ -317,11 +317,11 @@ REGISTER_TENSOR_SCATTER_UPDATE_INDEX(bfloat16)
 #undef REGISTER_TENSOR_SCATTER_UPDATE
 
 // TensorScatterAdd
-#define REGISTER_TENSOR_SCATTER_ADD(T, IndexT)                       \
-  REGISTER_KERNEL_BUILDER(Name("TensorScatterAdd")                   \
-                              .Device(DEVICE_MTGPU)                  \
-                              .TypeConstraint<T>("T")                \
-                              .TypeConstraint<IndexT>("Tindices"),   \
+#define REGISTER_TENSOR_SCATTER_ADD(T, IndexT)                     \
+  REGISTER_KERNEL_BUILDER(Name("TensorScatterAdd")                 \
+                              .Device(DEVICE_MTGPU)                \
+                              .TypeConstraint<T>("T")              \
+                              .TypeConstraint<IndexT>("Tindices"), \
                           MusaTensorScatterAddOp<T, IndexT>);
 
 #define REGISTER_TENSOR_SCATTER_ADD_INDEX(T) \
@@ -339,11 +339,11 @@ REGISTER_TENSOR_SCATTER_ADD_INDEX(bfloat16)
 #undef REGISTER_TENSOR_SCATTER_ADD
 
 // TensorScatterSub
-#define REGISTER_TENSOR_SCATTER_SUB(T, IndexT)                       \
-  REGISTER_KERNEL_BUILDER(Name("TensorScatterSub")                   \
-                              .Device(DEVICE_MTGPU)                  \
-                              .TypeConstraint<T>("T")                \
-                              .TypeConstraint<IndexT>("Tindices"),   \
+#define REGISTER_TENSOR_SCATTER_SUB(T, IndexT)                     \
+  REGISTER_KERNEL_BUILDER(Name("TensorScatterSub")                 \
+                              .Device(DEVICE_MTGPU)                \
+                              .TypeConstraint<T>("T")              \
+                              .TypeConstraint<IndexT>("Tindices"), \
                           MusaTensorScatterSubOp<T, IndexT>);
 
 #define REGISTER_TENSOR_SCATTER_SUB_INDEX(T) \
