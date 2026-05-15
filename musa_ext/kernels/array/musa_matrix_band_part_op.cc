@@ -8,9 +8,9 @@ namespace tensorflow {
 namespace musa {
 
 template <typename T>
-void MusaMatrixBandPartKernelLauncher(musaStream_t stream,
-                                      const int batch_size, const int m,
-                                      const int n, const int num_lower_diags,
+void MusaMatrixBandPartKernelLauncher(musaStream_t stream, const int batch_size,
+                                      const int m, const int n,
+                                      const int num_lower_diags,
                                       const int num_upper_diags,
                                       const T* input_ptr, T* output_ptr);
 
@@ -29,7 +29,8 @@ class MusaMatrixBandPartOp : public MusaOpKernel {
                     "input must be at least 2-dim, received shape: ",
                     input_shape.DebugString()));
 
-    // Read num_lower and num_upper as int64 scalars (may be DT_INT32 or DT_INT64)
+    // Read num_lower and num_upper as int64 scalars (may be DT_INT32 or
+    // DT_INT64)
     auto as_int64_scalar = [](const Tensor& t) -> int64 {
       if (t.dtype() == DT_INT32) {
         return static_cast<int64>(t.scalar<int32>()());
@@ -66,9 +67,8 @@ class MusaMatrixBandPartOp : public MusaOpKernel {
                     "), got: ", num_upper));
 
     // Passthrough if the entire matrix is within the band
-    if (input.NumElements() == 0 ||
-        ((num_lower < 0 || num_lower >= m) &&
-         (num_upper < 0 || num_upper >= n))) {
+    if (input.NumElements() == 0 || ((num_lower < 0 || num_lower >= m) &&
+                                     (num_upper < 0 || num_upper >= n))) {
       ctx->set_output(0, input);
       return;
     }
@@ -88,14 +88,13 @@ class MusaMatrixBandPartOp : public MusaOpKernel {
   }
 };
 
-#define REGISTER_MUSA_MATRIX_BAND_PART(TYPE)                          \
-  REGISTER_KERNEL_BUILDER(                                            \
-      Name("MatrixBandPart")                                          \
-          .Device(DEVICE_MTGPU)                                       \
-          .TypeConstraint<TYPE>("T")                                  \
-          .HostMemory("num_lower")                                    \
-          .HostMemory("num_upper"),                                   \
-      MusaMatrixBandPartOp<TYPE>)
+#define REGISTER_MUSA_MATRIX_BAND_PART(TYPE)             \
+  REGISTER_KERNEL_BUILDER(Name("MatrixBandPart")         \
+                              .Device(DEVICE_MTGPU)      \
+                              .TypeConstraint<TYPE>("T") \
+                              .HostMemory("num_lower")   \
+                              .HostMemory("num_upper"),  \
+                          MusaMatrixBandPartOp<TYPE>)
 
 REGISTER_MUSA_MATRIX_BAND_PART(float);
 REGISTER_MUSA_MATRIX_BAND_PART(double);
