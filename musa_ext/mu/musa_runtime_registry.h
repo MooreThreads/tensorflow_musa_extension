@@ -25,6 +25,9 @@ limitations under the License.
 #include <string>
 #include <unordered_map>
 
+#include "mu/device/musa_event_mgr.h"
+#include "mu/device/pinned_memory_pool.h"
+
 namespace tensorflow {
 namespace musa {
 
@@ -50,6 +53,9 @@ struct MusaSeDeviceRuntimeState {
 
   std::shared_ptr<void> collective_runtime_opaque;
 
+  std::unique_ptr<MusaEventMgr> event_mgr;
+  std::unique_ptr<GPUPinnedMemoryPool> pinned_pool;
+
   int last_collective_error_code = 0;
 };
 
@@ -62,6 +68,9 @@ void MusaSeRegistryOnStreamDestroyed(int32_t ordinal, musaStream_t stream);
 // handle for this `musaStream_t`.
 ::musa::dnn::Handle* MusaSeRegistryEnsureMudnnForDevice(int32_t ordinal,
                                                         musaStream_t stream);
+
+MusaEventMgr* MusaSeRegistryEventMgr(int32_t ordinal);
+GPUPinnedMemoryPool* MusaSeRegistryPinnedMemoryPool(int32_t ordinal);
 
 bool MusaSeRegistryHasLiveDeviceForTest(int32_t ordinal);
 

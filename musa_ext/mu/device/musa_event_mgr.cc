@@ -95,7 +95,8 @@ void MusaEventMgr::DestroyEvent(musaEvent_t event) {
     musaError_t err = musaEventDestroy(event);
     // Only log as WARNING for errors other than invalid resource handle
     // which can happen during shutdown when events are cleaned up
-    if (err != musaSuccess && err != musaErrorInvalidResourceHandle) {
+    if (err != musaSuccess && err != musaErrorInvalidResourceHandle &&
+        err != musaErrorInitializationError) {
       LOG(WARNING) << "Failed to destroy MUSA event: "
                    << musaGetErrorString(err);
     }

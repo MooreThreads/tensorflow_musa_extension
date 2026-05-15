@@ -28,6 +28,12 @@ inline bool StrictPhysicalDeviceEnum() {
   return EnvIsOne("MUSA_STRICT_DEVICE_ENUM");
 }
 
+inline bool SyncSeH2D() { return EnvIsOne("MUSA_SE_SYNC_H2D"); }
+
+inline bool SyncSeStreamDependency() {
+  return EnvIsOne("MUSA_SE_SYNC_STREAM_DEPENDENCY");
+}
+
 }  // namespace plugin_env
 }  // namespace musa
 }  // namespace tensorflow

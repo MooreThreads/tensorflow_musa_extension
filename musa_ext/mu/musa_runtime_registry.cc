@@ -53,8 +53,11 @@ void MusaSeRegistryOnDeviceDestroyed(int32_t ordinal) {
     return;
   }
   if (--(it->second.ref_count) <= 0) {
+    musaSetDevice(ordinal);
     it->second.mudnn_by_stream.clear();
     it->second.collective_runtime_opaque.reset();
+    it->second.event_mgr.reset();
+    it->second.pinned_pool.reset();
     g_devices.erase(it);
   }
 }
@@ -106,6 +109,28 @@ void MusaSeRegistryOnStreamDestroyed(int32_t ordinal, musaStream_t stream) {
   }
 
   return slot.handle.get();
+}
+
+MusaEventMgr* MusaSeRegistryEventMgr(int32_t ordinal) {
+  if (ordinal < 0) return nullptr;
+  std::lock_guard<std::mutex> lock(g_mu);
+  auto it = g_devices.find(ordinal);
+  if (it == g_devices.end() || !Live(it->second)) return nullptr;
+  if (!it->second.event_mgr) {
+    it->second.event_mgr.reset(new MusaEventMgr(ordinal));
+  }
+  return it->second.event_mgr.get();
+}
+
+GPUPinnedMemoryPool* MusaSeRegistryPinnedMemoryPool(int32_t ordinal) {
+  if (ordinal < 0) return nullptr;
+  std::lock_guard<std::mutex> lock(g_mu);
+  auto it = g_devices.find(ordinal);
+  if (it == g_devices.end() || !Live(it->second)) return nullptr;
+  if (!it->second.pinned_pool) {
+    it->second.pinned_pool.reset(new GPUPinnedMemoryPool(ordinal));
+  }
+  return it->second.pinned_pool.get();
 }
 
 bool MusaSeRegistryHasLiveDeviceForTest(int32_t ordinal) {

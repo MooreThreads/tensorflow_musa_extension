@@ -36,6 +36,7 @@ limitations under the License.
 #include "tensorflow/c/experimental/stream_executor/stream_executor.h"
 #include "tensorflow/c/tf_status.h"
 #include "tensorflow/core/platform/logging.h"
+#include "tensorflow/core/public/version.h"
 
 // TensorFlow headers only forward-declare these; the plugin must define the
 // full struct types in the global namespace (same tag names) so
@@ -256,21 +257,8 @@ void plugin_se_destroy_stream(const SP_Device* device, SP_Stream stream) {
   delete stream;
 }
 
-// musaStreamWaitEvent() queues the wait; destroying the event immediately can
-// race (see musa_device.cc: defer destruction until the waiting stream has
-// completed the wait).
-struct StreamDepEventCtx {
-  musaEvent_t event;
-  int device_ordinal;
-};
-
-void DestroyStreamDepEventTrampoline(void* p) {
-  auto* c = static_cast<StreamDepEventCtx*>(p);
-  if (!c) return;
-  musaSetDevice(c->device_ordinal);
-  (void)musaEventDestroy(c->event);
-  delete c;
-}
+// musaStreamWaitEvent() queues the wait; keep the temporary event alive until
+// the dependent stream has consumed the wait.
 
 void plugin_se_create_stream_dependency(const SP_Device* device,
                                         SP_Stream dependent, SP_Stream other,
@@ -304,25 +292,40 @@ void plugin_se_create_stream_dependency(const SP_Device* device,
                                                    "musaStreamWaitEvent");
     return;
   }
-  auto* ctx = new (std::nothrow) StreamDepEventCtx{event, dev_ord};
-  if (!ctx) {
-    (void)musaStreamSynchronize(dependent->stream);
+
+  if (::tensorflow::musa::plugin_env::SyncSeStreamDependency()) {
+    err = musaStreamSynchronize(dependent->stream);
+    if (err != musaSuccess) {
+      musaEventDestroy(event);
+      ::tensorflow::musa::runtime::SetStatusFromMusa(status, err,
+                                                     "musaStreamSynchronize");
+      return;
+    }
+    err = musaEventDestroy(event);
+    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err,
+                                                   "musaEventDestroy");
+    return;
+  }
+
+  auto* event_mgr = ::tensorflow::musa::MusaSeRegistryEventMgr(dev_ord);
+  if (event_mgr == nullptr) {
+    err = musaStreamSynchronize(dependent->stream);
+    if (err != musaSuccess) {
+      musaEventDestroy(event);
+      ::tensorflow::musa::runtime::SetStatusFromMusa(status, err,
+                                                     "musaStreamSynchronize");
+      return;
+    }
+    err = musaEventDestroy(event);
+    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err,
+                                                   "musaEventDestroy");
+    return;
+  }
+
+  event_mgr->ThenExecute(dependent->stream, [event, dev_ord]() {
     musaSetDevice(dev_ord);
     musaEventDestroy(event);
-    MallocOrBadAlloc(status);
-    return;
-  }
-  err = musaLaunchHostFunc(dependent->stream, DestroyStreamDepEventTrampoline,
-                           ctx);
-  if (err != musaSuccess) {
-    (void)musaStreamSynchronize(dependent->stream);
-    musaSetDevice(dev_ord);
-    (void)musaEventDestroy(ctx->event);
-    delete ctx;
-    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err,
-                                                   "musaLaunchHostFunc");
-    return;
-  }
+  });
   TF_SetStatus(status, TF_OK, "");
 }
 
@@ -526,13 +529,64 @@ void plugin_se_memcpy_htod(const SP_Device* device, SP_Stream stream,
     TF_SetStatus(status, TF_OK, "");
     return;
   }
-  ::tensorflow::musa::runtime::SetMusaDeviceOrStatus(Ordinal(device), status);
+  const int dev_ord = Ordinal(device);
+  ::tensorflow::musa::runtime::SetMusaDeviceOrStatus(dev_ord, status);
   if (TF_GetCode(status) != TF_OK) return;
+
   void* dst = device_dst->opaque;
-  musaError_t err = musaMemcpyAsync(dst, host_src, size, musaMemcpyHostToDevice,
-                                    stream->stream);
-  ::tensorflow::musa::runtime::SetStatusFromMusa(status, err,
-                                                 "musaMemcpyAsync H2D");
+  if (::tensorflow::musa::plugin_env::SyncSeH2D()) {
+    musaError_t err = musaMemcpy(dst, host_src, size, musaMemcpyHostToDevice);
+    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err,
+                                                   "musaMemcpy H2D");
+    return;
+  }
+
+  musaPointerAttributes attributes;
+  musaError_t attr_err = musaPointerGetAttributes(&attributes, host_src);
+  const bool is_pinned =
+      attr_err == musaSuccess && attributes.type == musaMemoryTypeHost;
+  if (attr_err != musaSuccess) {
+    musaGetLastError();
+  }
+
+  if (is_pinned) {
+    musaError_t err = musaMemcpyAsync(dst, host_src, size,
+                                      musaMemcpyHostToDevice, stream->stream);
+    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err,
+                                                   "musaMemcpyAsync H2D");
+    return;
+  }
+
+  auto* pinned_pool =
+      ::tensorflow::musa::MusaSeRegistryPinnedMemoryPool(dev_ord);
+  if (pinned_pool == nullptr) {
+    musaError_t err = musaMemcpy(dst, host_src, size, musaMemcpyHostToDevice);
+    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err,
+                                                   "musaMemcpy H2D");
+    return;
+  }
+
+  void* bounce_buffer = pinned_pool->Allocate(static_cast<size_t>(size));
+  if (bounce_buffer == nullptr) {
+    musaError_t err = musaMemcpy(dst, host_src, size, musaMemcpyHostToDevice);
+    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err,
+                                                   "musaMemcpy H2D");
+    return;
+  }
+
+  std::memcpy(bounce_buffer, host_src, static_cast<size_t>(size));
+  musaError_t err = musaMemcpyAsync(dst, bounce_buffer, size,
+                                    musaMemcpyHostToDevice, stream->stream);
+  if (err != musaSuccess) {
+    pinned_pool->FreeAsync(bounce_buffer, static_cast<size_t>(size), nullptr);
+    TF_SetStatus(status, TF_INTERNAL,
+                 "musaMemcpyAsync H2D via pinned bounce buffer failed");
+    return;
+  }
+
+  pinned_pool->FreeAsync(bounce_buffer, static_cast<size_t>(size),
+                         stream->stream);
+  TF_SetStatus(status, TF_OK, "");
 }
 
 void plugin_se_memcpy_dtod(const SP_Device* device, SP_Stream stream,
@@ -1095,9 +1149,11 @@ void plugin_create_stream_executor(const SP_Platform*,
   se->sync_memcpy_dtoh = plugin_se_sync_memcpy_dtoh;
   se->sync_memcpy_htod = plugin_se_sync_memcpy_htod;
   se->sync_memcpy_dtod = plugin_se_sync_memcpy_dtod;
+#if TF_MAJOR_VERSION > 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION >= 15)
   se->mem_zero = plugin_se_mem_zero;
   se->memset = plugin_se_memset;
   se->memset32 = plugin_se_memset32;
+#endif
   se->block_host_for_event = plugin_se_block_host_for_event;
   se->block_host_until_done = plugin_se_block_host_until_done;
   se->synchronize_all_activity = plugin_se_synchronize_all_activity;
