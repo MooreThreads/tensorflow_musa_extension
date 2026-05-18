@@ -56,9 +56,8 @@ Status PermuteTensorOnMusaGrad(OpKernelContext* ctx, const Tensor& input,
 
 Status ComputeOutputAndPadding2DGrad(
     int64_t in_h, int64_t in_w, int64_t window_h, int64_t window_w,
-    int stride_h, int stride_w, Padding padding, int64_t* out_h,
-    int64_t* out_w, int* pad_top, int* pad_bottom, int* pad_left,
-    int* pad_right) {
+    int stride_h, int stride_w, Padding padding, int64_t* out_h, int64_t* out_w,
+    int* pad_top, int* pad_bottom, int* pad_left, int* pad_right) {
   if (padding == Padding::VALID) {
     *out_h = std::max<int64_t>(0, (in_h - window_h + stride_h) / stride_h);
     *out_w = std::max<int64_t>(0, (in_w - window_w + stride_w) / stride_w);
@@ -119,17 +118,16 @@ Status RunMusaMaxPoolGrad(OpKernelContext* ctx, const Tensor& orig_input,
   // grad_output).  We need to execute the forward pass to obtain the internal
   // max-position indices that muDNN uses for the backward pass.
   Tensor fwd_output_scratch;
-  TF_RETURN_IF_ERROR(ctx->allocate_temp(grad_output.dtype(),
-                                        grad_output.shape(),
-                                        &fwd_output_scratch));
+  TF_RETURN_IF_ERROR(ctx->allocate_temp(
+      grad_output.dtype(), grad_output.shape(), &fwd_output_scratch));
 
   // Allocate GPU memory for the max-position indices (INT64, same shape as
   // the pooling output).  muDNN requires a pre-allocated device buffer; a
   // default-constructed mTensor has no backing memory and causes RunBwd to
   // fail with INTERNAL_ERROR (status=4).
   Tensor indices_tensor;
-  TF_RETURN_IF_ERROR(ctx->allocate_temp(DT_INT64, grad_output.shape(),
-                                        &indices_tensor));
+  TF_RETURN_IF_ERROR(
+      ctx->allocate_temp(DT_INT64, grad_output.shape(), &indices_tensor));
 
   // Build the indices mTensor descriptor manually: CreateMTensor() derives the
   // type from t.dtype(), but indices_tensor.dtype() is DT_INT64 which maps
@@ -142,9 +140,8 @@ Status RunMusaMaxPoolGrad(OpKernelContext* ctx, const Tensor& orig_input,
   // Run the forward pass to populate the indices buffer.
   status = pool.Run(handle, y, x, indices_mt);
   if (status != mStatus::SUCCESS) {
-    return errors::Internal(
-        "muDNN Pooling::Run (for indices) failed. status=",
-        static_cast<int>(status));
+    return errors::Internal("muDNN Pooling::Run (for indices) failed. status=",
+                            static_cast<int>(status));
   }
 
   // Propagate gradients backward.
@@ -180,10 +177,9 @@ class MusaMaxPoolGradOp : public MusaOpKernel {
                                 data_format_str_));
 
     OP_REQUIRES_OK(ctx, GetPaddingFromString(padding_str_, &padding_));
-    OP_REQUIRES(
-        ctx, padding_ == Padding::SAME || padding_ == Padding::VALID,
-        errors::InvalidArgument(
-            "MaxPoolGrad only supports SAME/VALID padding."));
+    OP_REQUIRES(ctx, padding_ == Padding::SAME || padding_ == Padding::VALID,
+                errors::InvalidArgument(
+                    "MaxPoolGrad only supports SAME/VALID padding."));
 
     OP_REQUIRES(ctx, ksize_.size() == 4,
                 errors::InvalidArgument(
@@ -213,9 +209,9 @@ class MusaMaxPoolGradOp : public MusaOpKernel {
     OP_REQUIRES(ctx, window_h_ > 0 && window_w_ > 0,
                 errors::InvalidArgument(
                     "MaxPoolGrad spatial window sizes must be > 0."));
-    OP_REQUIRES(ctx, stride_h_ > 0 && stride_w_ > 0,
-                errors::InvalidArgument(
-                    "MaxPoolGrad spatial strides must be > 0."));
+    OP_REQUIRES(
+        ctx, stride_h_ > 0 && stride_w_ > 0,
+        errors::InvalidArgument("MaxPoolGrad spatial strides must be > 0."));
   }
 
   bool IsExpensive() override { return true; }
@@ -260,12 +256,11 @@ class MusaMaxPoolGradOp : public MusaOpKernel {
                             stride_w_, padding_, &out_h, &out_w, &pad_top,
                             &pad_bottom, &pad_left, &pad_right));
 
-    OP_REQUIRES(
-        ctx, pad_top == pad_bottom && pad_left == pad_right,
-        errors::Unimplemented(
-            "Current MUSA MaxPoolGrad path only supports "
-            "symmetric padding. got [top,bottom,left,right]=",
-            pad_top, ",", pad_bottom, ",", pad_left, ",", pad_right));
+    OP_REQUIRES(ctx, pad_top == pad_bottom && pad_left == pad_right,
+                errors::Unimplemented(
+                    "Current MUSA MaxPoolGrad path only supports "
+                    "symmetric padding. got [top,bottom,left,right]=",
+                    pad_top, ",", pad_bottom, ",", pad_left, ",", pad_right));
 
     // Allocate output gradient tensor with the same shape as orig_input.
     Tensor* grad_input = nullptr;
@@ -277,10 +272,10 @@ class MusaMaxPoolGradOp : public MusaOpKernel {
     }
 
     if (data_format_ == FORMAT_NHWC) {
-      OP_REQUIRES_OK(ctx, RunMusaMaxPoolGrad<T>(
-                              ctx, orig_input, grad, grad_input, window_h_,
-                              window_w_, stride_h_, stride_w_, pad_top,
-                              pad_left));
+      OP_REQUIRES_OK(
+          ctx, RunMusaMaxPoolGrad<T>(ctx, orig_input, grad, grad_input,
+                                     window_h_, window_w_, stride_h_, stride_w_,
+                                     pad_top, pad_left));
       return;
     }
 
@@ -290,27 +285,27 @@ class MusaMaxPoolGradOp : public MusaOpKernel {
     Tensor grad_nhwc;
     Tensor grad_input_nhwc;
 
-    OP_REQUIRES_OK(
-        ctx, ctx->allocate_temp(orig_input.dtype(),
-                                TensorShape({batch, in_h, in_w, in_c}),
-                                &orig_input_nhwc));
-    OP_REQUIRES_OK(
-        ctx, ctx->allocate_temp(grad.dtype(),
-                                TensorShape({batch, out_h, out_w, in_c}),
-                                &grad_nhwc));
-    OP_REQUIRES_OK(
-        ctx, ctx->allocate_temp(grad_input->dtype(),
-                                TensorShape({batch, in_h, in_w, in_c}),
-                                &grad_input_nhwc));
+    OP_REQUIRES_OK(ctx,
+                   ctx->allocate_temp(orig_input.dtype(),
+                                      TensorShape({batch, in_h, in_w, in_c}),
+                                      &orig_input_nhwc));
+    OP_REQUIRES_OK(ctx,
+                   ctx->allocate_temp(grad.dtype(),
+                                      TensorShape({batch, out_h, out_w, in_c}),
+                                      &grad_nhwc));
+    OP_REQUIRES_OK(ctx,
+                   ctx->allocate_temp(grad_input->dtype(),
+                                      TensorShape({batch, in_h, in_w, in_c}),
+                                      &grad_input_nhwc));
 
     static const std::vector<int64_t> kPermNchwToNhwc = {0, 2, 3, 1};
     static const std::vector<int64_t> kPermNhwcToNchw = {0, 3, 1, 2};
 
-    OP_REQUIRES_OK(ctx, PermuteTensorOnMusaGrad(ctx, orig_input,
-                                                &orig_input_nhwc,
-                                                kPermNchwToNhwc));
-    OP_REQUIRES_OK(ctx, PermuteTensorOnMusaGrad(ctx, grad, &grad_nhwc,
-                                                kPermNchwToNhwc));
+    OP_REQUIRES_OK(ctx,
+                   PermuteTensorOnMusaGrad(ctx, orig_input, &orig_input_nhwc,
+                                           kPermNchwToNhwc));
+    OP_REQUIRES_OK(
+        ctx, PermuteTensorOnMusaGrad(ctx, grad, &grad_nhwc, kPermNchwToNhwc));
     OP_REQUIRES_OK(
         ctx, RunMusaMaxPoolGrad<T>(ctx, orig_input_nhwc, grad_nhwc,
                                    &grad_input_nhwc, window_h_, window_w_,
