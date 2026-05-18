@@ -175,6 +175,61 @@ class LayerNormOpTest(MUSATestCase):
             with self.subTest(dtype=dtype):
                 self._test_layernorm_gradient_tape([8, 16, 32], dtype)
 
+    def testLayerNormSingleLayerTrainingConverges(self):
+        if self._musa_ops is None:
+            self.skipTest("MUSA LayerNorm ops module not available")
+
+        np.random.seed(123)
+        tf.random.set_seed(123)
+
+        batch = 64
+        hidden = 32
+        steps = 1000
+        lr = 0.2
+
+        x_np = np.random.uniform(-2.0, 2.0, size=(batch, hidden)).astype(np.float32)
+        true_gamma_np = np.random.uniform(0.5, 1.5, size=(hidden,)).astype(np.float32)
+        true_beta_np = np.random.uniform(-0.5, 0.5, size=(hidden,)).astype(np.float32)
+
+        with tf.device('/CPU:0'):
+            x_cpu = tf.constant(x_np)
+            y_target = layernorm_ref(
+                x_cpu,
+                tf.constant(true_gamma_np),
+                tf.constant(true_beta_np),
+            )
+
+        with tf.device('/device:MUSA:0'):
+            x = tf.constant(x_np)
+            target = tf.identity(y_target)
+            gamma = tf.Variable(tf.ones([hidden], dtype=tf.float32))
+            beta = tf.Variable(tf.zeros([hidden], dtype=tf.float32))
+
+            losses = []
+            for _ in range(steps):
+                with tf.GradientTape() as tape:
+                    y = self._musa_ops.musa_layer_norm(
+                        x=x,
+                        gamma=gamma,
+                        beta=beta,
+                        epsilon=1e-5,
+                    )
+                    loss = tf.reduce_mean(tf.square(y - target))
+                grads = tape.gradient(loss, [gamma, beta])
+                self.assertIsNotNone(grads[0])
+                self.assertIsNotNone(grads[1])
+                gamma.assign_sub(lr * grads[0])
+                beta.assign_sub(lr * grads[1])
+                losses.append(float(loss.numpy()))
+
+            gamma_error = tf.reduce_max(tf.abs(gamma - true_gamma_np))
+            beta_error = tf.reduce_max(tf.abs(beta - true_beta_np))
+
+        self.assertLess(losses[-1], losses[0] * 1e-3)
+        self.assertLess(losses[-1], 1e-5)
+        self.assertLess(float(gamma_error.numpy()), 1e-3)
+        self.assertLess(float(beta_error.numpy()), 1e-3)
+
     def testLayerNormDifferentShapes(self):
         """Test LayerNorm with various different shapes."""
         test_shapes = [

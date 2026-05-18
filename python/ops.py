@@ -115,6 +115,15 @@ def gelu(x, approximate=False, name=None):
     )
 
 
+def gelu_grad(dy, x, approximate=False, name=None):
+    return raw_ops.musa_gelu_grad(
+        dy=dy,
+        x=x,
+        approximate=approximate,
+        name=name,
+    )
+
+
 def reshape_mat_mul(x, w, transpose_b=False, name=None):
     return raw_ops.musa_reshape_mat_mul(
         x=x,
@@ -168,8 +177,12 @@ def resource_apply_nadam(
 __all__ = [
     "clip",
     "dropout",
+    "dropout_grad",
     "gelu",
+    "gelu_grad",
     "interact",
+    "layer_norm",
+    "layer_norm_grad",
     "matmul_bias_add",
     "reshape_mat_mul",
     "resource_apply_nadam",

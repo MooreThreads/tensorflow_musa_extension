@@ -31,3 +31,21 @@ def _musa_layer_norm_grad(op, grad):
         epsilon=epsilon,
     )
     return dx, dgamma, dbeta
+
+
+@tf_ops.RegisterGradient("MusaGelu")
+def _musa_gelu_grad(op, grad):
+    return raw_ops.musa_gelu_grad(
+        dy=grad,
+        x=op.inputs[0],
+        approximate=op.get_attr("approximate"),
+    )
+
+
+@tf_ops.RegisterGradient("MusaDropout")
+def _musa_dropout_grad(op, grad, _mask_grad):
+    return raw_ops.musa_dropout_grad(
+        grad=grad,
+        mask=op.outputs[1],
+        rate=op.get_attr("rate"),
+    )

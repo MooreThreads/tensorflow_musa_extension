@@ -144,6 +144,18 @@ class PythonApiOpTest(unittest.TestCase):
         self.assertEqual(result, "result")
         op.assert_called_once_with(x="x", approximate=True, name="gelu")
 
+    def testGeluGradWrapperDelegatesToRawOp(self):
+        op = self._patch_raw_op("musa_gelu_grad", "grad")
+        result = ops.gelu_grad("dy", "x", approximate=True, name="gelu_grad")
+
+        self.assertEqual(result, "grad")
+        op.assert_called_once_with(
+            dy="dy",
+            x="x",
+            approximate=True,
+            name="gelu_grad",
+        )
+
     def testReshapeMatMulWrapperDelegatesToRawOp(self):
         op = self._patch_raw_op("musa_reshape_mat_mul", "result")
         result = ops.reshape_mat_mul("x", "w", transpose_b=True, name="rmm")
