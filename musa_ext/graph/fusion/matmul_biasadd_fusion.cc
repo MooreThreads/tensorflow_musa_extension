@@ -1,9 +1,11 @@
 #include "graph/fusion/matmul_biasadd_fusion.h"
 
 #include <algorithm>
+#include <string>
 #include <vector>
 
 #include "tensorflow/core/framework/attr_value.pb.h"
+#include "tensorflow/core/framework/tensor.pb.h"
 #include "tensorflow/core/platform/logging.h"
 
 namespace tensorflow {
@@ -15,6 +17,10 @@ namespace {
 // Helper to check if node has specific op type
 bool IsOp(const NodeDef& node, const std::string& op_type) {
   return node.op() == op_type;
+}
+
+bool IsBiasAddLikeOp(const NodeDef& node) {
+  return IsOp(node, "BiasAdd") || IsOp(node, "Add") || IsOp(node, "AddV2");
 }
 
 std::string CanonicalizeInputName(const std::string& input) {
@@ -52,6 +58,89 @@ bool HasOriginalSuffix(const std::string& node_name) {
                            kOriginalSuffix.size(), kOriginalSuffix) == 0;
 }
 
+bool TryGetStaticTensorShape(const NodeDef& node,
+                             std::vector<int64_t>* dims) {
+  if (!dims) {
+    return false;
+  }
+  dims->clear();
+
+  auto output_shapes_it = node.attr().find("_output_shapes");
+  if (output_shapes_it != node.attr().end()) {
+    const auto& shape_list = output_shapes_it->second.list().shape();
+    if (shape_list.size() > 0) {
+      const auto& shape = shape_list.Get(0);
+      if (!shape.unknown_rank()) {
+        dims->reserve(shape.dim_size());
+        for (int i = 0; i < shape.dim_size(); ++i) {
+          const auto dim_size = shape.dim(i).size();
+          if (dim_size <= 0) {
+            dims->clear();
+            return false;
+          }
+          dims->push_back(dim_size);
+        }
+        return true;
+      }
+    }
+  }
+
+  auto shape_it = node.attr().find("shape");
+  if (shape_it != node.attr().end()) {
+    const auto& shape = shape_it->second.shape();
+    if (!shape.unknown_rank()) {
+      dims->reserve(shape.dim_size());
+      for (int i = 0; i < shape.dim_size(); ++i) {
+        const auto dim_size = shape.dim(i).size();
+        if (dim_size <= 0) {
+          dims->clear();
+          return false;
+        }
+        dims->push_back(dim_size);
+      }
+      return true;
+    }
+  }
+
+  if (!IsOp(node, "Const")) {
+    return false;
+  }
+
+  auto value_it = node.attr().find("value");
+  if (value_it == node.attr().end()) {
+    return false;
+  }
+
+  const TensorProto& tensor = value_it->second.tensor();
+  dims->reserve(tensor.tensor_shape().dim_size());
+  for (int i = 0; i < tensor.tensor_shape().dim_size(); ++i) {
+    const auto dim_size = tensor.tensor_shape().dim(i).size();
+    if (dim_size <= 0) {
+      dims->clear();
+      return false;
+    }
+    dims->push_back(dim_size);
+  }
+
+  return true;
+}
+
+bool IsStaticBiasLikeAddInput(const NodeDef* node) {
+  if (!node) {
+    return false;
+  }
+
+  std::vector<int64_t> dims;
+  if (!TryGetStaticTensorShape(*node, &dims)) {
+    return false;
+  }
+
+  if (dims.size() == 1) {
+    return dims[0] > 0;
+  }
+  return dims.size() == 2 && dims[0] == 1 && dims[1] > 0;
+}
+
 }  // namespace
 
 bool MatMulBiasAddFusion::IsKernelAvailable() const {
@@ -71,8 +160,8 @@ FusionMatchResult MatMulBiasAddFusion::Match(const GraphDef& graph,
 
   const NodeDef& bias_add_node = graph.node(start_node_idx);
 
-  // Start node must be BiasAdd / Add / AddV2
-  if (!IsOp(bias_add_node, "BiasAdd")) {
+  // Start node must be BiasAdd / Add / AddV2.
+  if (!IsBiasAddLikeOp(bias_add_node) || bias_add_node.input_size() != 2) {
     return result;
   }
 
@@ -84,20 +173,25 @@ FusionMatchResult MatMulBiasAddFusion::Match(const GraphDef& graph,
   const NodeDef* matmul_node = nullptr;
   const NodeDef* bias_node = nullptr;
 
-  if (bias_add_node.input_size() >= 2) {
-    const NodeDef* in0 = FindProducer(graph, bias_add_node.input(0));
-    const NodeDef* in1 = FindProducer(graph, bias_add_node.input(1));
+  const NodeDef* in0 = FindProducer(graph, bias_add_node.input(0));
+  const NodeDef* in1 = FindProducer(graph, bias_add_node.input(1));
 
-    if (in0 && IsOp(*in0, "MatMul")) {
-      matmul_node = in0;
-      bias_node = in1;
-    } else if (in1 && IsOp(*in1, "MatMul")) {
-      matmul_node = in1;
-      bias_node = in0;
-    }
+  if (in0 && IsOp(*in0, "MatMul") && in0->input_size() == 2) {
+    matmul_node = in0;
+    bias_node = in1;
+  } else if (in1 && IsOp(*in1, "MatMul") && in1->input_size() == 2) {
+    matmul_node = in1;
+    bias_node = in0;
   }
 
   if (!matmul_node || !bias_node) {
+    return result;
+  }
+
+  // Add/AddV2 are general elementwise ops. Only fuse cases that are exactly
+  // bias-add-like for a 2D MatMul output: [N] or [1, N]. The kernel validates
+  // the final N at runtime, which keeps dynamic MatMul weights working.
+  if (!IsOp(bias_add_node, "BiasAdd") && !IsStaticBiasLikeAddInput(bias_node)) {
     return result;
   }
 

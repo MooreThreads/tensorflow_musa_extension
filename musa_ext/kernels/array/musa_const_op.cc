@@ -42,20 +42,19 @@ class MusaConstOp : public OpKernel {
             ctx, ctx->allocate_temp(cpu_tensor_.dtype(), cpu_tensor_.shape(),
                                     &gpu_tensor_, attr));
 
-        auto& handle = GetHandleByCtx(ctx);
-        musaStream_t stream =
-            reinterpret_cast<musaStream_t>(handle.GetStream());
         size_t total_bytes = cpu_tensor_.TotalBytes();
 
-        // only perform H2D copy once during the first execution
-        musaError_t err =
-            musaMemcpyAsync(const_cast<char*>(gpu_tensor_.tensor_data().data()),
-                            cpu_tensor_.tensor_data().data(), total_bytes,
-                            musaMemcpyHostToDevice, stream);
+        // On some host-only machines, the TensorProto-backed CPU storage is not
+        // stable enough for the stream-bound async upload path during startup.
+        // Use the plugin's synchronous H2D helper for the one-time const upload
+        // so steady-state inference keeps the cached device tensor while the
+        // initialization path stays deterministic.
+        auto status = MusaMemcpyH2D(
+            const_cast<char*>(gpu_tensor_.tensor_data().data()),
+            cpu_tensor_.tensor_data().data(), total_bytes);
 
-        OP_REQUIRES(ctx, err == musaSuccess,
-                    errors::Internal("MUSA Const H2D Memcpy failed: ",
-                                     musaGetErrorString(err)));
+        OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
+                    errors::Internal("MUSA Const H2D Memcpy failed"));
         initialized_ = true;
       }
     }

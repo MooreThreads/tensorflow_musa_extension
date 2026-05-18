@@ -1,18 +1,15 @@
 #include <limits>
+#include <vector>
 
+#include "../utils_op.h"
 #include "mu/device/musa_device.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
-#include "utils_op.h"
 
 namespace tensorflow {
 namespace musa {
-
-template <typename T, typename Tidx>
-void LaunchTopKV2(const T* input, T* values, Tidx* indices, int rows, int cols,
-                  int k, bool sorted, musaStream_t stream);
 
 template <typename T>
 class MusaTopKV2Op : public MusaOpKernel {
@@ -65,11 +62,6 @@ class MusaTopKV2Op : public MusaOpKernel {
         errors::InvalidArgument("TopKV2: k must not exceed last dim. k=", k64,
                                 ", last_dim=", last_dim64));
 
-    OP_REQUIRES(
-        ctx,
-        last_dim64 <= static_cast<int64_t>(std::numeric_limits<int>::max()),
-        errors::InvalidArgument("TopKV2: last dimension too large, cols=",
-                                last_dim64));
     OP_REQUIRES(ctx,
                 k64 <= static_cast<int64_t>(std::numeric_limits<int>::max()),
                 errors::InvalidArgument("TopKV2: k too large, k=", k64));
@@ -86,47 +78,38 @@ class MusaTopKV2Op : public MusaOpKernel {
       return;
     }
 
-    const int cols = static_cast<int>(last_dim64);
     const int k = static_cast<int>(k64);
-    OP_REQUIRES(
-        ctx, k <= 1024,
-        errors::InvalidArgument(
-            "TopKV2: current MUSA implementation supports k <= 1024, got ", k));
+    const int dim = input.dims() - 1;
 
-    const int64_t rows64 = input.NumElements() / last_dim64;
-    OP_REQUIRES(
-        ctx, rows64 <= static_cast<int64_t>(std::numeric_limits<int>::max()),
-        errors::InvalidArgument("TopKV2: row count too large, rows=", rows64));
-    const int rows = static_cast<int>(rows64);
+    auto& handle = GetHandleByCtx(ctx);
+    auto* musa_device = static_cast<MusaDevice*>(ctx->device());
 
-    const T* input_ptr = input.flat<T>().data();
-    T* values_ptr = values->flat<T>().data();
+    std::vector<Tensor> workspace_tensors;
+    auto mem_alloc_func =
+        [ctx, &workspace_tensors](size_t size) -> ::musa::dnn::MemoryHandler {
+      if (size == 0) return nullptr;
+      Tensor temp;
+      Status s = ctx->allocate_temp(
+          DT_UINT8, TensorShape({static_cast<int64_t>(size)}), &temp);
+      if (!s.ok()) return nullptr;
+      workspace_tensors.emplace_back(temp);
+      return ::musa::dnn::MemoryHandler(temp.flat<uint8_t>().data(),
+                                        [](void*) {});
+    };
+    auto maintainer = musa_device->GetMemMaintainer(mem_alloc_func);
 
-    auto* device = GetDeviceByCtx(ctx);
-    auto stream = device->GetStream();
+    mTensor input_mt = CreateMTensor(input);
+    mTensor values_mt = CreateMTensor(*values);
+    mTensor indices_mt = CreateMTensor(*indices);
 
-    switch (indices->dtype()) {
-      case DT_INT16:
-        LaunchTopKV2<T, int16>(input_ptr, values_ptr,
-                               indices->flat<int16>().data(), rows, cols, k,
-                               sorted_, stream);
-        break;
-      case DT_INT32:
-        LaunchTopKV2<T, int32>(input_ptr, values_ptr,
-                               indices->flat<int32>().data(), rows, cols, k,
-                               sorted_, stream);
-        break;
-      case DT_INT64:
-        LaunchTopKV2<T, int64>(input_ptr, values_ptr,
-                               indices->flat<int64>().data(), rows, cols, k,
-                               sorted_, stream);
-        break;
-      default:
-        ctx->CtxFailure(errors::InvalidArgument(
-            "TopKV2: unsupported index output dtype ",
-            DataTypeString(indices->dtype())));
-        return;
-    }
+    mTopK topk_op;
+    MTOP_CHECK_OK(topk_op.SetK(k), "TopKV2 SetK", ctx);
+    MTOP_CHECK_OK(topk_op.SetDim(dim), "TopKV2 SetDim", ctx);
+    MTOP_CHECK_OK(topk_op.SetLargest(true), "TopKV2 SetLargest", ctx);
+    MTOP_CHECK_OK(topk_op.SetSorted(sorted_), "TopKV2 SetSorted", ctx);
+    MTOP_CHECK_OK(
+        topk_op.Run(handle, values_mt, indices_mt, input_mt, maintainer),
+        "TopKV2 Run", ctx);
   }
 
  private:
@@ -141,11 +124,10 @@ class MusaTopKV2Op : public MusaOpKernel {
                           MusaTopKV2Op<T>)
 
 REGISTER_MUSA_TOPK(float);
-REGISTER_MUSA_TOPK(double);
 REGISTER_MUSA_TOPK(int32);
-REGISTER_MUSA_TOPK(int64);
 REGISTER_MUSA_TOPK(Eigen::half);
 REGISTER_MUSA_TOPK(bfloat16);
+// Note: double and int64 are not supported by muDNN TopK.
 
 #undef REGISTER_MUSA_TOPK
 
