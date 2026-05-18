@@ -32,6 +32,17 @@ def layer_norm(x, gamma, beta, epsilon=0.00001, name=None):
     )
 
 
+def layer_norm_grad(dy, x, gamma, beta, epsilon=0.00001, name=None):
+    return raw_ops.musa_layer_norm_grad(
+        dy=dy,
+        x=x,
+        gamma=gamma,
+        beta=beta,
+        epsilon=epsilon,
+        name=name,
+    )
+
+
 def shifted_affine_map(data_left, mask, sliced_var_right, name=None):
     return raw_ops.musa_shifted_affine_map(
         data_left=data_left,

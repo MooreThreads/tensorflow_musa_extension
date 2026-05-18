@@ -102,6 +102,22 @@ class PythonApiOpTest(unittest.TestCase):
             name="ln",
         )
 
+    def testLayerNormGradWrapperDelegatesToRawOp(self):
+        op = self._patch_raw_op("musa_layer_norm_grad", ("dx", "dgamma", "dbeta"))
+        result = ops.layer_norm_grad(
+            "dy", "x", "gamma", "beta", epsilon=0.1, name="ln_grad"
+        )
+
+        self.assertEqual(result, ("dx", "dgamma", "dbeta"))
+        op.assert_called_once_with(
+            dy="dy",
+            x="x",
+            gamma="gamma",
+            beta="beta",
+            epsilon=0.1,
+            name="ln_grad",
+        )
+
     def testShiftedAffineMapWrapperDelegatesToRawOp(self):
         op = self._patch_raw_op("musa_shifted_affine_map", "result")
         result = ops.shifted_affine_map("data", "mask", "slice", name="sam")
