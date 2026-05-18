@@ -84,7 +84,7 @@ def check_tensorflow_version():
     except ImportError:
         print("WARNING: TensorFlow not installed.")
         print(f"  Allowed versions: {sorted(allowed)}")
-        print("  See docs/COMPATIBILITY.md for the build matrix.")
+        print("  Install a supported TensorFlow version before building.")
         return False, None
 
 

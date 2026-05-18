@@ -134,8 +134,8 @@ class MusaTensorListStackOp : public MusaOpKernel {
     Tensor zeros;
     bool has_zeros = false;
 
-    T* output_base = output->flat<T>().data();
-    int64_t offset_elems = 0;
+    char* output_base = const_cast<char*>(output->tensor_data().data());
+    int64_t offset_bytes = 0;
 
     for (const auto& t : tensor_list->tensors()) {
       const Tensor* src_tensor = nullptr;
@@ -147,8 +147,9 @@ class MusaTensorListStackOp : public MusaOpKernel {
           OP_REQUIRES_OK(
               ctx, ctx->allocate_temp(element_dtype_, element_shape, &zeros));
 
-          auto err = musaMemsetAsync(zeros.flat<T>().data(), 0,
-                                     zeros.TotalBytes(), stream);
+          auto err = musaMemsetAsync(
+              const_cast<char*>(zeros.tensor_data().data()), 0,
+              zeros.TotalBytes(), stream);
           OP_REQUIRES(
               ctx, err == musaSuccess,
               errors::Internal("musaMemsetAsync failed when initializing "
@@ -166,18 +167,27 @@ class MusaTensorListStackOp : public MusaOpKernel {
                       element_shape.DebugString(), " but got ",
                       src_tensor->shape().DebugString()));
 
-      const T* src_base = src_tensor->flat<T>().data();
+      const void* src_base = src_tensor->tensor_data().data();
       const size_t bytes = src_tensor->TotalBytes();
 
-      auto err = musaMemcpyAsync(output_base + offset_elems, src_base, bytes,
-                                 musaMemcpyHostToDevice, stream);
+      musaMemcpyKind copy_kind = musaMemcpyHostToDevice;
+      musaPointerAttributes attributes;
+      musaError_t attr_err = musaPointerGetAttributes(&attributes, src_base);
+      if (attr_err == musaSuccess && attributes.type == musaMemoryTypeDevice) {
+        copy_kind = musaMemcpyDeviceToDevice;
+      } else if (attr_err != musaSuccess) {
+        musaGetLastError();
+      }
+
+      auto err = musaMemcpyAsync(output_base + offset_bytes, src_base, bytes,
+                                 copy_kind, stream);
       OP_REQUIRES(
           ctx, err == musaSuccess,
           errors::Internal("musaMemcpyAsync failed in TensorListStack, error "
                            "code: ",
                            static_cast<int>(err)));
 
-      offset_elems += src_tensor->NumElements();
+      offset_bytes += static_cast<int64_t>(bytes);
     }
   }
 
