@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <list>
+#include <type_traits>
 #include <vector>
 
 #include "../array/musa_fill_functor.h"
@@ -17,6 +18,11 @@
 
 namespace tensorflow {
 namespace musa {
+
+void LaunchResourceApplyAdamFloat(float* var, float* m, float* v,
+                                  const float* grad, float beta1,
+                                  float beta2, float epsilon, float alpha,
+                                  int64_t total, musaStream_t stream);
 
 // Keep Adam-related kernels in one translation unit so similarly shaped helper
 // classes do not end up with duplicate names across different .cc files.
@@ -193,6 +199,25 @@ class MusaResourceApplyAdamOp : public MusaOpKernel {
       alpha_val = static_cast<double>(lr) *
                   std::sqrt(1.0 - static_cast<double>(beta2_power)) /
                   one_minus_beta1_power;
+    }
+
+    if constexpr (std::is_same<T, float>::value) {
+      if (!use_nesterov_) {
+        const int64_t total = var_t.NumElements();
+        if (total > 0) {
+          LaunchResourceApplyAdamFloat(
+              var_t.flat<float>().data(), m_t.flat<float>().data(),
+              v_t.flat<float>().data(), grad.flat<float>().data(),
+              static_cast<float>(beta1), static_cast<float>(beta2),
+              static_cast<float>(epsilon), static_cast<float>(alpha_val),
+              total, GetMusaStreamByCtx(ctx));
+          const musaError_t launch_err = musaGetLastError();
+          OP_REQUIRES(ctx, launch_err == musaSuccess,
+                      errors::Internal("ResourceApplyAdam fused launch failed: ",
+                                       musaGetErrorString(launch_err)));
+        }
+        return;
+      }
     }
 
     // // Log shapes for debugging

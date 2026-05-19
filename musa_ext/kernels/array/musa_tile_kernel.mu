@@ -4,6 +4,7 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wignored-pragmas"
 #include "tensorflow/core/framework/types.h"
+#include "tensorflow/core/framework/bfloat16.h"
 #pragma GCC diagnostic pop
 
 namespace tensorflow {
@@ -55,6 +56,9 @@ template void LaunchMusaTileKernel<float>(const float*, const int64_t*,
 template void LaunchMusaTileKernel<Eigen::half>(
     const Eigen::half*, const int64_t*, const int64_t*, int, int64_t,
     Eigen::half*, musaStream_t);
+template void LaunchMusaTileKernel<bfloat16>(
+    const bfloat16*, const int64_t*, const int64_t*, int, int64_t, bfloat16*,
+    musaStream_t);
 template void LaunchMusaTileKernel<double>(const double*, const int64_t*,
                                            const int64_t*, int, int64_t,
                                            double*, musaStream_t);

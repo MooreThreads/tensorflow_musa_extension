@@ -1,6 +1,10 @@
 #include <musa_runtime.h>
+#include <musa_fp16.h>
 #include <cstdint>
 #include <cmath>
+
+#include "tensorflow/core/framework/types.h"
+#include "tensorflow/core/framework/bfloat16.h"
 
 struct MusaPhiloxState {
     uint32_t counter[4];
@@ -24,6 +28,23 @@ __device__ __forceinline__ float Uint32ToReal<float>(uint32_t x) {
 template <>
 __device__ __forceinline__ double Uint32ToReal<double>(uint32_t x) {
     return x * 2.3283064365386963e-10;
+}
+
+template <>
+__device__ __forceinline__ Eigen::half Uint32ToReal<Eigen::half>(uint32_t x) {
+    float v = Uint32ToReal<float>(x);
+    __half h = __float2half(v);
+    return *reinterpret_cast<Eigen::half*>(&h);
+}
+
+template <>
+__device__ __forceinline__ tensorflow::bfloat16 Uint32ToReal<tensorflow::bfloat16>(uint32_t x) {
+    float v = Uint32ToReal<float>(x);
+    uint32_t f_bits = *reinterpret_cast<uint32_t*>(&v);
+    uint16_t b_bits = static_cast<uint16_t>(f_bits >> 16);
+    tensorflow::bfloat16 out;
+    *reinterpret_cast<uint16_t*>(&out) = b_bits;
+    return out;
 }
 
 __device__ __forceinline__ uint4_ skip_philox(uint4_ ctr, uint64_t skip) {
@@ -193,6 +214,12 @@ void LaunchRandomUniform_float(void* stream, int64_t n, int num_blocks, int bloc
 }
 void LaunchRandomUniform_double(void* stream, int64_t n, int num_blocks, int block_size, MusaPhiloxState state, double* output) {
     RandomUniformKernel<double><<<num_blocks, block_size, 0, (musaStream_t)stream>>>(n, state, output);
+}
+void LaunchRandomUniform_half(void* stream, int64_t n, int num_blocks, int block_size, MusaPhiloxState state, Eigen::half* output) {
+    RandomUniformKernel<Eigen::half><<<num_blocks, block_size, 0, (musaStream_t)stream>>>(n, state, output);
+}
+void LaunchRandomUniform_bfloat16(void* stream, int64_t n, int num_blocks, int block_size, MusaPhiloxState state, tensorflow::bfloat16* output) {
+    RandomUniformKernel<tensorflow::bfloat16><<<num_blocks, block_size, 0, (musaStream_t)stream>>>(n, state, output);
 }
 void LaunchRandomUniformInt_int(void* stream, int64_t n, int num_blocks, int block_size, MusaPhiloxState state, int minval, int maxval, int* output) {
     RandomUniformIntKernel<int><<<num_blocks, block_size, 0, (musaStream_t)stream>>>(n, state, minval, maxval, output);

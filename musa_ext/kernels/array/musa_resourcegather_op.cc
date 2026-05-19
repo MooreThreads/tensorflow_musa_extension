@@ -8,6 +8,7 @@
 // 4. Support for all data types including bfloat16 and double
 
 #include <mudnn.h>
+#include <musa_runtime.h>
 
 #include <cmath>
 #include <limits>
@@ -76,6 +77,13 @@ void LaunchResourceGatherHalfInt64(const void* params, const int64_t* indices,
                                    int64_t inner_size, int64_t indices_size,
                                    int64_t params_stride, int64_t limit,
                                    musaStream_t stream);
+void LaunchResourceScatterAddRowsFloatInt32(
+    float* params, const int* indices, const float* updates,
+    int64_t num_updates, int64_t slice_size, int limit, musaStream_t stream);
+void LaunchResourceScatterAddRowsFloatInt64(
+    float* params, const int64_t* indices, const float* updates,
+    int64_t num_updates, int64_t slice_size, int64_t limit,
+    musaStream_t stream);
 }
 
 namespace tensorflow {
@@ -215,6 +223,38 @@ DEFINE_RESOURCE_GATHER_LAUNCHER_HALF(int64, LaunchResourceGatherHalfInt64)
 // ResourceScatterAdd Op (keeps muDNN for atomic operations)
 // ============================================================================
 template <typename T, typename Index>
+struct ResourceScatterAddFastPathLauncher {
+  static bool Launch(T*, const Index*, const T*, int64_t, int64_t, Index,
+                     musaStream_t) {
+    return false;
+  }
+};
+
+template <>
+struct ResourceScatterAddFastPathLauncher<float, int32> {
+  static bool Launch(float* params, const int32* indices, const float* updates,
+                     int64_t num_updates, int64_t slice_size, int32 limit,
+                     musaStream_t stream) {
+    LaunchResourceScatterAddRowsFloatInt32(params, indices, updates,
+                                           num_updates, slice_size, limit,
+                                           stream);
+    return true;
+  }
+};
+
+template <>
+struct ResourceScatterAddFastPathLauncher<float, int64> {
+  static bool Launch(float* params, const int64* indices, const float* updates,
+                     int64_t num_updates, int64_t slice_size, int64 limit,
+                     musaStream_t stream) {
+    LaunchResourceScatterAddRowsFloatInt64(params, indices, updates,
+                                           num_updates, slice_size, limit,
+                                           stream);
+    return true;
+  }
+};
+
+template <typename T, typename Index>
 class MusaResourceScatterAddOp : public MusaOpKernel {
  public:
   using MusaOpKernel::MusaOpKernel;
@@ -229,6 +269,25 @@ class MusaResourceScatterAddOp : public MusaOpKernel {
     const Tensor& updates = c->input(2);
 
     if (indices.NumElements() > 0) {
+      if (CanUseSparseRowsFastPath(*params, indices, updates)) {
+        const int64_t num_updates = indices.NumElements();
+        const int64_t slice_size = updates.NumElements() / num_updates;
+        const Index limit = static_cast<Index>(params->dim_size(0));
+        const bool launched =
+            ResourceScatterAddFastPathLauncher<T, Index>::Launch(
+                params->flat<T>().data(), indices.flat<Index>().data(),
+                updates.flat<T>().data(), num_updates, slice_size, limit,
+                GetMusaStreamByCtx(c));
+        if (launched) {
+          const musaError_t launch_err = musaGetLastError();
+          OP_REQUIRES(c, launch_err == musaSuccess,
+                      errors::Internal("ResourceScatterAdd fast path launch "
+                                       "failed: ",
+                                       musaGetErrorString(launch_err)));
+          return;
+        }
+      }
+
       if (QueryMusaKernelRuntimeView(c).mudnn_handle == nullptr) {
         c->CtxFailure(MusaMudnnHandleRequiredError());
         return;
@@ -250,6 +309,24 @@ class MusaResourceScatterAddOp : public MusaOpKernel {
           op.Run(h, params_mt, indices_mt, updates_mt, maintainer),
           "RunScatterND", c);
     }
+  }
+
+ private:
+  bool CanUseSparseRowsFastPath(const Tensor& params, const Tensor& indices,
+                                const Tensor& updates) const {
+    if (params.dims() < 1 || !TensorShapeUtils::IsVector(indices.shape())) {
+      return false;
+    }
+    if (updates.dims() != params.dims() ||
+        updates.dim_size(0) != indices.NumElements()) {
+      return false;
+    }
+    for (int i = 1; i < params.dims(); ++i) {
+      if (updates.dim_size(i) != params.dim_size(i)) {
+        return false;
+      }
+    }
+    return true;
   }
 };
 

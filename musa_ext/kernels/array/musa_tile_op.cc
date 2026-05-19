@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "../utils_op.h"
+#include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
@@ -123,6 +124,7 @@ class MusaTileOp : public MusaOpKernel {
 
 REGISTER_MUSA_TILE_ALL_TYPES(float);
 REGISTER_MUSA_TILE_ALL_TYPES(Eigen::half);
+REGISTER_MUSA_TILE_ALL_TYPES(bfloat16);
 REGISTER_MUSA_TILE_ALL_TYPES(double);
 REGISTER_MUSA_TILE_ALL_TYPES(int32);
 REGISTER_MUSA_TILE_ALL_TYPES(int64);

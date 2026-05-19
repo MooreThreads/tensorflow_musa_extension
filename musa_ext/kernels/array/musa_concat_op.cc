@@ -4,6 +4,7 @@
 
 #include "../utils_op.h"
 #include "mu/device/musa_memcpy.h"
+#include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
@@ -108,6 +109,34 @@ REGISTER_KERNEL_BUILDER(Name("ConcatV2")
                             .TypeConstraint<int64>("Tidx")
                             .HostMemory("axis"),
                         MusaConcatOp<float, int64>);
+
+REGISTER_KERNEL_BUILDER(Name("ConcatV2")
+                            .Device("MUSA")
+                            .TypeConstraint<Eigen::half>("T")
+                            .TypeConstraint<int32>("Tidx")
+                            .HostMemory("axis"),
+                        MusaConcatOp<Eigen::half, int32>);
+
+REGISTER_KERNEL_BUILDER(Name("ConcatV2")
+                            .Device("MUSA")
+                            .TypeConstraint<Eigen::half>("T")
+                            .TypeConstraint<int64>("Tidx")
+                            .HostMemory("axis"),
+                        MusaConcatOp<Eigen::half, int64>);
+
+REGISTER_KERNEL_BUILDER(Name("ConcatV2")
+                            .Device("MUSA")
+                            .TypeConstraint<bfloat16>("T")
+                            .TypeConstraint<int32>("Tidx")
+                            .HostMemory("axis"),
+                        MusaConcatOp<bfloat16, int32>);
+
+REGISTER_KERNEL_BUILDER(Name("ConcatV2")
+                            .Device("MUSA")
+                            .TypeConstraint<bfloat16>("T")
+                            .TypeConstraint<int64>("Tidx")
+                            .HostMemory("axis"),
+                        MusaConcatOp<bfloat16, int64>);
 
 REGISTER_KERNEL_BUILDER(Name("ConcatV2")
                             .Device("MUSA")

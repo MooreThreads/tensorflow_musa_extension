@@ -63,6 +63,12 @@ void LaunchRandomUniform_float(void* stream, int64_t n, int num_blocks,
 void LaunchRandomUniform_double(void* stream, int64_t n, int num_blocks,
                                 int block_size, MusaPhiloxState state,
                                 double* output);
+void LaunchRandomUniform_half(void* stream, int64_t n, int num_blocks,
+                              int block_size, MusaPhiloxState state,
+                              Eigen::half* output);
+void LaunchRandomUniform_bfloat16(void* stream, int64_t n, int num_blocks,
+                                  int block_size, MusaPhiloxState state,
+                                  tensorflow::bfloat16* output);
 void LaunchRandomUniformInt_int(void* stream, int64_t n, int num_blocks,
                                 int block_size, MusaPhiloxState state,
                                 int minval, int maxval, int* output);
@@ -130,6 +136,12 @@ class MusaRandomUniformOp : public MusaOpKernel {
     if (std::is_same<T, float>::value) {
       LaunchRandomUniform_float(stream, n, num_blocks, block_size, state,
                                 output->flat<float>().data());
+    } else if (std::is_same<T, Eigen::half>::value) {
+      LaunchRandomUniform_half(stream, n, num_blocks, block_size, state,
+                               output->flat<Eigen::half>().data());
+    } else if (std::is_same<T, bfloat16>::value) {
+      LaunchRandomUniform_bfloat16(stream, n, num_blocks, block_size, state,
+                                   output->flat<bfloat16>().data());
     } else {
       LaunchRandomUniform_double(stream, n, num_blocks, block_size, state,
                                  output->flat<double>().data());
@@ -304,6 +316,8 @@ class MusaTruncatedNormalOp : public MusaOpKernel {
                           MusaRandomUniformOp<TYPE>)
 REGISTER_MUSA_UNIFORM(float);
 REGISTER_MUSA_UNIFORM(double);
+REGISTER_MUSA_UNIFORM(Eigen::half);
+REGISTER_MUSA_UNIFORM(bfloat16);
 
 #define REGISTER_MUSA_UNIFORM_INT(TYPE)                      \
   REGISTER_KERNEL_BUILDER(Name("RandomUniformInt")           \
