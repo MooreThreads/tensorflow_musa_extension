@@ -16,23 +16,8 @@
 """Utilities for MUSA kernel tests."""
 
 import unittest
-import importlib.util
-import sys
-from pathlib import Path
 
 import tensorflow as tf
-
-
-if "tensorflow_musa" not in sys.modules:
-  package_dir = Path(__file__).resolve().parents[1] / "python"
-  spec = importlib.util.spec_from_file_location(
-      "tensorflow_musa",
-      package_dir / "__init__.py",
-      submodule_search_locations=[str(package_dir)],
-  )
-  tensorflow_musa = importlib.util.module_from_spec(spec)
-  sys.modules["tensorflow_musa"] = tensorflow_musa
-  spec.loader.exec_module(tensorflow_musa)
 
 
 def _get_test_full_name(test_method):
