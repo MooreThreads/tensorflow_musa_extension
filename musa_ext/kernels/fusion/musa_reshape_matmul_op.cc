@@ -126,12 +126,19 @@ class MusaReshapeMatMulOp : public MusaOpKernel {
     auto& handle = GetHandleByCtx(ctx);
     handle.SetAllowTF32(tf32_enabled_);
 
-    mTensor mt_x = CreateMTensor(x, format_);
-    mTensor mt_w = CreateMTensor(w, format_);
-    mTensor mt_out = CreateMTensor(*output, format_);
+    Tensor x_2d;
+    OP_REQUIRES(ctx, x_2d.CopyFrom(x, TensorShape({m, k})),
+                errors::Internal("MusaReshapeMatMul failed to view x as 2D: ",
+                                 x.shape().DebugString()));
+    Tensor output_2d;
+    OP_REQUIRES(
+        ctx, output_2d.CopyFrom(*output, TensorShape({m, n})),
+        errors::Internal("MusaReshapeMatMul failed to view output as 2D: ",
+                         output->shape().DebugString()));
 
-    mt_x.SetNdInfo({m, k}, {k, 1});
-    mt_out.SetNdInfo({m, n}, {n, 1});
+    mTensor mt_x = CreateMTensor(x_2d, format_);
+    mTensor mt_w = CreateMTensor(w, format_);
+    mTensor mt_out = CreateMTensor(output_2d, format_);
 
     mMatMul op;
     auto status = op.SetTranspose(false, transpose_b_);

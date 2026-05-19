@@ -1,10 +1,14 @@
 #include "../utils_op.h"
+#include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/types.h"
 
 namespace tensorflow {
 namespace musa {
+
+extern "C" void LaunchFloatToBFloat16Copy(const float* src, void* dst,
+                                           int64_t n, musaStream_t stream);
 
 class MusaCastOp : public MusaOpKernel {
  public:
@@ -37,6 +41,15 @@ class MusaCastOp : public MusaOpKernel {
     if (inp.NumElements() == 0) {
       // No need to run muDNN for empty tensors. Just return the zero-element
       // output tensor (already allocated above).
+      return;
+    }
+
+    if (external_src_dtype_ == DT_FLOAT &&
+        external_dst_dtype_ == DT_BFLOAT16) {
+      LaunchFloatToBFloat16Copy(
+          inp.flat<float>().data(),
+          reinterpret_cast<void*>(output->flat<bfloat16>().data()),
+          static_cast<int64_t>(inp.NumElements()), GetMusaStreamByCtx(ctx));
       return;
     }
 
@@ -96,7 +109,6 @@ REGISTER_CAST_MUSA(int32, int32);
 REGISTER_CAST_MUSA(int32, int64);
 REGISTER_CAST_MUSA(int32, Eigen::half);
 REGISTER_CAST_MUSA(int32, bfloat16);
-REGISTER_CAST_MUSA(int32, float);
 REGISTER_CAST_MUSA(int32, double);
 
 REGISTER_CAST_MUSA(int64, bool);

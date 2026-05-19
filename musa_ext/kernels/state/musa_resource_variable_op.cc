@@ -1,44 +1,37 @@
 #include "../utils_op.h"
+#include "mu/device/musa_device.h"
 #include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/resource_mgr.h"
 #include "tensorflow/core/framework/resource_var.h"
+#include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/lib/core/notification.h"
+
+#include <cstdlib>
+#include <string>
 
 namespace tensorflow {
 namespace musa {
 
 using Var = ::tensorflow::Var;
 
-Status SyncMusaStream(OpKernelContext* ctx, const char* op_name) {
-  musaStream_t stream = GetMusaStreamByCtx(ctx);
-  if (stream == nullptr) {
-    return errors::Internal("MUSA stream is unavailable for ", op_name);
-  }
-  musaError_t err = musaStreamSynchronize(stream);
-  if (err != musaSuccess) {
-    return errors::Internal(
-        op_name, ": musaStreamSynchronize failed: ", musaGetErrorString(err));
-  }
-  return OkStatus();
-}
+extern "C" void LaunchFloatToBFloat16Copy(const float* src, void* dst,
+                                           int64_t n, musaStream_t stream);
 
 Status CopyTensorWithDeviceContext(OpKernelContext* ctx, const Tensor& src,
                                    Tensor* dst) {
   if (src.TotalBytes() == 0) {
-    return OkStatus();
+    return ::tensorflow::OkStatus();
   }
 
   auto* device_context = ctx->op_device_context();
   if (device_context == nullptr) {
+    // Fall back to direct MUSA memcpy if device context is not available
     musaStream_t stream = GetMusaStreamByCtx(ctx);
-    if (stream == nullptr) {
-      return errors::Internal("MUSA stream is unavailable for variable copy");
-    }
     MusaMemcpyAsyncD2D(const_cast<char*>(dst->tensor_data().data()),
                        src.tensor_data().data(), src.TotalBytes(), stream);
-    return OkStatus();
+    return ::tensorflow::OkStatus();
   }
 
   Device* device = static_cast<Device*>(ctx->device());
@@ -137,7 +130,7 @@ class MusaAssignVariableOp : public OpKernel {
                               *ptr = new Var(dtype_);
                               *(*ptr)->tensor() = value;
                               (*ptr)->is_initialized = true;
-                              return OkStatus();
+                              return ::tensorflow::OkStatus();
                             }));
 
     mutex_lock lock(*var->mu());
@@ -166,7 +159,9 @@ class MusaAssignVariableOp : public OpKernel {
     } else {
       *var->tensor() = value;
     }
-    OP_REQUIRES_OK(ctx, SyncMusaStream(ctx, "AssignVariableOp"));
+    MusaDeviceContext* musa_device_context =
+        static_cast<MusaDeviceContext*>(ctx->op_device_context());
+    musa_device_context->ThenExecute(GetMusaStreamByCtx(ctx), [value]() {});
 
     var->is_initialized = true;
   }
@@ -209,27 +204,78 @@ class MusaReadVariableOp : public OpKernel {
             "Trying to read variable with wrong dtype. Expected ",
             DataTypeString(dtype_), " got ", DataTypeString(t.dtype())));
 
-    // Always copy the tensor to ensure the returned tensor is independent
-    // of the variable's underlying storage. This is critical for correct
-    // eager execution semantics where read_value() should return the value
-    // at the time of reading, not a reference that changes when the variable
-    // is modified.
+    const char* force_copy = std::getenv("MUSA_READ_VARIABLE_FORCE_COPY");
+    if (force_copy == nullptr || std::string(force_copy) != "1") {
+      ctx->set_output(0, t);
+      return;
+    }
+
+    // Fallback copy path for debugging or workloads that require a snapshot.
     Tensor* out = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, t.shape(), &out));
 
     if (t.TotalBytes() > 0) {
+      // Use direct MUSA memcpy instead of device context
       musaStream_t stream = GetMusaStreamByCtx(ctx);
-      OP_REQUIRES(
-          ctx, stream != nullptr,
-          errors::Internal("MUSA stream is unavailable for ReadVariableOp"));
       MusaMemcpyAsyncD2D(const_cast<char*>(out->tensor_data().data()),
                          t.tensor_data().data(), t.TotalBytes(), stream);
-      OP_REQUIRES_OK(ctx, SyncMusaStream(ctx, "ReadVariableOp"));
+      MusaDeviceContext* musa_device_context =
+          static_cast<MusaDeviceContext*>(ctx->op_device_context());
+      musa_device_context->ThenExecute(stream, [t]() {});
     }
   }
 
  private:
   DataType dtype_;
+};
+
+REGISTER_OP("MusaReadVariableFloatToBFloat16")
+    .Input("resource: resource")
+    .Output("value: bfloat16")
+    .SetShapeFn([](shape_inference::InferenceContext* c) {
+      c->set_output(0, c->UnknownShape());
+      return OkStatus();
+    });
+
+class MusaReadVariableFloatToBFloat16Op : public OpKernel {
+ public:
+  explicit MusaReadVariableFloatToBFloat16Op(OpKernelConstruction* ctx)
+      : OpKernel(ctx) {}
+
+  bool IsExpensive() override { return false; }
+
+  void Compute(OpKernelContext* ctx) override {
+    core::RefCountPtr<Var> var;
+    const Tensor& handle_tensor = ctx->input(0);
+    const ResourceHandle& handle = handle_tensor.flat<ResourceHandle>()(0);
+
+    Status s = LookupResource(ctx, handle, &var);
+    if (!s.ok()) {
+      ctx->CtxFailure(s);
+      return;
+    }
+
+    tf_shared_lock lock(*var->mu());
+    if (!var->is_initialized) {
+      ctx->CtxFailure(errors::FailedPrecondition("Variable not initialized."));
+      return;
+    }
+
+    const Tensor& t = *var->tensor();
+    OP_REQUIRES(ctx, t.dtype() == DT_FLOAT,
+                errors::InvalidArgument(
+                    "MusaReadVariableFloatToBFloat16 expects float variable"));
+
+    Tensor* out = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, t.shape(), &out));
+    if (t.NumElements() == 0) return;
+
+    LaunchFloatToBFloat16Copy(t.flat<float>().data(),
+                              reinterpret_cast<void*>(
+                                  out->flat<bfloat16>().data()),
+                              static_cast<int64_t>(t.NumElements()),
+                              GetMusaStreamByCtx(ctx));
+  }
 };
 
 REGISTER_KERNEL_BUILDER(
@@ -239,6 +285,11 @@ REGISTER_KERNEL_BUILDER(
 REGISTER_KERNEL_BUILDER(
     Name("ResourceReadVariableOp").Device("MUSA").HostMemory("resource"),
     MusaReadVariableOp);
+
+REGISTER_KERNEL_BUILDER(Name("MusaReadVariableFloatToBFloat16")
+                            .Device("MUSA")
+                            .HostMemory("resource"),
+                        MusaReadVariableFloatToBFloat16Op);
 
 class MusaVarIsInitializedOp : public OpKernel {
  public:
