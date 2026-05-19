@@ -51,12 +51,7 @@ GPUPinnedMemoryPool::~GPUPinnedMemoryPool() {
   // Do NOT move to free_list_ to avoid potential double-free issues
   for (auto& block : pending_frees_) {
     if (block.event != nullptr) {
-      musaError_t destroy_err = musaEventDestroy(block.event);
-      if (destroy_err != musaSuccess &&
-          destroy_err != musaErrorInitializationError) {
-        LOG(WARNING) << "PinnedMemoryPool: Failed to destroy event for block "
-                     << block.ptr << ": " << musaGetErrorString(destroy_err);
-      }
+      musaEventDestroy(block.event);
       block.event = nullptr;
     }
     // Release memory directly instead of moving to free_list_
@@ -269,10 +264,10 @@ void GPUPinnedMemoryPool::PollPendingFrees() {
 void GPUPinnedMemoryPool::ReleaseBlock(const Block& block) {
   if (block.ptr != nullptr) {
     musaError_t err = musaFreeHost(block.ptr);
-    if (err != musaSuccess && err != musaErrorInitializationError) {
+    if (err != musaSuccess) {
       LOG(WARNING) << "PinnedMemoryPool: musaFreeHost failed for " << block.ptr
                    << ": " << musaGetErrorString(err);
-    } else if (err == musaSuccess) {
+    } else {
       VLOG(2) << "PinnedMemoryPool: Released block " << block.ptr;
     }
   }

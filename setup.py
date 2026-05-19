@@ -38,13 +38,23 @@ RUNTIME_CONFIG_BINDINGS_PATTERN = f"{RUNTIME_CONFIG_BINDINGS}*.so"
 BUILD_DIR = "build"
 
 # Default TensorFlow version (used if TENSORFLOW_MUSA_TARGET_TF is unset)
-_DEFAULT_TF_VERSION = "2.6.1,2.15.1"
+_DEFAULT_TF_VERSION = "2.6.1,2.15.x"
 
 
 def _supported_tf_versions():
     """Comma-separated list from TENSORFLOW_MUSA_TARGET_TF or default."""
     raw = os.environ.get("TENSORFLOW_MUSA_TARGET_TF", _DEFAULT_TF_VERSION)
     return {v.strip() for v in raw.split(",") if v.strip()}
+
+def _matches_tf_version(version, token):
+    """Return whether `version` matches an exact token or a patch wildcard.
+
+    Examples:
+        2.6.1 matches only 2.6.1
+        2.15.x matches 2.15.0, 2.15.1, ...
+    """
+    return version.startswith(token[:-1]) if token.endswith(".x") else version == token
+
 
 
 def check_tensorflow_version():
@@ -70,12 +80,12 @@ def check_tensorflow_version():
         import tensorflow as tf
         version = tf.__version__
 
-        if version not in allowed:
+        if not any(_matches_tf_version(version, token) for token in allowed):
             print("ERROR: TensorFlow version mismatch!")
             print(f"  Allowed: {sorted(allowed)}")
             print(f"  Installed: {version}")
             print("  Set TENSORFLOW_MUSA_TARGET_TF to include your version, e.g.:")
-            print("    export TENSORFLOW_MUSA_TARGET_TF=2.6.1,2.8.0")
+            print("    export TENSORFLOW_MUSA_TARGET_TF=2.6.1,2.15.x")
             print("  Or: pip install tensorflow==<one of the allowed versions>")
             sys.exit(1)
 

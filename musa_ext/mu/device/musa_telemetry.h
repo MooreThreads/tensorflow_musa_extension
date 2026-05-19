@@ -145,9 +145,8 @@ class MusaTelemetry {
   // Get the singleton instance.
   static MusaTelemetry& Instance();
 
-  // Initialize or reconfigure telemetry with configuration.
-  // Safe to call repeatedly; an enabled existing telemetry session is flushed and
-  // stopped before the new configuration is applied.
+  // Initialize telemetry with configuration.
+  // Should be called once at plugin load time.
   void Initialize(const TelemetryConfig& config);
 
   // Shutdown telemetry.

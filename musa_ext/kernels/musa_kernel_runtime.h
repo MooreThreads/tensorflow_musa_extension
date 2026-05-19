@@ -66,14 +66,10 @@ struct MusaKernelRuntimeView {
 // registry initialization) rather than blindly casting `Device*` to
 // `MusaDevice*`.
 inline MusaDevice* TryGetMusaDeviceFromContext(OpKernelContext* context) {
-#if TF_MAJOR_VERSION > 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION >= 10)
-  return nullptr;
-#else
   if (context == nullptr) return nullptr;
   DeviceBase* base = context->device();
   if (base == nullptr) return nullptr;
   return dynamic_cast<MusaDevice*>(base);
-#endif
 }
 
 MusaKernelRuntimeView QueryMusaKernelRuntimeView(OpKernelContext* context);

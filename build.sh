@@ -14,7 +14,7 @@ set -e
 
 # Default TensorFlow version allowlist. Override with comma-separated values, e.g.
 # TENSORFLOW_MUSA_TARGET_TF=2.6.1,2.15.1 ./build.sh
-TARGET_TF_VERSIONS="${TENSORFLOW_MUSA_TARGET_TF:-2.6.1,2.15.1}"
+TARGET_TF_VERSIONS="${TENSORFLOW_MUSA_TARGET_TF:-2.6.1,2.15.x}"
 PYTHON_BIN="${PYTHON:-python3}"
 
 # Function to check TensorFlow version
@@ -23,14 +23,16 @@ check_tf_version() {
     "$PYTHON_BIN" -c "
 import tensorflow as tf
 version = tf.__version__
-allowed = {v.strip() for v in '${TARGET_TF_VERSIONS}'.split(',') if v.strip()}
-if version not in allowed:
+allowed = [v.strip() for v in '${TARGET_TF_VERSIONS}'.split(',') if v.strip()]
+def matches(token):
+    return version.startswith(token[:-1]) if token.endswith('.x') else version == token
+if not any(matches(v) for v in allowed):
     print('ERROR: TensorFlow version mismatch!')
-    print(f'  Allowed: {sorted(allowed)}')
+    print(f'  Allowed: {allowed}')
     print(f'  Installed: {version}')
-    print('  Set TENSORFLOW_MUSA_TARGET_TF to include this version, or install an allowed TensorFlow version.')
+    print('  Set TENSORFLOW_MUSA_TARGET_TF to include this version, e.g. 2.6.1,2.15.x.')
     exit(1)
-print(f'TensorFlow {version} found - OK (allowed: {sorted(allowed)})')
+print(f'TensorFlow {version} found - OK (allowed: {allowed})')
 " || exit 1
 }
 
