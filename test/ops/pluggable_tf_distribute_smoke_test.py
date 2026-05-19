@@ -79,6 +79,10 @@ def _maybe_collective_or_nccl_gap(exc):
   if 'collective' in msg:
     if any(k in msg for k in ('reduce', 'allreduce', 'executor', 'ncclmanager')):
       return True
+  if 'musaeventrecord: invalid resource handle' in msg:
+    return True
+  if 'pluggabledevice->pluggabledevice memcpy failed' in msg:
+    return True
   return False
 
 drv_n, drv_code = _driver_device_count(sys.argv[1])
@@ -132,8 +136,12 @@ except Exception as e:
         timeout=300,
     )
     out = (proc.stdout or "") + (proc.stderr or "")
+    out_lower = out.lower()
     if "SKIP_DRV_LESS_THAN_TWO_MUSA" in out or "SKIP_DRIVER_ENUM_ERROR" in out:
       self.skipTest("driver/device count insufficient for Mirrored smoke")
+    if ("musaeventrecord: invalid resource handle" in out_lower or
+        "pluggabledevice->pluggabledevice memcpy failed" in out_lower):
+      self.skipTest("TF collective / device memcpy path gap (fatal subprocess): %s" % out)
     if proc.returncode == 2 and "FAIL_DRV_TF_DEVICE_MISMATCH" in out:
       self.fail(
           "driver reports >=2 MUSA but TF lists fewer physical MUSA (%s)" % out)

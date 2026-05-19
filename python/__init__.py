@@ -50,6 +50,7 @@ from ._graph_optimizer import (
     set_musa_graph_optimizer_enabled,
 )
 from ._loader import get_musa_devices, get_musa_ops, is_plugin_loaded, load_plugin
+from ._optimizers import apply_adam_mixed, apply_sparse_adam_mixed
 from ._runtime_config import (
     disable_musa_telemetry,
     enable_musa_telemetry,
@@ -109,4 +110,17 @@ __all__ = [
     "disable_musa_telemetry",
     "is_musa_telemetry_enabled",
     "get_musa_telemetry_health",
+    "apply_adam_mixed",
+    "apply_sparse_adam_mixed",
+    "MusaAdam",
 ]
+
+
+def __getattr__(name):
+    if name == "MusaAdam":
+        from ._optimizers import _make_musa_adam_class
+
+        cls = _make_musa_adam_class()
+        globals()["MusaAdam"] = cls
+        return cls
+    raise AttributeError(f"module 'tensorflow_musa' has no attribute {name!r}")
