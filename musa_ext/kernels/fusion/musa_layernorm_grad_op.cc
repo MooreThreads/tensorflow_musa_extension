@@ -52,9 +52,8 @@ class MusaLayerNormGradOp : public MusaOpKernel {
     Tensor* dbeta = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(2, beta.shape(), &dbeta));
 
-    auto* device = GetDeviceByCtx(ctx);
-    auto& handle = device->mudnn_handle();
-    auto stream = device->GetStream();
+    auto& handle = GetHandleByCtx(ctx);
+    auto stream = GetMusaStreamByCtx(ctx);
 
     if (x.NumElements() == 0) {
       musaMemsetAsync(const_cast<char*>(dx->tensor_data().data()), 0,
@@ -96,18 +95,18 @@ class MusaLayerNormGradOp : public MusaOpKernel {
     axis_vec.push_back(axis);
     ln.SetAxis(static_cast<int>(axis_vec.size()), axis_vec.data());
 
-    std::vector<Tensor> workspace_holder;
-    auto maintainer_func = [&](size_t size) -> ::musa::dnn::MemoryHandler {
-      if (size == 0) return ::musa::dnn::MemoryHandler(nullptr, [](void*) {});
-      Tensor temp;
-      Status s = ctx->allocate_temp(
-          DT_UINT8, TensorShape({static_cast<int64_t>(size)}), &temp);
-      if (!s.ok()) return ::musa::dnn::MemoryHandler(nullptr, [](void*) {});
-      workspace_holder.push_back(temp);
-      return ::musa::dnn::MemoryHandler(temp.flat<uint8_t>().data(),
-                                        [](void*) {});
+    tensorflow::Allocator* tf_allocator =
+        ctx->device()->GetAllocator(tensorflow::AllocatorAttributes());
+    auto alloc_func =
+        [tf_allocator](
+            size_t size) -> std::unique_ptr<void, std::function<void(void*)>> {
+      void* ptr = tf_allocator->AllocateRaw(256, size);
+      return std::unique_ptr<void, std::function<void(void*)>>(
+          ptr, [tf_allocator](void* p) {
+            if (p) tf_allocator->DeallocateRaw(p);
+          });
     };
-    auto maintainer = device->GetMemMaintainer(maintainer_func);
+    ::musa::dnn::MemoryMaintainer maintainer(alloc_func);
 
     mStatus status =
         ln.Run(handle, mt_y, mt_mean, mt_inv_var, mt_x, mt_gamma, mt_beta,
