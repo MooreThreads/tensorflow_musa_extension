@@ -3,8 +3,27 @@
 
 """Tests for MUSA Dropout operator."""
 
+import importlib.util
+import sys
+from pathlib import Path
+
 import numpy as np
 import tensorflow as tf
+
+if "tensorflow_musa" not in sys.modules or not hasattr(sys.modules["tensorflow_musa"], "ops"):
+    for module_name in list(sys.modules):
+        if module_name == "tensorflow_musa" or module_name.startswith("tensorflow_musa."):
+            sys.modules.pop(module_name)
+    package_dir = Path(__file__).resolve().parents[2] / "python"
+    spec = importlib.util.spec_from_file_location(
+        "tensorflow_musa",
+        package_dir / "__init__.py",
+        submodule_search_locations=[str(package_dir)],
+    )
+    tensorflow_musa = importlib.util.module_from_spec(spec)
+    sys.modules["tensorflow_musa"] = tensorflow_musa
+    spec.loader.exec_module(tensorflow_musa)
+
 import tensorflow_musa as tf_musa
 from musa_test_utils import MUSATestCase
 
@@ -214,7 +233,7 @@ class DropoutOpTest(MUSATestCase):
             x = tf.constant(np_x, dtype=tf.float32)
             with tf.GradientTape() as tape:
                 tape.watch(x)
-                y, mask = self._musa_ops.musa_dropout(
+                y, mask = tf_musa.ops.dropout(
                     x=x, rate=rate, seed=7, offset=0
                 )
                 loss = tf.reduce_sum(y)

@@ -3,11 +3,29 @@
 
 """Tests for MUSA GELU gradient."""
 
+import importlib.util
+import sys
+from pathlib import Path
+
 import numpy as np
 import tensorflow as tf
 
-from musa_test_utils import MUSATestCase, load_musa_ops
+if "tensorflow_musa" not in sys.modules or not hasattr(sys.modules["tensorflow_musa"], "ops"):
+    for module_name in list(sys.modules):
+        if module_name == "tensorflow_musa" or module_name.startswith("tensorflow_musa."):
+            sys.modules.pop(module_name)
+    package_dir = Path(__file__).resolve().parents[2] / "python"
+    spec = importlib.util.spec_from_file_location(
+        "tensorflow_musa",
+        package_dir / "__init__.py",
+        submodule_search_locations=[str(package_dir)],
+    )
+    tensorflow_musa = importlib.util.module_from_spec(spec)
+    sys.modules["tensorflow_musa"] = tensorflow_musa
+    spec.loader.exec_module(tensorflow_musa)
+
 from tensorflow_musa import ops as musa_ops
+from musa_test_utils import MUSATestCase, load_musa_ops
 
 
 class GeluOpTest(MUSATestCase):

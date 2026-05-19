@@ -3,8 +3,27 @@
 
 """Tests for MUSA LayerNorm operator."""
 
+import importlib.util
+import sys
+from pathlib import Path
+
 import numpy as np
 import tensorflow as tf
+
+if "tensorflow_musa" not in sys.modules or not hasattr(sys.modules["tensorflow_musa"], "ops"):
+    for module_name in list(sys.modules):
+        if module_name == "tensorflow_musa" or module_name.startswith("tensorflow_musa."):
+            sys.modules.pop(module_name)
+    package_dir = Path(__file__).resolve().parents[2] / "python"
+    spec = importlib.util.spec_from_file_location(
+        "tensorflow_musa",
+        package_dir / "__init__.py",
+        submodule_search_locations=[str(package_dir)],
+    )
+    tensorflow_musa = importlib.util.module_from_spec(spec)
+    sys.modules["tensorflow_musa"] = tensorflow_musa
+    spec.loader.exec_module(tensorflow_musa)
+
 import tensorflow_musa as tf_musa
 from musa_test_utils import MUSATestCase
 
@@ -69,9 +88,6 @@ class LayerNormOpTest(MUSATestCase):
                                rtol=rtol, atol=atol)
 
     def _test_layernorm_grad(self, x_shape, dtype, eps=1e-5):
-        if self._musa_ops is None:
-            self.skipTest("MUSA LayerNorm ops module not available")
-
         np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
         x_np = np.random.uniform(-2, 2, size=x_shape).astype(np_dtype)
         dy_np = np.random.uniform(-1, 1, size=x_shape).astype(np_dtype)
@@ -90,7 +106,7 @@ class LayerNormOpTest(MUSATestCase):
             dy = tf.constant(dy_np, dtype=dtype)
             gamma = tf.constant(gamma_np, dtype=dtype)
             beta = tf.constant(beta_np, dtype=dtype)
-            musa_grads = self._musa_ops.musa_layer_norm_grad(
+            musa_grads = tf_musa.ops.layer_norm_grad(
                 dy=dy, x=x, gamma=gamma, beta=beta, epsilon=eps
             )
 
@@ -105,9 +121,6 @@ class LayerNormOpTest(MUSATestCase):
             )
 
     def _test_layernorm_gradient_tape(self, x_shape, dtype, eps=1e-5):
-        if self._musa_ops is None:
-            self.skipTest("MUSA LayerNorm ops module not available")
-
         np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
         x_np = np.random.uniform(-2, 2, size=x_shape).astype(np_dtype)
         gamma_np = np.random.uniform(0.5, 1.5, size=(x_shape[-1],)).astype(np_dtype)
@@ -129,7 +142,7 @@ class LayerNormOpTest(MUSATestCase):
             beta = tf.constant(beta_np, dtype=dtype)
             with tf.GradientTape() as tape:
                 tape.watch([x, gamma, beta])
-                y = self._musa_ops.musa_layer_norm(
+                y = tf_musa.ops.layer_norm(
                     x=x, gamma=gamma, beta=beta, epsilon=eps
                 )
                 loss = tf.reduce_sum(tf.square(y))
@@ -162,9 +175,6 @@ class LayerNormOpTest(MUSATestCase):
                 self._test_layernorm_gradient_tape([8, 16, 32], dtype)
 
     def testLayerNormSingleLayerTrainingConverges(self):
-        if self._musa_ops is None:
-            self.skipTest("MUSA LayerNorm ops module not available")
-
         np.random.seed(123)
         tf.random.set_seed(123)
 
@@ -194,7 +204,7 @@ class LayerNormOpTest(MUSATestCase):
             losses = []
             for _ in range(steps):
                 with tf.GradientTape() as tape:
-                    y = self._musa_ops.musa_layer_norm(
+                    y = tf_musa.ops.layer_norm(
                         x=x,
                         gamma=gamma,
                         beta=beta,

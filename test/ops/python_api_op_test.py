@@ -26,7 +26,10 @@ import numpy as np
 import tensorflow as tf
 
 
-if "tensorflow_musa" not in sys.modules:
+if "tensorflow_musa" not in sys.modules or not hasattr(sys.modules["tensorflow_musa"], "ops"):
+    for module_name in list(sys.modules):
+        if module_name == "tensorflow_musa" or module_name.startswith("tensorflow_musa."):
+            sys.modules.pop(module_name)
     package_dir = Path(__file__).resolve().parents[2] / "python"
     spec = importlib.util.spec_from_file_location(
         "tensorflow_musa",
