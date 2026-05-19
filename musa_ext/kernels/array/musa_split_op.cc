@@ -1,11 +1,11 @@
 #include <vector>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/lib/core/errors.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -49,6 +49,7 @@ class MusaSplitOp : public OpKernel {
     }
 
     const int64_t delta = input_size_split_dim / num_split;
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(context);
     auto& h = GetHandleByCtx(context);
     ::musa::dnn::Permute op;
 

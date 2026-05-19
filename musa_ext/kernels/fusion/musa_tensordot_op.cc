@@ -53,7 +53,7 @@ REGISTER_OP("MusaTensorDot")
 
       if (!c->RankKnown(a_shape) || !c->RankKnown(b_shape)) {
         c->set_output(0, c->UnknownShape());
-        return Status::OK();
+        return OkStatus();
       }
 
       std::vector<int> axes_a, axes_b;
@@ -90,7 +90,7 @@ REGISTER_OP("MusaTensorDot")
       }
 
       c->set_output(0, c->MakeShape(output_dims));
-      return Status::OK();
+      return OkStatus();
     });
 
 // =============================================================================
@@ -196,7 +196,7 @@ Status ComputeTensorDotDims(const TensorShape& a_shape,
     }
   }
 
-  return Status::OK();
+  return OkStatus();
 }
 
 template <typename T>
@@ -262,6 +262,7 @@ class MusaTensorDotOp : public MusaOpKernel {
     }
 
     // 设置 TF32
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     handle.SetAllowTF32(tf32_enabled_);
 
@@ -288,6 +289,9 @@ class MusaTensorDotOp : public MusaOpKernel {
   // 执行 MatMul 操作
   Status DoMatMul(OpKernelContext* ctx, const Tensor& a, const Tensor& b,
                   Tensor* output) {
+    if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+      return MusaMudnnHandleRequiredError();
+    }
     mHandle& handle = GetHandleByCtx(ctx);
 
     mTensor mt_a = CreateMTensor(a);
@@ -320,7 +324,7 @@ class MusaTensorDotOp : public MusaOpKernel {
                               static_cast<int>(status));
     }
 
-    return Status::OK();
+    return OkStatus();
   }
 
   Status DoTensorDot(OpKernelContext* ctx, const Tensor& a, const Tensor& b,
@@ -361,11 +365,11 @@ class MusaTensorDotOp : public MusaOpKernel {
       if (!output->CopyFrom(matmul_temp, output_shape)) {
         return errors::Internal("Failed to reshape matmul result to output");
       }
-      return Status::OK();
+      return OkStatus();
     }
 
     TF_RETURN_IF_ERROR(DoMatMul(ctx, a_2d, b_2d, &matmul_view));
-    return Status::OK();
+    return OkStatus();
   }
 
   // 准备张量：transpose + reshape 为 2D
@@ -404,7 +408,7 @@ class MusaTensorDotOp : public MusaOpKernel {
       }
     }
 
-    return Status::OK();
+    return OkStatus();
   }
 };
 

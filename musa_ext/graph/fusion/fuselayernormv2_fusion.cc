@@ -507,18 +507,17 @@ FusionMatchResult MusaFuseLayerNormV2Fusion::MatchFromAddNode(
 Status MusaFuseLayerNormV2Fusion::Apply(
     GraphDef* graph, const FusionMatchResult& match_result) const {
   if (!match_result.IsValid()) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Invalid FuseLayerNormV2 match result");
+    return errors::InvalidArgument("Invalid FuseLayerNormV2 match result");
   }
 
   if (!IsKernelAvailable()) {
-    return Status::OK();
+    return OkStatus();
   }
 
   auto output_it = match_result.captured_nodes.find("output");
   if (output_it == match_result.captured_nodes.end() || !output_it->second) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Missing output node in FuseLayerNormV2 pattern");
+    return errors::InvalidArgument(
+        "Missing output node in FuseLayerNormV2 pattern");
   }
 
   auto input_tensor_it = match_result.captured_attrs.find("input_tensor");
@@ -527,8 +526,8 @@ Status MusaFuseLayerNormV2Fusion::Apply(
   if (input_tensor_it == match_result.captured_attrs.end() ||
       gamma_tensor_it == match_result.captured_attrs.end() ||
       beta_tensor_it == match_result.captured_attrs.end()) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Missing tensors in FuseLayerNormV2 pattern");
+    return errors::InvalidArgument(
+        "Missing tensors in FuseLayerNormV2 pattern");
   }
 
   const std::string input_tensor = input_tensor_it->second;
@@ -543,7 +542,7 @@ Status MusaFuseLayerNormV2Fusion::Apply(
     if (node.name() == original_name && node.op() == "MusaLayerNorm") {
       VLOG(1) << "FuseLayerNormV2: Output node " << original_name
               << " is already fused, skipping";
-      return Status::OK();
+      return OkStatus();
     }
   }
 
@@ -555,8 +554,8 @@ Status MusaFuseLayerNormV2Fusion::Apply(
     }
   }
   if (output_node_idx < 0) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Failed to find output node in graph: " + original_name);
+    return errors::InvalidArgument("Failed to find output node in graph: " +
+                                   original_name);
   }
 
   NodeDef* original_output_node = graph->mutable_node(output_node_idx);
@@ -621,7 +620,7 @@ Status MusaFuseLayerNormV2Fusion::Apply(
   VLOG(1) << "FuseLayerNormV2: Replaced '" << original_name
           << "' with MusaLayerNorm (removed_nodes=" << removed_count << ")";
 
-  return Status::OK();
+  return OkStatus();
 }
 
 REGISTER_FUSION_PATTERN(MusaFuseLayerNormV2Fusion);

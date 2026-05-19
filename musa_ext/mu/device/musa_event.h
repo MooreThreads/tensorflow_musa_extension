@@ -3,8 +3,13 @@
 
 #include <musa_runtime.h>
 
+#if __has_include("tensorflow/stream_executor/event.h")
 #include "tensorflow/stream_executor/event.h"
 #include "tensorflow/stream_executor/stream_executor_internal.h"
+#else
+#include "xla/stream_executor/event.h"
+#include "xla/stream_executor/stream_executor_internal.h"
+#endif
 
 namespace stream_executor {
 namespace musa {

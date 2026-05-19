@@ -92,6 +92,7 @@ class MusaResourceApplyGradientDescentOp : public MusaOpKernel {
                     " grad: ", grad_t.shape().DebugString()));
 
     // Get MuDNN handle
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     std::list<Tensor> temp_storage;
 
@@ -186,6 +187,7 @@ class MusaApplyGradientDescentOp : public MusaOpKernel {
     Tensor* out_t;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, var_t.shape(), &out_t));
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     std::list<Tensor> temp_storage;
 

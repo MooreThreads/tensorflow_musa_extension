@@ -46,9 +46,7 @@ bool HasOriginalSuffix(const std::string& node_name) {
                            kOriginalSuffix.size(), kOriginalSuffix) == 0;
 }
 
-bool IsActivationNode(const NodeDef& node) {
-  return IsOp(node, "Relu");
-}
+bool IsActivationNode(const NodeDef& node) { return IsOp(node, "Relu"); }
 
 std::string GetActivationType(const NodeDef& node) {
   if (IsOp(node, "Relu")) {
@@ -135,12 +133,11 @@ FusionMatchResult LinearActivationFusion::Match(const GraphDef& graph,
 Status LinearActivationFusion::Apply(
     GraphDef* graph, const FusionMatchResult& match_result) const {
   if (!match_result.IsValid()) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Invalid LinearActivation match result");
+    return errors::InvalidArgument("Invalid LinearActivation match result");
   }
 
   if (!IsKernelAvailable()) {
-    return Status::OK();
+    return OkStatus();
   }
 
   // Get captured nodes
@@ -151,8 +148,8 @@ Status LinearActivationFusion::Apply(
   if (output_it == match_result.captured_nodes.end() ||
       matmul_it == match_result.captured_nodes.end() ||
       bias_it == match_result.captured_nodes.end()) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Missing required nodes in LinearActivation pattern");
+    return errors::InvalidArgument(
+        "Missing required nodes in LinearActivation pattern");
   }
 
   const NodeDef* output_node = output_it->second;
@@ -160,8 +157,8 @@ Status LinearActivationFusion::Apply(
   const NodeDef* bias_node = bias_it->second;
   const std::string activation_type = GetActivationType(*output_node);
   if (activation_type.empty()) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Unsupported activation in LinearActivation pattern");
+    return errors::InvalidArgument(
+        "Unsupported activation in LinearActivation pattern");
   }
 
   const std::string original_name = output_node->name();
@@ -172,7 +169,7 @@ Status LinearActivationFusion::Apply(
     if (node.name() == original_name && node.op() == "MusaLinearActivation") {
       VLOG(1) << "MusaLinearActivation: Output node " << original_name
               << " is already a fused node, skipping";
-      return Status::OK();
+      return OkStatus();
     }
   }
 
@@ -185,8 +182,8 @@ Status LinearActivationFusion::Apply(
   }
 
   if (output_node_idx < 0) {
-    return Status(error::INVALID_ARGUMENT,
-                  "Failed to find output node in graph: " + original_name);
+    return errors::InvalidArgument("Failed to find output node in graph: " +
+                                   original_name);
   }
 
   VLOG(1) << "LinearActivationFusion: Replacing " << original_name
@@ -253,10 +250,10 @@ Status LinearActivationFusion::Apply(
       {matmul_node->input(0), matmul_node->input(1), bias_node->name(),
        original_name});
 
-  VLOG(1) << "LinearActivationFusion: Successfully replaced '"
-          << original_name << "' with MusaLinearActivation";
+  VLOG(1) << "LinearActivationFusion: Successfully replaced '" << original_name
+          << "' with MusaLinearActivation";
 
-  return Status::OK();
+  return OkStatus();
 }
 
 // Register the pattern

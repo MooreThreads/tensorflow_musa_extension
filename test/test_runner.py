@@ -468,7 +468,7 @@ def discover_and_run_tests(test_pattern="*_op_test.py", test_dir_name="ops",
 
     if not test_files:
         print(f"{red('✗')} No test files found matching pattern: {test_pattern} in {test_dir_name}/")
-        return
+        return False
 
     # Add test directory to Python path
     sys.path.insert(0, str(test_dir))
@@ -477,7 +477,12 @@ def discover_and_run_tests(test_pattern="*_op_test.py", test_dir_name="ops",
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
 
-    for test_file in sorted(test_files):
+    load_errors = []
+    def test_file_sort_key(test_file):
+        is_pluggable_smoke = test_file.name.startswith("pluggable_")
+        return (0 if is_pluggable_smoke else 1, test_file.name)
+
+    for test_file in sorted(test_files, key=test_file_sort_key):
         module_name = test_file.stem
         try:
             module = importlib.import_module(module_name)
@@ -486,11 +491,12 @@ def discover_and_run_tests(test_pattern="*_op_test.py", test_dir_name="ops",
             if detail_mode:
                 print(f"  {green('✓')} Loaded tests from: {test_dir_name}/{module_name}")
         except Exception as e:
+            load_errors.append((module_name, e))
             print(f"  {red('✗')} Failed to load {module_name}: {e}", file=sys.stderr)
 
     if suite.countTestCases() == 0:
         print(f"{red('✗')} No tests found!")
-        return
+        return False
 
     if detail_mode:
         print(f"\n  Running {suite.countTestCases()} tests...\n")
@@ -501,6 +507,9 @@ def discover_and_run_tests(test_pattern="*_op_test.py", test_dir_name="ops",
                             detail_mode=detail_mode,
                             log_file=log_file)
     result = runner.run(suite)
+    if load_errors:
+        return False
+    return result.wasSuccessful()
 
 
 # ============================================================================
@@ -565,12 +574,15 @@ Examples:
         try:
             module = importlib.import_module(module_name)
             suite = unittest.TestLoader().loadTestsFromModule(module)
+            if suite.countTestCases() == 0:
+                print(f"{red('✗')} No tests found in {args.single}")
+                sys.exit(1)
             runner = CustomTestRunner(verbosity=2 if detail_mode else 0,
                                     quiet=quiet_mode,
                                     detail_mode=detail_mode,
                                     log_file=args.log_file if detail_mode else None)
             result = runner.run(suite)
-            if result and (result.failures or result.errors):
+            if not result or not result.wasSuccessful():
                 sys.exit(1)
         except Exception as e:
             if detail_mode:
@@ -583,15 +595,20 @@ Examples:
             if args.pattern == "*_op_test.py"
             else args.pattern
         )
-        discover_and_run_tests(fusion_pattern,
-                             test_dir_name="fusion",
-                             quiet=quiet_mode,
-                             detail_mode=detail_mode,
-                             log_file=args.log_file if detail_mode else None)
+        success = discover_and_run_tests(fusion_pattern,
+                                         test_dir_name="fusion",
+                                         quiet=quiet_mode,
+                                         detail_mode=detail_mode,
+                                         log_file=args.log_file if detail_mode else None)
+        if not success:
+            sys.exit(1)
     else:
-        # Run all operator tests
-        discover_and_run_tests(args.pattern,
-                             test_dir_name="ops",
-                             quiet=quiet_mode,
-                             detail_mode=detail_mode,
-                             log_file=args.log_file if detail_mode else None)
+        operator_pattern = (["*_op_test.py", "pluggable_*_test.py"]
+                            if args.pattern == "*_op_test.py" else args.pattern)
+        success = discover_and_run_tests(operator_pattern,
+                                         test_dir_name="ops",
+                                         quiet=quiet_mode,
+                                         detail_mode=detail_mode,
+                                         log_file=args.log_file if detail_mode else None)
+        if not success:
+            sys.exit(1)

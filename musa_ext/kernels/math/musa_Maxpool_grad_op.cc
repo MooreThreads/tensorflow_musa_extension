@@ -51,7 +51,7 @@ Status PermuteTensorOnMusaGrad(OpKernelContext* ctx, const Tensor& input,
                             static_cast<int>(status));
   }
 
-  return Status::OK();
+  return OkStatus();
 }
 
 Status ComputeOutputAndPadding2DGrad(
@@ -65,7 +65,7 @@ Status ComputeOutputAndPadding2DGrad(
     *pad_bottom = 0;
     *pad_left = 0;
     *pad_right = 0;
-    return Status::OK();
+    return OkStatus();
   }
 
   if (padding == Padding::SAME) {
@@ -81,7 +81,7 @@ Status ComputeOutputAndPadding2DGrad(
     *pad_bottom = static_cast<int>(pad_h - *pad_top);
     *pad_left = static_cast<int>(pad_w / 2);
     *pad_right = static_cast<int>(pad_w - *pad_left);
-    return Status::OK();
+    return OkStatus();
   }
 
   return errors::InvalidArgument(
@@ -154,7 +154,7 @@ Status RunMusaMaxPoolGrad(OpKernelContext* ctx, const Tensor& orig_input,
                             static_cast<int>(status));
   }
 
-  return Status::OK();
+  return OkStatus();
 }
 
 }  // namespace

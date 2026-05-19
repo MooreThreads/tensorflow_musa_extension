@@ -30,6 +30,7 @@ class MusaGeluOp : public MusaOpKernel {
     }
 
     const int64 num_elements = input.NumElements();
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     mTensor mt_input = CreateMTensor(input, format_);
     mTensor mt_output = CreateMTensor(*output, format_);
@@ -75,7 +76,7 @@ REGISTER_OP("MusaGelu")
     .Attr("approximate: bool = false")
     .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
       c->set_output(0, c->input(0));
-      return Status::OK();
+      return OkStatus();
     });
 
 }  // namespace tensorflow

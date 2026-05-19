@@ -44,6 +44,7 @@ class MusaDropoutOp : public MusaOpKernel {
 
     if (x.NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
 
     mTensor mt_x = CreateMTensor(x, format_);
@@ -107,6 +108,7 @@ class MusaDropoutGradOp : public MusaOpKernel {
 
     if (grad.NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
 
     mTensor mt_grad = CreateMTensor(grad, format_);
@@ -163,7 +165,7 @@ REGISTER_OP("MusaDropout")
     .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
       c->set_output(0, c->input(0));
       c->set_output(1, c->input(0));
-      return Status::OK();
+      return OkStatus();
     });
 
 REGISTER_OP("MusaDropoutGrad")
@@ -174,7 +176,7 @@ REGISTER_OP("MusaDropoutGrad")
     .Attr("rate: float = 0.5")
     .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
       c->set_output(0, c->input(0));
-      return Status::OK();
+      return OkStatus();
     });
 
 }  // namespace tensorflow

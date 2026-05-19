@@ -334,7 +334,7 @@ Status ConfigureBroadcastView(const Tensor& tensor,
   // Express TensorFlow-style broadcast as a muDNN tensor view by keeping the
   // output dims and setting broadcasted axes to stride 0.
   if (SameShape(tensor, output_shape) || output_shape.dims() == 0) {
-    return Status::OK();
+    return OkStatus();
   }
 
   const int input_rank = tensor.dims();
@@ -370,7 +370,7 @@ Status ConfigureBroadcastView(const Tensor& tensor,
     return errors::Internal("MUSA Add SetNdInfo failed. Status: ",
                             static_cast<int>(status));
   }
-  return Status::OK();
+  return OkStatus();
 }
 
 }  // namespace
@@ -424,6 +424,8 @@ class MusaAddOp : public MusaOpKernel {
     if (fast_path_status != AddFastPathResult::kNotHandled) {
       return;
     }
+
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
 
     auto& handle = GetHandleByCtx(ctx);
     mTensor t0 = CreateMTensor(in0, format_);

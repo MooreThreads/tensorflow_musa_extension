@@ -73,7 +73,7 @@ REGISTER_OP("MusaReshapeMatMul")
       }
       out_dims.push_back(w_n);
       c->set_output(0, c->MakeShape(out_dims));
-      return Status::OK();
+      return OkStatus();
     });
 
 template <typename T>
@@ -122,6 +122,7 @@ class MusaReshapeMatMulOp : public MusaOpKernel {
 
     const int64_t m = x.NumElements() / k;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     handle.SetAllowTF32(tf32_enabled_);
 

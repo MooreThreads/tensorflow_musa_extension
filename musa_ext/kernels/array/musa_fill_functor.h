@@ -20,6 +20,9 @@ namespace musa {
 
 template <typename T>
 inline Status MusaFillCall(mTensor* out_mt, T value, OpKernelContext* context) {
+  if (QueryMusaKernelRuntimeView(context).mudnn_handle == nullptr) {
+    return MusaMudnnHandleRequiredError();
+  }
   mFill op;
   mHandle& h = GetHandleByCtx(context);
 
@@ -41,7 +44,7 @@ inline Status MusaFillCall(mTensor* out_mt, T value, OpKernelContext* context) {
     return errors::Internal("mudnn run op error!");
   }
 
-  return Status::OK();
+  return OkStatus();
 }
 
 struct SetZeroFunctor {

@@ -1,7 +1,7 @@
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -22,10 +22,12 @@ class MusaNegOp : public MusaOpKernel {
     const Tensor& input = ctx->input(0);
 
     Tensor* output = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->forward_input_or_allocate_output({0}, 0, input.shape(), &output));
+    OP_REQUIRES_OK(ctx, ctx->forward_input_or_allocate_output(
+                            {0}, 0, input.shape(), &output));
 
     if (input.NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     musaStream_t stream = (musaStream_t)handle.GetStream();
 

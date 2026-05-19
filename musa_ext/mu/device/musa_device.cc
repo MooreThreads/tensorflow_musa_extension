@@ -1,5 +1,9 @@
 #include "musa_device.h"
 
+#include "tensorflow/core/public/version.h"
+
+#if TF_MAJOR_VERSION < 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION < 10)
+
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -82,7 +86,7 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
   size_t bytes = cpu_tensor->TotalBytes();
 
   if (bytes == 0) {
-    done(Status::OK());
+    done(OkStatus());
     return;
   }
 
@@ -97,7 +101,7 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
 
   auto wait_h2d_stream_for_compute = [&]() -> Status {
     if (!sync_dst_compute) {
-      return Status::OK();
+      return OkStatus();
     }
 
     musaEvent_t sync_event;
@@ -138,7 +142,7 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
       musaStreamSynchronize(h2d_stream_);
       musaEventDestroy(sync_event);
     }
-    return Status::OK();
+    return OkStatus();
   };
 
   // Check if source memory is pinned (musaMemoryTypeHost)
@@ -164,7 +168,7 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
             "MUSA pinned H2D async copy on compute stream failed"));
         return;
       }
-      done(Status::OK());
+      done(OkStatus());
       return;
     }
 
@@ -188,10 +192,10 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
     if (event_mgr_) {
       event_mgr_->ThenExecute(h2d_stream_, [device_id, done]() {
         musaSetDevice(device_id);
-        done(Status::OK());
+        done(OkStatus());
       });
     } else {
-      done(Status::OK());
+      done(OkStatus());
     }
   } else {
     // Use bounce buffer for pageable memory
@@ -207,7 +211,7 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
         done(errors::Internal("MUSA H2D small sync copy failed"));
         return;
       }
-      done(Status::OK());
+      done(OkStatus());
       return;
     }
 
@@ -226,7 +230,7 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
         done(errors::Internal("MUSA H2D sync copy failed"));
         return;
       }
-      done(Status::OK());
+      done(OkStatus());
       return;
     }
 
@@ -256,7 +260,7 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
 
       musa_dev->pinned_memory_pool()->FreeAsync(bounce_buffer, bytes,
                                                 stream_handle_);
-      done(Status::OK());
+      done(OkStatus());
       return;
     }
 
@@ -289,11 +293,11 @@ void MusaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
     if (event_mgr_) {
       event_mgr_->ThenExecute(h2d_stream_, [device_id, done]() {
         musaSetDevice(device_id);
-        done(Status::OK());
+        done(OkStatus());
       });
     } else {
       musaStreamSynchronize(h2d_stream_);
-      done(Status::OK());
+      done(OkStatus());
     }
   }
 }
@@ -315,7 +319,7 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
     bytes = cpu_tensor->TotalBytes();
   }
   if (bytes == 0 or src == nullptr) {
-    done(Status::OK());
+    done(OkStatus());
     return;
   }
 
@@ -367,7 +371,7 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
       musaEventDestroy(compute_done_event);
     }
 
-    return Status::OK();
+    return OkStatus();
   };
 
   if (is_pinned) {
@@ -392,10 +396,10 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
       event_mgr_->ThenExecute(d2h_stream_, [device_id, done, input_ref]() {
         input_ref.Unref();
         musaSetDevice(device_id);
-        done(Status::OK());
+        done(OkStatus());
       });
     } else {
-      done(Status::OK());
+      done(OkStatus());
     }
   } else {
     // Use bounce buffer for pageable memory
@@ -407,7 +411,7 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
         done(errors::Internal("MUSA D2H small sync copy failed"));
         return;
       }
-      done(Status::OK());
+      done(OkStatus());
       return;
     }
 
@@ -421,7 +425,7 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
         done(errors::Internal("MUSA D2H sync copy failed"));
         return;
       }
-      done(Status::OK());
+      done(OkStatus());
       return;
     }
 
@@ -460,13 +464,13 @@ void MusaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
             musa_dev->pinned_memory_pool()->FreeAsync(bounce_buffer, bytes,
                                                       nullptr);
             input_ref.Unref();
-            done(Status::OK());
+            done(OkStatus());
           });
     } else {
       musaStreamSynchronize(d2h_stream_);
       std::memcpy(dst, bounce_buffer, bytes);
       musa_dev->pinned_memory_pool()->FreeAsync(bounce_buffer, bytes, nullptr);
-      done(Status::OK());
+      done(OkStatus());
     }
   }
 }
@@ -671,7 +675,7 @@ Allocator* MusaDevice::GetAllocator(AllocatorAttributes attr) {
 Status MusaDevice::Sync() {
   musaSetDevice(device_id_);
   musaError_t err = musaDeviceSynchronize();
-  return (err == musaSuccess) ? Status::OK()
+  return (err == musaSuccess) ? OkStatus()
                               : errors::Internal("MUSA Device Sync Failed");
 }
 
@@ -679,10 +683,13 @@ Status MusaDevice::TryGetDeviceContext(DeviceContext** out_context) {
   if (device_context_) {
     *out_context = device_context_;
     device_context_->Ref();
-    return Status::OK();
+    return OkStatus();
   }
   return errors::Internal("MusaDeviceContext is null");
 }
 
 }  // namespace musa
 }  // namespace tensorflow
+
+#endif  // TF_MAJOR_VERSION < 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION <
+        // 10)

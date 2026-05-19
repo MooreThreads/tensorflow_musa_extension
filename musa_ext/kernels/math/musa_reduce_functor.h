@@ -18,6 +18,9 @@ struct ReduceFunctor {
   static Status Compute(OpKernelContext* ctx, mTensor* output, mTensor* input,
                         ::musa::dnn::Reduce::Mode mode, const int* reduce_dims,
                         int reduce_dim_count, const char* error_prefix) {
+    if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+      return MusaMudnnHandleRequiredError();
+    }
     auto& handle = GetHandleByCtx(ctx);
 
     mReduce op;
@@ -41,7 +44,7 @@ struct ReduceFunctor {
     if (status != ::musa::dnn::Status::SUCCESS) {
       return errors::Internal(error_prefix, static_cast<int>(status));
     }
-    return Status::OK();
+    return OkStatus();
   }
 };
 

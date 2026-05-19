@@ -5,17 +5,12 @@
 
 import numpy as np
 import tensorflow as tf
-from musa_test_utils import MUSATestCase, load_musa_ops
+import tensorflow_musa as tf_musa
+from musa_test_utils import MUSATestCase
 
 
 class DropoutOpTest(MUSATestCase):
     """Tests for MUSA Dropout forward and backward operators."""
-
-    @classmethod
-    def setUpClass(cls):
-        """Get the MUSA custom ops module (plugin already loaded by musa_test_utils)."""
-        super(DropoutOpTest, cls).setUpClass()
-        cls._musa_ops = load_musa_ops()
 
     # -------------------------------------------------------------------------
     # Helper
@@ -23,14 +18,14 @@ class DropoutOpTest(MUSATestCase):
     def _run_dropout(self, x, rate=0.5, seed=42, offset=0):
         """Run MusaDropout on MUSA device and return (y, mask)."""
         with tf.device('/device:MUSA:0'):
-            y, mask = self._musa_ops.musa_dropout(
+            y, mask = tf_musa.ops.dropout(
                 x=x, rate=rate, seed=seed, offset=offset)
         return y, mask
 
     def _run_dropout_grad(self, grad, mask, rate=0.5):
         """Run MusaDropoutGrad on MUSA device."""
         with tf.device('/device:MUSA:0'):
-            grad_input = self._musa_ops.musa_dropout_grad(
+            grad_input = tf_musa.ops.dropout_grad(
                 grad=grad, mask=mask, rate=rate)
         return grad_input
 

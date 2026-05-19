@@ -1,6 +1,10 @@
 #include <musa_runtime.h>
 #include <stdio.h>
 
+#include "tensorflow/core/public/version.h"
+
+#if TF_MAJOR_VERSION < 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION < 10)
+
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
@@ -10,6 +14,7 @@
 #include "device/musa_device.h"
 #include "mu/device/musa_telemetry.h"
 #include "mu/runtime_config_c_api.h"
+#include "musa_plugin_env.h"
 #include "tensorflow/core/common_runtime/device_factory.h"
 #include "tensorflow/core/framework/device_attributes.pb.h"
 #include "tensorflow/core/platform/env.h"
@@ -70,13 +75,21 @@ class MusaDeviceFactory : public DeviceFactory {
     int count = 0;
     musaError_t err = musaGetDeviceCount(&count);
     if (err != musaSuccess) {
-      return Status::OK();
+      if (musa::plugin_env::StrictPhysicalDeviceEnum()) {
+        return errors::FailedPrecondition(strings::StrCat(
+            "musaGetDeviceCount failed: ", musaGetErrorString(err)));
+      }
+      VLOG(1)
+          << "musaGetDeviceCount failed; returning empty physical device list "
+             "(set MUSA_STRICT_DEVICE_ENUM=1 to treat this as an error): "
+          << musaGetErrorString(err);
+      return OkStatus();
     }
 
     for (int i = 0; i < count; ++i) {
       devices->push_back(strings::StrCat("/physical_device:MUSA:", i));
     }
-    return Status::OK();
+    return OkStatus();
   }
 
   Status CreateDevices(const SessionOptions& options, const string& name_prefix,
@@ -85,7 +98,14 @@ class MusaDeviceFactory : public DeviceFactory {
     int count = 0;
     musaError_t err = musaGetDeviceCount(&count);
     if (err != musaSuccess) {
-      return errors::Internal("Failed to get MUSA device count");
+      if (musa::plugin_env::StrictPhysicalDeviceEnum()) {
+        return errors::FailedPrecondition(strings::StrCat(
+            "musaGetDeviceCount failed: ", musaGetErrorString(err)));
+      }
+      VLOG(1) << "musaGetDeviceCount failed; skipping MUSA device creation "
+                 "(set MUSA_STRICT_DEVICE_ENUM=1 to treat this as an error): "
+              << musaGetErrorString(err);
+      return OkStatus();
     }
 
     auto platform_status =
@@ -123,11 +143,9 @@ class MusaDeviceFactory : public DeviceFactory {
       devices->push_back(std::unique_ptr<Device>(
           new MusaDevice(Env::Default(), attr, i, executor, allow_growth)));
     }
-    return Status::OK();
+    return OkStatus();
   }
 };
-
-REGISTER_LOCAL_DEVICE_FACTORY("MUSA", MusaDeviceFactory, 210);
 
 }  // namespace musa
 }  // namespace tensorflow
@@ -137,9 +155,10 @@ void __attribute__((visibility("default"))) TFMusaSetAllowGrowth(int enabled) {
   ::tensorflow::musa::SetMusaAllowGrowthOverride(enabled != 0);
 }
 
-void __attribute__((visibility("default"))) TFMusaSetTelemetryConfig(
-    int enabled, const char* log_path, unsigned long long buffer_size,
-    int flush_interval_ms, int include_stack_trace) {
+void __attribute__((visibility("default")))
+TFMusaSetTelemetryConfig(int enabled, const char* log_path,
+                         unsigned long long buffer_size, int flush_interval_ms,
+                         int include_stack_trace) {
   ::tensorflow::musa::TelemetryConfig config;
   config.enabled = enabled != 0;
   if (log_path != nullptr) {
@@ -165,6 +184,21 @@ TFMusaGetTelemetryHealthSnapshot() {
 }
 
 void __attribute__((constructor)) OnMusaPluginLoad() {
+  static std::once_flag k_register_musa_device_factory;
+  std::call_once(k_register_musa_device_factory, [] {
+    if (!tensorflow::musa::plugin_env::UseLegacyCppDevicePath()) {
+      LOG(INFO) << "[MUSA] Skipping C++ DeviceFactory::Register(\"MUSA\") "
+                   "because PluggableDevice SE path is the default. Set "
+                   "TENSORFLOW_MUSA_USE_LEGACY_DEVICE=1 before loading "
+                   "libmusa_plugin.so to enable the legacy C++ path.";
+      return;
+    }
+    tensorflow::DeviceFactory::Register(
+        "MUSA", new tensorflow::musa::MusaDeviceFactory(), 210,
+        /*is_pluggable_device*/ false);
+    LOG(INFO) << "[MUSA] Registered C++ DeviceFactory for device type MUSA.";
+  });
+
   // Initialize telemetry system from environment variables
   auto config = ::tensorflow::musa::TelemetryConfig::FromEnv();
   if (config.enabled) {
@@ -184,3 +218,6 @@ void __attribute__((destructor)) OnMusaPluginUnload() {
 }
 }
 // extern "C" void ForceLinkMusaAmpOptimizer();
+
+#endif  // TF_MAJOR_VERSION < 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION <
+        // 10)

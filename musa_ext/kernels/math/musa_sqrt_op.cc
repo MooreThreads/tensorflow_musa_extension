@@ -21,6 +21,7 @@ class MusaSqrtOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &output));
     if (input.NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     ::musa::dnn::Tensor mudnn_input = CreateMTensor(input);
     ::musa::dnn::Tensor mudnn_output = CreateMTensor(*output);

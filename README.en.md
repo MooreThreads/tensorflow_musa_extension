@@ -1,23 +1,26 @@
 # TensorFlow MUSA Extension
 
-TensorFlow plugin for Moore Threads MUSA GPUs: MUSA kernels and graph optimizations accelerate TensorFlow on MUSA hardware.
+TensorFlow MUSA Extension provides TensorFlow support for Moore Threads MUSA GPUs. It packages MUSA device registration, operator kernels, and graph optimization as the `tensorflow_musa` Python package.
 
 ## Features
 
-- MUSA implementations for core ops and common fusion paths
-- Grappler-based graph optimizations (layout, fusion, optional mixed precision, etc.)
-- Python package `tensorflow_musa`: plugin load and device discovery
-- Optional telemetry and debugging: see [Debug guide](docs/DEBUG_GUIDE.md)
+- Registers MUSA as a TensorFlow device.
+- Provides MUSA implementations for common TensorFlow operators and selected fusion paths.
+- Loads the runtime plugin with `import tensorflow_musa`.
+- Debugging and environment-variable guidance is available in [docs/DEBUG_GUIDE.md](docs/DEBUG_GUIDE.md).
 
 ## Requirements
 
-- CMake ≥ 3.10, Make, GCC/G++ (ABI-compatible with TensorFlow 2.6.1 pip wheels)
-- MUSA SDK (default `/usr/local/musa`): runtime, muBLAS, muDNN
-- Python ≥ 3.7
-- **TensorFlow == 2.6.1** (must match this version)
-- NumPy ≥ 1.19.0
+- Moore Threads MUSA SDK, installed at `/usr/local/musa` by default.
+- CMake 3.10 or newer.
+- GCC/G++ compatible with the target TensorFlow wheel ABI.
+- Python 3.7 or newer.
+- TensorFlow installed before building this package.
+- NumPy 1.19.0 or newer.
 
-## Install (recommended: wheel)
+The built wheel must match the TensorFlow version and Python environment used at build time. Build separate wheels for separate TensorFlow environments.
+
+## Build and install
 
 ```bash
 git clone <repository-url>
@@ -25,146 +28,62 @@ cd tensorflow_musa_extension
 
 pip install tensorflow==2.6.1
 ./build.sh wheel
-pip install dist/tensorflow_musa-*.whl --no-deps
+pip install --force-reinstall dist/tensorflow_musa-*.whl --no-deps
 ```
 
-Use `--force-reinstall` when replacing an existing install.
+To build only the plugin shared library during development:
+
+```bash
+./build.sh
+```
+
+The wheel installation path is recommended for validation because it matches how users load the package.
 
 ## Quick check
 
 ```python
+import tensorflow as tf
 import tensorflow_musa as tf_musa
 
-print(tf_musa.__version__)
-print(tf_musa.get_musa_devices())
+print(tf.__version__)
+print(tf.config.list_physical_devices("MUSA"))
 ```
 
-Example with a MUSA device:
+Run a simple operation on MUSA:
 
 ```python
 import tensorflow as tf
-import tensorflow_musa  # ensure plugin is loaded
+import tensorflow_musa
 
 with tf.device("/device:MUSA:0"):
-    a = tf.constant([[1.0, 2.0], [3.0, 4.0]])
-    b = tf.matmul(a, a)
+    x = tf.constant([[1.0, 2.0], [3.0, 4.0]])
+    y = tf.matmul(x, x)
+
+print(y)
 ```
 
-MUSA allocator memory growth defaults to `False`, matching TensorFlow's native
-GPU behavior. You can configure it explicitly before MUSA devices are
-initialized:
+## Tests
 
-```python
-import tensorflow_musa as tf_musa
-
-tf_musa.set_musa_allow_growth(enabled=True)
-```
-
-To explicitly disable it:
-
-```python
-tf_musa.set_musa_allow_growth(enabled=False)
-```
-
-The TensorFlow-compatible environment variable can also override the Python
-setting:
+Run the operator test suite from an installed wheel:
 
 ```bash
-export TF_FORCE_GPU_ALLOW_GROWTH=true
+MUSA_VISIBLE_DEVICES=5 python test/test_runner.py
 ```
 
-Configure native MUSA telemetry from Python for debugging. The Python API
-overrides the `MUSA_TELEMETRY_*` environment variables:
-
-```python
-import tensorflow_musa as tf_musa
-
-tf_musa.set_musa_telemetry_config(
-    enabled=True,
-    log_path="/tmp/musa_telemetry.json",
-    buffer_size=50000,
-    flush_interval_ms=50,
-    include_stack_trace=True,
-)
-```
-
-Disable telemetry and flush pending events:
-
-```python
-tf_musa.disable_musa_telemetry()
-```
-
-Enable or disable the MUSA custom graph optimizer:
-
-```python
-import tensorflow as tf
-import tensorflow_musa as tf_musa
-
-config = tf.compat.v1.ConfigProto()
-tf_musa.set_musa_graph_optimizer_enabled(config, enabled=True)
-
-# To disable it:
-# tf_musa.set_musa_graph_optimizer_enabled(config, enabled=False)
-```
-
-Configure GraphDef dumps from Python when debugging Grappler passes. The Python
-API overrides the `MUSA_DUMP_GRAPHDEF*` environment variables:
-
-```python
-tf_musa.set_musa_graph_dump_config(
-    enabled=True,
-    dump_dir="/tmp/graphs",
-    dump_text=True,
-    dump_slim=True,
-)
-```
-
-Disable dumping:
-
-```python
-tf_musa.disable_musa_graph_dump()
-```
-
-Disable selected fusion patterns from Python by passing parameters to the C++
-optimizer:
-
-```python
-tf_musa.disable_musa_fusion_patterns(
-    config,
-    patterns=["MusaGeluFusion", "MusaLayerNormFusion"],
-)
-
-# Disable all fusion patterns
-tf_musa.disable_musa_fusion_patterns(config, patterns="all")
-
-# Clear the disabled fusion pattern list
-tf_musa.clear_musa_disabled_fusion_patterns(config)
-```
-
-## Build plugin from source (optional)
-
-Produces `build/libmusa_plugin.so` only (no wheel):
+Run a single operator test:
 
 ```bash
-pip install tensorflow==2.6.1
-./build.sh          # or ./build.sh release
+MUSA_VISIBLE_DEVICES=5 python test/test_runner.py --single matmul_op_test.py --detail
 ```
 
-For experiments you can `tf.load_library("./build/libmusa_plugin.so")`.
+## Debugging
 
-## Docs and examples
-
-- [Debugging and environment variables](docs/DEBUG_GUIDE.md)
-- More examples: [TensorFlow MUSA Playground](https://gitee.com/mthreadsacademy/tensorflow_musa_playground)
+See [docs/DEBUG_GUIDE.md](docs/DEBUG_GUIDE.md) for logging, GraphDef dumps, telemetry, and runtime debugging environment variables.
 
 ## Contributing
 
-Issues and PRs are welcome (please add tests for new ops).
+Issues and pull requests are welcome. Please include tests for new operators or behavior changes.
 
 ## License
 
 Apache License 2.0
-
-## Support
-
-Please use repository Issues or contact the maintainers.

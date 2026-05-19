@@ -1,4 +1,3 @@
-#include "mu/device/musa_device.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -42,8 +41,9 @@ class MusaSoftplusOp : public MusaOpKernel {
     const T* x_ptr = x.flat<T>().data();
     T* y_ptr = y->flat<T>().data();
 
-    auto* device = GetDeviceByCtx(ctx);
-    auto stream = device->GetStream();
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
+    OP_REQUIRES(ctx, stream != nullptr,
+                errors::Internal("MUSA stream is unavailable for Softplus"));
 
     LaunchSoftplus<T>(x_ptr, y_ptr, n, stream);
   }

@@ -150,11 +150,12 @@ class MusaBiasAddReluMatMulOp : public MusaOpKernel {
     *out_shape = bcast.output_batch_shape();
     out_shape->AddDim(m);
     out_shape->AddDim(n);
-    return Status::OK();
+    return OkStatus();
   }
 
   void RunBiasAddRelu(OpKernelContext* ctx, const Tensor& input,
                       const Tensor& bias_input, Tensor& bias_relu_tensor) {
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
 
     mTensor mt_input = CreateMTensor(input);
@@ -207,6 +208,7 @@ class MusaBiasAddReluMatMulOp : public MusaOpKernel {
         ctx, k == k_check,
         errors::InvalidArgument("Matrix size-incompatible: lhs mismatch rhs"));
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     handle.SetAllowTF32(tf32_enabled_);
 
@@ -331,7 +333,7 @@ REGISTER_OP("MusaBiasAddReluMatMul")
       TF_RETURN_IF_ERROR(c->Concatenate(batch_out, c->Vector(lhs_rows), &out));
       TF_RETURN_IF_ERROR(c->Concatenate(out, c->Vector(rhs_cols), &out));
       c->set_output(0, out);
-      return Status::OK();
+      return OkStatus();
     });
 
 }  // namespace tensorflow

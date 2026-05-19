@@ -1,10 +1,17 @@
 #include <musa_runtime.h>
 
+#include "tensorflow/core/public/version.h"
+
+#if TF_MAJOR_VERSION < 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION < 10)
+
 #include "musa_executor.h"
+#include "musa_plugin_env.h"
+#include "tensorflow/core/platform/logging.h"
 #include "tensorflow/stream_executor/executor_cache.h"
 #include "tensorflow/stream_executor/lib/error.h"
 #include "tensorflow/stream_executor/multi_platform_manager.h"
 #include "tensorflow/stream_executor/platform.h"
+#include "tensorflow/stream_executor/platform/default/initialize.h"
 #include "tensorflow/stream_executor/stream_executor_internal.h"
 
 namespace stream_executor {
@@ -22,7 +29,16 @@ class MusaPlatform : public Platform {
 
   int VisibleDeviceCount() const override {
     int count = 0;
-    if (musaGetDeviceCount(&count) != musaSuccess) return 0;
+    musaError_t err = musaGetDeviceCount(&count);
+    if (err != musaSuccess) {
+      if (!::tensorflow::musa::plugin_env::StrictPhysicalDeviceEnum()) {
+        VLOG(1)
+            << "musaGetDeviceCount failed in MusaPlatform::VisibleDeviceCount; "
+               "returning 0 (set MUSA_STRICT_DEVICE_ENUM=1 to treat as error): "
+            << musaGetErrorString(err);
+      }
+      return 0;
+    }
     return count;
   }
 
@@ -80,7 +96,7 @@ class MusaPlatform : public Platform {
   ExecutorCache executor_cache_;
 };
 
-static void InitializeMusaPlatform() {
+void InitializeMusaPlatform() {
   std::unique_ptr<Platform> platform(new MusaPlatform);
   TF_CHECK_OK(MultiPlatformManager::RegisterPlatform(std::move(platform)));
 }
@@ -88,5 +104,15 @@ static void InitializeMusaPlatform() {
 }  // namespace musa
 }  // namespace stream_executor
 
-REGISTER_MODULE_INITIALIZER(musa_platform,
-                            stream_executor::musa::InitializeMusaPlatform());
+// Use TensorFlow module initializer (ordered with other stream_executor
+// init) instead of a raw global static ctor; legacy C++ registration is now
+// opt-in because the PluggableDevice SE path is the default.
+REGISTER_MODULE_INITIALIZER(musa_cxx_se_platform, {
+  if (!::tensorflow::musa::plugin_env::UseLegacyCppDevicePath()) {
+    return;
+  }
+  stream_executor::musa::InitializeMusaPlatform();
+});
+
+#endif  // TF_MAJOR_VERSION < 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION <
+        // 10)

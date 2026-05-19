@@ -45,6 +45,7 @@ class MusaSliceOp : public MusaOpKernel {
 
     if (output->NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     auto in_mt = CreateMTensor(input);
     auto out_mt = CreateMTensor(*output);

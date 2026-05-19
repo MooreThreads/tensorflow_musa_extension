@@ -15,6 +15,7 @@
 #include "tensorflow/core/lib/math/math_util.h"
 #include "tensorflow/core/platform/types.h"
 #include "tensorflow/core/profiler/lib/traceme.h"
+#include "tensorflow/core/public/version.h"
 #include "tensorflow/core/util/matmul_bcast.h"
 #include "utils/musa_einsum_op_util.h"
 
@@ -59,7 +60,7 @@ struct EinsumHelper {
           " but got dimension ", input_dim);
     }
     (*label_to_dim_sizes)[label] = input_dim;
-    return Status::OK();
+    return OkStatus();
   }
 
   // Validate input dimensions and populate unnamed labels and their label
@@ -129,7 +130,7 @@ struct EinsumHelper {
     }
     if (!absl::c_linear_search(input_has_ellipsis, true) &&
         !output_has_ellipsis) {
-      return Status::OK();
+      return OkStatus();
     }
     // Insert broadcasting dimensions in the output labels.
     auto it =
@@ -147,7 +148,7 @@ struct EinsumHelper {
     // Populate EinsumDimensionType for the new broadcasting labels.
     label_types->resize(num_named_labels + max_bcast_dims,
                         EinsumDimensionType::kBroadcasting);
-    return Status::OK();
+    return OkStatus();
   }
 
   // Permutes the labels according to the given permutation.
@@ -163,7 +164,7 @@ struct EinsumHelper {
   // Returns a reshaped input Tensor. The underlying buffer is not copied.
   static Status CopyFrom(const Tensor& input, const TensorShape& shape,
                          Tensor* output) {
-    if (output->CopyFrom(input, shape)) return Status::OK();
+    if (output->CopyFrom(input, shape)) return OkStatus();
     return errors::Internal(
         "Encountered error while reshaping a Tensor of shape ",
         input.shape().DebugString(), " to shape ", shape.DebugString());
@@ -187,7 +188,7 @@ struct EinsumHelper {
     }
 
     TF_RETURN_IF_ERROR(ctx->allocate_temp(dst_dtype, input.shape(), output));
-    if (input.NumElements() == 0) return Status::OK();
+    if (input.NumElements() == 0) return OkStatus();
 
     auto input_mt = CreateMTensor(input);
     auto output_mt = CreateMTensor(*output);
@@ -270,7 +271,7 @@ struct EinsumHelper {
         ctx->allocate_temp(DataTypeToEnum<T>::value, output_shape, output));
 
     const int rank = reshape.size();
-    if (rank == 0) return Status::OK();
+    if (rank == 0) return OkStatus();
 
     auto compute_dense_strides = [](const ShapeVec& dims) {
       ShapeVec dense_strides(dims.size(), 1);
@@ -299,6 +300,9 @@ struct EinsumHelper {
     std::vector<int64_t> diagonal_strides_vec(diagonal_strides.begin(),
                                               diagonal_strides.end());
 
+    if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+      return MusaMudnnHandleRequiredError();
+    }
     auto& handle = GetHandleByCtx(ctx);
     auto input_mt = CreateMTensor(input);
     auto output_mt = CreateMTensor(*output);
@@ -323,7 +327,7 @@ struct EinsumHelper {
       return errors::Internal("Einsum StrideOrInflate Run failed. Status: ",
                               static_cast<int>(status));
     }
-    return Status::OK();
+    return OkStatus();
   }
 
   // Returns true if the input dimensions are already sorted in the order
@@ -364,8 +368,11 @@ struct EinsumHelper {
     int64 n = trans_b ? d2 : d3;
     int64 k_check = trans_b ? d3 : d2;
 
-    if (output->NumElements() == 0) return Status::OK();
+    if (output->NumElements() == 0) return OkStatus();
 
+    if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+      return MusaMudnnHandleRequiredError();
+    }
     auto& handle = GetHandleByCtx(ctx);
     handle.SetAllowTF32(false);
     // Use TF32 setting if needed, but here we can just default or use env like
@@ -403,7 +410,7 @@ struct EinsumHelper {
                               (int)status);
     }
 
-    return Status::OK();
+    return OkStatus();
   }
 
   template <typename T>
@@ -547,7 +554,7 @@ struct EinsumHelper {
 
     TF_RETURN_IF_ERROR(
         ctx->allocate_temp(DataTypeToEnum<T>::value, output_shape, output));
-    if (output->NumElements() == 0) return Status::OK();
+    if (output->NumElements() == 0) return OkStatus();
 
     std::vector<int64_t> input_dense_strides(input_rank, 1);
     for (int axis = input_rank - 2; axis >= 0; --axis) {
@@ -595,6 +602,9 @@ struct EinsumHelper {
           static_cast<int>(status));
     }
 
+    if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+      return MusaMudnnHandleRequiredError();
+    }
     auto& handle = GetHandleByCtx(ctx);
     ::musa::dnn::Unary op;
     status = op.SetMode(::musa::dnn::Unary::Mode::IDENTITY);
@@ -609,7 +619,7 @@ struct EinsumHelper {
           "Einsum batch broadcast: Unary Run failed. Status: ",
           static_cast<int>(status));
     }
-    return Status::OK();
+    return OkStatus();
   }
 
   // Contracts the inputs along the last axis (or the second last if the
@@ -659,7 +669,7 @@ struct EinsumHelper {
     if (lhs.NumElements() == 0 || rhs.NumElements() == 0) {
       mTensor output_mt = CreateMTensor(*output);
       TF_RETURN_IF_ERROR(SetZeroFunctor::Compute<T>(ctx, &output_mt));
-      return Status::OK();
+      return OkStatus();
     }
     Tensor output_reshaped;
     TF_RETURN_IF_ERROR(
@@ -795,6 +805,7 @@ class MusaEinsumOp : public MusaOpKernel {
     ctx->set_output(0, output);
   }
 
+#if TF_MAJOR_VERSION < 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION < 10)
   string TraceString(const OpKernelContext& ctx, bool verbose) const override {
     string op = profiler::TraceMeOp(name_view(), type_string_view());
     string equation = strings::StrCat("(", equation_, ")");
@@ -807,6 +818,7 @@ class MusaEinsumOp : public MusaOpKernel {
     }
     return profiler::TraceMeEncode(std::move(op), {{"equation", equation}});
   }
+#endif
 
   // einsum contains bmm
   bool IsExpensive() override { return true; }

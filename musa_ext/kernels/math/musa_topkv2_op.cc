@@ -1,8 +1,8 @@
 #include <limits>
+#include <list>
 #include <vector>
 
 #include "../utils_op.h"
-#include "mu/device/musa_device.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -81,22 +81,22 @@ class MusaTopKV2Op : public MusaOpKernel {
     const int k = static_cast<int>(k64);
     const int dim = input.dims() - 1;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
-    auto* musa_device = static_cast<MusaDevice*>(ctx->device());
 
-    std::vector<Tensor> workspace_tensors;
+    std::list<Tensor> workspace_tensors;
     auto mem_alloc_func =
         [ctx, &workspace_tensors](size_t size) -> ::musa::dnn::MemoryHandler {
       if (size == 0) return nullptr;
-      Tensor temp;
+      workspace_tensors.emplace_back();
+      Tensor& temp = workspace_tensors.back();
       Status s = ctx->allocate_temp(
           DT_UINT8, TensorShape({static_cast<int64_t>(size)}), &temp);
       if (!s.ok()) return nullptr;
-      workspace_tensors.emplace_back(temp);
       return ::musa::dnn::MemoryHandler(temp.flat<uint8_t>().data(),
                                         [](void*) {});
     };
-    auto maintainer = musa_device->GetMemMaintainer(mem_alloc_func);
+    ::musa::dnn::MemoryMaintainer maintainer(mem_alloc_func);
 
     mTensor input_mt = CreateMTensor(input);
     mTensor values_mt = CreateMTensor(*values);

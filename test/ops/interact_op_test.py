@@ -17,7 +17,8 @@
 
 import numpy as np
 import tensorflow as tf
-from musa_test_utils import MUSATestCase, load_musa_ops
+import tensorflow_musa as tf_musa
+from musa_test_utils import MUSATestCase
 
 
 def interact_ref(input_tensor):
@@ -29,23 +30,8 @@ def interact_ref(input_tensor):
 class InteractOpTest(MUSATestCase):
     """Tests for MUSA Interact operator."""
 
-    @classmethod
-    def setUpClass(cls):
-        """Set up the test class by loading ops from the tensorflow_musa wheel."""
-        super(InteractOpTest, cls).setUpClass()
-
-        try:
-            cls._musa_ops = load_musa_ops()
-        except Exception as e:
-            print(f"FAILED: Error loading MUSA ops from tensorflow_musa wheel: {e}")
-            cls._musa_ops = None
-
     def _test_interact(self, input_shape, dtype):
         """Test Interact operation with given shape and dtype."""
-        # Skip if MUSA ops are not available
-        if self._musa_ops is None:
-            self.skipTest("MUSA Interact ops module not available")
-
         # Handle numpy dtype compatibility
         if dtype == tf.bfloat16:
             np_dtype = np.float32
@@ -64,7 +50,7 @@ class InteractOpTest(MUSATestCase):
 
         # Test on MUSA using custom op
         with tf.device('/device:MUSA:0'):
-            musa_result = self._musa_ops.musa_interact(input=input_tensor)
+            musa_result = tf_musa.ops.interact(input=input_tensor)
 
         # Compare results
         if dtype in [tf.float16, tf.bfloat16]:

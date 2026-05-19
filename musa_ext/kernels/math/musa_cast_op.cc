@@ -48,6 +48,7 @@ class MusaCastOp : public MusaOpKernel {
       in_mt.SetFormat(mFormat::NCHW);
     }
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     mHandle& h = GetHandleByCtx(ctx);
     ::musa::dnn::Unary op;
 

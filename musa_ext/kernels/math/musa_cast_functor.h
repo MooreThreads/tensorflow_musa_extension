@@ -11,6 +11,9 @@ namespace musa {
 
 static Status CastFunctor(OpKernelContext* ctx, const mTensor& input_mt,
                           mTensor* output_mt) {
+  if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+    return MusaMudnnHandleRequiredError();
+  }
   ::musa::dnn::Unary op;
   auto status = op.SetMode(::musa::dnn::Unary::Mode::CAST);
   if (status != ::musa::dnn::Status::SUCCESS) {
@@ -22,7 +25,7 @@ static Status CastFunctor(OpKernelContext* ctx, const mTensor& input_mt,
     return errors::Internal("CastTensor Run failed. Status: ",
                             static_cast<int>(status));
   }
-  return Status::OK();
+  return OkStatus();
 }
 
 }  // namespace musa

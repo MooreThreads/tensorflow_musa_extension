@@ -56,6 +56,7 @@ class MusaArgMaxOp : public MusaOpKernel {
 
     if (output_shape.num_elements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
 
     mTensor input_mt = CreateMTensor(input, format_);

@@ -47,12 +47,11 @@ class MusaMatMulBiasAddOp : public MusaOpKernel {
                 errors::InvalidArgument(
                     "MatMulBiasAdd requires input b to be 2D, got shape ",
                     b.shape().DebugString()));
-    OP_REQUIRES(ctx,
-                bias.dims() == 1 ||
-                    (bias.dims() == 2 && bias.dim_size(0) == 1),
-                errors::InvalidArgument(
-                    "MatMulBiasAdd requires bias to be 1D or [1, N], got shape ",
-                    bias.shape().DebugString()));
+    OP_REQUIRES(
+        ctx, bias.dims() == 1 || (bias.dims() == 2 && bias.dim_size(0) == 1),
+        errors::InvalidArgument(
+            "MatMulBiasAdd requires bias to be 1D or [1, N], got shape ",
+            bias.shape().DebugString()));
 
     if (a.NumElements() == 0 || b.NumElements() == 0 ||
         bias.NumElements() == 0) {
@@ -81,16 +80,17 @@ class MusaMatMulBiasAddOp : public MusaOpKernel {
                                         ", transpose_a=", transpose_a_,
                                         ", transpose_b=", transpose_b_));
 
-    OP_REQUIRES(ctx, IsSupportedBiasShape(bias, n),
-                errors::InvalidArgument("Bias dimension mismatch: bias shape ",
-                                        bias.shape().DebugString(),
-                                        ", expected [", n, "] or [1, ", n,
-                                        "]"));
+    OP_REQUIRES(
+        ctx, IsSupportedBiasShape(bias, n),
+        errors::InvalidArgument("Bias dimension mismatch: bias shape ",
+                                bias.shape().DebugString(), ", expected [", n,
+                                "] or [1, ", n, "]"));
 
     TensorShape out_shape({m, n});
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, out_shape, &output));
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     handle.SetAllowTF32(tf32_enabled_);
 
@@ -102,8 +102,7 @@ class MusaMatMulBiasAddOp : public MusaOpKernel {
     if (bias.dims() == 2) {
       std::vector<int64_t> bias_dims = {BiasSize(bias)};
       std::vector<int64_t> bias_strides = {1};
-      auto status =
-          mt_bias.SetNdInfo(1, bias_dims.data(), bias_strides.data());
+      auto status = mt_bias.SetNdInfo(1, bias_dims.data(), bias_strides.data());
       OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
                   errors::Internal("muDNN bias SetNdInfo failed, status=",
                                    static_cast<int>(status)));
@@ -169,7 +168,7 @@ class MusaMatMulBiasAddOp : public MusaOpKernel {
     }
 
     *out_shape = TensorShape({m, n});
-    return Status::OK();
+    return OkStatus();
   }
 
  private:

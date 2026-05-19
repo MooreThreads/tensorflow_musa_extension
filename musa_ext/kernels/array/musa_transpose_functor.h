@@ -9,6 +9,9 @@ struct TransposeFunctor {
   static Status Compute(OpKernelContext* ctx, mTensor& in_mt,
                         const std::vector<int64_t>& permutation,
                         mTensor& out_mt) {
+    if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+      return MusaMudnnHandleRequiredError();
+    }
     mHandle& h = GetHandleByCtx(ctx);
 
     ::musa::dnn::Permute pop;
@@ -22,7 +25,7 @@ struct TransposeFunctor {
     if (::musa::dnn::Status::SUCCESS != pop.Run(h, out_mt, in_mt)) {
       return errors::Internal("muDNN Permute Run failed!");
     }
-    return Status::OK();
+    return OkStatus();
   }
 };
 

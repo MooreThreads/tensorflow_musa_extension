@@ -63,7 +63,7 @@ namespace {
 
 // Zero-initialize a tensor via muDNN Fill.
 Status ZeroInitTensor(Tensor* t, mFormat fmt, OpKernelContext* ctx) {
-  if (t->NumElements() == 0) return Status::OK();
+  if (t->NumElements() == 0) return OkStatus();
   auto& h = GetHandleByCtx(ctx);
   auto t_mt = CreateMTensor(*t, fmt);
   ::musa::dnn::Fill fill;
@@ -73,7 +73,7 @@ Status ZeroInitTensor(Tensor* t, mFormat fmt, OpKernelContext* ctx) {
   st = fill.Run(h, t_mt);
   if (st != ::musa::dnn::Status::SUCCESS)
     return errors::Internal("ScatterNd Fill Run failed");
-  return Status::OK();
+  return OkStatus();
 }
 
 // Run muDNN ScatterND with the given mode on pre-constructed tensors.
@@ -91,7 +91,7 @@ Status RunScatterND(OpKernelContext* ctx, mTensor& self_mt,
   if (st != ::musa::dnn::Status::SUCCESS)
     return errors::Internal("ScatterND Run failed. Status: ",
                             static_cast<int>(st));
-  return Status::OK();
+  return OkStatus();
 }
 
 }  // namespace

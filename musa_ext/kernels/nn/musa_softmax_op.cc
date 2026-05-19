@@ -1,6 +1,6 @@
+#include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -33,6 +33,7 @@ class MusaSoftmaxCall : public MusaOpKernel {
     auto in = CreateMTensor(logits_in, format_);
     auto out = CreateMTensor(*softmax_out, format_);
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(context);
     auto& h = GetHandleByCtx(context);
     mSoftmax softmax_op;
     this->Operate(softmax_op);

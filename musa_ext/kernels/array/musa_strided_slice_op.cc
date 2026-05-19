@@ -26,10 +26,10 @@ inline bool NeedsHostVisibleSliceSync() {
 }
 
 template <typename T>
-inline bool CanUseRank1MemcpySlice(const Tensor& input,
-                                   const TensorShape& output_shape,
-                                   const gtl::InlinedVector<int64_t, 4>& begin,
-                                   const gtl::InlinedVector<int64_t, 4>& strides) {
+inline bool CanUseRank1MemcpySlice(
+    const Tensor& input, const TensorShape& output_shape,
+    const gtl::InlinedVector<int64_t, 4>& begin,
+    const gtl::InlinedVector<int64_t, 4>& strides) {
   if (input.dims() != 1 || begin.size() != 1 || strides.size() != 1) {
     return false;
   }
@@ -53,8 +53,8 @@ inline void SyncSliceStreamIfNeeded(OpKernelContext* context, mHandle& handle,
                                     bool should_sync) {
   if (!should_sync) return;
 
-  musaError_t err = musaStreamSynchronize(
-      reinterpret_cast<musaStream_t>(handle.GetStream()));
+  musaError_t err =
+      musaStreamSynchronize(reinterpret_cast<musaStream_t>(handle.GetStream()));
   OP_REQUIRES(context, err == musaSuccess,
               errors::Internal("MUSA StridedSlice stream sync failed: ",
                                musaGetErrorString(err)));
@@ -99,11 +99,12 @@ class MusaStridedSliceOp : public OpKernel {
       OP_REQUIRES_OK(context,
                      context->allocate_output(0, final_tensor_shape, &output));
       if (input.NumElements() > 0) {
+        MUSA_OP_REQUIRES_MUDNN_HANDLE(context);
         auto& h = GetHandleByCtx(context);
-        musaError_t err = musaMemcpyAsync(
-            output->flat<T>().data(), input.flat<T>().data(),
-            input.TotalBytes(), musaMemcpyDeviceToDevice,
-            reinterpret_cast<musaStream_t>(h.GetStream()));
+        musaError_t err =
+            musaMemcpyAsync(output->flat<T>().data(), input.flat<T>().data(),
+                            input.TotalBytes(), musaMemcpyDeviceToDevice,
+                            reinterpret_cast<musaStream_t>(h.GetStream()));
         OP_REQUIRES(context, err == musaSuccess,
                     errors::Internal("MUSA StridedSlice memcpy failed: ",
                                      musaGetErrorString(err)));
@@ -125,13 +126,13 @@ class MusaStridedSliceOp : public OpKernel {
       if (start < 0) {
         start += input.dim_size(0);
       }
+      MUSA_OP_REQUIRES_MUDNN_HANDLE(context);
       auto& h = GetHandleByCtx(context);
       const T* src_ptr = input.flat<T>().data() + start;
       T* dst_ptr = result->flat<T>().data();
-      musaError_t err =
-          musaMemcpyAsync(dst_ptr, src_ptr, result->TotalBytes(),
-                          musaMemcpyDeviceToDevice,
-                          reinterpret_cast<musaStream_t>(h.GetStream()));
+      musaError_t err = musaMemcpyAsync(
+          dst_ptr, src_ptr, result->TotalBytes(), musaMemcpyDeviceToDevice,
+          reinterpret_cast<musaStream_t>(h.GetStream()));
       OP_REQUIRES(context, err == musaSuccess,
                   errors::Internal("MUSA StridedSlice fast memcpy failed: ",
                                    musaGetErrorString(err)));
@@ -175,6 +176,7 @@ class MusaStridedSliceOp : public OpKernel {
       }
     }
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(context);
     mHandle& h = GetHandleByCtx(context);
     ::musa::dnn::Permute op;
 

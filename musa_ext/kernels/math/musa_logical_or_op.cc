@@ -1,7 +1,7 @@
-#include "tensorflow/core/util/bcast.h"
 #include "../utils_op.h"
 #include "mu/device/musa_memcpy.h"
 #include "mu/device/musa_memset.h"
+#include "tensorflow/core/util/bcast.h"
 
 namespace tensorflow {
 namespace musa {
@@ -19,7 +19,7 @@ inline Status ReadScalarBoolFromDevice(const Tensor& scalar_tensor,
   if (status != mStatus::SUCCESS) {
     return errors::Internal("MUSA D2H copy failed for logical scalar input.");
   }
-  return Status::OK();
+  return OkStatus();
 }
 
 template <::musa::dnn::Binary::Mode mode>
@@ -36,7 +36,7 @@ Status MaybeHandleScalarLogicalShortcut(OpKernelContext* ctx, const Tensor& in0,
     scalar_input = &in1;
     other_input = &in0;
   } else {
-    return Status::OK();
+    return OkStatus();
   }
 
   bool scalar_value = false;
@@ -44,20 +44,20 @@ Status MaybeHandleScalarLogicalShortcut(OpKernelContext* ctx, const Tensor& in0,
 
   // For bool logical ops, scalar inputs collapse to either the other operand
   // or a fully constant output.
-  const bool passthrough_other =
-      mode == ::musa::dnn::Binary::Mode::LOGICAL_OR ? !scalar_value
-                                                    : scalar_value;
+  const bool passthrough_other = mode == ::musa::dnn::Binary::Mode::LOGICAL_OR
+                                     ? !scalar_value
+                                     : scalar_value;
   if (passthrough_other) {
     ctx->set_output(0, *other_input);
     *handled = true;
-    return Status::OK();
+    return OkStatus();
   }
 
   Tensor* out = nullptr;
   TF_RETURN_IF_ERROR(ctx->allocate_output(0, other_input->shape(), &out));
   if (out->NumElements() == 0) {
     *handled = true;
-    return Status::OK();
+    return OkStatus();
   }
 
   const bool fill_value = mode == ::musa::dnn::Binary::Mode::LOGICAL_OR;
@@ -65,11 +65,12 @@ Status MaybeHandleScalarLogicalShortcut(OpKernelContext* ctx, const Tensor& in0,
   auto status = MemsetAsync(out->data(), pattern, out->TotalBytes(),
                             GetMusaStreamByCtx(ctx));
   if (status != mStatus::SUCCESS) {
-    return errors::Internal("MUSA MemsetAsync failed for logical scalar "
-                            "constant output.");
+    return errors::Internal(
+        "MUSA MemsetAsync failed for logical scalar "
+        "constant output.");
   }
   *handled = true;
-  return Status::OK();
+  return OkStatus();
 }
 
 }  // namespace
@@ -84,9 +85,8 @@ class MusaLogicalBinaryOp : public MusaOpKernel {
     const Tensor& in1 = ctx->input(1);
 
     bool handled = false;
-    OP_REQUIRES_OK(ctx,
-                   MaybeHandleScalarLogicalShortcut<mode>(ctx, in0, in1,
-                                                          &handled));
+    OP_REQUIRES_OK(
+        ctx, MaybeHandleScalarLogicalShortcut<mode>(ctx, in0, in1, &handled));
     if (handled) return;
 
     BCast bcast(BCast::Vec(in0.shape().dim_sizes()),
@@ -102,6 +102,7 @@ class MusaLogicalBinaryOp : public MusaOpKernel {
 
     if (out->NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     mTensor t0 = CreateMTensor(in0);
     mTensor t1 = CreateMTensor(in1);

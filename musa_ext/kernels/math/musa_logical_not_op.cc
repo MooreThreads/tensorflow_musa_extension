@@ -21,6 +21,7 @@ class MusaLogicalNotOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &output));
     if (input.NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
 
     auto in_mt = CreateMTensor(input, format_);
@@ -31,9 +32,9 @@ class MusaLogicalNotOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx,
                    ctx->allocate_temp(DT_BOOL, TensorShape({}), &true_tensor));
     const bool true_host = true;
-    mStatus copy_status = MusaMemcpyH2D(
-        const_cast<bool*>(true_tensor.flat<bool>().data()), &true_host,
-        sizeof(true_host));
+    mStatus copy_status =
+        MusaMemcpyH2D(const_cast<bool*>(true_tensor.flat<bool>().data()),
+                      &true_host, sizeof(true_host));
     OP_REQUIRES(ctx, copy_status == mStatus::SUCCESS,
                 errors::Internal("MUSA H2D copy failed for LogicalNot true"));
     auto true_mt = CreateMTensor(true_tensor, format_);

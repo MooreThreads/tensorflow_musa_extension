@@ -1,18 +1,25 @@
-#include "mu/device/musa_executor.h"
+#include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/framework/tensor_util.h"
 #include "tensorflow/core/lib/random/philox_random.h"
 #include "tensorflow/core/lib/random/random_distributions.h"
+#include "utils_op.h"
 
 namespace tensorflow {
 namespace musa {
 
 using random::PhiloxRandom;
-using stream_executor::musa::FromMusaStatus;
 
 namespace {
+
+Status FromMusaStatus(mStatus s) {
+  if (s == mStatus::SUCCESS) {
+    return OkStatus();
+  }
+  return errors::Internal("MUSA Operation Failed");
+}
 
 template <typename T>
 PHILOX_DEVICE_INLINE T Uint32ToFloatOfficial(uint32 x) {
@@ -57,7 +64,7 @@ Status InternalGenerateKey(const Tensor& seed, PhiloxRandom::Key* out_key,
   (*out_counter)[2] = mix[2];
   (*out_counter)[3] = mix[3];
 
-  return Status::OK();
+  return OkStatus();
 }
 
 template <typename T>

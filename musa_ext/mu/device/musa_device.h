@@ -20,7 +20,12 @@
 #include "pinned_memory_pool.h"
 #include "tensorflow/core/framework/device.h"
 #include "tensorflow/core/framework/device_base.h"
+#include "tensorflow/core/public/version.h"
+#if __has_include("tensorflow/stream_executor/stream.h")
 #include "tensorflow/stream_executor/stream.h"
+#else
+#include "xla/stream_executor/stream.h"
+#endif
 
 namespace tensorflow {
 namespace musa {
@@ -86,9 +91,16 @@ class MusaDevice : public Device {
              ::stream_executor::StreamExecutor* executor, bool allow_growth);
   ~MusaDevice() override;
 
+#if TF_MAJOR_VERSION > 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION >= 10)
+  const DeviceBase::AcceleratorDeviceInfo* tensorflow_accelerator_device_info()
+      const override {
+    return &gpu_device_info_;
+  }
+#else
   const GpuDeviceInfo* tensorflow_gpu_device_info() const override {
     return &gpu_device_info_;
   }
+#endif
   Status TryGetDeviceContext(DeviceContext** out_context) override;
   Allocator* GetAllocator(AllocatorAttributes attr) override;
   Status Sync() override;
@@ -119,7 +131,11 @@ class MusaDevice : public Device {
   Allocator* musa_allocator_;
   Allocator* musa_host_allocator_;
   GPUPinnedMemoryPool* pinned_memory_pool_;
+#if TF_MAJOR_VERSION > 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION >= 10)
+  DeviceBase::AcceleratorDeviceInfo gpu_device_info_;
+#else
   GpuDeviceInfo gpu_device_info_;
+#endif
   MusaEventMgr* event_mgr_;
 
   std::unique_ptr<::musa::dnn::Handle> mudnn_handle_;

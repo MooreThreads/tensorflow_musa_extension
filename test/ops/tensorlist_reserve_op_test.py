@@ -21,21 +21,26 @@ sys.path.append("..")
 from musa_test_utils import MUSATestCase
 
 
+def _host_int32(value):
+  with tf.device('/CPU:0'):
+    return tf.constant(value, dtype=tf.int32)
+
+
 class TensorListReserveOpTest(MUSATestCase):
 
   def _tensor_list_reserve_and_stack(self, x, element_dtype, num_elements=-1):
-    element_shape = tf.constant(x.shape[1:], dtype=tf.int32)
+    element_shape = _host_int32(x.shape[1:])
 
     handle = tf.raw_ops.TensorListReserve(
         element_shape=element_shape,
-        num_elements=num_elements,
+        num_elements=_host_int32(num_elements),
         element_dtype=element_dtype
     )
 
     for i in range(x.shape[0]):
         handle = tf.raw_ops.TensorListSetItem(
             input_handle=handle,
-            index=i,
+            index=_host_int32(i),
             item=x[i]
         )
 
@@ -43,7 +48,7 @@ class TensorListReserveOpTest(MUSATestCase):
         input_handle=handle,
         element_shape=element_shape,
         element_dtype=element_dtype,
-        num_elements=num_elements
+        num_elements=_host_int32(num_elements)
     )
 
   def _test_tensor_list_reserve(self, shape, dtype, rtol=1e-5, atol=1e-5):
@@ -68,7 +73,7 @@ class TensorListReserveOpTest(MUSATestCase):
       return self._tensor_list_reserve_and_stack(
           inp,
           element_dtype=dtype,
-          num_elements=shape[0]
+          num_elements=_host_int32(shape[0])
       )
 
     self._compare_cpu_musa_results(

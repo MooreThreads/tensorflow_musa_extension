@@ -88,10 +88,10 @@ class MusaResourceApplyAdagradV2Op : public MusaOpKernel {
       locks.emplace_back(mu);
     }
 
-    OP_REQUIRES(ctx,
-                var->tensor()->IsInitialized() && accum->tensor()->IsInitialized(),
-                errors::FailedPrecondition(
-                    "Adagrad variables (var/accum) not initialized."));
+    OP_REQUIRES(
+        ctx, var->tensor()->IsInitialized() && accum->tensor()->IsInitialized(),
+        errors::FailedPrecondition(
+            "Adagrad variables (var/accum) not initialized."));
 
     OP_REQUIRES_OK(ctx, PrepareTensorForMusaUpdate(ctx, var.get()));
     OP_REQUIRES_OK(ctx, PrepareTensorForMusaUpdate(ctx, accum.get()));
@@ -117,15 +117,16 @@ class MusaResourceApplyAdagradV2Op : public MusaOpKernel {
     OP_REQUIRES(ctx, var_t.shape().IsSameSize(grad_t.shape()),
                 errors::InvalidArgument(
                     "Variable and gradient must have the same shape. var: ",
-                    var_t.shape().DebugString(), " grad: ",
-                    grad_t.shape().DebugString()));
+                    var_t.shape().DebugString(),
+                    " grad: ", grad_t.shape().DebugString()));
 
     OP_REQUIRES(ctx, accum_t.shape().IsSameSize(var_t.shape()),
                 errors::InvalidArgument(
                     "Variable and accum must have the same shape. var: ",
-                    var_t.shape().DebugString(), " accum: ",
-                    accum_t.shape().DebugString()));
+                    var_t.shape().DebugString(),
+                    " accum: ", accum_t.shape().DebugString()));
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     std::list<Tensor> temp_storage;
 
@@ -143,10 +144,11 @@ class MusaResourceApplyAdagradV2Op : public MusaOpKernel {
         return errors::Internal("ResourceApplyAdagradV2 ", op_name,
                                 " failed. Status: ", static_cast<int>(status));
       }
-      return Status::OK();
+      return OkStatus();
     };
 
-    auto fill_scalar = [&](T val, const TensorShape& shape, mTensor* out) -> Status {
+    auto fill_scalar = [&](T val, const TensorShape& shape,
+                           mTensor* out) -> Status {
       temp_storage.emplace_back();
       Status alloc_status = ctx->allocate_temp(DataTypeToEnum<T>::value, shape,
                                                &temp_storage.back());
@@ -162,22 +164,26 @@ class MusaResourceApplyAdagradV2Op : public MusaOpKernel {
 
     // Step 1: Compute grad_sq = grad * grad
     temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
-                                           grad_t.shape(), &temp_storage.back()));
+    OP_REQUIRES_OK(ctx,
+                   ctx->allocate_temp(DataTypeToEnum<T>::value, grad_t.shape(),
+                                      &temp_storage.back()));
     mTensor t_grad_sq = CreateMTensor(temp_storage.back(), format_);
     b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_grad_sq, t_grad, t_grad),
-                                        "MUL grad_sq"));
+    OP_REQUIRES_OK(ctx,
+                   require_success(b_op.Run(handle, t_grad_sq, t_grad, t_grad),
+                                   "MUL grad_sq"));
 
     // Step 2: accum = accum + grad_sq
     b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_accum, t_accum, t_grad_sq),
-                                        "ADD accum"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_accum, t_accum, t_grad_sq),
+                             "ADD accum"));
 
     // Step 3: sqrt_accum = sqrt(accum)
     temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
-                                           accum_t.shape(), &temp_storage.back()));
+    OP_REQUIRES_OK(ctx,
+                   ctx->allocate_temp(DataTypeToEnum<T>::value, accum_t.shape(),
+                                      &temp_storage.back()));
     mTensor t_sqrt_accum = CreateMTensor(temp_storage.back(), format_);
     u_op.SetMode(::musa::dnn::Unary::Mode::SQRT);
     OP_REQUIRES_OK(ctx, require_success(u_op.Run(handle, t_sqrt_accum, t_accum),
@@ -187,29 +193,34 @@ class MusaResourceApplyAdagradV2Op : public MusaOpKernel {
     mTensor t_epsilon;
     OP_REQUIRES_OK(ctx, fill_scalar(epsilon, accum_t.shape(), &t_epsilon));
     b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_sqrt_accum, t_sqrt_accum, t_epsilon),
+    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_sqrt_accum,
+                                                 t_sqrt_accum, t_epsilon),
                                         "ADD epsilon"));
 
     // Step 5: update = grad / denominator
     temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
-                                           grad_t.shape(), &temp_storage.back()));
+    OP_REQUIRES_OK(ctx,
+                   ctx->allocate_temp(DataTypeToEnum<T>::value, grad_t.shape(),
+                                      &temp_storage.back()));
     mTensor t_update = CreateMTensor(temp_storage.back(), format_);
     b_op.SetMode(::musa::dnn::Binary::Mode::DIV);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_update, t_grad, t_sqrt_accum),
-                                        "DIV update"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_update, t_grad, t_sqrt_accum),
+                             "DIV update"));
 
     // Step 6: scaled_update = lr * update
     mTensor t_lr;
     OP_REQUIRES_OK(ctx, fill_scalar(lr, grad_t.shape(), &t_lr));
     b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_update, t_update, t_lr),
-                                        "MUL lr"));
+    OP_REQUIRES_OK(
+        ctx,
+        require_success(b_op.Run(handle, t_update, t_update, t_lr), "MUL lr"));
 
     // Step 7: var = var - scaled_update
     b_op.SetMode(::musa::dnn::Binary::Mode::SUB);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_var, t_var, t_update),
-                                        "SUB var"));
+    OP_REQUIRES_OK(
+        ctx,
+        require_success(b_op.Run(handle, t_var, t_var, t_update), "SUB var"));
 
     // Synchronize to ensure computation is complete
     musaStream_t stream = GetMusaStreamByCtx(ctx);
@@ -228,8 +239,7 @@ class MusaResourceApplyAdagradV2Op : public MusaOpKernel {
 template <typename T>
 class MusaApplyAdagradV2Op : public MusaOpKernel {
  public:
-  explicit MusaApplyAdagradV2Op(OpKernelConstruction* ctx)
-      : MusaOpKernel(ctx) {
+  explicit MusaApplyAdagradV2Op(OpKernelConstruction* ctx) : MusaOpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("use_locking", &use_exclusive_lock_));
   }
 
@@ -248,13 +258,13 @@ class MusaApplyAdagradV2Op : public MusaOpKernel {
     OP_REQUIRES(ctx, epsilon_t.NumElements() == 1,
                 errors::InvalidArgument("epsilon must be a scalar"));
 
-    OP_REQUIRES(ctx, var_t.shape().IsSameSize(grad_t.shape()),
-                errors::InvalidArgument(
-                    "var and grad must have the same shape"));
+    OP_REQUIRES(
+        ctx, var_t.shape().IsSameSize(grad_t.shape()),
+        errors::InvalidArgument("var and grad must have the same shape"));
 
-    OP_REQUIRES(ctx, accum_t.shape().IsSameSize(var_t.shape()),
-                errors::InvalidArgument(
-                    "var and accum must have the same shape"));
+    OP_REQUIRES(
+        ctx, accum_t.shape().IsSameSize(var_t.shape()),
+        errors::InvalidArgument("var and accum must have the same shape"));
 
     // Allocate outputs
     Tensor* var_out;
@@ -262,6 +272,7 @@ class MusaApplyAdagradV2Op : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, var_t.shape(), &var_out));
     OP_REQUIRES_OK(ctx, ctx->allocate_output(1, accum_t.shape(), &accum_out));
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     std::list<Tensor> temp_storage;
 
@@ -281,10 +292,11 @@ class MusaApplyAdagradV2Op : public MusaOpKernel {
         return errors::Internal("ApplyAdagradV2 ", op_name,
                                 " failed. Status: ", static_cast<int>(status));
       }
-      return Status::OK();
+      return OkStatus();
     };
 
-    auto fill_scalar = [&](T val, const TensorShape& shape, mTensor* out) -> Status {
+    auto fill_scalar = [&](T val, const TensorShape& shape,
+                           mTensor* out) -> Status {
       temp_storage.emplace_back();
       Status alloc_status = ctx->allocate_temp(DataTypeToEnum<T>::value, shape,
                                                &temp_storage.back());
@@ -301,62 +313,75 @@ class MusaApplyAdagradV2Op : public MusaOpKernel {
     // Copy inputs to outputs first (using ADD with zero)
     b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
     mTensor t_zero;
-    OP_REQUIRES_OK(ctx, fill_scalar(static_cast<T>(0.0), var_t.shape(), &t_zero));
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_var_out, t_var_in, t_zero),
-                                        "COPY var"));
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_accum_out, t_accum_in, t_zero),
-                                        "COPY accum"));
+    OP_REQUIRES_OK(ctx,
+                   fill_scalar(static_cast<T>(0.0), var_t.shape(), &t_zero));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_var_out, t_var_in, t_zero),
+                             "COPY var"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_accum_out, t_accum_in, t_zero),
+                             "COPY accum"));
 
     // Step 1: Compute grad_sq = grad * grad
     temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
-                                           grad_t.shape(), &temp_storage.back()));
+    OP_REQUIRES_OK(ctx,
+                   ctx->allocate_temp(DataTypeToEnum<T>::value, grad_t.shape(),
+                                      &temp_storage.back()));
     mTensor t_grad_sq = CreateMTensor(temp_storage.back(), format_);
     b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_grad_sq, t_grad, t_grad),
-                                        "MUL grad_sq"));
+    OP_REQUIRES_OK(ctx,
+                   require_success(b_op.Run(handle, t_grad_sq, t_grad, t_grad),
+                                   "MUL grad_sq"));
 
     // Step 2: accum_out = accum_out + grad_sq
     b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_accum_out, t_accum_out, t_grad_sq),
+    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_accum_out,
+                                                 t_accum_out, t_grad_sq),
                                         "ADD accum"));
 
     // Step 3: sqrt_accum = sqrt(accum_out)
     temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
-                                           accum_t.shape(), &temp_storage.back()));
+    OP_REQUIRES_OK(ctx,
+                   ctx->allocate_temp(DataTypeToEnum<T>::value, accum_t.shape(),
+                                      &temp_storage.back()));
     mTensor t_sqrt_accum = CreateMTensor(temp_storage.back(), format_);
     u_op.SetMode(::musa::dnn::Unary::Mode::SQRT);
-    OP_REQUIRES_OK(ctx, require_success(u_op.Run(handle, t_sqrt_accum, t_accum_out),
-                                        "SQRT accum"));
+    OP_REQUIRES_OK(ctx,
+                   require_success(u_op.Run(handle, t_sqrt_accum, t_accum_out),
+                                   "SQRT accum"));
 
     // Step 4: denominator = sqrt_accum + epsilon
     mTensor t_epsilon;
     OP_REQUIRES_OK(ctx, fill_scalar(epsilon, accum_t.shape(), &t_epsilon));
     b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_sqrt_accum, t_sqrt_accum, t_epsilon),
+    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_sqrt_accum,
+                                                 t_sqrt_accum, t_epsilon),
                                         "ADD epsilon"));
 
     // Step 5: update = grad / denominator
     temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
-                                           grad_t.shape(), &temp_storage.back()));
+    OP_REQUIRES_OK(ctx,
+                   ctx->allocate_temp(DataTypeToEnum<T>::value, grad_t.shape(),
+                                      &temp_storage.back()));
     mTensor t_update = CreateMTensor(temp_storage.back(), format_);
     b_op.SetMode(::musa::dnn::Binary::Mode::DIV);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_update, t_grad, t_sqrt_accum),
-                                        "DIV update"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_update, t_grad, t_sqrt_accum),
+                             "DIV update"));
 
     // Step 6: scaled_update = lr * update
     mTensor t_lr;
     OP_REQUIRES_OK(ctx, fill_scalar(lr, grad_t.shape(), &t_lr));
     b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_update, t_update, t_lr),
-                                        "MUL lr"));
+    OP_REQUIRES_OK(
+        ctx,
+        require_success(b_op.Run(handle, t_update, t_update, t_lr), "MUL lr"));
 
     // Step 7: var_out = var_out - scaled_update
     b_op.SetMode(::musa::dnn::Binary::Mode::SUB);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_var_out, t_var_out, t_update),
-                                        "SUB var"));
+    OP_REQUIRES_OK(
+        ctx, require_success(b_op.Run(handle, t_var_out, t_var_out, t_update),
+                             "SUB var"));
 
     // Forward input to output for reference types
     if (IsRefType(ctx->input_dtype(0))) {
@@ -370,14 +395,14 @@ class MusaApplyAdagradV2Op : public MusaOpKernel {
 };
 
 // Register the kernels for supported types
-#define REGISTER_RESOURCE_ADAGRAD_V2(T)                        \
-  REGISTER_KERNEL_BUILDER(Name("ResourceApplyAdagradV2")       \
-                              .Device(DEVICE_MTGPU)            \
-                              .HostMemory("var")               \
-                              .HostMemory("accum")             \
-                              .HostMemory("lr")                \
-                              .HostMemory("epsilon")           \
-                              .TypeConstraint<T>("T"),         \
+#define REGISTER_RESOURCE_ADAGRAD_V2(T)                  \
+  REGISTER_KERNEL_BUILDER(Name("ResourceApplyAdagradV2") \
+                              .Device(DEVICE_MTGPU)      \
+                              .HostMemory("var")         \
+                              .HostMemory("accum")       \
+                              .HostMemory("lr")          \
+                              .HostMemory("epsilon")     \
+                              .TypeConstraint<T>("T"),   \
                           MusaResourceApplyAdagradV2Op<T>);
 
 REGISTER_RESOURCE_ADAGRAD_V2(float);
@@ -385,12 +410,12 @@ REGISTER_RESOURCE_ADAGRAD_V2(Eigen::half);
 REGISTER_RESOURCE_ADAGRAD_V2(bfloat16);
 REGISTER_RESOURCE_ADAGRAD_V2(double);
 
-#define REGISTER_APPLY_ADAGRAD_V2(T)                           \
-  REGISTER_KERNEL_BUILDER(Name("ApplyAdagradV2")               \
-                              .Device(DEVICE_MTGPU)            \
-                              .HostMemory("lr")                \
-                              .HostMemory("epsilon")           \
-                              .TypeConstraint<T>("T"),         \
+#define REGISTER_APPLY_ADAGRAD_V2(T)                   \
+  REGISTER_KERNEL_BUILDER(Name("ApplyAdagradV2")       \
+                              .Device(DEVICE_MTGPU)    \
+                              .HostMemory("lr")        \
+                              .HostMemory("epsilon")   \
+                              .TypeConstraint<T>("T"), \
                           MusaApplyAdagradV2Op<T>);
 
 REGISTER_APPLY_ADAGRAD_V2(float);

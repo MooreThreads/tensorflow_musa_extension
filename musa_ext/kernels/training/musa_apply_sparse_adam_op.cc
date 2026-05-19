@@ -34,7 +34,7 @@ REGISTER_OP("MusaResourceSparseApplyAdam")
     .Attr("Tindices: {int32, int64}")
     .Attr("use_locking: bool = false")
     .SetShapeFn([](shape_inference::InferenceContext* c) {
-      return Status::OK();
+      return OkStatus();
     });
 
 // Custom RAII unlocker to avoid issues with TF's mutex_lock macro

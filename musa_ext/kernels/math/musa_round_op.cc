@@ -1,7 +1,7 @@
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -19,6 +19,7 @@ class MusaRoundOp : public MusaOpKernel {
 
     if (input.NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     musaStream_t stream = (musaStream_t)handle.GetStream();
 
@@ -35,10 +36,10 @@ class MusaRoundOp : public MusaOpKernel {
 
 };  // class MusaRoundOp
 
-
-#define REGISTER_MUSA_ROUND(TYPE) \
-  REGISTER_KERNEL_BUILDER(      \
-      Name("Round").Device("MUSA").TypeConstraint<TYPE>("T"), MusaRoundOp<TYPE>);
+#define REGISTER_MUSA_ROUND(TYPE)                             \
+  REGISTER_KERNEL_BUILDER(                                    \
+      Name("Round").Device("MUSA").TypeConstraint<TYPE>("T"), \
+      MusaRoundOp<TYPE>);
 
 REGISTER_MUSA_ROUND(float);
 REGISTER_MUSA_ROUND(double);

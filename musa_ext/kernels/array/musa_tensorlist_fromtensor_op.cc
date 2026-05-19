@@ -18,11 +18,11 @@ Status TensorShapeFromTensorMusa(const Tensor& t, PartialTensorShape* out) {
     if (t.dtype() == DT_INT32) {
       out->Clear();
       out->AddDim(static_cast<int64_t>(t.scalar<int32>()()));
-      return Status::OK();
+      return OkStatus();
     } else if (t.dtype() == DT_INT64) {
       out->Clear();
       out->AddDim(static_cast<int64_t>(t.scalar<int64>()()));
-      return Status::OK();
+      return OkStatus();
     } else {
       return errors::InvalidArgument(
           "element_shape must be int32 or int64, got ",
@@ -43,7 +43,7 @@ Status TensorShapeFromTensorMusa(const Tensor& t, PartialTensorShape* out) {
     for (int i = 0; i < vec.size(); ++i) {
       out->AddDim(static_cast<int64_t>(vec(i)));
     }
-    return Status::OK();
+    return OkStatus();
   }
 
   if (t.dtype() == DT_INT64) {
@@ -51,7 +51,7 @@ Status TensorShapeFromTensorMusa(const Tensor& t, PartialTensorShape* out) {
     for (int i = 0; i < vec.size(); ++i) {
       out->AddDim(static_cast<int64_t>(vec(i)));
     }
-    return Status::OK();
+    return OkStatus();
   }
 
   return errors::InvalidArgument("element_shape must be int32 or int64, got ",
@@ -109,44 +109,10 @@ class MusaTensorListFromTensorOp : public MusaOpKernel {
     output_list.element_shape = element_shape;
     output_list.tensors().reserve(input_tensor.shape().dim_size(0));
 
-    auto& h = GetHandleByCtx(ctx);
-    musaStream_t stream = reinterpret_cast<musaStream_t>(h.GetStream());
-
-    OP_REQUIRES(ctx, stream != nullptr,
-                errors::Internal("Failed to get valid MUSA stream."));
-
     const int64_t num_slices = input_tensor.shape().dim_size(0);
 
     for (int64_t i = 0; i < num_slices; ++i) {
-      Tensor tmp = input_tensor.SubSlice(i);
-
-      Tensor aligned;
-      OP_REQUIRES_OK(ctx,
-                     ctx->allocate_temp(tmp.dtype(), tmp.shape(), &aligned));
-
-      const size_t bytes =
-          static_cast<size_t>(tmp.NumElements()) * DataTypeSize(tmp.dtype());
-
-      if (bytes > 0) {
-        void* dst = tensorflow::DMAHelper::base(&aligned);
-        const void* src = tensorflow::DMAHelper::base(&tmp);
-
-        OP_REQUIRES(ctx, dst != nullptr,
-                    errors::Internal("DMAHelper::base(&aligned) is nullptr"));
-        OP_REQUIRES(ctx, src != nullptr,
-                    errors::Internal("DMAHelper::base(&tmp) is nullptr"));
-
-        auto err =
-            musaMemcpyAsync(dst, src, bytes, musaMemcpyDeviceToDevice, stream);
-
-        OP_REQUIRES(
-            ctx, err == musaSuccess,
-            errors::Internal(
-                "musaMemcpyAsync failed in TensorListFromTensor, error code: ",
-                static_cast<int>(err)));
-      }
-
-      output_list.tensors().push_back(aligned);
+      output_list.tensors().push_back(input_tensor.SubSlice(i));
     }
 
     output_tensor->scalar<Variant>()() = std::move(output_list);

@@ -44,6 +44,9 @@ Status PermuteTensorOnMusa(OpKernelContext* ctx, const Tensor& input,
                                    input.dims(), ", perm_size=", perm.size());
   }
 
+  if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+    return MusaMudnnHandleRequiredError();
+  }
   auto& handle = GetHandleByCtx(ctx);
 
   // Use raw ND descriptors for permutation to avoid coupling to a specific
@@ -65,7 +68,7 @@ Status PermuteTensorOnMusa(OpKernelContext* ctx, const Tensor& input,
                             static_cast<int>(status));
   }
 
-  return Status::OK();
+  return OkStatus();
 }
 
 Status ComputeOutputAndPadding2D(int64_t in_h, int64_t in_w, int64_t filter_h,
@@ -84,7 +87,7 @@ Status ComputeOutputAndPadding2D(int64_t in_h, int64_t in_w, int64_t filter_h,
     *pad_bottom = 0;
     *pad_left = 0;
     *pad_right = 0;
-    return Status::OK();
+    return OkStatus();
   }
 
   if (padding == Padding::SAME) {
@@ -100,7 +103,7 @@ Status ComputeOutputAndPadding2D(int64_t in_h, int64_t in_w, int64_t filter_h,
     *pad_bottom = static_cast<int>(pad_h - *pad_top);
     *pad_left = static_cast<int>(pad_w / 2);
     *pad_right = static_cast<int>(pad_w - *pad_left);
-    return Status::OK();
+    return OkStatus();
   }
 
   return errors::InvalidArgument(
@@ -114,6 +117,9 @@ Status RunMusaConv2D(OpKernelContext* ctx, const Tensor& input,
                      TensorFormat data_format, int stride_h, int stride_w,
                      int dilation_h, int dilation_w, int pad_top, int pad_left,
                      bool tf32_enabled) {
+  if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+    return MusaMudnnHandleRequiredError();
+  }
   auto& handle = GetHandleByCtx(ctx);
 
   handle.SetAllowTF32(tf32_enabled);
@@ -195,7 +201,7 @@ Status RunMusaConv2D(OpKernelContext* ctx, const Tensor& input,
                             static_cast<int>(status));
   }
 
-  return Status::OK();
+  return OkStatus();
 }
 
 }  // namespace
@@ -319,11 +325,14 @@ class MusaConv2DOp : public MusaOpKernel {
       return;
     }
 
+    const bool use_tf32 =
+        tf32_enabled_ && dilation_h_ == 1 && dilation_w_ == 1;
+
     if (data_format_ == FORMAT_NHWC) {
       OP_REQUIRES_OK(
           ctx, RunMusaConv2D<T>(ctx, input, filter, output, FORMAT_NHWC,
                                 stride_h_, stride_w_, dilation_h_, dilation_w_,
-                                pad_top, pad_left, tf32_enabled_));
+                                pad_top, pad_left, use_tf32));
       return;
     }
 
@@ -347,7 +356,7 @@ class MusaConv2DOp : public MusaOpKernel {
     OP_REQUIRES_OK(
         ctx, RunMusaConv2D<T>(ctx, input_nhwc, filter, &output_nhwc,
                               FORMAT_NHWC, stride_h_, stride_w_, dilation_h_,
-                              dilation_w_, pad_top, pad_left, tf32_enabled_));
+                              dilation_w_, pad_top, pad_left, use_tf32));
     OP_REQUIRES_OK(
         ctx, PermuteTensorOnMusa(ctx, output_nhwc, output, kPermNhwcToNchw));
   }

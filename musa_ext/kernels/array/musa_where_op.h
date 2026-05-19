@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstdint>
+#include <list>
 #include <type_traits>
 
 #include "../math/musa_reduce_functor.h"
@@ -41,12 +42,15 @@ struct NumTrue {
                         typename TTypes<T>::ConstFlat input,
                         typename TTypes<TIndex>::UnalignedScalar num_true) {
     musaStream_t mstream = GetMusaStreamByCtx(ctx);
+    if (mstream == nullptr) {
+      return errors::Internal("MUSA stream is unavailable for Where count");
+    }
     const T* input_data = reinterpret_cast<const T*>(input.data());
     TIndex* num_true_data = num_true.data();
 
     if (input.size() == 0) {
       *num_true_data = static_cast<TIndex>(0);
-      return Status::OK();
+      return OkStatus();
     }
 
     // Use the new LaunchIsNonZeroCount operator which directly counts
@@ -70,7 +74,7 @@ struct NumTrue {
                               musaGetErrorString(m_err));
     }
 
-    return Status::OK();
+    return OkStatus();
   }
 };
 
@@ -99,10 +103,13 @@ struct Where {
                         typename TTypes<T, NDIM>::ConstTensor input,
                         typename TTypes<TIndex>::Matrix output) {
     if (output.dimension(0) == 0) {
-      return Status::OK();
+      return OkStatus();
     }
 
     musaStream_t stream = GetMusaStreamByCtx(ctx);
+    if (stream == nullptr) {
+      return errors::Internal("MUSA stream is unavailable for Where");
+    }
     const int64_t num_items = input.size();
 
     // Turn the inputted tensor into 0/1 flags (element-wise).
@@ -119,6 +126,9 @@ struct Where {
         DataTypeToEnum<TIndex>::value, TensorShape({num_items}), &scanned_t));
     TIndex* d_scanned = scanned_t.flat<TIndex>().data();
 
+    if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
+      return MusaMudnnHandleRequiredError();
+    }
     auto& handle = GetHandleByCtx(ctx);
     mTensor t_marks = CreateMTensor(marks_t);
     mTensor t_scanned = CreateMTensor(scanned_t);
@@ -128,7 +138,6 @@ struct Where {
     int dim = 0;
     cum_op.SetDim(dim);
 
-    auto* musa_device = static_cast<MusaDevice*>(ctx->device());
     std::list<Tensor> workspace_tensors;
     auto mem_alloc_func =
         [ctx, &workspace_tensors](size_t size) -> ::musa::dnn::MemoryHandler {
@@ -142,8 +151,7 @@ struct Where {
       void* raw_ptr = static_cast<void*>(temp.flat<uint8_t>().data());
       return ::musa::dnn::MemoryHandler(raw_ptr, [](void* p) {});
     };
-    ::musa::dnn::MemoryMaintainer maintainer =
-        musa_device->GetMemMaintainer(mem_alloc_func);
+    ::musa::dnn::MemoryMaintainer maintainer(mem_alloc_func);
 
     // muDNN CumSum handles the global scan
     mStatus status = cum_op.Run(handle, t_scanned, t_marks, maintainer);
@@ -171,7 +179,7 @@ struct Where {
     LaunchPropagateWhereIndicesKernel<NDIM, TIndex>(
         output_rows, strides.data(), selected_indices, output.data(), stream);
 
-    return Status::OK();
+    return OkStatus();
   }
 };
 

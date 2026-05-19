@@ -1,9 +1,9 @@
 #include <musa_runtime.h>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/util/bcast.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -17,10 +17,9 @@ struct DivNoNanDims {
 };
 
 template <typename T>
-void LaunchDivNoNan(const T* in0, const T* in1, T* out,
-                    DivNoNanStrides s_in0, DivNoNanStrides s_in1,
-                    DivNoNanDims dims, int total_elements,
-                    musaStream_t stream);
+void LaunchDivNoNan(const T* in0, const T* in1, T* out, DivNoNanStrides s_in0,
+                    DivNoNanStrides s_in1, DivNoNanDims dims,
+                    int total_elements, musaStream_t stream);
 
 namespace {
 
@@ -42,10 +41,9 @@ DivNoNanStrides CalcDivNoNanStrides(const TensorShape& shape,
   DivNoNanStrides strides;
   int* stride_values = reinterpret_cast<int*>(&strides);
   for (int i = 0; i < 4; ++i) {
-    stride_values[i] =
-        (shape.dim_size(i) == 1 && output_shape.dim_size(i) > 1)
-            ? 0
-            : static_cast<int>(raw_strides[i]);
+    stride_values[i] = (shape.dim_size(i) == 1 && output_shape.dim_size(i) > 1)
+                           ? 0
+                           : static_cast<int>(raw_strides[i]);
   }
   return strides;
 }
@@ -81,6 +79,7 @@ class MusaDivNoNanOp : public MusaOpKernel {
       return;
     }
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     mTensor t_input_0 = CreateMTensor(input_0, format_);
     mTensor t_input_1 = CreateMTensor(input_1, format_);
@@ -93,9 +92,10 @@ class MusaDivNoNanOp : public MusaOpKernel {
                                  static_cast<int>(status)));
 
     status = op.Run(handle, t_output, t_input_0, t_input_1);
-    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
-                errors::Internal("MUSA DivNoNan execution failed. Status code: ",
-                                 static_cast<int>(status)));
+    OP_REQUIRES(
+        ctx, status == ::musa::dnn::Status::SUCCESS,
+        errors::Internal("MUSA DivNoNan execution failed. Status code: ",
+                         static_cast<int>(status)));
   }
 };
 
@@ -108,9 +108,9 @@ void MusaDivNoNanOp<double>::Compute(OpKernelContext* ctx) {
               BCast::FromShape(input_1.shape()));
 
   OP_REQUIRES(ctx, bcast.IsValid(),
-              errors::InvalidArgument("Incompatible shapes: ",
-                                      input_0.shape().DebugString(), " vs. ",
-                                      input_1.shape().DebugString()));
+              errors::InvalidArgument(
+                  "Incompatible shapes: ", input_0.shape().DebugString(),
+                  " vs. ", input_1.shape().DebugString()));
 
   TensorShape output_shape = BCast::ToShape(bcast.output_shape());
 
@@ -142,10 +142,10 @@ void MusaDivNoNanOp<double>::Compute(OpKernelContext* ctx) {
               errors::Internal("MUSA DivNoNan failed to get stream."));
 
   (void)musaGetLastError();
-  LaunchDivNoNan<double>(
-      input_0.flat<double>().data(), input_1.flat<double>().data(),
-      output->flat<double>().data(), input_0_strides, input_1_strides, dims,
-      output->NumElements(), stream);
+  LaunchDivNoNan<double>(input_0.flat<double>().data(),
+                         input_1.flat<double>().data(),
+                         output->flat<double>().data(), input_0_strides,
+                         input_1_strides, dims, output->NumElements(), stream);
 
   musaError_t status = musaGetLastError();
   OP_REQUIRES(ctx, status == musaSuccess,

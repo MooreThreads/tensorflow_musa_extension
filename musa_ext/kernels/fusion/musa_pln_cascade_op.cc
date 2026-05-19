@@ -40,7 +40,7 @@ Status BroadcastShapes(const TensorShape& lhs, const TensorShape& rhs,
                                    " vs ", rhs.DebugString());
   }
   *output = BCast::ToShape(bcast.output_shape());
-  return Status::OK();
+  return OkStatus();
 }
 
 PlnCascadeShape BuildKernelShape(const TensorShape& output_shape) {
@@ -149,7 +149,7 @@ REGISTER_OP("MusaPlnCascade")
 
         std::reverse(dims.begin(), dims.end());
         *out = c->MakeShape(dims);
-        return Status::OK();
+        return OkStatus();
       };
 
       auto LeftAlignBatchMask = [&](ShapeHandle base, ShapeHandle mask,
@@ -172,7 +172,7 @@ REGISTER_OP("MusaPlnCascade")
           dims.push_back(c->Dim(base, i));
         }
         *out = c->MakeShape(dims);
-        return Status::OK();
+        return OkStatus();
       };
 
       bool use_table = false;
@@ -181,7 +181,7 @@ REGISTER_OP("MusaPlnCascade")
       ShapeHandle out = c->input(0);
       if (!c->RankKnown(out) || !c->RankKnown(c->input(1))) {
         c->set_output(0, c->UnknownShape());
-        return Status::OK();
+        return OkStatus();
       }
 
       Status mask_bcast_status = BroadcastTwoShapes(out, c->input(1), &out);
@@ -191,14 +191,14 @@ REGISTER_OP("MusaPlnCascade")
       if (!use_table) {
         if (!c->RankKnown(c->input(2)) || !c->RankKnown(c->input(3))) {
           c->set_output(0, c->UnknownShape());
-          return Status::OK();
+          return OkStatus();
         }
         TF_RETURN_IF_ERROR(BroadcastTwoShapes(out, c->input(2), &out));
         TF_RETURN_IF_ERROR(BroadcastTwoShapes(out, c->input(3), &out));
       }
 
       c->set_output(0, out);
-      return Status::OK();
+      return OkStatus();
     });
 
 class MusaPlnCascadeOp : public MusaOpKernel {

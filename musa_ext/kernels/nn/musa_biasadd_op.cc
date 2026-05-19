@@ -1,8 +1,8 @@
+#include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/util/tensor_format.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -37,6 +37,7 @@ class MusaBiasAddOp : public MusaOpKernel {
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &output));
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     mTensor mt_in = CreateMTensor(input, format_);
     mTensor mt_bias = CreateMTensor(bias, format_);

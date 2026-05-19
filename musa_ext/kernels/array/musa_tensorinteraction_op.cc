@@ -1,10 +1,10 @@
 #include <mublas.h>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bounds_check.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor_shape.h"
-#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
@@ -31,9 +31,12 @@ class MusaInteractOp : public OpKernel {
 
     if (input.NumElements() == 0) return;
 
-    auto* device = GetDeviceByCtx(ctx);
+    MusaKernelRuntimeView runtime = QueryMusaKernelRuntimeView(ctx);
+    OP_REQUIRES(ctx, runtime.mublas_handle != nullptr,
+                errors::Internal("MUSA muBLAS handle is unavailable for "
+                                 "MusaInteract"));
 
-    mublasHandle_t blas_handle = device->mublas_handle();
+    mublasHandle_t blas_handle = runtime.mublas_handle;
     int m = num_features;  // N
     int n = num_features;  // N
     int k = embed_dim;     // D
@@ -97,6 +100,6 @@ REGISTER_OP("MusaInteract")
       ::tensorflow::shape_inference::DimensionHandle n = c->Dim(input_shape, 1);
 
       c->set_output(0, c->MakeShape({batch, n, n}));
-      return Status::OK();
+      return OkStatus();
     });
 }

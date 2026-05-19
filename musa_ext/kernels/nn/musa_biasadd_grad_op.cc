@@ -62,6 +62,7 @@ class MusaBiasAddGradOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
 
     if (output_backprop.NumElements() == 0) {
+      MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
       auto& handle = GetHandleByCtx(ctx);
       Memset(handle, output->data(), output->TotalBytes(), 0);
       return;

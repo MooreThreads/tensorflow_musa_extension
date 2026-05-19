@@ -263,14 +263,13 @@ Status MusaTensorDotBiasFusion::Apply(
 
   if (!match_result.IsValid()) {
     VLOG(2) << "[TensorDotBias::Apply] RETURN: invalid match result";
-    return Status(error::INVALID_ARGUMENT,
-                  "Invalid TensorDotBias match result");
+    return errors::InvalidArgument("Invalid TensorDotBias match result");
   }
 
   if (!IsKernelAvailable()) {
     VLOG(2) << "[TensorDotBias::Apply] RETURN: kernel not available, skipping "
                "fusion";
-    return Status::OK();
+    return OkStatus();
   }
 
   // Get critical nodes
@@ -281,8 +280,8 @@ Status MusaTensorDotBiasFusion::Apply(
   if (bias_add_it == match_result.captured_nodes.end()) {
     VLOG(2) << "[TensorDotBias::Apply] RETURN: missing bias_add node in "
                "captured_nodes";
-    return Status(error::INVALID_ARGUMENT,
-                  "Missing bias_add node in TensorDotBias pattern");
+    return errors::InvalidArgument(
+        "Missing bias_add node in TensorDotBias pattern");
   }
 
   const NodeDef* bias_add_node = bias_add_it->second;
@@ -295,7 +294,7 @@ Status MusaTensorDotBiasFusion::Apply(
     if (node.name() == output_name && node.op() == "MusaTensorDotBias") {
       VLOG(2) << "[TensorDotBias::Apply] RETURN: already fused, node="
               << output_name;
-      return Status(error::ALREADY_EXISTS, "Already fused");
+      return errors::AlreadyExists("Already fused");
     }
   }
 
@@ -310,8 +309,7 @@ Status MusaTensorDotBiasFusion::Apply(
     input_a_name = original_input_it->second;
   } else {
     VLOG(2) << "[TensorDotBias::Apply] RETURN: cannot determine input A";
-    return Status(error::INVALID_ARGUMENT,
-                  "Cannot determine TensorDotBias input A");
+    return errors::InvalidArgument("Cannot determine TensorDotBias input A");
   }
 
   auto tensordot_weight_input_it =
@@ -322,8 +320,8 @@ Status MusaTensorDotBiasFusion::Apply(
   } else {
     VLOG(2)
         << "[TensorDotBias::Apply] RETURN: cannot determine tensordot weight";
-    return Status(error::INVALID_ARGUMENT,
-                  "Cannot determine TensorDotBias tensordot weight");
+    return errors::InvalidArgument(
+        "Cannot determine TensorDotBias tensordot weight");
   }
 
   auto bias_weights_input_it =
@@ -336,8 +334,8 @@ Status MusaTensorDotBiasFusion::Apply(
     bias_weights_name = bias_weights_it->second->name();
   } else {
     VLOG(2) << "[TensorDotBias::Apply] RETURN: cannot determine bias weights";
-    return Status(error::INVALID_ARGUMENT,
-                  "Cannot determine TensorDotBias bias weights");
+    return errors::InvalidArgument(
+        "Cannot determine TensorDotBias bias weights");
   }
 
   // Get data type from BiasAdd
@@ -474,7 +472,7 @@ Status MusaTensorDotBiasFusion::Apply(
           << ", removed=" << removed_count
           << ", graph_nodes=" << graph->node_size();
 
-  return Status::OK();
+  return OkStatus();
 }
 
 // Register fusion pattern

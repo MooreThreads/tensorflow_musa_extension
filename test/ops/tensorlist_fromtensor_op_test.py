@@ -22,10 +22,15 @@ sys.path.append("..")
 from musa_test_utils import MUSATestCase
 
 
+def _host_int32(value):
+  with tf.device('/CPU:0'):
+    return tf.constant(value, dtype=tf.int32)
+
+
 class TensorListFromTensorOpTest(MUSATestCase):
 
   def _tensor_list_from_tensor_and_stack(self, x, element_dtype):
-    element_shape = tf.constant(x.shape[1:], dtype=tf.int32)
+    element_shape = _host_int32(x.shape[1:])
 
     handle = tf.raw_ops.TensorListFromTensor(
         tensor=x,
@@ -36,7 +41,7 @@ class TensorListFromTensorOpTest(MUSATestCase):
         input_handle=handle,
         element_shape=element_shape,
         element_dtype=element_dtype,
-        num_elements=x.shape[0]
+        num_elements=_host_int32(x.shape[0])
     )
 
   def _test_tensor_list_from_tensor(self, shape, dtype, rtol=1e-5, atol=1e-5):

@@ -19,7 +19,7 @@ Status TensorShapeFromTensorReserve(const Tensor& t, PartialTensorShape* out) {
     if ((t.dtype() == DT_INT32 && t.scalar<int32_t>()() == -1) ||
         (t.dtype() == DT_INT64 && t.scalar<int64_t>()() == -1)) {
       *out = PartialTensorShape();  // Fully unknown shape
-      return Status::OK();
+      return OkStatus();
     }
     return errors::InvalidArgument(
         "The only valid scalar shape tensor is the fully unknown shape "
@@ -56,8 +56,7 @@ class MusaTensorListReserveOp : public MusaOpKernel {
 
     // Handle both scalar (-1 for unknown shape) and vector element_shape
     PartialTensorShape element_shape;
-    OP_REQUIRES_OK(ctx, TensorShapeFromTensorReserve(element_shape_tensor,
-                                                     &element_shape));
+    OP_REQUIRES_OK(ctx, TensorShapeFromTensorReserve(element_shape_tensor, &element_shape));
 
     OP_REQUIRES(
         ctx, TensorShapeUtils::IsScalar(num_elements_tensor.shape()),
@@ -89,7 +88,7 @@ class MusaTensorListReserveOp : public MusaOpKernel {
     output_list.element_dtype = element_dtype_;
     output_list.element_shape = element_shape;
 
-    output_list.tensors().resize(num_elements, Tensor(DT_INVALID));
+    output_list.tensors().resize(num_elements);
 
     output_handle->scalar<Variant>()() = std::move(output_list);
   }

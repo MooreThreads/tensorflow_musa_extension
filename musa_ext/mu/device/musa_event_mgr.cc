@@ -64,7 +64,7 @@ MusaEventMgr::~MusaEventMgr() {
       iu.func();
     } else if (iu.has_status_func) {
       musaSetDevice(device_id_);
-      iu.status_func(Status::OK());
+      iu.status_func(OkStatus());
     }
   }
 
@@ -95,7 +95,8 @@ void MusaEventMgr::DestroyEvent(musaEvent_t event) {
     musaError_t err = musaEventDestroy(event);
     // Only log as WARNING for errors other than invalid resource handle
     // which can happen during shutdown when events are cleaned up
-    if (err != musaSuccess && err != musaErrorInvalidResourceHandle) {
+    if (err != musaSuccess && err != musaErrorInvalidResourceHandle &&
+        err != musaErrorInitializationError) {
       LOG(WARNING) << "Failed to destroy MUSA event: "
                    << musaGetErrorString(err);
     }
@@ -212,7 +213,7 @@ void MusaEventMgr::FreeMemory(const ToFreeVector& to_free) {
         });
       }
     } else if (iu.has_status_func) {
-      Status status = Status::OK();
+      Status status = OkStatus();
       auto status_func = iu.status_func;
       int device_id = device_id_;
 
@@ -278,7 +279,7 @@ void MusaEventMgr::PollLoop() {
         iu.func();
       } else if (iu.has_status_func) {
         musaSetDevice(device_id_);
-        iu.status_func(Status::OK());
+        iu.status_func(OkStatus());
       }
     }
   } else {

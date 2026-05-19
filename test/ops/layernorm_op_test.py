@@ -5,7 +5,8 @@
 
 import numpy as np
 import tensorflow as tf
-from musa_test_utils import MUSATestCase, load_musa_ops
+import tensorflow_musa as tf_musa
+from musa_test_utils import MUSATestCase
 
 
 def layernorm_ref(x, gamma, beta, eps=1e-5):
@@ -27,23 +28,8 @@ def layernorm_grad_ref(dy, x, gamma, beta, eps=1e-5):
 class LayerNormOpTest(MUSATestCase):
     """Tests for MUSA LayerNorm operator."""
 
-    @classmethod
-    def setUpClass(cls):
-        """Set up the test class by loading ops from the tensorflow_musa wheel."""
-        super(LayerNormOpTest, cls).setUpClass()
-
-        try:
-            cls._musa_ops = load_musa_ops()
-        except Exception as e:
-            print(f"FAILED: Error loading MUSA ops from tensorflow_musa wheel: {e}")
-            cls._musa_ops = None
-
     def _test_layernorm(self, x_shape, dtype, eps=1e-5):
         """Test LayerNorm with given shape and dtype."""
-        # Skip if MUSA ops are not available
-        if self._musa_ops is None:
-            self.skipTest("MUSA LayerNorm ops module not available")
-
         # Handle numpy dtype compatibility
         if dtype == tf.bfloat16:
             np_dtype = np.float32
@@ -66,7 +52,7 @@ class LayerNormOpTest(MUSATestCase):
 
         # Test on MUSA using custom op
         with tf.device('/device:MUSA:0'):
-            musa_result = self._musa_ops.musa_layer_norm(x=x, gamma=gamma, beta=beta, epsilon=eps)
+            musa_result = tf_musa.ops.layer_norm(x=x, gamma=gamma, beta=beta, epsilon=eps)
 
         # Compare results
         if dtype in [tf.float16, tf.bfloat16]:
@@ -275,13 +261,9 @@ class LayerNormOpTest(MUSATestCase):
                 with tf.device('/CPU:0'):
                     cpu_result = layernorm_ref(x, gamma, beta, eps)
 
-                # Skip if MUSA ops are not available
-                if self._musa_ops is None:
-                    self.skipTest("MUSA LayerNorm ops module not available")
-
                 # Test on MUSA using custom op
                 with tf.device('/device:MUSA:0'):
-                    musa_result = self._musa_ops.musa_layer_norm(x=x, gamma=gamma, beta=beta, epsilon=eps)
+                    musa_result = tf_musa.ops.layer_norm(x=x, gamma=gamma, beta=beta, epsilon=eps)
 
                 self.assertAllClose(cpu_result.numpy(), musa_result.numpy(),
                                    rtol=1e-5, atol=1e-5)

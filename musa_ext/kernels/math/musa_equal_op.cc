@@ -1,5 +1,5 @@
-#include "tensorflow/core/util/bcast.h"
 #include "../utils_op.h"
+#include "tensorflow/core/util/bcast.h"
 
 namespace tensorflow {
 namespace musa {
@@ -30,6 +30,7 @@ class MusaComparisonOp : public MusaOpKernel {
 
     if (out->NumElements() == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
 
     mTensor t0 = CreateMTensor(in0);

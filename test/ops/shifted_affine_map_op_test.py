@@ -2,8 +2,9 @@
 
 import numpy as np
 import tensorflow as tf
+import tensorflow_musa as tf_musa
 
-from musa_test_utils import MUSATestCase, load_musa_ops
+from musa_test_utils import MUSATestCase
 
 
 def shifted_affine_map_ref(data_left, mask, sliced_var_right):
@@ -14,28 +15,10 @@ def shifted_affine_map_ref(data_left, mask, sliced_var_right):
 class ShiftedAffineMapOpTest(MUSATestCase):
     """Tests for MusaShiftedAffineMap kernel correctness."""
 
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-
-        try:
-            cls._musa_ops = load_musa_ops()
-        except Exception as exc:
-            print(f"FAILED: Error loading MUSA ops from tensorflow_musa wheel: {exc}")
-            cls._musa_ops = None
-
     def _run_musa_shifted_affine_map(self, data_left, mask,
                                      sliced_var_right):
-        if (self._musa_ops is None or
-                not hasattr(self._musa_ops, "musa_shifted_affine_map")):
-            self.skipTest(
-                "MusaShiftedAffineMap op module is not available. "
-                "Make sure REGISTER_OP(\"MusaShiftedAffineMap\") is compiled "
-                "and the plugin is loaded."
-            )
-
         with tf.device("/device:MUSA:0"):
-            return self._musa_ops.musa_shifted_affine_map(
+            return tf_musa.ops.shifted_affine_map(
                 data_left=data_left,
                 mask=mask,
                 sliced_var_right=sliced_var_right,

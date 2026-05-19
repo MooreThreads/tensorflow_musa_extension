@@ -85,6 +85,7 @@ class MusaNormalizeOp : public MusaOpKernel {
     const T* input_ptr = x.flat<T>().data();
     T* output_ptr = y->flat<T>().data();
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
     musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 
@@ -127,7 +128,7 @@ REGISTER_OP("MusaNormalize")
     .Attr("max_std: float = inf")  // Maximum standard deviation limit
     .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
       c->set_output(0, c->input(0));
-      return Status::OK();
+      return OkStatus();
     });
 
 }  // namespace tensorflow

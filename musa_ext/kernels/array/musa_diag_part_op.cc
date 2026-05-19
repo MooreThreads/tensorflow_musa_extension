@@ -42,6 +42,7 @@ class MusaDiagPartOp : public MusaOpKernel {
     OP_REQUIRES_OK(context, context->allocate_output(0, out_shape, &output));
 
     // Get stream
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(context);
     auto& handle = GetHandleByCtx(context);
     musaStream_t stream = (musaStream_t)handle.GetStream();
 

@@ -55,8 +55,11 @@ class MusaConcatOp : public MusaOpKernel {
 
     if (total_elements == 0) return;
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
-    musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
+    musaStream_t stream = GetMusaStreamByCtx(ctx);
+    OP_REQUIRES(ctx, stream != nullptr,
+                errors::Internal("MUSA stream is unavailable for Concat"));
 
     if (non_empty_indices.size() == 1) {
       const Tensor& src = ctx->input(non_empty_indices[0]);
