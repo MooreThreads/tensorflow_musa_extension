@@ -159,10 +159,10 @@ jobs:
           git init -q
           git remote add origin "$REPO_URL"
 
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            git fetch --no-tags --prune --depth=1 origin "refs/pull/${{ github.event.pull_request.number }}/merge"
+          if git fetch --no-tags --prune --depth=1 origin "$COMMIT_ID"; then
             git checkout --force FETCH_HEAD
-          elif git fetch --no-tags --prune --depth=1 origin "$COMMIT_ID"; then
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git fetch --no-tags --prune --depth=1 origin "refs/pull/${{ github.event.pull_request.number }}/merge"
             git checkout --force FETCH_HEAD
           else
             git fetch --no-tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
@@ -263,10 +263,10 @@ jobs:
           git init -q
           git remote add origin "$REPO_URL"
 
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            git fetch --no-tags --prune --depth=1 origin "refs/pull/${{ github.event.pull_request.number }}/merge"
+          if git fetch --no-tags --prune --depth=1 origin "$COMMIT_ID"; then
             git checkout --force FETCH_HEAD
-          elif git fetch --no-tags --prune --depth=1 origin "$COMMIT_ID"; then
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git fetch --no-tags --prune --depth=1 origin "refs/pull/${{ github.event.pull_request.number }}/merge"
             git checkout --force FETCH_HEAD
           else
             git fetch --no-tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
@@ -492,10 +492,10 @@ jobs:
           git init -q
           git remote add origin "$REPO_URL"
 
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            git fetch --no-tags --prune --depth=1 origin "refs/pull/${{ github.event.pull_request.number }}/merge"
+          if git fetch --no-tags --prune --depth=1 origin "$COMMIT_ID"; then
             git checkout --force FETCH_HEAD
-          elif git fetch --no-tags --prune --depth=1 origin "$COMMIT_ID"; then
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git fetch --no-tags --prune --depth=1 origin "refs/pull/${{ github.event.pull_request.number }}/merge"
             git checkout --force FETCH_HEAD
           else
             git fetch --no-tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
