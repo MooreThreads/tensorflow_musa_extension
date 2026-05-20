@@ -73,7 +73,6 @@ class MusaResourceSparseApplyAdamOp : public MusaOpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
-    LOG(INFO) << "[debug for timo] calling MusaResourceSparseApplyAdamOp";
     // Lookup resource variables
     core::RefCountPtr<Var> var;
     core::RefCountPtr<Var> m_var;
