@@ -146,10 +146,32 @@ jobs:
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.prepare_metadata.outputs.commit_id }}
+        run: |
+          set -euo pipefail
+
+          REPO_URL="${{ github.server_url }}/${{ github.repository }}.git"
+          COMMIT_ID="${{ needs.prepare_metadata.outputs.commit_id }}"
+
+          cd "${RUNNER_TEMP:-/tmp}"
+          rm -rf "$GITHUB_WORKSPACE"
+          mkdir -p "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          git init -q
+          git remote add origin "$REPO_URL"
+
+          if git fetch --no-tags --prune --depth=1 origin "$COMMIT_ID"; then
+            git checkout --force FETCH_HEAD
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git fetch --no-tags --prune --depth=1 origin "refs/pull/${{ github.event.pull_request.number }}/merge"
+            git checkout --force FETCH_HEAD
+          else
+            git fetch --no-tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
+            git checkout --force "$COMMIT_ID"
+          fi
+
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          git clean -fdx
+          git --no-pager log -1 --oneline
 
       - name: Run format check
         id: run_check
@@ -228,10 +250,32 @@ jobs:
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.prepare_metadata.outputs.commit_id }}
+        run: |
+          set -euo pipefail
+
+          REPO_URL="${{ github.server_url }}/${{ github.repository }}.git"
+          COMMIT_ID="${{ needs.prepare_metadata.outputs.commit_id }}"
+
+          cd "${RUNNER_TEMP:-/tmp}"
+          rm -rf "$GITHUB_WORKSPACE"
+          mkdir -p "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          git init -q
+          git remote add origin "$REPO_URL"
+
+          if git fetch --no-tags --prune --depth=1 origin "$COMMIT_ID"; then
+            git checkout --force FETCH_HEAD
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git fetch --no-tags --prune --depth=1 origin "refs/pull/${{ github.event.pull_request.number }}/merge"
+            git checkout --force FETCH_HEAD
+          else
+            git fetch --no-tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
+            git checkout --force "$COMMIT_ID"
+          fi
+
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          git clean -fdx
+          git --no-pager log -1 --oneline
 
       - name: Build current wheel
         id: run_build
@@ -327,7 +371,7 @@ jobs:
           build_exit=0
           baseline_sha=""
 
-          BASELINE_WORKSPACE="${RUNNER_TEMP}/baseline-workspace"
+          BASELINE_WORKSPACE="$JOB_LOG_DIR/baseline-workspace"
           echo "baseline_workspace=$BASELINE_WORKSPACE" >> "$GITHUB_OUTPUT"
 
           export LOG_FILE BASELINE_WORKSPACE BASELINE_REPO_URL
@@ -382,6 +426,9 @@ jobs:
           BASELINE_WORKSPACE="${{ steps.run_build.outputs.baseline_workspace }}"
           WHEEL_PATH="$(find "$BASELINE_WORKSPACE/dist" -maxdepth 1 -name 'tensorflow_musa-*.whl' -print -quit 2>/dev/null || true)"
           BASELINE_SHA="${{ steps.run_build.outputs.baseline_sha }}"
+          if [[ -z "$BASELINE_SHA" && -d "$BASELINE_WORKSPACE/.git" ]]; then
+            BASELINE_SHA="$(git -C "$BASELINE_WORKSPACE" rev-parse HEAD 2>/dev/null || true)"
+          fi
           STATUS="success"
 
           if [[ "${{ steps.run_build.outputs.sync_exit }}" != "0" || "${{ steps.run_build.outputs.build_exit }}" != "0" || -z "$WHEEL_PATH" ]]; then
@@ -432,10 +479,32 @@ jobs:
       summary_file: ${{ steps.collect.outputs.summary_file }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.prepare_metadata.outputs.commit_id }}
+        run: |
+          set -euo pipefail
+
+          REPO_URL="${{ github.server_url }}/${{ github.repository }}.git"
+          COMMIT_ID="${{ needs.prepare_metadata.outputs.commit_id }}"
+
+          cd "${RUNNER_TEMP:-/tmp}"
+          rm -rf "$GITHUB_WORKSPACE"
+          mkdir -p "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          git init -q
+          git remote add origin "$REPO_URL"
+
+          if git fetch --no-tags --prune --depth=1 origin "$COMMIT_ID"; then
+            git checkout --force FETCH_HEAD
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git fetch --no-tags --prune --depth=1 origin "refs/pull/${{ github.event.pull_request.number }}/merge"
+            git checkout --force FETCH_HEAD
+          else
+            git fetch --no-tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
+            git checkout --force "$COMMIT_ID"
+          fi
+
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          git clean -fdx
+          git --no-pager log -1 --oneline
 
       - name: Run integration tests
         id: run_test
