@@ -63,7 +63,7 @@ Status CopyTensorForFusedAdagradV2Update(OpKernelContext* ctx,
   attr.set_nic_compatible(true);
   TF_RETURN_IF_ERROR(ctx->allocate_temp(src.dtype(), src.shape(), dst, attr));
 
-  if (src.TotalBytes() == 0) return Status::OK();
+  if (src.TotalBytes() == 0) return OkStatus();
 
   musaStream_t stream = GetMusaStreamByCtx(ctx);
   musaError_t err = musaMemcpyAsync(dst->data(), src.data(), src.TotalBytes(),
@@ -73,19 +73,19 @@ Status CopyTensorForFusedAdagradV2Update(OpKernelContext* ctx,
         "CopyTensorForFusedAdagradV2Update: musaMemcpyAsync failed: ",
         musaGetErrorString(err));
   }
-  return Status::OK();
+  return OkStatus();
 }
 
 Status PrepareTensorForFusedAdagradV2Update(OpKernelContext* ctx, Var* var) {
   if (!var->copy_on_read_mode.load() && var->tensor()->RefCountIsOne()) {
-    return Status::OK();
+    return OkStatus();
   }
 
   Tensor copied;
   TF_RETURN_IF_ERROR(
       CopyTensorForFusedAdagradV2Update(ctx, *var->tensor(), &copied));
   *var->tensor() = copied;
-  return Status::OK();
+  return OkStatus();
 }
 
 class ScopedMutexUnlocker {
@@ -151,7 +151,7 @@ Status CheckSameShape(const Tensor& lhs, const Tensor& rhs,
                                    rhs_name,
                                    " shape: ", rhs.shape().DebugString());
   }
-  return Status::OK();
+  return OkStatus();
 }
 
 Status CheckScalar(const Tensor& tensor, const char* name) {
@@ -159,7 +159,7 @@ Status CheckScalar(const Tensor& tensor, const char* name) {
     return errors::InvalidArgument(name, " must be a scalar, got ",
                                    tensor.NumElements(), " elements.");
   }
-  return Status::OK();
+  return OkStatus();
 }
 
 void CheckLaunchAndSync(OpKernelContext* ctx, const char* op_name) {
