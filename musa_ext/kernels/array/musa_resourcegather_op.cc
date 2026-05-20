@@ -115,6 +115,30 @@ void LaunchResourceScatterSubBFloat16Int64(
 namespace tensorflow {
 namespace musa {
 
+Status ReadFloatScalarHostOrDevice(const Tensor& tensor, float* value) {
+  const float* data = tensor.flat<float>().data();
+
+  musaPointerAttributes attributes;
+  musaError_t attr_err = musaPointerGetAttributes(&attributes, data);
+  const bool is_device =
+      attr_err == musaSuccess && attributes.type == musaMemoryTypeDevice;
+  if (attr_err != musaSuccess) {
+    musaGetLastError();
+  }
+
+  if (is_device) {
+    musaError_t copy_err =
+        musaMemcpy(value, data, sizeof(float), musaMemcpyDeviceToHost);
+    if (copy_err != musaSuccess) {
+      return errors::Internal("Failed to copy float scalar to host");
+    }
+    return OkStatus();
+  }
+
+  *value = data[0];
+  return OkStatus();
+}
+
 // ============================================================================
 // Optimized ResourceGather Op Implementation
 // ============================================================================
@@ -612,11 +636,13 @@ class MusaResourceScatterSubBFloat16Op : public MusaOpKernel {
                     " indices: ", indices.shape().DebugString(),
                     " resource: ", params->shape().DebugString()));
 
+    float alpha_value = 0.0f;
+    OP_REQUIRES_OK(c, ReadFloatScalarHostOrDevice(alpha, &alpha_value));
+
     musaStream_t stream = GetMusaStreamByCtx(c);
     LaunchKernel(params->flat<float>().data(), indices.flat<Index>().data(),
                  reinterpret_cast<const void*>(updates.flat<bfloat16>().data()),
-                 alpha.scalar<float>()(), indices_size, inner_size, limit,
-                 stream);
+                 alpha_value, indices_size, inner_size, limit, stream);
   }
 
  private:
