@@ -5541,6 +5541,14 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
       }
     }
 
+    if (!EnvFlagEnabledLocal("MUSA_DISABLE_ADDN_SUFFIX_SLICE_GRAD_FUSION")) {
+      const int addn_slice_grad_rewrites =
+          OptimizeAddNWithSuffixSliceGrad(optimized_graph);
+      if (addn_slice_grad_rewrites > 0) {
+        dumper.DumpAtStage(*optimized_graph,
+                           "after_addn_suffix_slice_grad_fusion");
+      }
+    }
     if (!EnvFlagEnabledLocal("MUSA_DISABLE_CONCAT_SUFFIX_SLICE_GRAD_FUSION")) {
       const int concat_slice_grad_rewrites =
           OptimizeConcatWithSuffixSliceGrad(optimized_graph);
