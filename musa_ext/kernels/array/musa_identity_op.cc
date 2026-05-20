@@ -1,5 +1,6 @@
 #include "../utils_op.h"
 #include "mu/device/musa_memcpy.h"
+#include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/resource_handle.h"
@@ -41,6 +42,7 @@ class MusaIdentityOp : public OpKernel {
 REGISTER_MUSA_BASE_OPS(float);
 REGISTER_MUSA_BASE_OPS(double);
 REGISTER_MUSA_BASE_OPS(Eigen::half);
+REGISTER_MUSA_BASE_OPS(Eigen::bfloat16);
 REGISTER_MUSA_BASE_OPS(int32);
 REGISTER_MUSA_BASE_OPS(int64);
 REGISTER_MUSA_BASE_OPS(bool);

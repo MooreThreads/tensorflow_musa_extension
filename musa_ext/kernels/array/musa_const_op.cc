@@ -69,6 +69,26 @@ class MusaConstOp : public OpKernel {
   mutex mu_;
 };
 
+class MusaHostConstOp : public OpKernel {
+ public:
+  explicit MusaHostConstOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
+    const TensorProto* proto = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("value", &proto));
+    OP_REQUIRES(ctx, tensor_.FromProto(*proto),
+                errors::InvalidArgument("Unparseable tensor proto"));
+    OP_REQUIRES(ctx, tensor_.dtype() == ctx->output_type(0),
+                errors::InvalidArgument(
+                    "Type mismatch between value and output"));
+  }
+
+  bool IsExpensive() override { return false; }
+
+  void Compute(OpKernelContext* ctx) override { ctx->set_output(0, tensor_); }
+
+ private:
+  Tensor tensor_;
+};
+
 #define REGISTER_MUSA_CONST(type)                                       \
   REGISTER_KERNEL_BUILDER(                                              \
       Name("Const").Device(DEVICE_MTGPU).TypeConstraint<type>("dtype"), \
@@ -79,7 +99,6 @@ REGISTER_MUSA_CONST(double);
 REGISTER_MUSA_CONST(Eigen::half);
 REGISTER_MUSA_CONST(bfloat16);
 REGISTER_MUSA_CONST(int64);
-REGISTER_MUSA_CONST(int32);
 REGISTER_MUSA_CONST(int16);
 REGISTER_MUSA_CONST(int8);
 REGISTER_MUSA_CONST(uint64);
@@ -91,6 +110,12 @@ REGISTER_MUSA_CONST(std::complex<float>);
 REGISTER_MUSA_CONST(std::complex<double>);
 
 #undef REGISTER_MUSA_CONST
+
+REGISTER_KERNEL_BUILDER(Name("Const")
+                            .Device(DEVICE_MTGPU)
+                            .HostMemory("output")
+                            .TypeConstraint<int32>("dtype"),
+                        MusaHostConstOp);
 
 }  // namespace musa
 }  // namespace tensorflow

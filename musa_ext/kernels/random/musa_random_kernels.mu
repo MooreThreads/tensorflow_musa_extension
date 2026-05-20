@@ -27,7 +27,7 @@ __device__ __forceinline__ float Uint32ToReal<float>(uint32_t x) {
 
 template <>
 __device__ __forceinline__ double Uint32ToReal<double>(uint32_t x) {
-    return x * 2.3283064365386963e-10;
+    return x * 2.3283064365386963e-10; 
 }
 
 template <>
@@ -69,9 +69,9 @@ __device__ __forceinline__ uint4_ ComputePhilox10(uint4_ ctr, uint2_ key) {
         uint64_t p0 = (uint64_t)ctr.x * M0;
         uint64_t p1 = (uint64_t)ctr.z * M1;
         uint4_ res;
-        res.x = (uint32_t)(p1 >> 32) ^ ctr.y ^ k.x;
+        res.x = (uint32_t)(p1 >> 32) ^ ctr.y ^ k.x; 
         res.y = (uint32_t)p1;
-        res.z = (uint32_t)(p0 >> 32) ^ ctr.w ^ k.y;
+        res.z = (uint32_t)(p0 >> 32) ^ ctr.w ^ k.y; 
         res.w = (uint32_t)p0;
         ctr = res;
         k.x += 0x9E3779B9;
@@ -99,10 +99,10 @@ __global__ void RandomUniformKernel(int64_t n, MusaPhiloxState state, T* output)
     const int kGroupSize = 4;
     const int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
     const int total_thread_count = gridDim.x * blockDim.x;
-
+    
     uint4_ ctr = {state.counter[0], state.counter[1], state.counter[2], state.counter[3]};
     uint2_ key = {state.key[0], state.key[1]};
-
+    
     ctr = skip_philox(ctr, (uint64_t)thread_id);
     int64_t offset = (int64_t)thread_id * kGroupSize;
 
@@ -117,8 +117,15 @@ __global__ void RandomUniformKernel(int64_t n, MusaPhiloxState state, T* output)
     }
 }
 
-template <typename T>
-__global__ void RandomUniformIntKernel(int64_t n, MusaPhiloxState state, T minval, T maxval, T* output) {
+__device__ __forceinline__ bool Uint32ToRealGreaterEqual(
+    uint32_t x, uint32_t threshold_bits) {
+    return (x & 0x7fffffu) >= threshold_bits;
+}
+
+__global__ void RandomUniformGreaterEqualKernel(int64_t n,
+                                                MusaPhiloxState state,
+                                                uint32_t threshold_bits,
+                                                bool* output) {
     const int kGroupSize = 4;
     const int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
     const int total_thread_count = gridDim.x * blockDim.x;
@@ -126,6 +133,29 @@ __global__ void RandomUniformIntKernel(int64_t n, MusaPhiloxState state, T minva
     uint4_ ctr = {state.counter[0], state.counter[1], state.counter[2], state.counter[3]};
     uint2_ key = {state.key[0], state.key[1]};
 
+    ctr = skip_philox(ctr, (uint64_t)thread_id);
+    int64_t offset = (int64_t)thread_id * kGroupSize;
+
+    while (offset < n) {
+        uint4_ res = ComputePhilox10(ctr, key);
+        if (offset < n) output[offset] = Uint32ToRealGreaterEqual(res.x, threshold_bits);
+        if (offset + 1 < n) output[offset + 1] = Uint32ToRealGreaterEqual(res.y, threshold_bits);
+        if (offset + 2 < n) output[offset + 2] = Uint32ToRealGreaterEqual(res.z, threshold_bits);
+        if (offset + 3 < n) output[offset + 3] = Uint32ToRealGreaterEqual(res.w, threshold_bits);
+        offset += (int64_t)total_thread_count * kGroupSize;
+        ctr = skip_philox(ctr, (uint64_t)total_thread_count);
+    }
+}
+
+template <typename T>
+__global__ void RandomUniformIntKernel(int64_t n, MusaPhiloxState state, T minval, T maxval, T* output) {
+    const int kGroupSize = 4;
+    const int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
+    const int total_thread_count = gridDim.x * blockDim.x;
+    
+    uint4_ ctr = {state.counter[0], state.counter[1], state.counter[2], state.counter[3]};
+    uint2_ key = {state.key[0], state.key[1]};
+    
     ctr = skip_philox(ctr, (uint64_t)thread_id);
     int64_t offset = (int64_t)thread_id * kGroupSize;
     T range = maxval - minval;
@@ -148,10 +178,10 @@ __global__ void RandomStandardNormalKernel(int64_t n, MusaPhiloxState state, T* 
     const int kGroupSize = 4;
     const int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
     const int total_thread_count = gridDim.x * blockDim.x;
-
+    
     uint4_ ctr = {state.counter[0], state.counter[1], state.counter[2], state.counter[3]};
     uint2_ key = {state.key[0], state.key[1]};
-
+    
     ctr = skip_philox(ctr, (uint64_t)thread_id);
     int64_t offset = (int64_t)thread_id * kGroupSize;
 
@@ -160,7 +190,7 @@ __global__ void RandomStandardNormalKernel(int64_t n, MusaPhiloxState state, T* 
         if (offset < n) {
             T z0, z1, z2, z3;
             BoxMuller(res.x, res.y, &z0, &z1);
-            BoxMuller(res.z, res.w, &z2, &z3);
+            BoxMuller(res.z, res.w, &z2, &z3); 
 
             output[offset + 0] = z0;
             if (offset + 1 < n) output[offset + 1] = z1;
@@ -169,42 +199,6 @@ __global__ void RandomStandardNormalKernel(int64_t n, MusaPhiloxState state, T* 
         }
         offset += (int64_t)total_thread_count * kGroupSize;
         ctr = skip_philox(ctr, (uint64_t)total_thread_count);
-    }
-}
-
-// Each output element is assigned kMaxTrials consecutive Philox groups for
-// rejection sampling. P(all kMaxTrials pairs rejected) < 0.046^kMaxTrials,
-// which is negligible for kMaxTrials >= 5. Elements whose every candidate is
-// out of range receive 0 (practically never occurs).
-template <typename T>
-__global__ void TruncatedNormalKernel(int64_t n, MusaPhiloxState state, T* output) {
-    constexpr int kMaxTrials = 10;
-    const int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
-    const int total_thread_count = gridDim.x * blockDim.x;
-
-    const uint4_ base_ctr = {state.counter[0], state.counter[1],
-                              state.counter[2], state.counter[3]};
-    const uint2_ key = {state.key[0], state.key[1]};
-
-    for (int64_t idx = (int64_t)thread_id; idx < n; idx += total_thread_count) {
-        // Give each element its own exclusive block of kMaxTrials Philox groups.
-        uint4_ ctr = skip_philox(base_ctr, (uint64_t)idx * kMaxTrials);
-        T sample = static_cast<T>(0);
-        for (int trial = 0; trial < kMaxTrials; ++trial) {
-            uint4_ res = ComputePhilox10(ctr, key);
-            ctr = skip_philox(ctr, 1);
-            T z0, z1;
-            BoxMuller<T>(res.x, res.y, &z0, &z1);
-            if (z0 >= static_cast<T>(-2.0) && z0 <= static_cast<T>(2.0)) {
-                sample = z0;
-                break;
-            }
-            if (z1 >= static_cast<T>(-2.0) && z1 <= static_cast<T>(2.0)) {
-                sample = z1;
-                break;
-            }
-        }
-        output[idx] = sample;
     }
 }
 
@@ -221,6 +215,9 @@ void LaunchRandomUniform_half(void* stream, int64_t n, int num_blocks, int block
 void LaunchRandomUniform_bfloat16(void* stream, int64_t n, int num_blocks, int block_size, MusaPhiloxState state, tensorflow::bfloat16* output) {
     RandomUniformKernel<tensorflow::bfloat16><<<num_blocks, block_size, 0, (musaStream_t)stream>>>(n, state, output);
 }
+void LaunchRandomUniformGreaterEqual_bool(void* stream, int64_t n, int num_blocks, int block_size, MusaPhiloxState state, uint32_t threshold_bits, bool* output) {
+    RandomUniformGreaterEqualKernel<<<num_blocks, block_size, 0, (musaStream_t)stream>>>(n, state, threshold_bits, output);
+}
 void LaunchRandomUniformInt_int(void* stream, int64_t n, int num_blocks, int block_size, MusaPhiloxState state, int minval, int maxval, int* output) {
     RandomUniformIntKernel<int><<<num_blocks, block_size, 0, (musaStream_t)stream>>>(n, state, minval, maxval, output);
 }
@@ -233,11 +230,5 @@ void LaunchRandomStandardNormal_float(void* stream, int64_t n, int num_blocks, i
 }
 void LaunchRandomStandardNormal_double(void* stream, int64_t n, int num_blocks, int block_size, MusaPhiloxState state, double* output) {
     RandomStandardNormalKernel<double><<<num_blocks, block_size, 0, (musaStream_t)stream>>>(n, state, output);
-}
-void LaunchTruncatedNormal_float(void* stream, int64_t n, int num_blocks, int block_size, MusaPhiloxState state, float* output) {
-    TruncatedNormalKernel<float><<<num_blocks, block_size, 0, (musaStream_t)stream>>>(n, state, output);
-}
-void LaunchTruncatedNormal_double(void* stream, int64_t n, int num_blocks, int block_size, MusaPhiloxState state, double* output) {
-    TruncatedNormalKernel<double><<<num_blocks, block_size, 0, (musaStream_t)stream>>>(n, state, output);
 }
 }

@@ -167,6 +167,76 @@ inline bool CanUseDenseGradCopy(const TensorShape& output_shape,
   return true;
 }
 
+struct StridedSliceGradCopyPlan {
+  bool identity = false;
+  int partial_axis = -1;
+  int64_t outer = 1;
+  int64_t width_elements = 0;
+  int64_t src_pitch_elements = 0;
+  int64_t dst_pitch_elements = 0;
+  int64_t dst_offset_elements = 0;
+};
+
+inline bool BuildUnitStrideSingleAxisCopyPlan(
+    const TensorShape& output_shape, const TensorShape& processing_shape,
+    const gtl::InlinedVector<int64_t, 4>& begin,
+    const gtl::InlinedVector<int64_t, 4>& strides,
+    StridedSliceGradCopyPlan* plan) {
+  const int rank = output_shape.dims();
+  if (rank != processing_shape.dims() || begin.size() != rank ||
+      strides.size() != rank) {
+    return false;
+  }
+
+  if (rank == 0) {
+    plan->identity = true;
+    plan->width_elements = 1;
+    return true;
+  }
+
+  int partial_axis = -1;
+  for (int dim = 0; dim < rank; ++dim) {
+    const int64_t start = begin[dim];
+    const int64_t proc_dim = processing_shape.dim_size(dim);
+    const int64_t out_dim = output_shape.dim_size(dim);
+    if (strides[dim] != 1 || start < 0 || proc_dim < 0 ||
+        start + proc_dim > out_dim) {
+      return false;
+    }
+
+    const bool full_dim = start == 0 && proc_dim == out_dim;
+    if (!full_dim) {
+      if (partial_axis != -1) return false;
+      partial_axis = dim;
+    }
+  }
+
+  if (partial_axis == -1) {
+    plan->identity = true;
+    plan->width_elements = processing_shape.num_elements();
+    return true;
+  }
+
+  int64_t inner = 1;
+  for (int dim = partial_axis + 1; dim < rank; ++dim) {
+    inner *= output_shape.dim_size(dim);
+  }
+
+  int64_t outer = 1;
+  for (int dim = 0; dim < partial_axis; ++dim) {
+    outer *= output_shape.dim_size(dim);
+  }
+
+  plan->identity = false;
+  plan->partial_axis = partial_axis;
+  plan->outer = outer;
+  plan->width_elements = processing_shape.dim_size(partial_axis) * inner;
+  plan->src_pitch_elements = plan->width_elements;
+  plan->dst_pitch_elements = output_shape.dim_size(partial_axis) * inner;
+  plan->dst_offset_elements = begin[partial_axis] * inner;
+  return plan->outer > 0 && plan->width_elements > 0;
+}
+
 template <typename T>
 struct StridedSliceGradLauncher;
 
@@ -303,8 +373,15 @@ class MusaStridedSliceGradOp : public OpKernel {
     mHandle& handle = GetHandleByCtx(context);
     musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 
+    StridedSliceGradCopyPlan copy_plan;
+    const bool use_copy_plan =
+        dy.NumElements() > 0 &&
+        BuildUnitStrideSingleAxisCopyPlan(output_shape, processing_shape, begin,
+                                          strides, &copy_plan);
+
     if (dy.NumElements() > 0 &&
-        CanUseDenseGradCopy(output_shape, processing_shape, begin, strides)) {
+        (CanUseDenseGradCopy(output_shape, processing_shape, begin, strides) ||
+         (use_copy_plan && copy_plan.identity))) {
       musaError_t err =
           musaMemcpyAsync(output->data(), dy.data(), dy.TotalBytes(),
                           musaMemcpyDeviceToDevice, stream);
@@ -321,6 +398,22 @@ class MusaStridedSliceGradOp : public OpKernel {
                                  musaGetErrorString(err)));
 
     if (dy.NumElements() == 0) return;
+
+    if (use_copy_plan) {
+      const size_t elem_size = sizeof(T);
+      const char* src = reinterpret_cast<const char*>(dy.data());
+      char* dst = reinterpret_cast<char*>(output->data()) +
+                  copy_plan.dst_offset_elements * elem_size;
+      err = musaMemcpy2DAsync(
+          dst, copy_plan.dst_pitch_elements * elem_size, src,
+          copy_plan.src_pitch_elements * elem_size,
+          copy_plan.width_elements * elem_size, copy_plan.outer,
+          musaMemcpyDeviceToDevice, stream);
+      OP_REQUIRES(context, err == musaSuccess,
+                  errors::Internal("MUSA StridedSliceGrad copy2D failed: ",
+                                   musaGetErrorString(err)));
+      return;
+    }
 
     StridedSliceGradLaunchParams params = {};
     FillLaunchParams(output_shape, processing_shape, begin, strides, &params);
@@ -355,7 +448,6 @@ class MusaStridedSliceGradOp : public OpKernel {
 
 REGISTER_STRIDED_SLICE_GRAD_MUSA_INDICES(float);
 REGISTER_STRIDED_SLICE_GRAD_MUSA_INDICES(double);
-REGISTER_STRIDED_SLICE_GRAD_MUSA_INDICES(int32);
 REGISTER_STRIDED_SLICE_GRAD_MUSA_INDICES(int64_t);
 REGISTER_STRIDED_SLICE_GRAD_MUSA_INDICES(Eigen::half);
 REGISTER_STRIDED_SLICE_GRAD_MUSA_INDICES(Eigen::bfloat16);

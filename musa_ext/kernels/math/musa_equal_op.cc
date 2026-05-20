@@ -1,8 +1,15 @@
-#include "../utils_op.h"
 #include "tensorflow/core/util/bcast.h"
+
+#include <stdint.h>
+
+#include "../utils_op.h"
 
 namespace tensorflow {
 namespace musa {
+
+extern "C" void LaunchGreaterEqualFloatScalar(const float* x, const float* y,
+                                               bool* out, int64_t n,
+                                               musaStream_t stream);
 
 template <::musa::dnn::Binary::Mode mode>
 class MusaComparisonOp : public MusaOpKernel {
@@ -30,7 +37,16 @@ class MusaComparisonOp : public MusaOpKernel {
 
     if (out->NumElements() == 0) return;
 
-    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
+    if (mode == ::musa::dnn::Binary::Mode::GE &&
+        ctx->input_dtype(0) == DT_FLOAT && in1.NumElements() == 1 &&
+        output_shape.IsSameSize(in0.shape())) {
+      LaunchGreaterEqualFloatScalar(in0.flat<float>().data(),
+                                    in1.flat<float>().data(),
+                                    out->flat<bool>().data(),
+                                    out->NumElements(), GetMusaStreamByCtx(ctx));
+      return;
+    }
+
     auto& handle = GetHandleByCtx(ctx);
 
     mTensor t0 = CreateMTensor(in0);
