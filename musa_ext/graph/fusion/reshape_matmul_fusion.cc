@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "graph/fusion/reshape_matmul_fusion.h"
 
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <unordered_set>
@@ -23,6 +24,7 @@ limitations under the License.
 #include "tensorflow/core/framework/attr_value.pb.h"
 #include "tensorflow/core/framework/tensor.pb.h"
 #include "tensorflow/core/platform/logging.h"
+#include "tensorflow/core/public/version.h"
 
 namespace tensorflow {
 namespace grappler {
@@ -321,6 +323,14 @@ bool MatchRestoreShapePack(const GraphDef& graph,
 bool MusaReshapeMatMulFusion::IsKernelAvailable() const {
   if (!kernel_checked_) {
     kernel_available_ = true;
+#if TF_MAJOR_VERSION > 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION >= 15)
+    const char* enable_env = std::getenv("MUSA_ENABLE_RESHAPE_MATMUL_FUSION");
+    kernel_available_ = enable_env != nullptr && std::atoi(enable_env) != 0;
+    if (!kernel_available_) {
+      VLOG(1) << "MusaReshapeMatMulFusion disabled by default for TF >= 2.15; "
+              << "set MUSA_ENABLE_RESHAPE_MATMUL_FUSION=1 to enable";
+    }
+#endif
     kernel_checked_ = true;
   }
   return kernel_available_;
