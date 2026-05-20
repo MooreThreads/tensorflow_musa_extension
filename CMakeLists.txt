@@ -5,7 +5,7 @@ project(musa_plugin)
 set(CMAKE_C_COMPILER gcc)
 set(CMAKE_CXX_COMPILER g++)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Set MUSA path
@@ -33,6 +33,8 @@ if(NOT PYTHON_EXECUTABLE)
     set(PYTHON_EXECUTABLE python3)
 endif()
 message(STATUS "Using Python executable: ${PYTHON_EXECUTABLE}")
+execute_process(COMMAND "${PYTHON_EXECUTABLE}" -c "import tensorflow as tf; print(tf.__version__.split('+')[0])"
+    OUTPUT_VARIABLE TF_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE)
 execute_process(COMMAND "${PYTHON_EXECUTABLE}" -c "import tensorflow as tf; print(tf.sysconfig.get_include())"
     OUTPUT_VARIABLE TF_INC OUTPUT_STRIP_TRAILING_WHITESPACE)
 execute_process(COMMAND "${PYTHON_EXECUTABLE}" -c "import tensorflow as tf; print(' '.join(tf.sysconfig.get_compile_flags()))"
@@ -54,6 +56,18 @@ execute_process(
     RESULT_VARIABLE PYBIND11_RESULT)
 
 # Validate TensorFlow is available
+if(NOT TF_VERSION)
+    message(FATAL_ERROR "Failed to get TensorFlow version. Please ensure TensorFlow is installed.")
+endif()
+if(TF_VERSION VERSION_GREATER_EQUAL "2.15.0")
+    set(CMAKE_CXX_STANDARD 17)
+    set(TF_MUSA_HOST_CXX_STANDARD 17)
+else()
+    set(CMAKE_CXX_STANDARD 14)
+    set(TF_MUSA_HOST_CXX_STANDARD 14)
+endif()
+message(STATUS "TensorFlow Version: ${TF_VERSION}")
+message(STATUS "Host C++ standard: C++${TF_MUSA_HOST_CXX_STANDARD}")
 if(NOT TF_INC)
     message(FATAL_ERROR "Failed to get TensorFlow include path. Please ensure TensorFlow is installed.")
 endif()
@@ -168,7 +182,7 @@ file(GLOB_RECURSE MU_SOURCES "${KERNELS_ROOT}/*.mu")
 set(MCC_COMMON_FLAGS
     -O3
     -fPIC
-    -std=c++17
+    -std=c++${TF_MUSA_HOST_CXX_STANDARD}
     -DEIGEN_DONT_VECTORIZE
     -U__ARM_NEON
     -U__ARM_NEON__
