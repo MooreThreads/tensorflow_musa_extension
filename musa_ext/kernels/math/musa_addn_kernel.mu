@@ -9,7 +9,7 @@
 #include <musa_bf16.h>
 #include <stdint.h>
 
-#define MAX_INLINE_ADDN_INPUTS 8
+#define MAX_INLINE_ADDN_INPUTS 32
 
 struct InlinePointers {
   const void* ptrs[MAX_INLINE_ADDN_INPUTS];

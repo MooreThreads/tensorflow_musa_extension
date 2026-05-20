@@ -14,7 +14,7 @@
 // MUSA AddN custom kernel launcher declarations from musa_addn_kernel.mu
 // ============================================================================
 
-#define MAX_INLINE_ADDN_INPUTS 8
+#define MAX_INLINE_ADDN_INPUTS 32
 
 struct InlinePointers {
   const void* ptrs[MAX_INLINE_ADDN_INPUTS];
