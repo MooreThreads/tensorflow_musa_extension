@@ -54,6 +54,39 @@ __global__ void TileSmallDimsKernel(const T* __restrict__ input,
       blockIdx.x * static_cast<int64_t>(blockDim.x) + threadIdx.x;
   if (tid >= output_size) return;
 
+  if (dims == 3) {
+    const int64_t in0 = tile_dims.input[0];
+    const int64_t in1 = tile_dims.input[1];
+    const int64_t in2 = tile_dims.input[2];
+    const int64_t out0 = tile_dims.output[0];
+    const int64_t out1 = tile_dims.output[1];
+    const int64_t out2 = tile_dims.output[2];
+
+    const int64_t c = tid % out2;
+    const int64_t q = tid / out2;
+    const int64_t b = q % out1;
+    const int64_t a = q / out1;
+    const int64_t i0 = (in0 == out0) ? a : (in0 == 1 ? 0 : a % in0);
+    const int64_t i1 = (in1 == out1) ? b : (in1 == 1 ? 0 : b % in1);
+    const int64_t i2 = (in2 == out2) ? c : (in2 == 1 ? 0 : c % in2);
+    output[tid] = input[(i0 * in1 + i1) * in2 + i2];
+    return;
+  }
+
+  if (dims == 2) {
+    const int64_t in0 = tile_dims.input[0];
+    const int64_t in1 = tile_dims.input[1];
+    const int64_t out0 = tile_dims.output[0];
+    const int64_t out1 = tile_dims.output[1];
+
+    const int64_t b = tid % out1;
+    const int64_t a = tid / out1;
+    const int64_t i0 = (in0 == out0) ? a : (in0 == 1 ? 0 : a % in0);
+    const int64_t i1 = (in1 == out1) ? b : (in1 == 1 ? 0 : b % in1);
+    output[tid] = input[i0 * in1 + i1];
+    return;
+  }
+
   int64_t remaining = tid;
   int64_t input_offset = 0;
   int64_t input_stride = 1;
