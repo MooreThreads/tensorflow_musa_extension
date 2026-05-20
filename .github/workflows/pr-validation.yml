@@ -840,6 +840,7 @@ jobs:
             bash -l -c '
               set -o pipefail
               cd "$MODEL_ROOT/inference/prunedGraph"
+              TF_ENABLE_ONEDNN_OPTS=0 \
               MUSA_ENABLE_TF32=0 \
               timeout 20m python run_inference.py \
                 --device musa \
