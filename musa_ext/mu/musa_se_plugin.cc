@@ -109,6 +109,108 @@ static bool ValidHostMemory(const void* ptr, uint64_t size, TF_Status* status,
   return false;
 }
 
+static bool HostPointerIsPinnedOrDevice(const void* ptr, bool* is_pinned,
+                                        bool* is_device) {
+  *is_pinned = false;
+  *is_device = false;
+  musaPointerAttributes attributes;
+  musaError_t attr_err = musaPointerGetAttributes(&attributes, ptr);
+  if (attr_err == musaSuccess) {
+    *is_pinned = attributes.type == musaMemoryTypeHost;
+    *is_device = attributes.type == musaMemoryTypeDevice;
+    return true;
+  }
+  musaGetLastError();
+  return false;
+}
+
+static void MemcpyHtoDWithPinnedBounce(const SP_Device* device,
+                                       musaStream_t stream, void* dst,
+                                       const void* src, uint64_t size,
+                                       bool sync, TF_Status* status) {
+  bool is_pinned = false;
+  bool is_device_src = false;
+  HostPointerIsPinnedOrDevice(src, &is_pinned, &is_device_src);
+
+  const char* op_name = sync ? "musaMemcpy H2D" : "musaMemcpyAsync H2D";
+  if (is_device_src) {
+    musaError_t err =
+        sync
+            ? musaMemcpy(dst, src, size, musaMemcpyDeviceToDevice)
+            : musaMemcpyAsync(dst, src, size, musaMemcpyDeviceToDevice, stream);
+    ::tensorflow::musa::runtime::SetStatusFromMusa(
+        status, err, sync ? "musaMemcpy H2D(D2D)" : "musaMemcpyAsync H2D(D2D)");
+    return;
+  }
+
+  if (::tensorflow::musa::plugin_env::SyncSeH2D()) {
+    musaError_t err = musaMemcpy(dst, src, size, musaMemcpyHostToDevice);
+    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err,
+                                                   "musaMemcpy H2D");
+    return;
+  }
+
+  if (is_pinned) {
+    musaError_t err =
+        sync ? musaMemcpy(dst, src, size, musaMemcpyHostToDevice)
+             : musaMemcpyAsync(dst, src, size, musaMemcpyHostToDevice, stream);
+    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err, op_name);
+    return;
+  }
+
+  auto pageable_fallback = [&]() {
+    musaError_t err = musaMemcpy(dst, src, size, musaMemcpyHostToDevice);
+    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err,
+                                                   "musaMemcpy H2D");
+  };
+
+  if (!::tensorflow::musa::plugin_env::SePageableH2DBounce() || !sync ||
+      (sync && !::tensorflow::musa::plugin_env::SeSyncH2DBounce())) {
+    pageable_fallback();
+    return;
+  }
+
+  const int dev_ord = Ordinal(device);
+  auto* pinned_pool =
+      ::tensorflow::musa::MusaSeRegistryPinnedMemoryPool(dev_ord);
+  if (pinned_pool == nullptr) {
+    pageable_fallback();
+    return;
+  }
+
+  void* bounce_buffer = pinned_pool->Allocate(static_cast<size_t>(size));
+  if (bounce_buffer == nullptr) {
+    pageable_fallback();
+    return;
+  }
+
+  std::memcpy(bounce_buffer, src, static_cast<size_t>(size));
+  musaStream_t copy_stream = sync ? 0 : stream;
+  musaError_t err = musaMemcpyAsync(dst, bounce_buffer, size,
+                                    musaMemcpyHostToDevice, copy_stream);
+  if (err != musaSuccess) {
+    pinned_pool->FreeCompleted(bounce_buffer, static_cast<size_t>(size));
+    TF_SetStatus(status, TF_INTERNAL,
+                 "musaMemcpyAsync H2D via pinned bounce buffer failed");
+    return;
+  }
+
+  if (sync) {
+    err = musaStreamSynchronize(copy_stream);
+    if (err == musaSuccess) {
+      pinned_pool->FreeCompleted(bounce_buffer, static_cast<size_t>(size));
+    } else {
+      pinned_pool->FreeAsync(bounce_buffer, static_cast<size_t>(size), nullptr);
+    }
+    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err,
+                                                   "musaStreamSynchronize H2D");
+    return;
+  }
+
+  pinned_pool->FreeAsync(bounce_buffer, static_cast<size_t>(size), copy_stream);
+  TF_SetStatus(status, TF_OK, "");
+}
+
 // --- SP_StreamExecutor callback implementations (names match SP_* vtable) ---
 
 void plugin_se_allocate(const SP_Device* device, uint64_t size, int64_t,
@@ -534,69 +636,8 @@ void plugin_se_memcpy_htod(const SP_Device* device, SP_Stream stream,
   if (TF_GetCode(status) != TF_OK) return;
 
   void* dst = device_dst->opaque;
-  musaPointerAttributes attributes;
-  musaError_t attr_err = musaPointerGetAttributes(&attributes, host_src);
-  const bool is_pinned =
-      attr_err == musaSuccess && attributes.type == musaMemoryTypeHost;
-  const bool is_device_src =
-      attr_err == musaSuccess && attributes.type == musaMemoryTypeDevice;
-  if (attr_err != musaSuccess) {
-    musaGetLastError();
-  }
-
-  if (is_device_src) {
-    musaError_t err = musaMemcpyAsync(dst, host_src, size,
-                                      musaMemcpyDeviceToDevice, stream->stream);
-    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err,
-                                                   "musaMemcpyAsync H2D(D2D)");
-    return;
-  }
-
-  if (::tensorflow::musa::plugin_env::SyncSeH2D()) {
-    musaError_t err = musaMemcpy(dst, host_src, size, musaMemcpyHostToDevice);
-    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err,
-                                                   "musaMemcpy H2D");
-    return;
-  }
-
-  if (is_pinned) {
-    musaError_t err = musaMemcpyAsync(dst, host_src, size,
-                                      musaMemcpyHostToDevice, stream->stream);
-    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err,
-                                                   "musaMemcpyAsync H2D");
-    return;
-  }
-
-  auto* pinned_pool =
-      ::tensorflow::musa::MusaSeRegistryPinnedMemoryPool(dev_ord);
-  if (pinned_pool == nullptr) {
-    musaError_t err = musaMemcpy(dst, host_src, size, musaMemcpyHostToDevice);
-    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err,
-                                                   "musaMemcpy H2D");
-    return;
-  }
-
-  void* bounce_buffer = pinned_pool->Allocate(static_cast<size_t>(size));
-  if (bounce_buffer == nullptr) {
-    musaError_t err = musaMemcpy(dst, host_src, size, musaMemcpyHostToDevice);
-    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err,
-                                                   "musaMemcpy H2D");
-    return;
-  }
-
-  std::memcpy(bounce_buffer, host_src, static_cast<size_t>(size));
-  musaError_t err = musaMemcpyAsync(dst, bounce_buffer, size,
-                                    musaMemcpyHostToDevice, stream->stream);
-  if (err != musaSuccess) {
-    pinned_pool->FreeAsync(bounce_buffer, static_cast<size_t>(size), nullptr);
-    TF_SetStatus(status, TF_INTERNAL,
-                 "musaMemcpyAsync H2D via pinned bounce buffer failed");
-    return;
-  }
-
-  pinned_pool->FreeAsync(bounce_buffer, static_cast<size_t>(size),
-                         stream->stream);
-  TF_SetStatus(status, TF_OK, "");
+  MemcpyHtoDWithPinnedBounce(device, stream->stream, dst, host_src, size,
+                             /*sync=*/false, status);
 }
 
 void plugin_se_memcpy_dtod(const SP_Device* device, SP_Stream stream,
@@ -700,22 +741,9 @@ void plugin_se_sync_memcpy_htod(const SP_Device* device,
   }
   ::tensorflow::musa::runtime::SetMusaDeviceOrStatus(Ordinal(device), status);
   if (TF_GetCode(status) != TF_OK) return;
-  musaPointerAttributes attributes;
-  musaError_t attr_err = musaPointerGetAttributes(&attributes, host_src);
-  if (attr_err == musaSuccess && attributes.type == musaMemoryTypeDevice) {
-    musaError_t err = musaMemcpy(device_dst->opaque, host_src, size,
-                                 musaMemcpyDeviceToDevice);
-    ::tensorflow::musa::runtime::SetStatusFromMusa(status, err,
-                                                   "musaMemcpy H2D(D2D)");
-    return;
-  }
-  if (attr_err != musaSuccess) {
-    musaGetLastError();
-  }
-
-  musaError_t err =
-      musaMemcpy(device_dst->opaque, host_src, size, musaMemcpyHostToDevice);
-  ::tensorflow::musa::runtime::SetStatusFromMusa(status, err, "musaMemcpy H2D");
+  void* dst = device_dst->opaque;
+  MemcpyHtoDWithPinnedBounce(device, nullptr, dst, host_src, size,
+                             /*sync=*/true, status);
 }
 
 void plugin_se_sync_memcpy_dtod(const SP_Device* device,
@@ -829,7 +857,7 @@ static void MUSA_PluginGetDeviceCountBody(int* count, TF_Status* status) {
   musaError_t err = musaGetDeviceCount(&n);
   if (err != musaSuccess) {
     if (!::tensorflow::musa::plugin_env::StrictPhysicalDeviceEnum()) {
-      VLOG(1) << "musaGetDeviceCount failed; plugin reports 0 devices "
+      VLOG(1) << "musaGetDeviceCount failed, plugin reports 0 devices "
                  "(set MUSA_STRICT_DEVICE_ENUM=1 to treat as error): "
               << musaGetErrorString(err);
       *count = 0;

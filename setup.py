@@ -117,15 +117,16 @@ class BuildPluginCommand(Command):
         project_root = os.path.abspath(os.path.dirname(__file__))
         build_dir = os.path.join(project_root, BUILD_DIR)
 
-        # Create build directory if it doesn't exist
-        if not os.path.exists(build_dir):
-            os.makedirs(build_dir)
+        if os.path.exists(build_dir):
+            shutil.rmtree(build_dir)
+        os.makedirs(build_dir)
 
         # Run CMake configuration
         cmake_cmd = [
             "cmake",
             "..",
             "-DCMAKE_BUILD_TYPE=Release",
+            f"-DPYTHON_EXECUTABLE={sys.executable}",
         ]
 
         print(f"Running CMake configuration: {cmake_cmd}")

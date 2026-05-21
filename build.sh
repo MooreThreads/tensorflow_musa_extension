@@ -75,8 +75,8 @@ case "$BUILD_TYPE" in
         echo "Building wheel package..."
         echo ""
 
-        # Clean previous wheel builds
-        rm -rf build/lib build/bdist.* dist/*.whl 2>/dev/null || true
+        # Clean previous wheel/native builds
+        rm -rf build dist/*.whl 2>/dev/null || true
 
         # Build wheel using setup.py (no isolation to use existing TF)
         "$PYTHON_BIN" setup.py bdist_wheel
