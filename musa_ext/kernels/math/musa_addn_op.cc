@@ -5,8 +5,10 @@
 #include "../utils_op.h"
 #include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/bfloat16.h"
+#include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
+#include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/framework/tensor_shape.h"
 #include "utils/logging.h"
 
@@ -14,7 +16,7 @@
 // MUSA AddN custom kernel launcher declarations from musa_addn_kernel.mu
 // ============================================================================
 
-#define MAX_INLINE_ADDN_INPUTS 8
+#define MAX_INLINE_ADDN_INPUTS 32
 
 struct InlinePointers {
   const void* ptrs[MAX_INLINE_ADDN_INPUTS];
@@ -39,6 +41,16 @@ void LaunchAddNKernelInt32(const int** inputs, InlinePointers inline_inputs,
 void LaunchAddNKernelInt64(const int64_t** inputs, InlinePointers inline_inputs,
                            int64_t* output, int num_inputs, int size,
                            musaStream_t stream);
+void LaunchAddNWithSliceGradFloat(InlinePointers base_inputs,
+                                  const float* slice_grad, float* output,
+                                  int num_base_inputs, int size, int axis_dim,
+                                  int slice_start, int inner_dim,
+                                  musaStream_t stream);
+void LaunchAddNWithSliceGradBFloat16(InlinePointers base_inputs,
+                                     const void* slice_grad, void* output,
+                                     int num_base_inputs, int size,
+                                     int axis_dim, int slice_start,
+                                     int inner_dim, musaStream_t stream);
 }
 
 namespace tensorflow {
@@ -285,6 +297,83 @@ class MusaAddNOp : public MusaOpKernel {
                                musaStream_t);
 };
 
+
+class MusaAddNWithSliceGradOp : public MusaOpKernel {
+ public:
+  explicit MusaAddNWithSliceGradOp(OpKernelConstruction* ctx)
+      : MusaOpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("N", &num_base_inputs_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("axis_dim", &axis_dim_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("slice_start", &slice_start_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("inner_dim", &inner_dim_));
+  }
+
+  bool IsExpensive() override { return false; }
+
+  void Compute(OpKernelContext* ctx) override {
+    OP_REQUIRES(ctx, num_base_inputs_ >= 1 &&
+                         num_base_inputs_ <= MAX_INLINE_ADDN_INPUTS,
+                errors::InvalidArgument(
+                    "MusaAddNWithSliceGrad requires 1..",
+                    MAX_INLINE_ADDN_INPUTS, " base inputs, got ",
+                    num_base_inputs_));
+    OP_REQUIRES(ctx, ctx->num_inputs() == num_base_inputs_ + 1,
+                errors::InvalidArgument("MusaAddNWithSliceGrad expected ",
+                                        num_base_inputs_ + 1, " inputs, got ",
+                                        ctx->num_inputs()));
+
+    const TensorShape& output_shape = ctx->input(0).shape();
+    for (int i = 1; i < num_base_inputs_; ++i) {
+      OP_REQUIRES(ctx, ctx->input(i).shape() == output_shape,
+                  errors::InvalidArgument(
+                      "MusaAddNWithSliceGrad base input shape mismatch: ",
+                      ctx->input(i).shape().DebugString(), " vs ",
+                      output_shape.DebugString()));
+    }
+    OP_REQUIRES(ctx, output_shape.dims() >= 2 &&
+                         output_shape.dim_size(1) == axis_dim_,
+                errors::InvalidArgument(
+                    "MusaAddNWithSliceGrad output axis mismatch"));
+    OP_REQUIRES(ctx, slice_start_ >= 0 && slice_start_ < axis_dim_ &&
+                         inner_dim_ > 0,
+                errors::InvalidArgument(
+                    "MusaAddNWithSliceGrad invalid slice attrs"));
+
+    Tensor* output = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->forward_input_or_allocate_output(
+                            {0}, 0, output_shape, &output));
+    if (output->NumElements() == 0) return;
+
+    InlinePointers base_inputs;
+    for (int i = 0; i < num_base_inputs_; ++i) {
+      base_inputs.ptrs[i] = ctx->input(i).tensor_data().data();
+    }
+    const Tensor& slice_grad = ctx->input(num_base_inputs_);
+
+    auto& handle = GetHandleByCtx(ctx);
+    musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
+    if (output->dtype() == DT_FLOAT) {
+      LaunchAddNWithSliceGradFloat(
+          base_inputs, slice_grad.flat<float>().data(),
+          output->flat<float>().data(), num_base_inputs_,
+          static_cast<int>(output->NumElements()), axis_dim_, slice_start_,
+          inner_dim_, stream);
+    } else {
+      LaunchAddNWithSliceGradBFloat16(
+          base_inputs, slice_grad.flat<bfloat16>().data(),
+          output->flat<bfloat16>().data(), num_base_inputs_,
+          static_cast<int>(output->NumElements()), axis_dim_, slice_start_,
+          inner_dim_, stream);
+    }
+  }
+
+ private:
+  int num_base_inputs_ = 0;
+  int axis_dim_ = 0;
+  int slice_start_ = 0;
+  int inner_dim_ = 1;
+};
+
 // ============================================================================
 // Launchers
 // ============================================================================
@@ -333,5 +422,30 @@ REGISTER_MUSA_ADDN(bfloat16);
 REGISTER_MUSA_ADDN(int32);
 REGISTER_MUSA_ADDN(int64);
 
+REGISTER_KERNEL_BUILDER(Name("MusaAddNWithSliceGrad")
+                            .Device("MUSA")
+                            .TypeConstraint<float>("T"),
+                        MusaAddNWithSliceGradOp);
+REGISTER_KERNEL_BUILDER(Name("MusaAddNWithSliceGrad")
+                            .Device("MUSA")
+                            .TypeConstraint<bfloat16>("T"),
+                        MusaAddNWithSliceGradOp);
+
 }  // namespace musa
+
+
+REGISTER_OP("MusaAddNWithSliceGrad")
+    .Input("base_inputs: N * T")
+    .Input("slice_grad: T")
+    .Output("output: T")
+    .Attr("N: int >= 1")
+    .Attr("T: {float, bfloat16}")
+    .Attr("axis_dim: int")
+    .Attr("slice_start: int")
+    .Attr("inner_dim: int")
+    .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
+      c->set_output(0, c->input(0));
+      return OkStatus();
+    });
+
 }  // namespace tensorflow

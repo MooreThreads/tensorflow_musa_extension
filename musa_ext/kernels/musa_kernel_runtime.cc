@@ -25,7 +25,11 @@ limitations under the License.
 #include "mu/tf_compat/pluggable_tf_compat.h"
 #include "tensorflow/core/framework/allocator.h"
 #include "tensorflow/core/framework/op_kernel.h"
+#if __has_include("tensorflow/stream_executor/stream.h")
 #include "tensorflow/stream_executor/stream.h"
+#else
+#include "xla/stream_executor/stream.h"
+#endif
 
 namespace tensorflow {
 namespace musa {

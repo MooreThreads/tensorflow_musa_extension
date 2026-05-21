@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <memory>
+#include <type_traits>
 
 #include "../utils_op.h"
 #include "mu/device/musa_memcpy.h"
@@ -14,6 +15,10 @@
 
 namespace tensorflow {
 namespace musa {
+
+extern "C" void LaunchMeanLastDimBFloat16(const void* input, void* output,
+                                          int64_t rows, int64_t reduce,
+                                          musaStream_t stream);
 
 REGISTER_OP("MusaMean")
     .Input("input: T")
@@ -99,6 +104,22 @@ class MusaMeanOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &out));
 
     if (out->NumElements() == 0) return;
+
+    if constexpr (std::is_same<T, bfloat16>::value) {
+      const bool reduce_last_dim =
+          reduce_dims.size() == 1 && reduce_dims[0] == input.dims() - 1;
+      if (reduce_last_dim && input.dims() >= 2 && reduce_elements <= 1024) {
+        musaStream_t stream = GetMusaStreamByCtx(ctx);
+        LaunchMeanLastDimBFloat16(input.tensor_data().data(),
+                                  const_cast<char*>(out->tensor_data().data()),
+                                  out->NumElements(), reduce_elements, stream);
+        auto launch_status = musaGetLastError();
+        OP_REQUIRES(ctx, launch_status == musaSuccess,
+                    errors::Internal("MUSA Mean BF16 fast path failed: ",
+                                     musaGetErrorString(launch_status)));
+        return;
+      }
+    }
 
     Tensor out_reshaped(out->dtype());
     OP_REQUIRES(ctx, out_reshaped.CopyFrom(*out, musa_output_shape),

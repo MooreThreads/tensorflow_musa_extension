@@ -21,6 +21,7 @@ limitations under the License.
 #include <unordered_set>
 
 #include "tensorflow/core/framework/attr_value.pb.h"
+#include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/platform/logging.h"
 
@@ -106,6 +107,9 @@ bool TryGetScalarFloatValue(const NodeDef& node, float* value) {
     case DT_INT64:
       *value = static_cast<float>(parsed_tensor.flat<int64>()(0));
       return true;
+    case DT_BFLOAT16:
+      *value = static_cast<float>(parsed_tensor.flat<bfloat16>()(0));
+      return true;
     default:
       return false;
   }
@@ -164,6 +168,10 @@ bool IsSqrt2Node(const NodeDef* node, const GraphDef& graph) {
   if (!node) return false;
   if (HasFloatValue(*node, kSqrt2)) {
     return true;
+  }
+  if (IsOp(*node, "Cast") && node->input_size() == 1) {
+    const NodeDef* cast_input = FindProducer(graph, node->input(0));
+    return cast_input && HasFloatValue(*cast_input, kSqrt2);
   }
   if (IsOp(*node, "Sqrt") && node->input_size() == 1) {
     const NodeDef* sqrt_input = FindProducer(graph, node->input(0));

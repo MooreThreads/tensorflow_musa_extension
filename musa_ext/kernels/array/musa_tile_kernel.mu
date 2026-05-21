@@ -1,72 +1,94 @@
+#include <musa_bf16.h>
+#include <musa_fp16.h>
 #include <musa_runtime.h>
 #include <stdint.h>
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wignored-pragmas"
-#include "tensorflow/core/framework/types.h"
-#pragma GCC diagnostic pop
-
-namespace tensorflow {
-namespace musa {
 namespace {
 
-constexpr int kThreadsPerBlock = 256;
+constexpr int kMaxTileDims = 16;
+constexpr int kThreads = 256;
+
+struct TileShapeInfo {
+  int dims;
+  int64_t input_dims[kMaxTileDims];
+  int64_t output_dims[kMaxTileDims];
+  int64_t input_strides[kMaxTileDims];
+};
 
 template <typename T>
-__global__ void TileKernel(const T* __restrict__ input,
-                           const int64_t* __restrict__ input_dims,
-                           const int64_t* __restrict__ output_dims, int dims,
-                           int64_t output_size, T* __restrict__ output) {
-  const int64_t tid = blockIdx.x * static_cast<int64_t>(blockDim.x) + threadIdx.x;
-  if (tid >= output_size) return;
+__global__ void TileKernel(const T* __restrict__ input, T* __restrict__ output,
+                           int64_t total, TileShapeInfo info) {
+  int64_t out_index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const int64_t stride = static_cast<int64_t>(blockDim.x) * gridDim.x;
 
-  int64_t remaining = tid;
-  int64_t input_offset = 0;
-  int64_t input_stride = 1;
+  for (; out_index < total; out_index += stride) {
+    int64_t remaining = out_index;
+    int64_t input_index = 0;
 
-  for (int d = dims - 1; d >= 0; --d) {
-    const int64_t out_dim = output_dims[d];
-    const int64_t in_dim = input_dims[d];
-    const int64_t out_coord = remaining % out_dim;
-    remaining /= out_dim;
-    input_offset += (out_coord % in_dim) * input_stride;
-    input_stride *= in_dim;
+    for (int dim = info.dims - 1; dim >= 0; --dim) {
+      const int64_t output_dim = info.output_dims[dim];
+      const int64_t coord = remaining % output_dim;
+      remaining /= output_dim;
+      input_index += (coord % info.input_dims[dim]) * info.input_strides[dim];
+    }
+
+    output[out_index] = input[input_index];
   }
+}
 
-  output[tid] = input[input_offset];
+int BlocksFor(int64_t total) {
+  const int64_t blocks = (total + kThreads - 1) / kThreads;
+  return blocks > 4096 ? 4096 : static_cast<int>(blocks);
+}
+
+template <typename T>
+void LaunchTileTyped(const T* input, T* output, int64_t total,
+                     TileShapeInfo info, musaStream_t stream) {
+  if (total <= 0) return;
+  TileKernel<T><<<BlocksFor(total), kThreads, 0, stream>>>(input, output, total,
+                                                           info);
 }
 
 }  // namespace
 
-template <typename T>
-void LaunchMusaTileKernel(const T* input, const int64_t* input_dims,
-                          const int64_t* output_dims, int dims,
-                          int64_t output_size, T* output,
-                          musaStream_t stream) {
-  if (output_size <= 0) return;
-  const int64_t blocks = (output_size + kThreadsPerBlock - 1) / kThreadsPerBlock;
-  TileKernel<T><<<blocks, kThreadsPerBlock, 0, stream>>>(
-      input, input_dims, output_dims, dims, output_size, output);
+extern "C" {
+
+void LaunchTileFloat(const float* input, float* output, int64_t total,
+                     TileShapeInfo info, musaStream_t stream) {
+  LaunchTileTyped(input, output, total, info, stream);
 }
 
-template void LaunchMusaTileKernel<float>(const float*, const int64_t*,
-                                          const int64_t*, int, int64_t, float*,
-                                          musaStream_t);
-template void LaunchMusaTileKernel<Eigen::half>(
-    const Eigen::half*, const int64_t*, const int64_t*, int, int64_t,
-    Eigen::half*, musaStream_t);
-template void LaunchMusaTileKernel<double>(const double*, const int64_t*,
-                                           const int64_t*, int, int64_t,
-                                           double*, musaStream_t);
-template void LaunchMusaTileKernel<int32>(const int32*, const int64_t*,
-                                          const int64_t*, int, int64_t, int32*,
-                                          musaStream_t);
-template void LaunchMusaTileKernel<int64>(const int64*, const int64_t*,
-                                          const int64_t*, int, int64_t, int64*,
-                                          musaStream_t);
-template void LaunchMusaTileKernel<bool>(const bool*, const int64_t*,
-                                         const int64_t*, int, int64_t, bool*,
-                                         musaStream_t);
+void LaunchTileDouble(const double* input, double* output, int64_t total,
+                      TileShapeInfo info, musaStream_t stream) {
+  LaunchTileTyped(input, output, total, info, stream);
+}
 
-}  // namespace musa
-}  // namespace tensorflow
+void LaunchTileInt32(const int32_t* input, int32_t* output, int64_t total,
+                     TileShapeInfo info, musaStream_t stream) {
+  LaunchTileTyped(input, output, total, info, stream);
+}
+
+void LaunchTileInt64(const int64_t* input, int64_t* output, int64_t total,
+                     TileShapeInfo info, musaStream_t stream) {
+  LaunchTileTyped(input, output, total, info, stream);
+}
+
+void LaunchTileBool(const bool* input, bool* output, int64_t total,
+                    TileShapeInfo info, musaStream_t stream) {
+  LaunchTileTyped(input, output, total, info, stream);
+}
+
+void LaunchTileHalf(const void* input, void* output, int64_t total,
+                    TileShapeInfo info, musaStream_t stream) {
+  LaunchTileTyped(reinterpret_cast<const half*>(input),
+                  reinterpret_cast<half*>(output), total, info, stream);
+}
+
+void LaunchTileBFloat16(const void* input, void* output, int64_t total,
+                        TileShapeInfo info, musaStream_t stream) {
+  LaunchTileTyped(reinterpret_cast<const __mt_bfloat16*>(input),
+                  reinterpret_cast<__mt_bfloat16*>(output), total, info,
+                  stream);
+}
+
+}  // extern "C"

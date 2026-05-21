@@ -1,6 +1,7 @@
 #include <mudnn.h>
 
 #include "../utils_op.h"
+#include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -10,6 +11,14 @@
 
 namespace tensorflow {
 namespace musa {
+
+extern "C" void LaunchMusaScaledMaskedMulFloat(const float* x,
+                                                const bool* mask, float* y,
+                                                int64_t n, float scale,
+                                                musaStream_t stream);
+extern "C" void LaunchMusaScaledMaskedMulBFloat16(
+    const tensorflow::bfloat16* x, const bool* mask, tensorflow::bfloat16* y,
+    int64_t n, float scale, musaStream_t stream);
 
 // ----------------------------------------------------------------------------
 // Forward: MusaDropoutOp
@@ -132,6 +141,52 @@ class MusaDropoutGradOp : public MusaOpKernel {
   float rate_;
 };
 
+class MusaScaledMaskedMulOp : public MusaOpKernel {
+ public:
+  explicit MusaScaledMaskedMulOp(OpKernelConstruction* ctx)
+      : MusaOpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("scale", &scale_));
+  }
+
+  bool IsExpensive() override { return false; }
+
+  void Compute(OpKernelContext* ctx) override {
+    const Tensor& x = ctx->input(0);
+    const Tensor& mask = ctx->input(1);
+
+    OP_REQUIRES(ctx, x.dtype() == DT_FLOAT || x.dtype() == DT_BFLOAT16,
+                errors::InvalidArgument(
+                    "MusaScaledMaskedMul expects float/bfloat16 input"));
+    OP_REQUIRES(ctx, mask.dtype() == DT_BOOL,
+                errors::InvalidArgument(
+                    "MusaScaledMaskedMul expects bool mask"));
+    OP_REQUIRES(ctx, x.shape() == mask.shape(),
+                errors::InvalidArgument(
+                    "input and mask must have the same shape. input: ",
+                    x.shape().DebugString(),
+                    ", mask: ", mask.shape().DebugString()));
+
+    Tensor* y = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, x.shape(), &y));
+    if (x.NumElements() == 0) return;
+
+    auto& h = GetHandleByCtx(ctx);
+    musaStream_t stream = reinterpret_cast<musaStream_t>(h.GetStream());
+    if (x.dtype() == DT_FLOAT) {
+      LaunchMusaScaledMaskedMulFloat(
+          x.flat<float>().data(), mask.flat<bool>().data(),
+          y->flat<float>().data(), x.NumElements(), scale_, stream);
+    } else {
+      LaunchMusaScaledMaskedMulBFloat16(
+          x.flat<bfloat16>().data(), mask.flat<bool>().data(),
+          y->flat<bfloat16>().data(), x.NumElements(), scale_, stream);
+    }
+  }
+
+ private:
+  float scale_;
+};
+
 // ----------------------------------------------------------------------------
 // Kernel registrations
 // ----------------------------------------------------------------------------
@@ -142,6 +197,16 @@ class MusaDropoutGradOp : public MusaOpKernel {
   REGISTER_KERNEL_BUILDER(                                              \
       Name("MusaDropoutGrad").Device("MUSA").TypeConstraint<TYPE>("T"), \
       MusaDropoutGradOp<TYPE>);
+
+#define REGISTER_MUSA_SCALED_MASKED_MUL(TYPE)                         \
+  REGISTER_KERNEL_BUILDER(                                            \
+      Name("MusaScaledMaskedMul").Device("MUSA").TypeConstraint<TYPE>("T"), \
+      MusaScaledMaskedMulOp);
+
+REGISTER_MUSA_SCALED_MASKED_MUL(float);
+REGISTER_MUSA_SCALED_MASKED_MUL(bfloat16);
+
+#undef REGISTER_MUSA_SCALED_MASKED_MUL
 
 REGISTER_MUSA_DROPOUT(float);
 REGISTER_MUSA_DROPOUT(Eigen::half);
@@ -174,6 +239,17 @@ REGISTER_OP("MusaDropoutGrad")
     .Output("grad_input: T")
     .Attr("T: {float, half, bfloat16}")
     .Attr("rate: float = 0.5")
+    .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
+      c->set_output(0, c->input(0));
+      return OkStatus();
+    });
+
+REGISTER_OP("MusaScaledMaskedMul")
+    .Input("x: T")
+    .Input("mask: bool")
+    .Output("y: T")
+    .Attr("T: {float, bfloat16}")
+    .Attr("scale: float")
     .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
       c->set_output(0, c->input(0));
       return OkStatus();

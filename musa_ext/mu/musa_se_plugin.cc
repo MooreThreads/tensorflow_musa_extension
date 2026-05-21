@@ -56,7 +56,7 @@ extern "C" const char NAME_MTGPU[] = "MUSA";
 
 namespace {
 
-static const char kPlatformName[] = "MUSA";
+static const char kPlatformName[] = "MUSA_PLUGGABLE";
 static const char kPlatformType[] = "MUSA";
 static const char kVendorMthreads[] = "MooreThreads";
 

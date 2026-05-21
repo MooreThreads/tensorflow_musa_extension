@@ -137,5 +137,36 @@ REGISTER_SPARSE_ADAM_LAUNCHER(bfloat16, int64);
 
 #undef REGISTER_SPARSE_ADAM_LAUNCHER
 
+__global__ void ResourceApplyAdamFloatKernel(
+    float* __restrict__ var, float* __restrict__ m, float* __restrict__ v,
+    const float* __restrict__ grad, float beta1, float beta2, float epsilon,
+    float alpha, int64_t total) {
+  int64_t tid = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const int64_t step = static_cast<int64_t>(blockDim.x) * gridDim.x;
+  const float one_minus_beta1 = 1.0f - beta1;
+  const float one_minus_beta2 = 1.0f - beta2;
+
+  for (; tid < total; tid += step) {
+    const float g = grad[tid];
+    const float m_new = beta1 * m[tid] + one_minus_beta1 * g;
+    const float v_new = beta2 * v[tid] + one_minus_beta2 * g * g;
+    m[tid] = m_new;
+    v[tid] = v_new;
+    var[tid] -= alpha * m_new / (sqrtf(v_new) + epsilon);
+  }
+}
+
+void LaunchResourceApplyAdamFloat(float* var, float* m, float* v,
+                                  const float* grad, float beta1,
+                                  float beta2, float epsilon, float alpha,
+                                  int64_t total, musaStream_t stream) {
+  if (total <= 0) return;
+  int64_t blocks64 = (total + OPTIMAL_THREADS - 1) / OPTIMAL_THREADS;
+  if (blocks64 > 4096) blocks64 = 4096;
+  const int blocks = static_cast<int>(blocks64 > 0 ? blocks64 : 1);
+  ResourceApplyAdamFloatKernel<<<blocks, OPTIMAL_THREADS, 0, stream>>>(
+      var, m, v, grad, beta1, beta2, epsilon, alpha, total);
+}
+
 }  // namespace musa
 }  // namespace tensorflow

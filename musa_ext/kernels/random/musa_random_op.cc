@@ -1,3 +1,5 @@
+#include <cstring>
+
 #include "mu/device/musa_memcpy.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/tensor.h"
@@ -31,19 +33,43 @@ PHILOX_DEVICE_INLINE T Uint32ToFloatOfficial(uint32 x) {
   return static_cast<T>(result - 1.0f);
 }
 
+template <typename T>
+Status ReadSeedPair(const Tensor& seed, uint64* seed0, uint64* seed1) {
+  const T* seed_data = seed.flat<T>().data();
+  T host_seed[2];
+
+  musaPointerAttributes attributes;
+  musaError_t attr_err = musaPointerGetAttributes(&attributes, seed_data);
+  const bool is_device =
+      attr_err == musaSuccess && attributes.type == musaMemoryTypeDevice;
+  if (attr_err != musaSuccess) {
+    musaGetLastError();
+  }
+
+  if (is_device) {
+    mStatus s = MusaMemcpyD2H(host_seed, seed_data, sizeof(host_seed));
+    if (s != mStatus::SUCCESS) {
+      return errors::Internal("Failed to copy stateless random seed to host");
+    }
+    seed_data = host_seed;
+  }
+
+  *seed0 = static_cast<uint64>(seed_data[0]);
+  *seed1 = static_cast<uint64>(seed_data[1]);
+  return OkStatus();
+}
+
 Status InternalGenerateKey(const Tensor& seed, PhiloxRandom::Key* out_key,
                            PhiloxRandom::ResultType* out_counter) {
   uint64 seed0;
   uint64 seed1;
 
   if (seed.dtype() == DT_INT32) {
-    const auto seed_vals = seed.flat<int32>();
-    seed0 = static_cast<uint64>(seed_vals(0));
-    seed1 = static_cast<uint64>(seed_vals(1));
+    Status s = ReadSeedPair<int32>(seed, &seed0, &seed1);
+    if (!s.ok()) return s;
   } else if (seed.dtype() == DT_INT64) {
-    const auto seed_vals = seed.flat<int64>();
-    seed0 = static_cast<uint64>(seed_vals(0));
-    seed1 = static_cast<uint64>(seed_vals(1));
+    Status s = ReadSeedPair<int64>(seed, &seed0, &seed1);
+    if (!s.ok()) return s;
   } else {
     return errors::InvalidArgument("Invalid seed type");
   }
@@ -66,6 +92,12 @@ Status InternalGenerateKey(const Tensor& seed, PhiloxRandom::Key* out_key,
 
   return OkStatus();
 }
+
+uint64 PackUint32Pair(uint32 lo, uint32 hi) {
+  return (static_cast<uint64>(hi) << 32) | static_cast<uint64>(lo);
+}
+
+constexpr int32 kPhiloxAlg = 1;
 
 template <typename T>
 class MusaRandomOp : public MusaOpKernel {
@@ -129,6 +161,61 @@ class MusaRandomOp : public MusaOpKernel {
   }
 };
 
+template <bool IncludeAlg>
+class MusaStatelessRandomGetKeyCounterOp : public MusaOpKernel {
+ public:
+  explicit MusaStatelessRandomGetKeyCounterOp(OpKernelConstruction* ctx)
+      : MusaOpKernel(ctx) {}
+
+  void Compute(OpKernelContext* ctx) override {
+    const Tensor& seed_t = ctx->input(0);
+    OP_REQUIRES(ctx, seed_t.dims() == 1 && seed_t.dim_size(0) == 2,
+                errors::InvalidArgument(
+                    "seed must have shape [2], got ",
+                    seed_t.shape().DebugString()));
+
+    PhiloxRandom::Key key;
+    PhiloxRandom::ResultType counter;
+    OP_REQUIRES_OK(ctx, InternalGenerateKey(seed_t, &key, &counter));
+
+    Tensor* key_out = nullptr;
+    OP_REQUIRES_OK(ctx,
+                   ctx->allocate_output(0, TensorShape({1}), &key_out));
+    key_out->flat<uint64>()(0) = PackUint32Pair(key[0], key[1]);
+
+    Tensor* counter_out = nullptr;
+    OP_REQUIRES_OK(ctx,
+                   ctx->allocate_output(1, TensorShape({2}), &counter_out));
+    auto counter_flat = counter_out->flat<uint64>();
+    counter_flat(0) = PackUint32Pair(counter[0], counter[1]);
+    counter_flat(1) = PackUint32Pair(counter[2], counter[3]);
+
+    if (IncludeAlg) {
+      Tensor* alg_out = nullptr;
+      OP_REQUIRES_OK(ctx,
+                     ctx->allocate_output(2, TensorShape({}), &alg_out));
+      alg_out->scalar<int32>()() = kPhiloxAlg;
+    }
+  }
+};
+
+#define REGISTER_MUSA_GET_KEY_COUNTER(TYPE)                           \
+  REGISTER_KERNEL_BUILDER(Name("StatelessRandomGetKeyCounter")        \
+                              .Device("MUSA")                         \
+                              .HostMemory("seed")                     \
+                              .HostMemory("key")                      \
+                              .HostMemory("counter")                  \
+                              .TypeConstraint<TYPE>("Tseed"),         \
+                          MusaStatelessRandomGetKeyCounterOp<false>); \
+  REGISTER_KERNEL_BUILDER(Name("StatelessRandomGetKeyCounterAlg")     \
+                              .Device("MUSA")                         \
+                              .HostMemory("seed")                     \
+                              .HostMemory("key")                      \
+                              .HostMemory("counter")                  \
+                              .HostMemory("alg")                      \
+                              .TypeConstraint<TYPE>("Tseed"),         \
+                          MusaStatelessRandomGetKeyCounterOp<true>)
+
 }  // namespace
 
 #define REGISTER_MUSA_RANDOM(TYPE)                            \
@@ -149,6 +236,11 @@ class MusaRandomOp : public MusaOpKernel {
 
 REGISTER_MUSA_RANDOM(float);
 REGISTER_MUSA_RANDOM(double);
+
+REGISTER_MUSA_GET_KEY_COUNTER(int32);
+REGISTER_MUSA_GET_KEY_COUNTER(int64);
+
+#undef REGISTER_MUSA_GET_KEY_COUNTER
 
 }  // namespace musa
 }  // namespace tensorflow
