@@ -5,7 +5,7 @@ project(musa_plugin)
 set(CMAKE_C_COMPILER gcc)
 set(CMAKE_CXX_COMPILER g++)
 
-set(CMAKE_CXX_STANDARD 17)
+# C++ standard is selected after querying TensorFlow below.
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Set MUSA path
@@ -33,6 +33,16 @@ if(NOT PYTHON_EXECUTABLE)
     set(PYTHON_EXECUTABLE python3)
 endif()
 message(STATUS "Using Python executable: ${PYTHON_EXECUTABLE}")
+execute_process(COMMAND "${PYTHON_EXECUTABLE}" -c "import tensorflow as tf; print(tf.__version__.split('+')[0])"
+    OUTPUT_VARIABLE TF_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(TF_VERSION VERSION_LESS "2.10.0")
+    set(CMAKE_CXX_STANDARD 14)
+    set(MUSA_CXX_STANDARD_FLAG -std=c++14)
+else()
+    set(CMAKE_CXX_STANDARD 17)
+    set(MUSA_CXX_STANDARD_FLAG -std=c++17)
+endif()
+message(STATUS "Using C++ standard: C++${CMAKE_CXX_STANDARD}")
 execute_process(COMMAND "${PYTHON_EXECUTABLE}" -c "import tensorflow as tf; print(tf.sysconfig.get_include())"
     OUTPUT_VARIABLE TF_INC OUTPUT_STRIP_TRAILING_WHITESPACE)
 execute_process(COMMAND "${PYTHON_EXECUTABLE}" -c "import tensorflow as tf; print(' '.join(tf.sysconfig.get_compile_flags()))"
@@ -163,12 +173,12 @@ file(GLOB_RECURSE CPP_SOURCES
 # Automatically collect MUSA Kernel files
 file(GLOB_RECURSE MU_SOURCES "${KERNELS_ROOT}/*.mu")
 
-# TensorFlow headers pulled into `.mu` compilation require C++17, and mcc's
-# aarch64 host predefines can incorrectly trigger NEON-only host headers.
+# TensorFlow 2.15+ headers pulled into `.mu` compilation require C++17, while
+# TensorFlow 2.6.1 must stay on C++14 to match its Abseil string_view ABI.
 set(MCC_COMMON_FLAGS
     -O3
     -fPIC
-    -std=c++17
+    ${MUSA_CXX_STANDARD_FLAG}
     -DEIGEN_DONT_VECTORIZE
     -U__ARM_NEON
     -U__ARM_NEON__

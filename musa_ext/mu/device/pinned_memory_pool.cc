@@ -69,6 +69,16 @@ GPUPinnedMemoryPool::~GPUPinnedMemoryPool() {
     ReleaseBlock(block);
   }
   free_list_.clear();
+
+  for (musaEvent_t event : free_events_) {
+    musaError_t destroy_err = musaEventDestroy(event);
+    if (destroy_err != musaSuccess &&
+        destroy_err != musaErrorInitializationError) {
+      LOG(WARNING) << "PinnedMemoryPool: Failed to destroy reusable event: "
+                   << musaGetErrorString(destroy_err);
+    }
+  }
+  free_events_.clear();
 }
 
 void* GPUPinnedMemoryPool::Allocate(size_t bytes) {
@@ -109,6 +119,16 @@ void* GPUPinnedMemoryPool::Allocate(size_t bytes) {
       }
       free_list_.pop_back();
 
+      reuse_hits_++;
+      if ((reuse_hits_ & 0x3ff) == 1) {
+        VLOG(1) << "PinnedMemoryPool stats: reuse_hits=" << reuse_hits_
+                << " host_allocs=" << host_allocs_
+                << " event_reuse_hits=" << event_reuse_hits_
+                << " event_allocs=" << event_allocs_
+                << " free_blocks=" << free_list_.size()
+                << " pending_frees=" << pending_frees_.size()
+                << " free_events=" << free_events_.size();
+      }
       VLOG(2) << "PinnedMemoryPool: Reusing block " << block.ptr
               << " size=" << block.size << " requested=" << alloc_size;
       return block.ptr;
@@ -127,9 +147,33 @@ void* GPUPinnedMemoryPool::Allocate(size_t bytes) {
     return nullptr;
   }
 
+  {
+    mutex_lock l(mu_);
+    host_allocs_++;
+    VLOG(1) << "PinnedMemoryPool stats: allocated new host block ptr=" << ptr
+            << " size=" << alloc_size << " host_allocs=" << host_allocs_
+            << " reuse_hits=" << reuse_hits_;
+  }
+
   VLOG(2) << "PinnedMemoryPool: Allocated new block " << ptr
           << " size=" << alloc_size;
   return ptr;
+}
+
+void GPUPinnedMemoryPool::FreeCompleted(void* ptr, size_t bytes) {
+  if (ptr == nullptr) {
+    return;
+  }
+
+  size_t alloc_size = bytes;
+  if (alloc_size < kMinAllocationSize) {
+    alloc_size = kMinAllocationSize;
+  }
+
+  mutex_lock l(mu_);
+  free_list_.push_back({ptr, alloc_size, nullptr});
+  VLOG(2) << "PinnedMemoryPool: Returned completed block " << ptr
+          << " size=" << alloc_size;
 }
 
 void GPUPinnedMemoryPool::FreeAsync(void* ptr, size_t bytes,
@@ -163,14 +207,28 @@ void GPUPinnedMemoryPool::FreeAsync(void* ptr, size_t bytes,
     return;
   }
 
-  musaEvent_t event;
-  musaError_t err = musaEventCreateWithFlags(&event, musaEventDisableTiming);
-  if (err != musaSuccess) {
-    LOG(ERROR) << "PinnedMemoryPool: Failed to create event: "
-               << musaGetErrorString(err);
-    musaStreamSynchronize(stream);
-    musaFreeHost(ptr);
-    return;
+  musaEvent_t event = nullptr;
+  musaError_t err = musaSuccess;
+  {
+    mutex_lock l(mu_);
+    if (!free_events_.empty()) {
+      event = free_events_.back();
+      free_events_.pop_back();
+      event_reuse_hits_++;
+    }
+  }
+
+  if (event == nullptr) {
+    err = musaEventCreateWithFlags(&event, musaEventDisableTiming);
+    if (err != musaSuccess) {
+      LOG(ERROR) << "PinnedMemoryPool: Failed to create event: "
+                 << musaGetErrorString(err);
+      musaStreamSynchronize(stream);
+      musaFreeHost(ptr);
+      return;
+    }
+    mutex_lock l(mu_);
+    event_allocs_++;
   }
 
   err = musaEventRecord(event, stream);
@@ -233,17 +291,14 @@ void GPUPinnedMemoryPool::PollPendingFrees() {
     musaError_t err = musaEventQuery(block.event);
 
     if (err == musaSuccess) {
-      // Event completed successfully, destroy it and move block to free_list
-      musaError_t destroy_err = musaEventDestroy(block.event);
-      if (destroy_err != musaSuccess) {
-        LOG(WARNING) << "PinnedMemoryPool: Failed to destroy event for block "
-                     << block.ptr << ": " << musaGetErrorString(destroy_err);
-      }
+      // Event completed successfully, recycle it and move block to free_list
+      musaEvent_t completed_event = block.event;
       block.event = nullptr;
 
       VLOG(2) << "PinnedMemoryPool: Block " << block.ptr
               << " completed, moving to free_list";
 
+      free_events_.push_back(completed_event);
       free_list_.push_back(block);
       it = pending_frees_.erase(it);
     } else if (err == musaErrorNotReady) {

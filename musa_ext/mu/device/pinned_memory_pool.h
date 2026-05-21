@@ -58,6 +58,10 @@ class GPUPinnedMemoryPool {
   // Thread-safe.
   void FreeAsync(void* ptr, size_t bytes, musaStream_t stream);
 
+  // Return memory that is already known to be safe for reuse.
+  // Thread-safe.
+  void FreeCompleted(void* ptr, size_t bytes);
+
   // Disable copy and move
   GPUPinnedMemoryPool(const GPUPinnedMemoryPool&) = delete;
   GPUPinnedMemoryPool& operator=(const GPUPinnedMemoryPool&) = delete;
@@ -75,6 +79,14 @@ class GPUPinnedMemoryPool {
 
   // Free blocks that are safe to reuse (GPU operations completed)
   std::vector<Block> free_list_ TF_GUARDED_BY(mu_);
+
+  // Events that can be reused for async free tracking
+  std::vector<musaEvent_t> free_events_ TF_GUARDED_BY(mu_);
+
+  uint64_t reuse_hits_ TF_GUARDED_BY(mu_) = 0;
+  uint64_t host_allocs_ TF_GUARDED_BY(mu_) = 0;
+  uint64_t event_reuse_hits_ TF_GUARDED_BY(mu_) = 0;
+  uint64_t event_allocs_ TF_GUARDED_BY(mu_) = 0;
 
   // Blocks waiting for GPU completion
   std::list<Block> pending_frees_ TF_GUARDED_BY(mu_);

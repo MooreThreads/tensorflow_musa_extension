@@ -30,6 +30,14 @@ inline bool StrictPhysicalDeviceEnum() {
 
 inline bool SyncSeH2D() { return EnvIsOne("MUSA_SE_SYNC_H2D"); }
 
+inline bool SePageableH2DBounce() {
+  return !EnvIsOne("MUSA_SE_DISABLE_PAGEABLE_H2D_BOUNCE");
+}
+
+inline bool SeSyncH2DBounce() {
+  return !EnvIsOne("MUSA_SE_DISABLE_SYNC_H2D_BOUNCE");
+}
+
 inline bool SyncSeStreamDependency() {
   return EnvIsOne("MUSA_SE_SYNC_STREAM_DEPENDENCY");
 }
