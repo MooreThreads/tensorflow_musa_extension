@@ -795,6 +795,7 @@ jobs:
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
 
+
   t_accuracy:
     name: T Accuracy
     needs: [prepare_metadata, build_current]
@@ -1951,6 +1952,468 @@ jobs:
         if: always() && steps.collect.outputs.status == 'failure'
         run: exit 1
 
+  onetrans_perf:
+    name: OneTrans Performance
+    needs: [prepare_metadata, build_current, build_baseline]
+    if: needs.prepare_metadata.result == 'success' && needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
+    runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 120
+    outputs:
+      status: ${{ steps.collect.outputs.status }}
+      baseline_ms: ${{ steps.collect.outputs.baseline_ms }}
+      current_ms: ${{ steps.collect.outputs.current_ms }}
+      threshold_ms: ${{ steps.collect.outputs.threshold_ms }}
+      metrics_summary: ${{ steps.collect.outputs.metrics_summary }}
+      metrics_json: ${{ steps.collect.outputs.metrics_json }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
+    steps:
+      - name: Run OneTrans performance baseline/current
+        id: run_perf
+        run: |
+          set +e
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/onetrans-perf"
+          BASELINE_LOG="$JOB_LOG_DIR/onetrans_perf_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/onetrans_perf_current.log"
+          ONETRANS_PERF_ROOT="${ONETRANS_PERF_ROOT:-$MODEL_ROOT/training/onetrans}"
+          ONETRANS_PERF_SCRIPT_NAME="${ONETRANS_PERF_SCRIPT_NAME:-train_perf_bf16.py}"
+          ONETRANS_PERF_SCRIPT="$ONETRANS_PERF_ROOT/$ONETRANS_PERF_SCRIPT_NAME"
+          ONETRANS_PERF_DATA_DIR="${ONETRANS_PERF_DATA_DIR:-$ONETRANS_PERF_ROOT/data}"
+          ONETRANS_PERF_WARMUP_STEPS="${ONETRANS_PERF_WARMUP_STEPS:-20}"
+          ONETRANS_PERF_MEASURE_STEPS="${ONETRANS_PERF_MEASURE_STEPS:-50}"
+          ONETRANS_PERF_TIMEOUT="${ONETRANS_PERF_TIMEOUT:-60m}"
+          mkdir -p "$JOB_LOG_DIR" "$ONETRANS_PERF_ROOT"
+          rm -f "$BASELINE_LOG" "$CURRENT_LOG"
+
+          baseline_exit=0
+          current_exit=0
+          guard_failed=0
+          if [[ -z "${GPU_LOCK_FILE:-}" ]]; then
+            echo "GPU_LOCK_FILE is not set; refusing to use a global GPU lock." | tee -a "$BASELINE_LOG"
+            guard_failed=1
+            lock_file=""
+          else
+            lock_file="$GPU_LOCK_FILE"
+          fi
+
+          if [[ ! -d "$ONETRANS_PERF_ROOT" ]]; then
+            echo "OneTrans training root not found: $ONETRANS_PERF_ROOT" | tee -a "$BASELINE_LOG"
+            guard_failed=1
+          fi
+          if [[ ! -d "$ONETRANS_PERF_ROOT/model" || ! -d "$ONETRANS_PERF_ROOT/data" ]]; then
+            echo "OneTrans model/data directories not found under: $ONETRANS_PERF_ROOT" | tee -a "$BASELINE_LOG"
+            guard_failed=1
+          fi
+          if [[ ! -f "$ONETRANS_PERF_SCRIPT" ]]; then
+            echo "OneTrans performance script missing: $ONETRANS_PERF_SCRIPT" | tee -a "$BASELINE_LOG"
+            guard_failed=1
+          fi
+
+          ONETRANS_PERF_DATA_FILE="${ONETRANS_PERF_DATA_FILE:-}"
+          if [[ -z "$ONETRANS_PERF_DATA_FILE" && -f "$ONETRANS_PERF_ROOT/data/kaggleAdDisplayChallenge_processed_sub.npz" ]]; then
+            ONETRANS_PERF_DATA_FILE="$ONETRANS_PERF_ROOT/data/kaggleAdDisplayChallenge_processed_sub.npz"
+          fi
+          if [[ -z "$ONETRANS_PERF_DATA_FILE" && -d "$ONETRANS_PERF_DATA_DIR" ]]; then
+            ONETRANS_PERF_DATA_FILE="$(find "$ONETRANS_PERF_DATA_DIR" -maxdepth 2 -type f -name '*.npz' | sort | head -n 1)"
+          fi
+          if [[ -z "$ONETRANS_PERF_DATA_FILE" || ! -f "$ONETRANS_PERF_DATA_FILE" ]]; then
+            echo "OneTrans performance data npz not found under: $ONETRANS_PERF_DATA_DIR" | tee -a "$BASELINE_LOG"
+            guard_failed=1
+          fi
+
+          run_onetrans_perf() {
+            local wheel_dir="$1"
+            local log_file="$2"
+            local label="$3"
+
+            set -o pipefail
+            pip install "$wheel_dir"/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$log_file" || return $?
+
+            python3 - <<'PY' 2>&1 | tee -a "$log_file" || return $?
+          import pathlib
+          import tensorflow_musa
+
+          package_root = pathlib.Path(tensorflow_musa.__file__).resolve().parent
+          print(f"tensorflow_musa wheel: {package_root}")
+          PY
+
+            export ONETRANS_PERF_LABEL="$label"
+
+            bash -l -c '
+              set -o pipefail
+              cd "$ONETRANS_PERF_ROOT"
+              echo "Running OneTrans performance: $ONETRANS_PERF_LABEL"
+              echo "Script: $ONETRANS_PERF_SCRIPT"
+              echo "Data file: $ONETRANS_PERF_DATA_FILE"
+              timeout "$ONETRANS_PERF_TIMEOUT" python -u "$ONETRANS_PERF_SCRIPT" \
+                --data_path "$ONETRANS_PERF_DATA_FILE" \
+                --warmup_steps "$ONETRANS_PERF_WARMUP_STEPS" \
+                --measure_steps "$ONETRANS_PERF_MEASURE_STEPS" \
+                --max_steps "$((ONETRANS_PERF_WARMUP_STEPS + ONETRANS_PERF_MEASURE_STEPS))"
+            ' 2>&1 | tee -a "$log_file"
+          }
+
+          export ONETRANS_PERF_ROOT ONETRANS_PERF_SCRIPT ONETRANS_PERF_DATA_FILE ONETRANS_PERF_WARMUP_STEPS ONETRANS_PERF_MEASURE_STEPS ONETRANS_PERF_TIMEOUT
+
+          if [[ "$guard_failed" == "0" ]]; then
+            exec 9>"$lock_file"
+            flock 9
+            echo "Acquired GPU test lock: $lock_file" | tee -a "$BASELINE_LOG"
+
+            run_onetrans_perf "${{ needs.prepare_metadata.outputs.log_root }}/wheels/baseline" "$BASELINE_LOG" "baseline" || baseline_exit=$?
+            run_onetrans_perf "${{ needs.prepare_metadata.outputs.log_root }}/wheels/current" "$CURRENT_LOG" "current" || current_exit=$?
+          else
+            baseline_exit=1
+            current_exit=1
+          fi
+
+          echo "baseline_exit=$baseline_exit" >> "$GITHUB_OUTPUT"
+          echo "current_exit=$current_exit" >> "$GITHUB_OUTPUT"
+
+      - name: Collect OneTrans performance summary
+        id: collect
+        if: always()
+        run: |
+          set -euo pipefail
+
+          LOG_ROOT="${{ needs.prepare_metadata.outputs.log_root }}"
+          JOB_LOG_DIR="$LOG_ROOT/onetrans-perf"
+          BASELINE_LOG="$JOB_LOG_DIR/onetrans_perf_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/onetrans_perf_current.log"
+          mkdir -p "$LOG_ROOT/summaries"
+          SUMMARY_FILE="$LOG_ROOT/summaries/onetrans-perf.md"
+          STATUS="success"
+          BASELINE_MS=""
+          CURRENT_MS=""
+          THRESHOLD_MS=""
+          METRICS_SUMMARY=""
+          METRICS_JSON=""
+          RUNNER_NAME="${RUNNER_NAME:-unknown}"
+          HOST_NAME="$(hostname)"
+          HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+          HOST_SN="$(cat /sys/class/dmi/id/product_serial 2>/dev/null || true)"
+
+          HOST_IP="${HOST_IP:-unavailable}"
+          HOST_SN="${HOST_SN:-unavailable}"
+
+          parse_avg_ms() {
+            python3 -c 'import pathlib,re,sys; text=pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="ignore"); matches=re.findall(r"Average ms/full step:\s*([0-9]+(?:\.[0-9]+)?)", text); print(matches[-1] if matches else "")' "$1" || true
+          }
+
+          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" == "0" && -f "$BASELINE_LOG" ]]; then
+            BASELINE_MS="$(parse_avg_ms "$BASELINE_LOG")"
+          fi
+          if [[ "${{ steps.run_perf.outputs.current_exit }}" == "0" && -f "$CURRENT_LOG" ]]; then
+            CURRENT_MS="$(parse_avg_ms "$CURRENT_LOG")"
+          fi
+
+          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" != "0" || "${{ steps.run_perf.outputs.current_exit }}" != "0" || -z "$BASELINE_MS" || -z "$CURRENT_MS" ]]; then
+            STATUS="failure"
+          else
+            THRESHOLD_MS="$(awk -v base="$BASELINE_MS" 'BEGIN {printf "%.4f", base * 1.05}')"
+            if awk -v cur="$CURRENT_MS" -v thr="$THRESHOLD_MS" 'BEGIN {exit !(cur > thr)}'; then
+              STATUS="failure"
+            fi
+          fi
+
+          METRICS_SUMMARY="baseline=${BASELINE_MS:-n/a} ms, current=${CURRENT_MS:-n/a} ms, threshold=${THRESHOLD_MS:-n/a} ms, result=${STATUS}"
+          METRICS_JSON="$(python3 - "$STATUS" "$BASELINE_MS" "$CURRENT_MS" "$THRESHOLD_MS" <<'PY'
+          import json
+          import sys
+
+          status, baseline_ms, current_ms, threshold_ms = sys.argv[1:5]
+          payload = {
+              "name": "OneTrans Performance",
+              "kind": "single",
+              "status": status,
+              "baseline_ms": baseline_ms or "n/a",
+              "current_ms": current_ms or "n/a",
+              "threshold_ms": threshold_ms or "n/a",
+          }
+          print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+          PY
+          )"
+
+          {
+            echo "## OneTrans Performance"
+            echo
+            echo "- Status: $STATUS"
+            echo "- Runner name: $RUNNER_NAME"
+            echo "- Host name: $HOST_NAME"
+            echo "- Host IP: $HOST_IP"
+            echo "- Host SN: $HOST_SN"
+            echo "- Log artifact: logs-onetrans-perf"
+            echo "- Baseline: ${BASELINE_MS:-n/a} ms"
+            echo "- Current: ${CURRENT_MS:-n/a} ms"
+            echo "- Threshold: ${THRESHOLD_MS:-n/a} ms"
+            echo
+            echo "### Baseline log tail"
+            echo '```text'
+            if [[ -f "$BASELINE_LOG" ]]; then
+              tail -20 "$BASELINE_LOG" || true
+            else
+              echo "baseline log not found"
+            fi
+            echo '```'
+            echo
+            echo "### Current log tail"
+            echo '```text'
+            if [[ -f "$CURRENT_LOG" ]]; then
+              tail -20 "$CURRENT_LOG" || true
+            else
+              echo "current log not found"
+            fi
+            echo '```'
+          } | tee "$SUMMARY_FILE"
+
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "baseline_ms=$BASELINE_MS" >> "$GITHUB_OUTPUT"
+          echo "current_ms=$CURRENT_MS" >> "$GITHUB_OUTPUT"
+          echo "threshold_ms=$THRESHOLD_MS" >> "$GITHUB_OUTPUT"
+          echo "metrics_summary=$METRICS_SUMMARY" >> "$GITHUB_OUTPUT"
+          {
+            echo "metrics_json<<EOF"
+            echo "$METRICS_JSON"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Fail job if OneTrans performance regressed
+        if: always() && steps.collect.outputs.status == 'failure'
+        run: exit 1
+
+  tokenlarge_perf:
+    name: TokenMixer Large Performance
+    needs: [prepare_metadata, build_current, build_baseline]
+    if: needs.prepare_metadata.result == 'success' && needs.build_current.result == 'success' && needs.build_baseline.result == 'success'
+    runs-on: [self-hosted, musa-gpu]
+    timeout-minutes: 120
+    outputs:
+      status: ${{ steps.collect.outputs.status }}
+      baseline_ms: ${{ steps.collect.outputs.baseline_ms }}
+      current_ms: ${{ steps.collect.outputs.current_ms }}
+      threshold_ms: ${{ steps.collect.outputs.threshold_ms }}
+      metrics_summary: ${{ steps.collect.outputs.metrics_summary }}
+      metrics_json: ${{ steps.collect.outputs.metrics_json }}
+      summary_file: ${{ steps.collect.outputs.summary_file }}
+    steps:
+      - name: Run TokenMixer Large performance baseline/current
+        id: run_perf
+        run: |
+          set +e
+
+          JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/tokenlarge-perf"
+          BASELINE_LOG="$JOB_LOG_DIR/tokenlarge_perf_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/tokenlarge_perf_current.log"
+          TOKENLARGE_PERF_ROOT="${TOKENLARGE_PERF_ROOT:-$MODEL_ROOT/training/tokenmixer-large}"
+          TOKENLARGE_PERF_SCRIPT_NAME="${TOKENLARGE_PERF_SCRIPT_NAME:-train_perf_bf16.py}"
+          TOKENLARGE_PERF_SCRIPT="$TOKENLARGE_PERF_ROOT/$TOKENLARGE_PERF_SCRIPT_NAME"
+          TOKENLARGE_PERF_DATA_DIR="${TOKENLARGE_PERF_DATA_DIR:-$TOKENLARGE_PERF_ROOT/data}"
+          TOKENLARGE_PERF_WARMUP_STEPS="${TOKENLARGE_PERF_WARMUP_STEPS:-20}"
+          TOKENLARGE_PERF_MEASURE_STEPS="${TOKENLARGE_PERF_MEASURE_STEPS:-50}"
+          TOKENLARGE_PERF_TIMEOUT="${TOKENLARGE_PERF_TIMEOUT:-60m}"
+          mkdir -p "$JOB_LOG_DIR" "$TOKENLARGE_PERF_ROOT"
+          rm -f "$BASELINE_LOG" "$CURRENT_LOG"
+
+          baseline_exit=0
+          current_exit=0
+          guard_failed=0
+          if [[ -z "${GPU_LOCK_FILE:-}" ]]; then
+            echo "GPU_LOCK_FILE is not set; refusing to use a global GPU lock." | tee -a "$BASELINE_LOG"
+            guard_failed=1
+            lock_file=""
+          else
+            lock_file="$GPU_LOCK_FILE"
+          fi
+
+          if [[ ! -d "$TOKENLARGE_PERF_ROOT" ]]; then
+            echo "TokenMixer Large training root not found: $TOKENLARGE_PERF_ROOT" | tee -a "$BASELINE_LOG"
+            guard_failed=1
+          fi
+          if [[ ! -d "$TOKENLARGE_PERF_ROOT/model" || ! -d "$TOKENLARGE_PERF_ROOT/data" ]]; then
+            echo "TokenMixer Large model/data directories not found under: $TOKENLARGE_PERF_ROOT" | tee -a "$BASELINE_LOG"
+            guard_failed=1
+          fi
+          if [[ ! -f "$TOKENLARGE_PERF_SCRIPT" ]]; then
+            echo "TokenMixer Large performance script missing: $TOKENLARGE_PERF_SCRIPT" | tee -a "$BASELINE_LOG"
+            guard_failed=1
+          fi
+
+          TOKENLARGE_PERF_DATA_FILE="${TOKENLARGE_PERF_DATA_FILE:-}"
+          if [[ -z "$TOKENLARGE_PERF_DATA_FILE" && -f "$TOKENLARGE_PERF_ROOT/data/kaggleAdDisplayChallenge_processed_sub.npz" ]]; then
+            TOKENLARGE_PERF_DATA_FILE="$TOKENLARGE_PERF_ROOT/data/kaggleAdDisplayChallenge_processed_sub.npz"
+          fi
+          if [[ -z "$TOKENLARGE_PERF_DATA_FILE" && -d "$TOKENLARGE_PERF_DATA_DIR" ]]; then
+            TOKENLARGE_PERF_DATA_FILE="$(find "$TOKENLARGE_PERF_DATA_DIR" -maxdepth 2 -type f -name '*.npz' | sort | head -n 1)"
+          fi
+          if [[ -z "$TOKENLARGE_PERF_DATA_FILE" || ! -f "$TOKENLARGE_PERF_DATA_FILE" ]]; then
+            echo "TokenMixer Large performance data npz not found under: $TOKENLARGE_PERF_DATA_DIR" | tee -a "$BASELINE_LOG"
+            guard_failed=1
+          fi
+
+          run_tokenlarge_perf() {
+            local wheel_dir="$1"
+            local log_file="$2"
+            local label="$3"
+
+            set -o pipefail
+            pip install "$wheel_dir"/tensorflow_musa-*.whl --no-deps --force-reinstall 2>&1 | tee -a "$log_file" || return $?
+
+            python3 - <<'PY' 2>&1 | tee -a "$log_file" || return $?
+          import pathlib
+          import tensorflow_musa
+
+          package_root = pathlib.Path(tensorflow_musa.__file__).resolve().parent
+          print(f"tensorflow_musa wheel: {package_root}")
+          PY
+
+            export TOKENLARGE_PERF_LABEL="$label"
+
+            bash -l -c '
+              set -o pipefail
+              cd "$TOKENLARGE_PERF_ROOT"
+              echo "Running TokenMixer Large performance: $TOKENLARGE_PERF_LABEL"
+              echo "Script: $TOKENLARGE_PERF_SCRIPT"
+              echo "Data file: $TOKENLARGE_PERF_DATA_FILE"
+              timeout "$TOKENLARGE_PERF_TIMEOUT" python -u "$TOKENLARGE_PERF_SCRIPT" \
+                --data_path "$TOKENLARGE_PERF_DATA_FILE" \
+                --warmup_steps "$TOKENLARGE_PERF_WARMUP_STEPS" \
+                --measure_steps "$TOKENLARGE_PERF_MEASURE_STEPS" \
+                --max_steps "$((TOKENLARGE_PERF_WARMUP_STEPS + TOKENLARGE_PERF_MEASURE_STEPS))"
+            ' 2>&1 | tee -a "$log_file"
+          }
+
+          export TOKENLARGE_PERF_ROOT TOKENLARGE_PERF_SCRIPT TOKENLARGE_PERF_DATA_FILE TOKENLARGE_PERF_WARMUP_STEPS TOKENLARGE_PERF_MEASURE_STEPS TOKENLARGE_PERF_TIMEOUT
+
+          if [[ "$guard_failed" == "0" ]]; then
+            exec 9>"$lock_file"
+            flock 9
+            echo "Acquired GPU test lock: $lock_file" | tee -a "$BASELINE_LOG"
+
+            run_tokenlarge_perf "${{ needs.prepare_metadata.outputs.log_root }}/wheels/baseline" "$BASELINE_LOG" "baseline" || baseline_exit=$?
+            run_tokenlarge_perf "${{ needs.prepare_metadata.outputs.log_root }}/wheels/current" "$CURRENT_LOG" "current" || current_exit=$?
+          else
+            baseline_exit=1
+            current_exit=1
+          fi
+
+          echo "baseline_exit=$baseline_exit" >> "$GITHUB_OUTPUT"
+          echo "current_exit=$current_exit" >> "$GITHUB_OUTPUT"
+
+      - name: Collect TokenMixer Large performance summary
+        id: collect
+        if: always()
+        run: |
+          set -euo pipefail
+
+          LOG_ROOT="${{ needs.prepare_metadata.outputs.log_root }}"
+          JOB_LOG_DIR="$LOG_ROOT/tokenlarge-perf"
+          BASELINE_LOG="$JOB_LOG_DIR/tokenlarge_perf_baseline.log"
+          CURRENT_LOG="$JOB_LOG_DIR/tokenlarge_perf_current.log"
+          mkdir -p "$LOG_ROOT/summaries"
+          SUMMARY_FILE="$LOG_ROOT/summaries/tokenlarge-perf.md"
+          STATUS="success"
+          BASELINE_MS=""
+          CURRENT_MS=""
+          THRESHOLD_MS=""
+          METRICS_SUMMARY=""
+          METRICS_JSON=""
+          RUNNER_NAME="${RUNNER_NAME:-unknown}"
+          HOST_NAME="$(hostname)"
+          HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+          HOST_SN="$(cat /sys/class/dmi/id/product_serial 2>/dev/null || true)"
+
+          HOST_IP="${HOST_IP:-unavailable}"
+          HOST_SN="${HOST_SN:-unavailable}"
+
+          parse_avg_ms() {
+            python3 -c 'import pathlib,re,sys; text=pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="ignore"); matches=re.findall(r"Average ms/full step:\s*([0-9]+(?:\.[0-9]+)?)", text); print(matches[-1] if matches else "")' "$1" || true
+          }
+
+          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" == "0" && -f "$BASELINE_LOG" ]]; then
+            BASELINE_MS="$(parse_avg_ms "$BASELINE_LOG")"
+          fi
+          if [[ "${{ steps.run_perf.outputs.current_exit }}" == "0" && -f "$CURRENT_LOG" ]]; then
+            CURRENT_MS="$(parse_avg_ms "$CURRENT_LOG")"
+          fi
+
+          if [[ "${{ steps.run_perf.outputs.baseline_exit }}" != "0" || "${{ steps.run_perf.outputs.current_exit }}" != "0" || -z "$BASELINE_MS" || -z "$CURRENT_MS" ]]; then
+            STATUS="failure"
+          else
+            THRESHOLD_MS="$(awk -v base="$BASELINE_MS" 'BEGIN {printf "%.4f", base * 1.05}')"
+            if awk -v cur="$CURRENT_MS" -v thr="$THRESHOLD_MS" 'BEGIN {exit !(cur > thr)}'; then
+              STATUS="failure"
+            fi
+          fi
+
+          METRICS_SUMMARY="baseline=${BASELINE_MS:-n/a} ms, current=${CURRENT_MS:-n/a} ms, threshold=${THRESHOLD_MS:-n/a} ms, result=${STATUS}"
+          METRICS_JSON="$(python3 - "$STATUS" "$BASELINE_MS" "$CURRENT_MS" "$THRESHOLD_MS" <<'PY'
+          import json
+          import sys
+
+          status, baseline_ms, current_ms, threshold_ms = sys.argv[1:5]
+          payload = {
+              "name": "TokenMixer Large Performance",
+              "kind": "single",
+              "status": status,
+              "baseline_ms": baseline_ms or "n/a",
+              "current_ms": current_ms or "n/a",
+              "threshold_ms": threshold_ms or "n/a",
+          }
+          print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+          PY
+          )"
+
+          {
+            echo "## TokenMixer Large Performance"
+            echo
+            echo "- Status: $STATUS"
+            echo "- Runner name: $RUNNER_NAME"
+            echo "- Host name: $HOST_NAME"
+            echo "- Host IP: $HOST_IP"
+            echo "- Host SN: $HOST_SN"
+            echo "- Log artifact: logs-tokenlarge-perf"
+            echo "- Baseline: ${BASELINE_MS:-n/a} ms"
+            echo "- Current: ${CURRENT_MS:-n/a} ms"
+            echo "- Threshold: ${THRESHOLD_MS:-n/a} ms"
+            echo
+            echo "### Baseline log tail"
+            echo '```text'
+            if [[ -f "$BASELINE_LOG" ]]; then
+              tail -20 "$BASELINE_LOG" || true
+            else
+              echo "baseline log not found"
+            fi
+            echo '```'
+            echo
+            echo "### Current log tail"
+            echo '```text'
+            if [[ -f "$CURRENT_LOG" ]]; then
+              tail -20 "$CURRENT_LOG" || true
+            else
+              echo "current log not found"
+            fi
+            echo '```'
+          } | tee "$SUMMARY_FILE"
+
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "baseline_ms=$BASELINE_MS" >> "$GITHUB_OUTPUT"
+          echo "current_ms=$CURRENT_MS" >> "$GITHUB_OUTPUT"
+          echo "threshold_ms=$THRESHOLD_MS" >> "$GITHUB_OUTPUT"
+          echo "metrics_summary=$METRICS_SUMMARY" >> "$GITHUB_OUTPUT"
+          {
+            echo "metrics_json<<EOF"
+            echo "$METRICS_JSON"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Fail job if TokenMixer Large performance regressed
+        if: always() && steps.collect.outputs.status == 'failure'
+        run: exit 1
+
   training:
     name: Training
     needs: [prepare_metadata, build_current]
@@ -1972,7 +2435,7 @@ jobs:
           JOB_LOG_DIR="${{ needs.prepare_metadata.outputs.log_root }}/training"
           LOG_FILE="$JOB_LOG_DIR/training_tests.log"
           ERROR_LOG_DIR="$JOB_LOG_DIR/error_logs"
-          pr_training_models=(onetrans rankmixer tokenmixer-large)
+          pr_training_models=(rankmixer)
           daily_training_models=(afm autoint bst ccpm dcn dcnmix deepfefm deepfm dien difm din dsin edcn esmm fgcnn fibinet flen fnn fwfm ifm mlr mmoe nfm onn ple pnn wdl wukong xdeepfm)
           mkdir -p "$JOB_LOG_DIR"
           rm -f "$LOG_FILE"
@@ -2153,6 +2616,8 @@ jobs:
       - bd_model1
       - bd_model2
       - bd_model3
+      - onetrans_perf
+      - tokenlarge_perf
       - training
     if: ${{ always() && !cancelled() }}
     runs-on: [self-hosted, musa-gpu]
@@ -2163,6 +2628,8 @@ jobs:
       BD1_JSON: ${{ needs.bd_model1.outputs.metrics_json || '' }}
       BD2_JSON: ${{ needs.bd_model2.outputs.metrics_json || '' }}
       BD3_JSON: ${{ needs.bd_model3.outputs.metrics_json || '' }}
+      ONETRANS_PERF_JSON: ${{ needs.onetrans_perf.outputs.metrics_json || '' }}
+      TOKENLARGE_PERF_JSON: ${{ needs.tokenlarge_perf.outputs.metrics_json || '' }}
     steps:
 
       - name: Generate final summary
@@ -2185,6 +2652,8 @@ jobs:
           BD1_STATUS: ${{ needs.bd_model1.outputs.status || 'skipped' }}
           BD2_STATUS: ${{ needs.bd_model2.outputs.status || 'skipped' }}
           BD3_STATUS: ${{ needs.bd_model3.outputs.status || 'skipped' }}
+          ONETRANS_PERF_STATUS: ${{ needs.onetrans_perf.outputs.status || 'skipped' }}
+          TOKENLARGE_PERF_STATUS: ${{ needs.tokenlarge_perf.outputs.status || 'skipped' }}
           TRAINING_STATUS: ${{ needs.training.outputs.status || 'skipped' }}
         run: |
           set -euo pipefail
@@ -2213,6 +2682,10 @@ jobs:
           BD2_RESULT="${{ needs.bd_model2.result }}"
           BD3_STATUS="${{ needs.bd_model3.outputs.status || 'skipped' }}"
           BD3_RESULT="${{ needs.bd_model3.result }}"
+          ONETRANS_PERF_STATUS="${{ needs.onetrans_perf.outputs.status || 'skipped' }}"
+          ONETRANS_PERF_RESULT="${{ needs.onetrans_perf.result }}"
+          TOKENLARGE_PERF_STATUS="${{ needs.tokenlarge_perf.outputs.status || 'skipped' }}"
+          TOKENLARGE_PERF_RESULT="${{ needs.tokenlarge_perf.result }}"
           TRAINING_STATUS="${{ needs.training.outputs.status || 'skipped' }}"
           TRAINING_RESULT="${{ needs.training.result }}"
           PREPARE_METADATA_RESULT="${{ needs.prepare_metadata.result }}"
@@ -2263,15 +2736,19 @@ jobs:
               {"name": "BD Model 1", "result": os.environ["BD1_STATUS"], "blocking": "yes"},
               {"name": "BD Model 2", "result": os.environ["BD2_STATUS"], "blocking": "yes"},
               {"name": "BD Model 3", "result": os.environ["BD3_STATUS"], "blocking": "yes"},
+              {"name": "OneTrans Performance", "result": os.environ["ONETRANS_PERF_STATUS"], "blocking": "yes"},
+              {"name": "TokenMixer Large Performance", "result": os.environ["TOKENLARGE_PERF_STATUS"], "blocking": "yes"},
               {"name": "Training", "result": os.environ["TRAINING_STATUS"], "blocking": "yes"},
           ]
 
           metrics = [
               load_json_env("T_PERF_JSON"),
+              load_json_env("T_ACC_JSON"),
               load_json_env("BD1_JSON"),
               load_json_env("BD2_JSON"),
               load_json_env("BD3_JSON"),
-              load_json_env("T_ACC_JSON"),
+              load_json_env("ONETRANS_PERF_JSON"),
+              load_json_env("TOKENLARGE_PERF_JSON"),
           ]
           metrics = [item for item in metrics if item]
 
@@ -2360,6 +2837,8 @@ jobs:
             "$LOG_ROOT/summaries/bd-model1.md" \
             "$LOG_ROOT/summaries/bd-model2.md" \
             "$LOG_ROOT/summaries/bd-model3.md" \
+            "$LOG_ROOT/summaries/onetrans-perf.md" \
+            "$LOG_ROOT/summaries/tokenlarge-perf.md" \
             "$LOG_ROOT/summaries/training.md"; do
             if [[ -f "$file" ]]; then
               echo >> "$SUMMARY_FILE"
@@ -2380,6 +2859,8 @@ jobs:
           if [[ "$BD1_STATUS" == "failure" || "$BD1_RESULT" == "failure" || "$BD1_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
           if [[ "$BD2_STATUS" == "failure" || "$BD2_RESULT" == "failure" || "$BD2_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
           if [[ "$BD3_STATUS" == "failure" || "$BD3_RESULT" == "failure" || "$BD3_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$ONETRANS_PERF_STATUS" == "failure" || "$ONETRANS_PERF_RESULT" == "failure" || "$ONETRANS_PERF_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
+          if [[ "$TOKENLARGE_PERF_STATUS" == "failure" || "$TOKENLARGE_PERF_RESULT" == "failure" || "$TOKENLARGE_PERF_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
           if [[ "$TRAINING_STATUS" == "failure" || "$TRAINING_RESULT" == "failure" || "$TRAINING_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
           if [[ "$PREPARE_METADATA_RESULT" == "failure" || "$PREPARE_METADATA_RESULT" == "skipped" ]]; then BLOCKING_FAILURE=1; fi
 
