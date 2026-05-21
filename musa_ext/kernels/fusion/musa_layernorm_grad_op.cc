@@ -154,7 +154,7 @@ REGISTER_OP("MusaLayerNormGrad")
       c->set_output(0, c->input(1));
       c->set_output(1, c->input(2));
       c->set_output(2, c->input(3));
-      return Status::OK();
+      return OkStatus();
     });
 
 }  // namespace tensorflow
