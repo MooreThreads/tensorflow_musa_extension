@@ -1049,7 +1049,7 @@ int OptimizeForwardRmsNorm(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " forward RMSNorm node(s)";
   }
   return rewrites;
@@ -1230,7 +1230,7 @@ int OptimizeRmsNormGradDxWarp128(GraphDef* graph) {
   }
 
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " RMSNorm grad dx node(s) with warp128 kernel";
   }
   return rewrites;
@@ -1440,7 +1440,7 @@ int OptimizeTf215SgdAssignAdd(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " TF2.15 SGD update node(s) with ResourceApplyGradientDescent";
   }
   return rewrites;
@@ -1513,7 +1513,7 @@ int OptimizeTf215SgdLearningRateReadSharing(GraphDef* graph) {
   }
 
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Shared " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Shared " << rewrites
               << " TF2.15 SGD learning-rate read node(s)";
   }
   return rewrites;
@@ -1844,7 +1844,7 @@ int OptimizeBFloat16BinaryCrossentropyToFloat(GraphDef* graph) {
   }
 
   RemoveNodesByName(graph, remove_names);
-  LOG(INFO) << "MusaGraphOptimizer: Promoted BF16 binary_crossentropy"
+  VLOG(1) << "MusaGraphOptimizer: Promoted BF16 binary_crossentropy"
             << " loss/gradient to float";
   return 1;
 }
@@ -1930,7 +1930,7 @@ int OptimizeBFloat16GradientDescentCast(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " bfloat16-gradient SGD update node(s) with mixed update";
   }
   return rewrites;
@@ -2047,7 +2047,7 @@ int OptimizeGroupedBFloat16GradientDescent(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (grouped_nodes > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Grouped " << grouped_nodes
+    VLOG(1) << "MusaGraphOptimizer: Grouped " << grouped_nodes
               << " bfloat16-gradient SGD update node(s)";
   }
   return grouped_nodes;
@@ -2143,7 +2143,7 @@ int OptimizeGroupedFloatGradientDescent(GraphDef* graph) {
     }
   }
 
-  LOG(INFO) << "MusaGraphOptimizer: Grouped " << nodes.size()
+  VLOG(1) << "MusaGraphOptimizer: Grouped " << nodes.size()
             << " float-gradient SGD update node(s)";
   return static_cast<int>(nodes.size());
 }
@@ -2263,7 +2263,7 @@ int OptimizeResourceGatherFloatToBFloat16(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " ResourceGather+float-to-bfloat16 Cast node(s)";
   }
   return rewrites;
@@ -2371,7 +2371,7 @@ int OptimizeReadVariableFloatToBFloat16(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " ReadVariable+float-to-bfloat16 Cast node(s)";
   }
   return rewrites;
@@ -2400,7 +2400,7 @@ int OptimizeOneTrans3DEinsum(GraphDef* graph) {
     rewrites++;
   }
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " OneTrans 3D Einsum node(s)";
   }
   return rewrites;
@@ -2509,7 +2509,7 @@ int OptimizeCriteoSparseEmbeddingGatherPack(GraphDef* graph) {
   }
 
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " Criteo sparse embedding gather Pack node(s)";
   }
   return rewrites;
@@ -2621,7 +2621,7 @@ int OptimizeBFloat16SparseSgdScatter(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " bfloat16 sparse SGD scatter update node(s)";
   }
   return rewrites;
@@ -2888,7 +2888,7 @@ int OptimizeTf215SparseSgdAssignAdd(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " TF2.15 sparse SGD slot update node(s) with ResourceScatterAdd";
   }
   return rewrites;
@@ -3029,7 +3029,7 @@ int OptimizeRmsNormSqrtGradDxWarp128(GraphDef* graph) {
   }
 
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " Sqrt RMSNorm grad dx node(s) with warp128 kernel";
   }
   return rewrites;
@@ -3125,7 +3125,7 @@ int OptimizeExactGeluGrad(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " exact GELU grad node(s)";
   }
   return rewrites;
@@ -3270,7 +3270,7 @@ int OptimizeSimpleTensordotReshapeMatMul(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " Tensordot Reshape+MatMul node(s)";
   }
   return rewrites;
@@ -3368,7 +3368,7 @@ int OptimizeReshapeMatMulBiasAdd(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " ReshapeMatMul+BiasAdd node(s)";
   }
   return rewrites;
@@ -3487,7 +3487,7 @@ int OptimizeTensordotMatMulReshapeBiasAdd(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " Tensordot MatMul+Reshape+BiasAdd node(s)";
   }
   return rewrites;
@@ -3647,7 +3647,7 @@ int OptimizeQkvDenseForward(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " QKV dense forward group(s) to concat MatMul+Split";
   }
   return rewrites;
@@ -3765,7 +3765,7 @@ int OptimizeQkvDenseDw(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " QKV dense dW group(s) to concat MatMul+Split";
   }
   return rewrites;
@@ -3916,7 +3916,7 @@ int OptimizeQkvDenseDx(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " QKV dense dX group(s) to concat MatMul";
   }
   return rewrites;
@@ -4017,7 +4017,7 @@ int OptimizeQkvForwardEinsum(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " QKV forward Einsum group(s) to concat Einsum+Split";
   }
   return rewrites;
@@ -4202,7 +4202,7 @@ int OptimizeQkvBackwardEinsum(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " QKV backward Einsum group(s)";
   }
   return rewrites;
@@ -4331,7 +4331,7 @@ int OptimizeCausalMaskedSoftmax(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " causal mask Softmax node(s)";
   }
   return rewrites;
@@ -4431,7 +4431,7 @@ int OptimizeCausalAttentionForward(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " causal attention forward core group(s)";
   }
   return rewrites;
@@ -4547,7 +4547,7 @@ int OptimizeSoftmaxGradSmallLastDim(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " softmax grad node(s) with MusaSoftmaxGrad";
   }
   return rewrites;
@@ -4700,7 +4700,7 @@ int OptimizeCausalAttentionGrad(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " causal attention grad group(s)";
   }
   return rewrites;
@@ -4938,7 +4938,7 @@ int OptimizeDropoutScaledMaskMul(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " dropout scaled-mask Mul node(s)";
   }
   return rewrites;
@@ -5027,7 +5027,7 @@ int OptimizeRandomUniformGreaterEqual(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " dropout RandomUniform+GreaterEqual mask node(s)";
   }
   return rewrites;
@@ -5150,7 +5150,7 @@ int OptimizeSliceGradAddNConcat(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " StridedSliceGrad+AddN pair(s) to ConcatV2";
   }
   return rewrites;
@@ -5242,7 +5242,7 @@ int OptimizeAddNWithSuffixSliceGrad(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " AddN+suffix StridedSliceGrad node(s)";
   }
   return rewrites;
@@ -5325,7 +5325,7 @@ int OptimizeConcatWithSuffixSliceGrad(GraphDef* graph) {
 
   RemoveNodesByName(graph, remove_names);
   if (rewrites > 0) {
-    LOG(INFO) << "MusaGraphOptimizer: Rewrote " << rewrites
+    VLOG(1) << "MusaGraphOptimizer: Rewrote " << rewrites
               << " ConcatV2+suffix StridedSliceGrad node(s)";
   }
   return rewrites;
@@ -5541,14 +5541,6 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
       }
     }
 
-    if (!EnvFlagEnabledLocal("MUSA_DISABLE_ADDN_SUFFIX_SLICE_GRAD_FUSION")) {
-      const int addn_slice_grad_rewrites =
-          OptimizeAddNWithSuffixSliceGrad(optimized_graph);
-      if (addn_slice_grad_rewrites > 0) {
-        dumper.DumpAtStage(*optimized_graph,
-                           "after_addn_suffix_slice_grad_fusion");
-      }
-    }
     if (!EnvFlagEnabledLocal("MUSA_DISABLE_CONCAT_SUFFIX_SLICE_GRAD_FUSION")) {
       const int concat_slice_grad_rewrites =
           OptimizeConcatWithSuffixSliceGrad(optimized_graph);
@@ -6241,7 +6233,7 @@ class MusaAutoGraphOptimizationPass : public ::tensorflow::GraphOptimizationPass
     TF_RETURN_IF_ERROR(::tensorflow::ConvertGraphDefToGraph(
         constructor_opts, std::move(optimized_graph_def), new_graph.get()));
     options.graph->swap(new_graph);
-    LOG(INFO) << "MusaAutoGraphOptimizationPass applied to graph with "
+    VLOG(1) << "MusaAutoGraphOptimizationPass applied to graph with "
               << graph_def.node_size() << " node(s)";
     return OkStatus();
   }
