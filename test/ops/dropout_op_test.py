@@ -5,6 +5,7 @@
 
 import numpy as np
 import tensorflow as tf
+
 import tensorflow_musa as tf_musa
 from musa_test_utils import MUSATestCase
 
@@ -205,6 +206,24 @@ class DropoutOpTest(MUSATestCase):
         expected_kept = np_x[kept] * scale * scale
         self.assertAllClose(grad_np[kept], expected_kept, rtol=1e-4, atol=1e-4)
         self.assertTrue(np.all(grad_np[mask_np == False] == 0.0))
+    def testGradientTapeUsesMusaDropoutGrad(self):
+        rate = 0.25
+        scale = 1.0 / (1.0 - rate)
+        np_x = np.random.uniform(0.5, 1.5, size=[64, 64]).astype(np.float32)
+
+        with tf.device('/device:MUSA:0'):
+            x = tf.constant(np_x, dtype=tf.float32)
+            with tf.GradientTape() as tape:
+                tape.watch(x)
+                y, mask = tf_musa.ops.dropout(
+                    x=x, rate=rate, seed=7, offset=0
+                )
+                loss = tf.reduce_sum(y)
+            grad = tape.gradient(loss, x)
+
+        self.assertIsNotNone(grad)
+        expected = mask.numpy().astype(np.float32) * scale
+        self.assertAllClose(grad.numpy(), expected, rtol=1e-5, atol=1e-5)
 
 
 if __name__ == "__main__":
