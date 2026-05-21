@@ -155,6 +155,31 @@ class ApplyAdagradV2OpTest(MUSATestCase):
         self._assert_by_dtype(cpu_var, musa_var, dtype)
         self._assert_by_dtype(cpu_accum, musa_accum, dtype)
 
+  def testResourceApplyAdagradV2FusedLargeTensorFloat32(self):
+    """Test ResourceApplyAdagradV2 correctness on the fused large tensor path."""
+    dtype = tf.float32
+    shape = (1024, 1024)
+    rng = np.random.default_rng(123)
+
+    init_var_np = rng.normal(loc=0.0, scale=0.1, size=shape).astype(np.float32)
+    init_accum_np = (
+        rng.random(shape).astype(np.float32) + np.float32(0.1)
+    )
+    grad_np = (
+        rng.normal(loc=0.0, scale=0.01, size=shape).astype(np.float32)
+    )
+    lr_np = np.float32(0.01)
+    epsilon_np = np.float32(1e-7)
+
+    expected_var, expected_accum = self._expected_apply_adagrad_v2(
+        init_var_np, init_accum_np, lr_np, epsilon_np, grad_np)
+    musa_var, musa_accum = self._run_resource_apply_adagrad_v2(
+        "/device:MUSA:0", init_var_np, init_accum_np, lr_np, epsilon_np,
+        grad_np, dtype)
+
+    self._assert_by_dtype(expected_var, musa_var, dtype)
+    self._assert_by_dtype(expected_accum, musa_accum, dtype)
+
   def testResourceApplyAdagradV2WithUseLocking(self):
     """Test ResourceApplyAdagradV2 with use_locking=True."""
     init_var_np = np.array([1.0, -2.0, 3.5, -4.5], dtype=np.float32)
