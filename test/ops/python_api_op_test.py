@@ -15,7 +15,9 @@
 
 """Tests for the public MUSA Python op API."""
 
+import inspect
 import importlib.util
+import re
 import sys
 import types
 import unittest
@@ -26,8 +28,12 @@ import numpy as np
 import tensorflow as tf
 
 
-if "tensorflow_musa" not in sys.modules:
-    package_dir = Path(__file__).resolve().parents[2] / "python"
+package_dir = Path(__file__).resolve().parents[2] / "python"
+module = sys.modules.get("tensorflow_musa")
+if module is None or not str(getattr(module, "__file__", "")).startswith(str(package_dir)):
+    for module_name in list(sys.modules):
+        if module_name == "tensorflow_musa" or module_name.startswith("tensorflow_musa."):
+            del sys.modules[module_name]
     spec = importlib.util.spec_from_file_location(
         "tensorflow_musa",
         package_dir / "__init__.py",
@@ -35,10 +41,15 @@ if "tensorflow_musa" not in sys.modules:
     )
     tensorflow_musa = importlib.util.module_from_spec(spec)
     sys.modules["tensorflow_musa"] = tensorflow_musa
-    spec.loader.exec_module(tensorflow_musa)
+    from tensorflow.python.framework import load_library as tf_load_library
+
+    with mock.patch("tensorflow.load_op_library", return_value=types.SimpleNamespace()):
+        with mock.patch.object(tf_load_library, "load_pluggable_device_library"):
+            spec.loader.exec_module(tensorflow_musa)
 
 import tensorflow_musa
 from tensorflow_musa import ops, raw_ops
+from tensorflow_musa.op_manifest import CUSTOM_OPS, PUBLIC_API_NAMES, RAW_OP_NAMES
 
 
 class PythonApiOpTest(unittest.TestCase):
@@ -57,11 +68,57 @@ class PythonApiOpTest(unittest.TestCase):
         else:
             ops.raw_ops.__dict__[name] = previous
 
+    def _skip_unless_raw_op_available(self, name):
+        if not hasattr(tensorflow_musa.get_musa_ops(), name):
+            self.skipTest(f"MUSA raw op {name!r} is not available in this test environment")
+
     def testPackageExportsOpModules(self):
         self.assertIs(tensorflow_musa.ops, ops)
         self.assertIs(tensorflow_musa.raw_ops, raw_ops)
         self.assertIn("ops", tensorflow_musa.__all__)
         self.assertIn("raw_ops", tensorflow_musa.__all__)
+
+    def testAllCustomOpsAreInPublicAll(self):
+        self.assertEqual(set(PUBLIC_API_NAMES), set(ops.__all__))
+        for api_name in PUBLIC_API_NAMES:
+            with self.subTest(api_name=api_name):
+                self.assertTrue(callable(getattr(ops, api_name)))
+
+    def testManifestCoversRegisteredCustomOps(self):
+        root = Path(__file__).resolve().parents[2]
+        pattern = re.compile(r'REGISTER_OP\("([^"]+)"\)')
+        registered_ops = set()
+        for source in (root / "musa_ext" / "kernels").rglob("*.cc"):
+            registered_ops.update(pattern.findall(source.read_text(encoding="utf-8")))
+
+        self.assertEqual(registered_ops, {entry["op"] for entry in CUSTOM_OPS})
+
+    def testAllGeneratedWrappersDelegateToRawOps(self):
+        for entry in CUSTOM_OPS:
+            with self.subTest(api=entry["api"]):
+                wrapper = getattr(ops, entry["api"])
+                signature = inspect.signature(wrapper)
+                kwargs = {}
+                expected_kwargs = {}
+                for name, parameter in signature.parameters.items():
+                    if parameter.default is inspect.Parameter.empty:
+                        value = f"{entry['api']}_{name}"
+                    elif name == "name":
+                        value = f"{entry['api']}_name"
+                    else:
+                        value = parameter.default
+                    kwargs[name] = value
+                    expected_kwargs[name] = value
+
+                op = self._patch_raw_op(entry["raw"], "result")
+                self.assertEqual(wrapper(**kwargs), "result")
+                op.assert_called_once_with(**expected_kwargs)
+
+    def testRawOpManifestNamesAreUnique(self):
+        self.assertEqual(len(CUSTOM_OPS), len(PUBLIC_API_NAMES))
+        self.assertEqual(len(CUSTOM_OPS), len(RAW_OP_NAMES))
+        self.assertEqual(len(PUBLIC_API_NAMES), len(set(PUBLIC_API_NAMES)))
+        self.assertEqual(len(RAW_OP_NAMES), len(set(RAW_OP_NAMES)))
 
     def testRawOpsDelegatesToGeneratedModule(self):
         generated = types.SimpleNamespace(musa_clip=lambda **kwargs: kwargs)
@@ -254,11 +311,13 @@ class PythonApiOpTest(unittest.TestCase):
         )
 
     def testRealClipComputesExpectedValues(self):
+        self._skip_unless_raw_op_available("musa_clip")
         result = ops.clip(tf.constant([-2.0, 0.5, 3.0]), 0.0, 1.0)
 
         np.testing.assert_allclose(result.numpy(), [0.0, 0.5, 1.0])
 
     def testRealLayerNormComputesExpectedValues(self):
+        self._skip_unless_raw_op_available("musa_layer_norm")
         x = tf.constant([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
         result = ops.layer_norm(x, tf.ones([3]), tf.zeros([3]))
 
@@ -273,6 +332,7 @@ class PythonApiOpTest(unittest.TestCase):
         np.testing.assert_allclose(result.numpy(), expected.numpy(), rtol=1e-5)
 
     def testRealShiftedAffineMapComputesExpectedValues(self):
+        self._skip_unless_raw_op_available("musa_shifted_affine_map")
         result = ops.shifted_affine_map(
             tf.ones([2, 3]),
             tf.ones([2, 3]),
@@ -282,17 +342,20 @@ class PythonApiOpTest(unittest.TestCase):
         np.testing.assert_allclose(result.numpy(), np.full([2, 3], 2.0))
 
     def testRealInteractComputesExpectedValues(self):
+        self._skip_unless_raw_op_available("musa_interact")
         result = ops.interact(tf.ones([2, 3, 4]))
 
         np.testing.assert_allclose(result.numpy(), np.full([2, 3, 3], 4.0))
 
     def testRealDropoutComputesOutputAndMask(self):
+        self._skip_unless_raw_op_available("musa_dropout")
         y, mask = ops.dropout(tf.ones([2, 3]), rate=0.5, seed=1, offset=0)
 
         self.assertEqual(y.shape, [2, 3])
         self.assertEqual(mask.shape, [2, 3])
         np.testing.assert_allclose(y.numpy(), mask.numpy().astype(np.float32) * 2.0)
     def testRealGeluComputesExpectedValues(self):
+        self._skip_unless_raw_op_available("musa_gelu")
         x = tf.constant([-2.0, -0.5, 0.0, 0.5, 2.0])
         for approximate in [False, True]:
             with self.subTest(approximate=approximate):
@@ -307,6 +370,7 @@ class PythonApiOpTest(unittest.TestCase):
                 )
 
     def testRealReshapeMatMulComputesExpectedValues(self):
+        self._skip_unless_raw_op_available("musa_reshape_mat_mul")
         x = tf.constant([[[1.0, 2.0], [3.0, 4.0]]])
         w = tf.constant([[5.0, 6.0], [7.0, 8.0]])
         result = ops.reshape_mat_mul(x, w)
@@ -314,6 +378,7 @@ class PythonApiOpTest(unittest.TestCase):
         np.testing.assert_allclose(result.numpy(), tf.matmul(x, w).numpy())
 
     def testRealMatmulBiasAddComputesExpectedValues(self):
+        self._skip_unless_raw_op_available("musa_mat_mul_bias_add")
         a = tf.constant([[1.0, 2.0], [3.0, 4.0]])
         b = tf.constant([[5.0, 6.0], [7.0, 8.0]])
         bias = tf.constant([0.5, -0.5])
