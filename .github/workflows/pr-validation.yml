@@ -1973,7 +1973,7 @@ jobs:
           LOG_FILE="$JOB_LOG_DIR/training_tests.log"
           ERROR_LOG_DIR="$JOB_LOG_DIR/error_logs"
           pr_training_models=(onetrans rankmixer tokenmixer-large)
-          daily_training_models=(deepfm dien din dsin esmm fgcnn flen fwfm mmoe ple wukong xdeepfm)
+          daily_training_models=(afm autoint bst ccpm dcn dcnmix deepfefm deepfm dien difm din dsin edcn esmm fgcnn fibinet flen fnn fwfm ifm mlr mmoe nfm onn ple pnn wdl wukong xdeepfm)
           mkdir -p "$JOB_LOG_DIR"
           rm -f "$LOG_FILE"
           rm -rf "$ERROR_LOG_DIR"
