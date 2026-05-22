@@ -369,7 +369,6 @@ class MusaStridedSliceGradOp : public OpKernel {
     OP_REQUIRES_OK(context, context->allocate_output(0, output_shape, &output));
     if (output->NumElements() == 0) return;
 
-    MUSA_OP_REQUIRES_MUDNN_HANDLE(context);
     mHandle& handle = GetHandleByCtx(context);
     musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 
