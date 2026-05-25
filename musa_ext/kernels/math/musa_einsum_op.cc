@@ -1025,11 +1025,28 @@ class MusaOneTrans3DEinsumOp : public MusaOpKernel {
     OP_REQUIRES(ctx, a.dims() == 3 && b.dims() == 3,
                 errors::InvalidArgument(
                     "MusaOneTrans3DEinsum expects rank-3 inputs"));
-
     if (equation_ == "btd,tde->bte") {
       OP_REQUIRES(ctx, b.dim_size(0) == a.dim_size(1) &&
                            b.dim_size(1) == a.dim_size(2),
                   errors::InvalidArgument("Invalid btd,tde->bte shapes"));
+      if (DataTypeToEnum<T>::value == DT_BFLOAT16) {
+        const int64_t batch = a.dim_size(0);
+        const int64_t tokens = a.dim_size(1);
+        const int64_t depth = a.dim_size(2);
+        const int64_t embed = b.dim_size(2);
+        Tensor* output = nullptr;
+        OP_REQUIRES_OK(ctx, ctx->allocate_output(
+                                0, TensorShape({batch, tokens, embed}),
+                                &output));
+        OP_REQUIRES_OK(ctx, BFloat16StridedBatchedGemm(
+                                ctx, b, a, output, MUBLAS_OP_N, MUBLAS_OP_N,
+                                /*m=*/embed, /*n=*/batch, /*k=*/depth,
+                                /*lda=*/embed, /*stride_a=*/depth * embed,
+                                /*ldb=*/tokens * depth, /*stride_b=*/depth,
+                                /*ldc=*/tokens * embed, /*stride_c=*/embed,
+                                /*batch_count=*/tokens));
+        return;
+      }
       Tensor lhs;
       OP_REQUIRES_OK(
           ctx, EinsumHelper::TransposeOperand<T>(ctx, a, {1, 0, 2}, &lhs));
@@ -1049,6 +1066,24 @@ class MusaOneTrans3DEinsumOp : public MusaOpKernel {
       OP_REQUIRES(ctx, b.dim_size(0) == a.dim_size(1) &&
                            b.dim_size(2) == a.dim_size(2),
                   errors::InvalidArgument("Invalid bte,tde->btd shapes"));
+      if (DataTypeToEnum<T>::value == DT_BFLOAT16) {
+        const int64_t batch = a.dim_size(0);
+        const int64_t tokens = a.dim_size(1);
+        const int64_t embed = a.dim_size(2);
+        const int64_t depth = b.dim_size(1);
+        Tensor* output = nullptr;
+        OP_REQUIRES_OK(ctx, ctx->allocate_output(
+                                0, TensorShape({batch, tokens, depth}),
+                                &output));
+        OP_REQUIRES_OK(ctx, BFloat16StridedBatchedGemm(
+                                ctx, b, a, output, MUBLAS_OP_T, MUBLAS_OP_N,
+                                /*m=*/depth, /*n=*/batch, /*k=*/embed,
+                                /*lda=*/embed, /*stride_a=*/depth * embed,
+                                /*ldb=*/tokens * embed, /*stride_b=*/embed,
+                                /*ldc=*/tokens * depth, /*stride_c=*/depth,
+                                /*batch_count=*/tokens));
+        return;
+      }
       Tensor lhs;
       OP_REQUIRES_OK(
           ctx, EinsumHelper::TransposeOperand<T>(ctx, a, {1, 0, 2}, &lhs));
@@ -1068,6 +1103,24 @@ class MusaOneTrans3DEinsumOp : public MusaOpKernel {
       OP_REQUIRES(ctx, b.dim_size(0) == a.dim_size(0) &&
                            b.dim_size(1) == a.dim_size(1),
                   errors::InvalidArgument("Invalid bte,btd->tde shapes"));
+      if (DataTypeToEnum<T>::value == DT_BFLOAT16) {
+        const int64_t batch = a.dim_size(0);
+        const int64_t tokens = a.dim_size(1);
+        const int64_t embed = a.dim_size(2);
+        const int64_t depth = b.dim_size(2);
+        Tensor* output = nullptr;
+        OP_REQUIRES_OK(ctx, ctx->allocate_output(
+                                0, TensorShape({tokens, depth, embed}),
+                                &output));
+        OP_REQUIRES_OK(ctx, BFloat16StridedBatchedGemm(
+                                ctx, a, b, output, MUBLAS_OP_N, MUBLAS_OP_T,
+                                /*m=*/embed, /*n=*/depth, /*k=*/batch,
+                                /*lda=*/tokens * embed, /*stride_a=*/embed,
+                                /*ldb=*/tokens * depth, /*stride_b=*/depth,
+                                /*ldc=*/embed, /*stride_c=*/depth * embed,
+                                /*batch_count=*/tokens));
+        return;
+      }
       Tensor lhs;
       OP_REQUIRES_OK(
           ctx, EinsumHelper::TransposeOperand<T>(ctx, b, {1, 2, 0}, &lhs));
@@ -1090,6 +1143,38 @@ class MusaOneTrans3DEinsumOp : public MusaOpKernel {
   }
 
  private:
+  static Status BFloat16StridedBatchedGemm(
+      OpKernelContext* ctx, const Tensor& lhs, const Tensor& rhs,
+      Tensor* output, mublasOperation_t trans_a, mublasOperation_t trans_b,
+      int m, int n, int k, int lda, long long int stride_a, int ldb,
+      long long int stride_b, int ldc, long long int stride_c,
+      int batch_count) {
+    if (output->NumElements() == 0) return OkStatus();
+    MusaKernelRuntimeView runtime = QueryMusaKernelRuntimeView(ctx);
+    if (runtime.mublas_handle == nullptr) {
+      return errors::Unimplemented(
+          "MusaOneTrans3DEinsum BF16 muBLAS path requires mublas_handle");
+    }
+
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+    const void* lhs_data = lhs.flat<bfloat16>().data();
+    const void* rhs_data = rhs.flat<bfloat16>().data();
+    void* output_data = output->flat<bfloat16>().data();
+    const mublasStatus_t status = mublasGemmStridedBatchedEx(
+        runtime.mublas_handle, trans_a, trans_b, m, n, k, &alpha, lhs_data,
+        MUSA_R_16BF, lda, stride_a, rhs_data, MUSA_R_16BF, ldb, stride_b,
+        &beta, output_data, MUSA_R_16BF, ldc, stride_c, batch_count,
+        MUBLAS_COMPUTE_32F, MUBLAS_GEMM_DEFAULT_TENSOR_OP);
+    if (status != MUBLAS_STATUS_SUCCESS) {
+      return errors::Internal(
+          "MusaOneTrans3DEinsum BF16 muBLAS strided batched GEMM failed. "
+          "Status: ",
+          static_cast<int>(status));
+    }
+    return OkStatus();
+  }
+
   string equation_;
 };
 
