@@ -597,16 +597,82 @@ bool TryParseConstAxis1SuffixSliceGrad(
       !GetConstIntVector(get_input_node(3), &strides)) {
     return false;
   }
-  if (shape.size() < 2 || begin.size() < 2 || end.size() < 2 ||
-      strides.size() < 2 || shape[1] <= 0 || begin[0] != 0 ||
-      end[0] != 0 || strides[0] != 1 || strides[1] != 1) {
+  if (shape.size() < 2 || begin.size() < 2 || begin.size() > shape.size() ||
+      end.size() != begin.size() || strides.size() != begin.size() ||
+      shape[1] <= 0) {
+    return false;
+  }
+
+  auto get_int_attr = [&](const char* attr_name) -> int64_t {
+    const auto it = node.attr().find(attr_name);
+    return it == node.attr().end() ? 0 : it->second.i();
+  };
+  auto mask_bit = [](int64_t mask, size_t dim) -> bool {
+    return (mask & (int64_t{1} << dim)) != 0;
+  };
+
+  const int64_t begin_mask = get_int_attr("begin_mask");
+  const int64_t end_mask = get_int_attr("end_mask");
+  const int64_t ellipsis_mask = get_int_attr("ellipsis_mask");
+  const int64_t new_axis_mask = get_int_attr("new_axis_mask");
+  const int64_t shrink_axis_mask = get_int_attr("shrink_axis_mask");
+  if (ellipsis_mask != 0 || new_axis_mask != 0 || begin.size() >= 63) {
+    return false;
+  }
+  const int64_t valid_spec_mask = (int64_t{1} << begin.size()) - 1;
+  if (((begin_mask | end_mask | shrink_axis_mask) & ~valid_spec_mask) != 0) {
+    return false;
+  }
+  const int64_t axis1_mask = int64_t{1} << 1;
+  if ((shrink_axis_mask & ~axis1_mask) != 0 || mask_bit(begin_mask, 1) ||
+      strides[1] != 1) {
     return false;
   }
 
   const int64_t axis_dim = shape[1];
   const int64_t start = begin[1] < 0 ? axis_dim + begin[1] : begin[1];
-  if (start <= 0 || start >= axis_dim ||
-      !(end[1] == 0 || end[1] == axis_dim)) {
+  if (start <= 0 || start >= axis_dim) {
+    return false;
+  }
+
+  const bool shrink_axis1 = mask_bit(shrink_axis_mask, 1);
+  if (shrink_axis1) {
+    if (start != axis_dim - 1) {
+      return false;
+    }
+  } else {
+    const int64_t effective_axis_end =
+        mask_bit(end_mask, 1) ? axis_dim
+                              : (end[1] < 0 ? axis_dim + end[1] : end[1]);
+    if (effective_axis_end != axis_dim) {
+      return false;
+    }
+  }
+
+  for (size_t dim = 0; dim < begin.size(); ++dim) {
+    if (dim == 1) continue;
+    if (strides[dim] != 1 || mask_bit(shrink_axis_mask, dim)) {
+      return false;
+    }
+    const int64_t dim_size = shape[dim];
+    const int64_t effective_begin =
+        mask_bit(begin_mask, dim) ? 0
+                                  : (begin[dim] < 0 ? dim_size + begin[dim]
+                                                    : begin[dim]);
+    const int64_t effective_end =
+        mask_bit(end_mask, dim) ? dim_size
+                                : (end[dim] < 0 ? dim_size + end[dim]
+                                                : end[dim]);
+    if (effective_begin != 0 || effective_end != dim_size) {
+      return false;
+    }
+  }
+  for (size_t dim = begin.size(); dim < shape.size(); ++dim) {
+    if (shape[dim] <= 0) {
+      return false;
+    }
+  }
+  if (shape[0] <= 0) {
     return false;
   }
 
@@ -5539,6 +5605,15 @@ class MusaGraphOptimizer : public CustomGraphOptimizer {
           OptimizeSliceGradAddNConcat(optimized_graph);
       if (slice_grad_addn_rewrites > 0) {
         dumper.DumpAtStage(*optimized_graph, "after_slice_grad_addn_concat");
+      }
+    }
+
+    if (!EnvFlagEnabledLocal("MUSA_DISABLE_ADDN_SUFFIX_SLICE_GRAD_FUSION")) {
+      const int addn_slice_grad_rewrites =
+          OptimizeAddNWithSuffixSliceGrad(optimized_graph);
+      if (addn_slice_grad_rewrites > 0) {
+        dumper.DumpAtStage(*optimized_graph,
+                           "after_addn_suffix_slice_grad_fusion");
       }
     }
 

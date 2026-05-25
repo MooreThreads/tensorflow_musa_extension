@@ -1,75 +1,42 @@
+/* Copyright 2026 The TensorFlow MUSA Authors. All Rights Reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
 #include <musa_runtime.h>
 
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
-#include <list>
-#include <type_traits>
+#include <cstdint>
 #include <vector>
 
-#include "../array/musa_fill_functor.h"
 #include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
-#include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/resource_mgr.h"
 #include "tensorflow/core/framework/resource_var.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.h"
-
-extern "C" {
-void LaunchApplyAdamSameType_BFloat16(void* var, void* m, void* v,
-                                      const void* grad, float lr_t, float beta1,
-                                      float beta2, float epsilon, int64_t n,
-                                      bool use_nesterov, musaStream_t stream);
-void LaunchApplyAdamSameType_Half(void* var, void* m, void* v, const void* grad,
-                                  float lr_t, float beta1, float beta2,
-                                  float epsilon, int64_t n, bool use_nesterov,
-                                  musaStream_t stream);
-}
+#include "tensorflow/core/platform/mutex.h"
 
 namespace tensorflow {
 namespace musa {
 
-void LaunchResourceApplyAdamFloat(float* var, float* m, float* v,
-                                  const float* grad, float beta1,
-                                  float beta2, float epsilon, float alpha,
-                                  int64_t total, musaStream_t stream);
-
-namespace {
-
 template <typename T>
-struct AdamSameTypeFP32Path {
-  static constexpr bool kEnabled = false;
-};
-
-template <>
-struct AdamSameTypeFP32Path<bfloat16> {
-  static constexpr bool kEnabled = true;
-};
-
-template <>
-struct AdamSameTypeFP32Path<Eigen::half> {
-  static constexpr bool kEnabled = true;
-};
-
-inline void DispatchAdamSameType(DataType dtype, void* var, void* m, void* v,
-                                 const void* grad, float lr_t, float beta1,
-                                 float beta2, float epsilon, int64_t n,
-                                 bool use_nesterov, musaStream_t stream) {
-  if (dtype == DT_BFLOAT16) {
-    LaunchApplyAdamSameType_BFloat16(var, m, v, grad, lr_t, beta1, beta2,
-                                     epsilon, n, use_nesterov, stream);
-  } else {
-    LaunchApplyAdamSameType_Half(var, m, v, grad, lr_t, beta1, beta2, epsilon,
-                                 n, use_nesterov, stream);
-  }
-}
-
-}  // namespace
-
-// Keep Adam-related kernels in one translation unit so similarly shaped helper
-// classes do not end up with duplicate names across different .cc files.
+void LaunchFusedApplyAdamKernel(T* var, T* m, T* v, const T* grad,
+                                double alpha, double beta1, double beta2,
+                                double epsilon, bool use_nesterov, int64_t n,
+                                musaStream_t stream);
 
 Status CopyTensorForUpdate(OpKernelContext* ctx, const Tensor& src,
                            Tensor* dst) {
@@ -78,11 +45,8 @@ Status CopyTensorForUpdate(OpKernelContext* ctx, const Tensor& src,
   attr.set_nic_compatible(true);
   TF_RETURN_IF_ERROR(ctx->allocate_temp(src.dtype(), src.shape(), dst, attr));
 
-  if (src.TotalBytes() == 0) {
-    return OkStatus();
-  }
+  if (src.TotalBytes() == 0) return OkStatus();
 
-  // Use musaMemcpyAsync for same-device memory copy
   musaStream_t stream = GetMusaStreamByCtx(ctx);
   musaError_t err = musaMemcpyAsync(dst->data(), src.data(), src.TotalBytes(),
                                     musaMemcpyDeviceToDevice, stream);
@@ -90,7 +54,6 @@ Status CopyTensorForUpdate(OpKernelContext* ctx, const Tensor& src,
     return errors::Internal("CopyTensorForUpdate: musaMemcpyAsync failed: ",
                             musaGetErrorString(err));
   }
-
   return OkStatus();
 }
 
@@ -105,27 +68,125 @@ Status PrepareTensorForMusaUpdate(OpKernelContext* ctx, Var* var) {
   return OkStatus();
 }
 
-class MutexUnlocker {
+namespace {
+
+template <typename T>
+double ScalarToDouble(const Tensor& tensor) {
+  return static_cast<double>(tensor.scalar<T>()());
+}
+
+template <>
+double ScalarToDouble<Eigen::half>(const Tensor& tensor) {
+  return static_cast<double>(static_cast<float>(tensor.scalar<Eigen::half>()()));
+}
+
+template <>
+double ScalarToDouble<bfloat16>(const Tensor& tensor) {
+  return static_cast<double>(static_cast<float>(tensor.scalar<bfloat16>()()));
+}
+
+class ScopedMutexUnlocker {
  public:
-  explicit MutexUnlocker(mutex* mu) : mu_(mu) {}
-  ~MutexUnlocker() {
-    if (mu_ != nullptr) {
-      mu_->unlock();
-    }
+  explicit ScopedMutexUnlocker(mutex* mu) : mu_(mu) {}
+  ScopedMutexUnlocker(ScopedMutexUnlocker&& other) noexcept : mu_(other.mu_) {
+    other.mu_ = nullptr;
+  }
+  ScopedMutexUnlocker(const ScopedMutexUnlocker&) = delete;
+  ScopedMutexUnlocker& operator=(const ScopedMutexUnlocker&) = delete;
+  ~ScopedMutexUnlocker() {
+    if (mu_ != nullptr) mu_->unlock();
   }
 
  private:
   mutex* mu_;
 };
 
+void LockResourceVariables(const std::vector<Var*>& vars,
+                           std::vector<ScopedMutexUnlocker>* locks) {
+  std::vector<mutex*> mutexes;
+  mutexes.reserve(vars.size());
+  for (Var* var : vars) {
+    mutex* mu = var->mu();
+    if (std::find(mutexes.begin(), mutexes.end(), mu) == mutexes.end()) {
+      mutexes.push_back(mu);
+    }
+  }
+  std::sort(mutexes.begin(), mutexes.end());
+
+  locks->reserve(mutexes.size());
+  for (mutex* mu : mutexes) {
+    mu->lock();
+    locks->emplace_back(mu);
+  }
+}
+
+void LockRefInputs(OpKernelContext* ctx, const std::vector<int>& input_indices,
+                   std::vector<ScopedMutexUnlocker>* locks) {
+  std::vector<mutex*> mutexes;
+  mutexes.reserve(input_indices.size());
+  for (int index : input_indices) {
+    mutex* mu = ctx->input_ref_mutex(index);
+    if (std::find(mutexes.begin(), mutexes.end(), mu) == mutexes.end()) {
+      mutexes.push_back(mu);
+    }
+  }
+  std::sort(mutexes.begin(), mutexes.end());
+
+  locks->reserve(mutexes.size());
+  for (mutex* mu : mutexes) {
+    mu->lock();
+    locks->emplace_back(mu);
+  }
+}
+
+Status CheckSameShape(const Tensor& lhs, const Tensor& rhs,
+                      const char* lhs_name, const char* rhs_name) {
+  if (!lhs.shape().IsSameSize(rhs.shape())) {
+    return errors::InvalidArgument(lhs_name, " and ", rhs_name,
+                                   " must have the same shape. ", lhs_name,
+                                   " shape: ", lhs.shape().DebugString(), ", ",
+                                   rhs_name,
+                                   " shape: ", rhs.shape().DebugString());
+  }
+  return OkStatus();
+}
+
+Status CheckScalar(const Tensor& tensor, const char* name) {
+  if (tensor.NumElements() != 1) {
+    return errors::InvalidArgument(name, " must be a scalar, got ",
+                                   tensor.NumElements(), " elements.");
+  }
+  return OkStatus();
+}
+
+double BiasCorrectedLearningRate(double beta1_power, double beta2_power,
+                                 double lr) {
+  const double one_minus_beta1_power = 1.0 - beta1_power;
+  if (std::abs(one_minus_beta1_power) < 1e-10) {
+    return lr;
+  }
+  return lr * std::sqrt(1.0 - beta2_power) / one_minus_beta1_power;
+}
+
+void CheckLaunch(OpKernelContext* ctx, const char* op_name) {
+  musaError_t launch_err = musaGetLastError();
+  OP_REQUIRES(ctx, launch_err == musaSuccess,
+              errors::Internal(op_name, ": MUSA kernel launch failed: ",
+                               musaGetErrorString(launch_err)));
+}
+
+}  // namespace
+
 template <typename T>
-class MusaResourceApplyAdamOp : public MusaOpKernel {
+class MusaResourceApplyAdamSingleKernelOp : public MusaOpKernel {
  public:
-  explicit MusaResourceApplyAdamOp(OpKernelConstruction* ctx)
+  explicit MusaResourceApplyAdamSingleKernelOp(OpKernelConstruction* ctx)
       : MusaOpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("use_locking", &use_exclusive_lock_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("use_nesterov", &use_nesterov_));
   }
+
+  bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
     core::RefCountPtr<Var> var;
@@ -135,284 +196,53 @@ class MusaResourceApplyAdamOp : public MusaOpKernel {
     OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 1), &m));
     OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 2), &v));
 
-    std::vector<mutex*> mutexes;
-    auto add_mutex = [&](mutex* mu) {
-      if (std::find(mutexes.begin(), mutexes.end(), mu) == mutexes.end()) {
-        mutexes.push_back(mu);
-      }
-    };
-    add_mutex(var->mu());
-    add_mutex(m->mu());
-    add_mutex(v->mu());
-    std::sort(mutexes.begin(), mutexes.end());
-
-    for (mutex* mu : mutexes) {
-      mu->lock();
-    }
-    std::vector<MutexUnlocker> locks;
-    locks.reserve(mutexes.size());
-    for (mutex* mu : mutexes) {
-      locks.emplace_back(mu);
-    }
-
-    OP_REQUIRES(ctx,
-                var->tensor()->IsInitialized() &&
-                    m->tensor()->IsInitialized() &&
-                    v->tensor()->IsInitialized(),
-                errors::FailedPrecondition(
-                    "Adam variables (var/m/v) not initialized."));
-
-    // Validate shapes match (Adam requires var, m, v, and grad to have same
-    // shape)
-    Tensor var_t = *var->tensor();
-    Tensor m_t = *m->tensor();
-    Tensor v_t = *v->tensor();
-    const Tensor& grad = ctx->input(9);
+    std::vector<ScopedMutexUnlocker> locks;
+    LockResourceVariables({var.get(), m.get(), v.get()}, &locks);
 
     OP_REQUIRES(
-        ctx, var_t.shape().IsSameSize(m_t.shape()),
-        errors::InvalidArgument("var and m must have the same shape. var: ",
-                                var_t.shape().DebugString(),
-                                " m: ", m_t.shape().DebugString()));
-    OP_REQUIRES(
-        ctx, var_t.shape().IsSameSize(v_t.shape()),
-        errors::InvalidArgument("var and v must have the same shape. var: ",
-                                var_t.shape().DebugString(),
-                                " v: ", v_t.shape().DebugString()));
-    OP_REQUIRES(
-        ctx, var_t.shape().IsSameSize(grad.shape()),
-        errors::InvalidArgument("var and grad must have the same shape. var: ",
-                                var_t.shape().DebugString(),
-                                " grad: ", grad.shape().DebugString()));
+        ctx,
+        var->tensor()->IsInitialized() && m->tensor()->IsInitialized() &&
+            v->tensor()->IsInitialized(),
+        errors::FailedPrecondition(
+            "Adam variables (var/m/v) not initialized."));
 
     OP_REQUIRES_OK(ctx, PrepareTensorForMusaUpdate(ctx, var.get()));
     OP_REQUIRES_OK(ctx, PrepareTensorForMusaUpdate(ctx, m.get()));
     OP_REQUIRES_OK(ctx, PrepareTensorForMusaUpdate(ctx, v.get()));
 
-    // Update tensor references after potential copy
-    var_t = *var->tensor();
-    m_t = *m->tensor();
-    v_t = *v->tensor();
+    Tensor* var_t = var->tensor();
+    Tensor* m_t = m->tensor();
+    Tensor* v_t = v->tensor();
+    const Tensor& grad = ctx->input(9);
 
-    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
-    auto& handle = GetHandleByCtx(ctx);
-    std::list<Tensor> temp_storage;
-    ::musa::dnn::Binary b_op;
-    ::musa::dnn::Unary u_op;
+    OP_REQUIRES_OK(ctx, CheckSameShape(*var_t, *m_t, "var", "m"));
+    OP_REQUIRES_OK(ctx, CheckSameShape(*var_t, *v_t, "var", "v"));
+    OP_REQUIRES_OK(ctx, CheckSameShape(*var_t, grad, "var", "grad"));
+    OP_REQUIRES_OK(ctx, CheckScalar(ctx->input(3), "beta1_power"));
+    OP_REQUIRES_OK(ctx, CheckScalar(ctx->input(4), "beta2_power"));
+    OP_REQUIRES_OK(ctx, CheckScalar(ctx->input(5), "lr"));
+    OP_REQUIRES_OK(ctx, CheckScalar(ctx->input(6), "beta1"));
+    OP_REQUIRES_OK(ctx, CheckScalar(ctx->input(7), "beta2"));
+    OP_REQUIRES_OK(ctx, CheckScalar(ctx->input(8), "epsilon"));
 
-    auto require_success = [&](::musa::dnn::Status status,
-                               const char* op_name) -> Status {
-      if (status != ::musa::dnn::Status::SUCCESS) {
-        return errors::Internal("ResourceApplyAdam ", op_name,
-                                " failed. Status: ", static_cast<int>(status));
-      }
-      return OkStatus();
-    };
+    const int64_t n = var_t->NumElements();
+    if (n == 0) return;
 
-    auto fill_scalar = [&](T val, const TensorShape& shape,
-                           mTensor* out) -> Status {
-      temp_storage.emplace_back();
-      Status alloc_status = ctx->allocate_temp(DataTypeToEnum<T>::value, shape,
-                                               &temp_storage.back());
-      if (!alloc_status.ok()) {
-        return alloc_status;
-      }
-      *out = CreateMTensor(temp_storage.back(), format_);
-      return MusaFillCall(out, val, ctx);
-    };
-
-    const T beta1_power = ctx->input(3).scalar<T>()();
-    const T beta2_power = ctx->input(4).scalar<T>()();
-    const T lr = ctx->input(5).scalar<T>()();
-    const T beta1 = ctx->input(6).scalar<T>()();
-    const T beta2 = ctx->input(7).scalar<T>()();
-    const T epsilon = ctx->input(8).scalar<T>()();
-    // grad already declared above for shape validation
-
-    // Calculate bias-corrected learning rate
-    // Formula: alpha = lr * sqrt(1 - beta2^t) / (1 - beta1^t)
-    // Handle the edge case when beta1_power = 1.0 (initial state) to avoid
-    // division by zero
-    double alpha_val;
-    const double one_minus_beta1_power = 1.0 - static_cast<double>(beta1_power);
-    if (std::abs(one_minus_beta1_power) < 1e-10) {
-      // Initial iteration: beta1_power ≈ 1.0, use lr as fallback
-      // This matches TensorFlow's behavior on the first step
-      alpha_val = static_cast<double>(lr);
-    } else {
-      alpha_val = static_cast<double>(lr) *
-                  std::sqrt(1.0 - static_cast<double>(beta2_power)) /
-                  one_minus_beta1_power;
-    }
-
-    if constexpr (std::is_same<T, float>::value) {
-      if (!use_nesterov_) {
-        const int64_t total = var_t.NumElements();
-        if (total > 0) {
-          LaunchResourceApplyAdamFloat(
-              var_t.flat<float>().data(), m_t.flat<float>().data(),
-              v_t.flat<float>().data(), grad.flat<float>().data(),
-              static_cast<float>(beta1), static_cast<float>(beta2),
-              static_cast<float>(epsilon), static_cast<float>(alpha_val),
-              total, GetMusaStreamByCtx(ctx));
-          const musaError_t launch_err = musaGetLastError();
-          OP_REQUIRES(ctx, launch_err == musaSuccess,
-                      errors::Internal("ResourceApplyAdam fused launch failed: ",
-                                       musaGetErrorString(launch_err)));
-        }
-        return;
-      }
-    }
-
-    if (AdamSameTypeFP32Path<T>::kEnabled && var_t.NumElements() > 0 &&
-        std::getenv("MUSA_DISABLE_ADAM_BF16") == nullptr) {
-      musaStream_t stream = GetMusaStreamByCtx(ctx);
-      DispatchAdamSameType(
-          var_t.dtype(),
-          const_cast<void*>(
-              static_cast<const void*>(var_t.tensor_data().data())),
-          const_cast<void*>(static_cast<const void*>(m_t.tensor_data().data())),
-          const_cast<void*>(static_cast<const void*>(v_t.tensor_data().data())),
-          static_cast<const void*>(grad.tensor_data().data()),
-          static_cast<float>(alpha_val), static_cast<float>(beta1),
-          static_cast<float>(beta2), static_cast<float>(epsilon),
-          var_t.NumElements(), /*use_nesterov=*/false, stream);
-      musaError_t sync_err = musaStreamSynchronize(stream);
-      OP_REQUIRES(
-          ctx, sync_err == musaSuccess,
-          errors::Internal("ResourceApplyAdam (bf16/fp16 fp32-compute path): "
-                           "musaStreamSynchronize failed: ",
-                           musaGetErrorString(sync_err)));
-      return;
-    }
-
-    // // Log shapes for debugging
-    // LOG(INFO) << "ResourceApplyAdam shapes: var=" <<
-    // var_t.shape().DebugString()
-    //           << " m=" << m_t.shape().DebugString()
-    //           << " v=" << v_t.shape().DebugString()
-    //           << " grad=" << grad.shape().DebugString()
-    //           << " dtype=" << var_t.dtype();
-
-    mTensor t_var = CreateMTensor(var_t, format_);
-    mTensor t_m = CreateMTensor(m_t, format_);
-    mTensor t_v = CreateMTensor(v_t, format_);
-    mTensor t_grad = CreateMTensor(grad, format_);
-
-    mTensor t_beta1;
-    mTensor t_inv_beta1;
-    mTensor t_beta2;
-    mTensor t_inv_beta2;
-    mTensor t_eps;
-    mTensor t_alpha;
-    // Use var_t.shape() consistently for all scalar fills (var, m, v, grad
-    // should all have same shape)
-    OP_REQUIRES_OK(ctx, fill_scalar(beta1, var_t.shape(), &t_beta1));
-    OP_REQUIRES_OK(ctx, fill_scalar(static_cast<T>(1.0) - beta1, var_t.shape(),
-                                    &t_inv_beta1));
-    OP_REQUIRES_OK(ctx, fill_scalar(beta2, var_t.shape(), &t_beta2));
-    OP_REQUIRES_OK(ctx, fill_scalar(static_cast<T>(1.0) - beta2, var_t.shape(),
-                                    &t_inv_beta2));
-    OP_REQUIRES_OK(ctx, fill_scalar(epsilon, v_t.shape(), &t_eps));
-    OP_REQUIRES_OK(
-        ctx, fill_scalar(static_cast<T>(alpha_val), var_t.shape(), &t_alpha));
-    // Step 1: m = beta1 * m + (1 - beta1) * grad
-    // Following RMSProp pattern: allow in-place operations for MUL and ADD
-    b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_m, t_m, t_beta1), "MUL beta1"));
-
-    temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx,
-                   ctx->allocate_temp(DataTypeToEnum<T>::value, var_t.shape(),
-                                      &temp_storage.back()));
-    mTensor t_g_scaled = CreateMTensor(temp_storage.back(), format_);
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_g_scaled, t_grad, t_inv_beta1),
-                             "MUL inv_beta1"));
-
-    b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_m, t_m, t_g_scaled), "ADD m"));
-
-    // Step 2: v = beta2 * v + (1 - beta2) * grad^2
-    b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_v, t_v, t_beta2), "MUL beta2"));
-
-    temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx,
-                   ctx->allocate_temp(DataTypeToEnum<T>::value, var_t.shape(),
-                                      &temp_storage.back()));
-    mTensor t_g2 = CreateMTensor(temp_storage.back(), format_);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_g2, t_grad, t_grad),
-                                        "MUL grad_sq"));
-
-    temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx,
-                   ctx->allocate_temp(DataTypeToEnum<T>::value, var_t.shape(),
-                                      &temp_storage.back()));
-    mTensor t_g2_scaled = CreateMTensor(temp_storage.back(), format_);
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_g2_scaled, t_g2, t_inv_beta2),
-                             "MUL inv_beta2"));
-
-    b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_v, t_v, t_g2_scaled), "ADD v"));
-
-    // Step 3: sqrt(v) + epsilon
-    temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
-                                           v_t.shape(), &temp_storage.back()));
-    mTensor t_sqrt_v = CreateMTensor(temp_storage.back(), format_);
-    u_op.SetMode(::musa::dnn::Unary::Mode::SQRT);
-    OP_REQUIRES_OK(ctx,
-                   require_success(u_op.Run(handle, t_sqrt_v, t_v), "SQRT v"));
-
-    temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
-                                           v_t.shape(), &temp_storage.back()));
-    mTensor t_v_plus_eps = CreateMTensor(temp_storage.back(), format_);
-    b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_v_plus_eps, t_sqrt_v, t_eps),
-                             "ADD epsilon"));
-
-    // Step 4: update = m / denom
-    temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx,
-                   ctx->allocate_temp(DataTypeToEnum<T>::value, var_t.shape(),
-                                      &temp_storage.back()));
-    mTensor t_update = CreateMTensor(temp_storage.back(), format_);
-    b_op.SetMode(::musa::dnn::Binary::Mode::DIV);
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_update, t_m, t_v_plus_eps),
-                             "DIV update"));
-
-    // Step 5: update = update * alpha
-    temp_storage.emplace_back();
-    OP_REQUIRES_OK(ctx,
-                   ctx->allocate_temp(DataTypeToEnum<T>::value, var_t.shape(),
-                                      &temp_storage.back()));
-    mTensor t_update_scaled = CreateMTensor(temp_storage.back(), format_);
-    b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    OP_REQUIRES_OK(ctx, require_success(b_op.Run(handle, t_update_scaled,
-                                                 t_update, t_alpha),
-                                        "MUL alpha"));
-
-    // Step 6: var = var - update_scaled (in-place SUB like RMSProp)
-    b_op.SetMode(::musa::dnn::Binary::Mode::SUB);
-    OP_REQUIRES_OK(
-        ctx, require_success(b_op.Run(handle, t_var, t_var, t_update_scaled),
-                             "SUB var"));
+    const double beta1_power = ScalarToDouble<T>(ctx->input(3));
+    const double beta2_power = ScalarToDouble<T>(ctx->input(4));
+    const double lr = ScalarToDouble<T>(ctx->input(5));
+    const double beta1 = ScalarToDouble<T>(ctx->input(6));
+    const double beta2 = ScalarToDouble<T>(ctx->input(7));
+    const double epsilon = ScalarToDouble<T>(ctx->input(8));
+    const double alpha =
+        BiasCorrectedLearningRate(beta1_power, beta2_power, lr);
 
     musaStream_t stream = GetMusaStreamByCtx(ctx);
-    musaError_t sync_err = musaStreamSynchronize(stream);
-    OP_REQUIRES(ctx, sync_err == musaSuccess,
-                errors::Internal("ResourceApplyAdam: musaStreamSynchronize "
-                                 "failed: ",
-                                 musaGetErrorString(sync_err)));
+    LaunchFusedApplyAdamKernel<T>(
+        var_t->flat<T>().data(), m_t->flat<T>().data(), v_t->flat<T>().data(),
+        grad.flat<T>().data(), alpha, beta1, beta2, epsilon, use_nesterov_, n,
+        stream);
+    CheckLaunch(ctx, "ResourceApplyAdam");
   }
 
  private:
@@ -421,220 +251,63 @@ class MusaResourceApplyAdamOp : public MusaOpKernel {
 };
 
 template <typename T>
-class MusaApplyAdamKernelOp : public MusaOpKernel {
+class MusaApplyAdamSingleKernelOp : public MusaOpKernel {
  public:
-  explicit MusaApplyAdamKernelOp(OpKernelConstruction* ctx)
+  explicit MusaApplyAdamSingleKernelOp(OpKernelConstruction* ctx)
       : MusaOpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("use_locking", &use_exclusive_lock_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("use_nesterov", &use_nesterov_));
   }
 
-  // ApplyAdam is computationally intensive (multiple element-wise ops).
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
-    Var* var = nullptr;
-    Var* m = nullptr;
-    Var* v = nullptr;
-    OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 0), &var));
-    OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 1), &m));
-    OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 2), &v));
-    core::ScopedUnref var_unref(var), m_unref(m), v_unref(v);
+    std::vector<ScopedMutexUnlocker> locks;
+    if (use_exclusive_lock_) {
+      LockRefInputs(ctx, {0, 1, 2}, &locks);
+    }
 
-    Tensor* var_t = var->tensor();
-    Tensor* m_t = m->tensor();
-    Tensor* v_t = v->tensor();
-
-    OP_REQUIRES(
-        ctx,
-        var_t->IsInitialized() && m_t->IsInitialized() && v_t->IsInitialized(),
-        errors::FailedPrecondition(
-            "Adam variables (var/m/v) not initialized."));
-
+    Tensor var_t = ctx->mutable_input(0, use_exclusive_lock_);
+    Tensor m_t = ctx->mutable_input(1, use_exclusive_lock_);
+    Tensor v_t = ctx->mutable_input(2, use_exclusive_lock_);
     const Tensor& grad = ctx->input(9);
 
-    // Validate shapes match
-    OP_REQUIRES(
-        ctx, var_t->shape().IsSameSize(m_t->shape()),
-        errors::InvalidArgument("var and m must have the same shape. var: ",
-                                var_t->shape().DebugString(),
-                                " m: ", m_t->shape().DebugString()));
-    OP_REQUIRES(
-        ctx, var_t->shape().IsSameSize(v_t->shape()),
-        errors::InvalidArgument("var and v must have the same shape. var: ",
-                                var_t->shape().DebugString(),
-                                " v: ", v_t->shape().DebugString()));
-    OP_REQUIRES(
-        ctx, var_t->shape().IsSameSize(grad.shape()),
-        errors::InvalidArgument("var and grad must have the same shape. var: ",
-                                var_t->shape().DebugString(),
-                                " grad: ", grad.shape().DebugString()));
+    OP_REQUIRES(ctx,
+                var_t.IsInitialized() && m_t.IsInitialized() &&
+                    v_t.IsInitialized(),
+                errors::FailedPrecondition(
+                    "ApplyAdam variables (var/m/v) not initialized."));
 
-    const T beta1_power = ctx->input(3).scalar<T>()();
-    const T beta2_power = ctx->input(4).scalar<T>()();
-    const T lr = ctx->input(5).scalar<T>()();
-    const T beta1 = ctx->input(6).scalar<T>()();
-    const T beta2 = ctx->input(7).scalar<T>()();
-    const T epsilon = ctx->input(8).scalar<T>()();
-    // grad already declared above for shape validation
+    OP_REQUIRES_OK(ctx, CheckSameShape(var_t, m_t, "var", "m"));
+    OP_REQUIRES_OK(ctx, CheckSameShape(var_t, v_t, "var", "v"));
+    OP_REQUIRES_OK(ctx, CheckSameShape(var_t, grad, "var", "grad"));
+    OP_REQUIRES_OK(ctx, CheckScalar(ctx->input(3), "beta1_power"));
+    OP_REQUIRES_OK(ctx, CheckScalar(ctx->input(4), "beta2_power"));
+    OP_REQUIRES_OK(ctx, CheckScalar(ctx->input(5), "lr"));
+    OP_REQUIRES_OK(ctx, CheckScalar(ctx->input(6), "beta1"));
+    OP_REQUIRES_OK(ctx, CheckScalar(ctx->input(7), "beta2"));
+    OP_REQUIRES_OK(ctx, CheckScalar(ctx->input(8), "epsilon"));
 
-    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
-    auto& handle = GetHandleByCtx(ctx);
-    std::list<Tensor> temp_storage;
+    const int64_t n = var_t.NumElements();
+    if (n != 0) {
+      const double beta1_power = ScalarToDouble<T>(ctx->input(3));
+      const double beta2_power = ScalarToDouble<T>(ctx->input(4));
+      const double lr = ScalarToDouble<T>(ctx->input(5));
+      const double beta1 = ScalarToDouble<T>(ctx->input(6));
+      const double beta2 = ScalarToDouble<T>(ctx->input(7));
+      const double epsilon = ScalarToDouble<T>(ctx->input(8));
+      const double alpha =
+          BiasCorrectedLearningRate(beta1_power, beta2_power, lr);
 
-    mTensor t_var = CreateMTensor(*var_t, format_);
-    mTensor t_m = CreateMTensor(*m_t, format_);
-    mTensor t_v = CreateMTensor(*v_t, format_);
-    mTensor t_grad = CreateMTensor(grad, format_);
-
-    auto fill_scalar = [&](T val, const TensorShape& shape, mTensor* out) {
-      temp_storage.emplace_back();
-      ctx->allocate_temp(DataTypeToEnum<T>::value, shape, &temp_storage.back());
-      *out = CreateMTensor(temp_storage.back(), format_);
-      ::musa::dnn::Fill fill_op;
-      fill_op.SetValue(static_cast<float>(val));
-      return fill_op.Run(handle, *out);
-    };
-
-    ::musa::dnn::Binary b_op;
-    ::musa::dnn::Unary u_op;
-
-    // Calculate bias-corrected learning rate
-    // Handle the edge case when beta1_power = 1.0 (initial state) to avoid
-    // division by zero
-    double alpha_val;
-    const double one_minus_beta1_power = 1.0 - static_cast<double>(beta1_power);
-    if (std::abs(one_minus_beta1_power) < 1e-10) {
-      // Initial iteration: beta1_power ≈ 1.0, use lr as fallback
-      alpha_val = static_cast<double>(lr);
-    } else {
-      alpha_val = static_cast<double>(lr) *
-                  std::sqrt(1.0 - static_cast<double>(beta2_power)) /
-                  one_minus_beta1_power;
-    }
-
-    if (AdamSameTypeFP32Path<T>::kEnabled && var_t->NumElements() > 0 &&
-        std::getenv("MUSA_DISABLE_ADAM_BF16") == nullptr) {
       musaStream_t stream = GetMusaStreamByCtx(ctx);
-      DispatchAdamSameType(
-          var_t->dtype(),
-          const_cast<void*>(
-              static_cast<const void*>(var_t->tensor_data().data())),
-          const_cast<void*>(
-              static_cast<const void*>(m_t->tensor_data().data())),
-          const_cast<void*>(
-              static_cast<const void*>(v_t->tensor_data().data())),
-          static_cast<const void*>(grad.tensor_data().data()),
-          static_cast<float>(alpha_val), static_cast<float>(beta1),
-          static_cast<float>(beta2), static_cast<float>(epsilon),
-          var_t->NumElements(), /*use_nesterov=*/false, stream);
-      if (IsRefType(ctx->input_dtype(0))) {
-        ctx->forward_ref_input_to_ref_output(0, 0);
-      } else {
-        for (int i = 0; i < ctx->num_outputs(); ++i) {
-          ctx->set_output(i, ctx->input(i));
-        }
-      }
-      return;
+      LaunchFusedApplyAdamKernel<T>(
+          var_t.flat<T>().data(), m_t.flat<T>().data(), v_t.flat<T>().data(),
+          grad.flat<T>().data(), alpha, beta1, beta2, epsilon, use_nesterov_, n,
+          stream);
+      CheckLaunch(ctx, "ApplyAdam");
     }
 
-    mTensor t_beta1;
-    mTensor t_inv_beta1;
-    mTensor t_beta2;
-    mTensor t_inv_beta2;
-    mTensor t_eps;
-    mTensor t_alpha;
-    // Use var_t->shape() consistently for all scalar fills (var, m, v, grad
-    // should all have same shape)
-    fill_scalar(beta1, var_t->shape(), &t_beta1);
-    fill_scalar(static_cast<T>(1.0) - beta1, var_t->shape(), &t_inv_beta1);
-    fill_scalar(beta2, var_t->shape(), &t_beta2);
-    fill_scalar(static_cast<T>(1.0) - beta2, var_t->shape(), &t_inv_beta2);
-    fill_scalar(epsilon, v_t->shape(), &t_eps);
-    fill_scalar(static_cast<T>(alpha_val), var_t->shape(), &t_alpha);
-
-    // Step 1: m = beta1 * m + (1 - beta1) * grad
-    // Avoid all in-place operations for safety
-    temp_storage.emplace_back();
-    ctx->allocate_temp(DataTypeToEnum<T>::value, var_t->shape(),
-                       &temp_storage.back());
-    mTensor t_m_new = CreateMTensor(temp_storage.back(), format_);
-    b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    b_op.Run(handle, t_m_new, t_m, t_beta1);
-
-    temp_storage.emplace_back();
-    ctx->allocate_temp(DataTypeToEnum<T>::value, var_t->shape(),
-                       &temp_storage.back());
-    mTensor t_grad_scaled = CreateMTensor(temp_storage.back(), format_);
-    b_op.Run(handle, t_grad_scaled, t_grad, t_inv_beta1);
-    b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    b_op.Run(handle, t_m, t_m_new, t_grad_scaled);
-
-    // Step 2: v = beta2 * v + (1 - beta2) * grad^2
-    temp_storage.emplace_back();
-    ctx->allocate_temp(DataTypeToEnum<T>::value, var_t->shape(),
-                       &temp_storage.back());
-    mTensor t_v_new = CreateMTensor(temp_storage.back(), format_);
-    b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    b_op.Run(handle, t_v_new, t_v, t_beta2);
-
-    temp_storage.emplace_back();
-    ctx->allocate_temp(DataTypeToEnum<T>::value, var_t->shape(),
-                       &temp_storage.back());
-    mTensor t_grad_sq = CreateMTensor(temp_storage.back(), format_);
-    b_op.Run(handle, t_grad_sq, t_grad, t_grad);
-
-    temp_storage.emplace_back();
-    ctx->allocate_temp(DataTypeToEnum<T>::value, var_t->shape(),
-                       &temp_storage.back());
-    mTensor t_grad_sq_scaled = CreateMTensor(temp_storage.back(), format_);
-    b_op.Run(handle, t_grad_sq_scaled, t_grad_sq, t_inv_beta2);
-    b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    b_op.Run(handle, t_v, t_v_new, t_grad_sq_scaled);
-
-    // Step 3: sqrt(v) + epsilon
-    temp_storage.emplace_back();
-    ctx->allocate_temp(DataTypeToEnum<T>::value, v_t->shape(),
-                       &temp_storage.back());
-    mTensor t_sqrt_v = CreateMTensor(temp_storage.back(), format_);
-    u_op.SetMode(::musa::dnn::Unary::Mode::SQRT);
-    u_op.Run(handle, t_sqrt_v, t_v);
-
-    // sqrt_v + epsilon (allocate new output)
-    temp_storage.emplace_back();
-    ctx->allocate_temp(DataTypeToEnum<T>::value, v_t->shape(),
-                       &temp_storage.back());
-    mTensor t_denom = CreateMTensor(temp_storage.back(), format_);
-    b_op.SetMode(::musa::dnn::Binary::Mode::ADD);
-    b_op.Run(handle, t_denom, t_sqrt_v, t_eps);
-
-    // Step 4: update = m / denom
-    temp_storage.emplace_back();
-    ctx->allocate_temp(DataTypeToEnum<T>::value, var_t->shape(),
-                       &temp_storage.back());
-    mTensor t_update = CreateMTensor(temp_storage.back(), format_);
-    b_op.SetMode(::musa::dnn::Binary::Mode::DIV);
-    b_op.Run(handle, t_update, t_m, t_denom);
-
-    // Step 5: update = update * alpha
-    temp_storage.emplace_back();
-    ctx->allocate_temp(DataTypeToEnum<T>::value, var_t->shape(),
-                       &temp_storage.back());
-    mTensor t_update_scaled = CreateMTensor(temp_storage.back(), format_);
-    b_op.SetMode(::musa::dnn::Binary::Mode::MUL);
-    b_op.Run(handle, t_update_scaled, t_update, t_alpha);
-
-    // Step 6: var = var - update_scaled
-    b_op.SetMode(::musa::dnn::Binary::Mode::SUB);
-    b_op.Run(handle, t_var, t_var, t_update_scaled);
-
-    if (IsRefType(ctx->input_dtype(0))) {
-      ctx->forward_ref_input_to_ref_output(0, 0);
-    } else {
-      for (int i = 0; i < ctx->num_outputs(); ++i) {
-        ctx->set_output(i, ctx->input(i));
-      }
-    }
+    ctx->forward_ref_input_to_ref_output(0, 0);
   }
 
  private:
@@ -655,7 +328,7 @@ class MusaApplyAdamKernelOp : public MusaOpKernel {
                               .HostMemory("beta1")       \
                               .HostMemory("beta2")       \
                               .HostMemory("epsilon"),    \
-                          MusaResourceApplyAdamOp<T>);
+                          MusaResourceApplyAdamSingleKernelOp<T>);
 
 #define REGISTER_APPLY_ADAM(T)                           \
   REGISTER_KERNEL_BUILDER(Name("ApplyAdam")              \
@@ -667,14 +340,12 @@ class MusaApplyAdamKernelOp : public MusaOpKernel {
                               .HostMemory("beta1")       \
                               .HostMemory("beta2")       \
                               .HostMemory("epsilon"),    \
-                          MusaApplyAdamKernelOp<T>);
+                          MusaApplyAdamSingleKernelOp<T>);
 
 REGISTER_RESOURCE_ADAM(float);
 REGISTER_RESOURCE_ADAM(double);
 REGISTER_RESOURCE_ADAM(Eigen::half);
 REGISTER_RESOURCE_ADAM(bfloat16);
-REGISTER_RESOURCE_ADAM(int64);
-REGISTER_RESOURCE_ADAM(int32);
 
 REGISTER_APPLY_ADAM(float);
 REGISTER_APPLY_ADAM(double);

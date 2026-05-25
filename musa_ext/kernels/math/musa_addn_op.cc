@@ -349,6 +349,19 @@ class MusaAddNWithSliceGradOp : public MusaOpKernel {
       base_inputs.ptrs[i] = ctx->input(i).tensor_data().data();
     }
     const Tensor& slice_grad = ctx->input(num_base_inputs_);
+    const int64_t suffix_elems =
+        (axis_dim_ - slice_start_) * static_cast<int64_t>(inner_dim_);
+    const int64_t stride_elems =
+        axis_dim_ * static_cast<int64_t>(inner_dim_);
+    OP_REQUIRES(ctx,
+                output->NumElements() % stride_elems == 0,
+                errors::InvalidArgument(
+                    "MusaAddNWithSliceGrad output shape is incompatible with "
+                    "slice attrs"));
+    const int64_t outer = output->NumElements() / stride_elems;
+    OP_REQUIRES(ctx, slice_grad.NumElements() == outer * suffix_elems,
+                errors::InvalidArgument(
+                    "MusaAddNWithSliceGrad slice input shape mismatch"));
 
     auto& handle = GetHandleByCtx(ctx);
     musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
