@@ -1,3 +1,5 @@
+#include <mudnn.h>
+
 #include <array>
 #include <cstdint>
 
@@ -132,6 +134,7 @@ class MusaTileOp : public MusaOpKernel {
 
     TensorShape output_shape;
     bool need_tile = false;
+    bool can_use_mudnn_broadcast_tile = true;
     TileShapeInfo info = {};
     info.dims = input_dims;
 
@@ -151,7 +154,10 @@ class MusaTileOp : public MusaOpKernel {
       output_shape.AddDim(output_dim);
       info.input_dims[i] = input_dim;
       info.output_dims[i] = output_dim;
-      if (multiple != 1) need_tile = true;
+      if (multiple != 1) {
+        need_tile = true;
+        if (input_dim != 1) can_use_mudnn_broadcast_tile = false;
+      }
     }
 
     if (input_dims == 0 || !need_tile) {
@@ -163,6 +169,32 @@ class MusaTileOp : public MusaOpKernel {
     OP_REQUIRES_OK(context, context->allocate_output(0, output_shape, &output));
     const int64_t total = output->NumElements();
     if (total == 0) return;
+
+    if (can_use_mudnn_broadcast_tile) {
+      auto& h = GetHandleByCtx(context);
+      auto in_mt = CreateMTensor(input);
+      auto out_mt = CreateMTensor(*output);
+
+      std::array<int64_t, kMaxTileDims> b_dims;
+      std::array<int64_t, kMaxTileDims> b_strides;
+      std::array<int64_t, kMaxTileDims> orig_strides;
+      int64_t stride = 1;
+
+      for (int i = input_dims - 1; i >= 0; --i) {
+        orig_strides[i] = input.dim_size(i) == 1 ? 0 : stride;
+        stride *= input.dim_size(i);
+      }
+      for (int i = 0; i < input_dims; ++i) {
+        b_dims[i] = output_shape.dim_size(i);
+        b_strides[i] = input.dim_size(i) == 1 ? 0 : orig_strides[i];
+      }
+
+      MTOP_CHECK_OK(in_mt.SetNdInfo(input_dims, b_dims.data(), b_strides.data()),
+                    "Tile SetNdInfo", context);
+      ::musa::dnn::Permute op;
+      MTOP_CHECK_OK_RUN(op.Run(h, out_mt, in_mt), "Permute Run for Tile", context);
+      return;
+    }
 
     TileLauncher<T>::Run(input, output, total, info, GetMusaStreamByCtx(context));
   }
