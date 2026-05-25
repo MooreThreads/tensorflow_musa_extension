@@ -5,6 +5,7 @@
 
 import numpy as np
 import tensorflow as tf
+
 import tensorflow_musa as tf_musa
 from musa_test_utils import MUSATestCase
 
@@ -16,6 +17,13 @@ def layernorm_ref(x, gamma, beta, eps=1e-5):
     inv = tf.math.rsqrt(var + eps)
     y = (x - mean) * inv
     return y * gamma + beta
+
+
+def layernorm_grad_ref(dy, x, gamma, beta, eps=1e-5):
+    with tf.GradientTape() as tape:
+        tape.watch([x, gamma, beta])
+        y = layernorm_ref(x, gamma, beta, eps)
+    return tape.gradient(y, [x, gamma, beta], output_gradients=dy)
 
 
 class LayerNormOpTest(MUSATestCase):
@@ -61,11 +69,144 @@ class LayerNormOpTest(MUSATestCase):
             self.assertAllClose(cpu_result.numpy(), musa_result.numpy(),
                                rtol=rtol, atol=atol)
 
+    def _test_layernorm_grad(self, x_shape, dtype, eps=1e-5):
+        np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+        x_np = np.random.uniform(-2, 2, size=x_shape).astype(np_dtype)
+        dy_np = np.random.uniform(-1, 1, size=x_shape).astype(np_dtype)
+        gamma_np = np.random.uniform(0.5, 1.5, size=(x_shape[-1],)).astype(np_dtype)
+        beta_np = np.random.uniform(-0.5, 0.5, size=(x_shape[-1],)).astype(np_dtype)
+
+        with tf.device('/CPU:0'):
+            x_cpu = tf.constant(x_np, dtype=dtype)
+            dy_cpu = tf.constant(dy_np, dtype=dtype)
+            gamma_cpu = tf.constant(gamma_np, dtype=dtype)
+            beta_cpu = tf.constant(beta_np, dtype=dtype)
+            cpu_grads = layernorm_grad_ref(dy_cpu, x_cpu, gamma_cpu, beta_cpu, eps)
+
+        with tf.device('/device:MUSA:0'):
+            x = tf.constant(x_np, dtype=dtype)
+            dy = tf.constant(dy_np, dtype=dtype)
+            gamma = tf.constant(gamma_np, dtype=dtype)
+            beta = tf.constant(beta_np, dtype=dtype)
+            musa_grads = tf_musa.ops.layer_norm_grad(
+                dy=dy, x=x, gamma=gamma, beta=beta, epsilon=eps
+            )
+
+        rtol = 2e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-4
+        atol = 2e-1 if dtype in [tf.float16, tf.bfloat16] else 1e-4
+        for cpu_grad, musa_grad in zip(cpu_grads, musa_grads):
+            self.assertAllClose(
+                tf.cast(cpu_grad, tf.float32).numpy(),
+                tf.cast(musa_grad, tf.float32).numpy(),
+                rtol=rtol,
+                atol=atol,
+            )
+
+    def _test_layernorm_gradient_tape(self, x_shape, dtype, eps=1e-5):
+        np_dtype = np.float32 if dtype == tf.bfloat16 else dtype.as_numpy_dtype
+        x_np = np.random.uniform(-2, 2, size=x_shape).astype(np_dtype)
+        gamma_np = np.random.uniform(0.5, 1.5, size=(x_shape[-1],)).astype(np_dtype)
+        beta_np = np.random.uniform(-0.5, 0.5, size=(x_shape[-1],)).astype(np_dtype)
+
+        with tf.device('/CPU:0'):
+            x_cpu = tf.constant(x_np, dtype=dtype)
+            gamma_cpu = tf.constant(gamma_np, dtype=dtype)
+            beta_cpu = tf.constant(beta_np, dtype=dtype)
+            with tf.GradientTape() as tape:
+                tape.watch([x_cpu, gamma_cpu, beta_cpu])
+                y_cpu = layernorm_ref(x_cpu, gamma_cpu, beta_cpu, eps)
+                loss_cpu = tf.reduce_sum(tf.square(y_cpu))
+            cpu_grads = tape.gradient(loss_cpu, [x_cpu, gamma_cpu, beta_cpu])
+
+        with tf.device('/device:MUSA:0'):
+            x = tf.constant(x_np, dtype=dtype)
+            gamma = tf.constant(gamma_np, dtype=dtype)
+            beta = tf.constant(beta_np, dtype=dtype)
+            with tf.GradientTape() as tape:
+                tape.watch([x, gamma, beta])
+                y = tf_musa.ops.layer_norm(
+                    x=x, gamma=gamma, beta=beta, epsilon=eps
+                )
+                loss = tf.reduce_sum(tf.square(y))
+            musa_grads = tape.gradient(loss, [x, gamma, beta])
+
+        rtol = 2e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-4
+        atol = 2e-1 if dtype in [tf.float16, tf.bfloat16] else 1e-4
+        for cpu_grad, musa_grad in zip(cpu_grads, musa_grads):
+            self.assertAllClose(
+                tf.cast(cpu_grad, tf.float32).numpy(),
+                tf.cast(musa_grad, tf.float32).numpy(),
+                rtol=rtol,
+                atol=atol,
+            )
+
     def testLayerNormBasic(self):
         """Test basic LayerNorm operation with standard shapes."""
         for dtype in [tf.float32, tf.float16]:
             with self.subTest(dtype=dtype):
                 self._test_layernorm([1024, 1024], dtype)
+
+    def testLayerNormGradBasic(self):
+        for dtype in [tf.float32, tf.float16]:
+            with self.subTest(dtype=dtype):
+                self._test_layernorm_grad([16, 32], dtype)
+
+    def testLayerNormGradientTape(self):
+        for dtype in [tf.float32, tf.float16]:
+            with self.subTest(dtype=dtype):
+                self._test_layernorm_gradient_tape([8, 16, 32], dtype)
+
+    def testLayerNormSingleLayerTrainingConverges(self):
+        np.random.seed(123)
+        tf.random.set_seed(123)
+
+        batch = 64
+        hidden = 32
+        steps = 1000
+        lr = 0.2
+
+        x_np = np.random.uniform(-2.0, 2.0, size=(batch, hidden)).astype(np.float32)
+        true_gamma_np = np.random.uniform(0.5, 1.5, size=(hidden,)).astype(np.float32)
+        true_beta_np = np.random.uniform(-0.5, 0.5, size=(hidden,)).astype(np.float32)
+
+        with tf.device('/CPU:0'):
+            x_cpu = tf.constant(x_np)
+            y_target = layernorm_ref(
+                x_cpu,
+                tf.constant(true_gamma_np),
+                tf.constant(true_beta_np),
+            )
+
+        with tf.device('/device:MUSA:0'):
+            x = tf.constant(x_np)
+            target = tf.identity(y_target)
+            gamma = tf.Variable(tf.ones([hidden], dtype=tf.float32))
+            beta = tf.Variable(tf.zeros([hidden], dtype=tf.float32))
+
+            losses = []
+            for _ in range(steps):
+                with tf.GradientTape() as tape:
+                    y = tf_musa.ops.layer_norm(
+                        x=x,
+                        gamma=gamma,
+                        beta=beta,
+                        epsilon=1e-5,
+                    )
+                    loss = tf.reduce_mean(tf.square(y - target))
+                grads = tape.gradient(loss, [gamma, beta])
+                self.assertIsNotNone(grads[0])
+                self.assertIsNotNone(grads[1])
+                gamma.assign_sub(lr * grads[0])
+                beta.assign_sub(lr * grads[1])
+                losses.append(float(loss.numpy()))
+
+            gamma_error = tf.reduce_max(tf.abs(gamma - true_gamma_np))
+            beta_error = tf.reduce_max(tf.abs(beta - true_beta_np))
+
+        self.assertLess(losses[-1], losses[0] * 1e-3)
+        self.assertLess(losses[-1], 1e-5)
+        self.assertLess(float(gamma_error.numpy()), 1e-3)
+        self.assertLess(float(beta_error.numpy()), 1e-3)
 
     def testLayerNormDifferentShapes(self):
         """Test LayerNorm with various different shapes."""

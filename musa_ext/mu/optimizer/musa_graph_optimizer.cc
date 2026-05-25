@@ -3180,9 +3180,10 @@ int OptimizeExactGeluGrad(GraphDef* graph) {
     fused->set_name(fused_name);
     fused->set_op("MusaGeluGrad");
     fused->set_device(addn.device());
-    fused->add_input(forward_gelu->input(0));
     fused->add_input(dy_input);
+    fused->add_input(forward_gelu->input(0));
     (*fused->mutable_attr())["T"].set_type(dtype);
+    (*fused->mutable_attr())["approximate"].set_b(false);
 
     RedirectNodeOutputs(graph, addn.name(), fused_name);
     remove_names.insert(addn.name());

@@ -15,27 +15,12 @@
 
 """Tests for the public MUSA Python op API."""
 
-import importlib.util
-import sys
 import types
 import unittest
-from pathlib import Path
 from unittest import mock
 
 import numpy as np
 import tensorflow as tf
-
-
-if "tensorflow_musa" not in sys.modules:
-    package_dir = Path(__file__).resolve().parents[2] / "python"
-    spec = importlib.util.spec_from_file_location(
-        "tensorflow_musa",
-        package_dir / "__init__.py",
-        submodule_search_locations=[str(package_dir)],
-    )
-    tensorflow_musa = importlib.util.module_from_spec(spec)
-    sys.modules["tensorflow_musa"] = tensorflow_musa
-    spec.loader.exec_module(tensorflow_musa)
 
 import tensorflow_musa
 from tensorflow_musa import ops, raw_ops
@@ -102,6 +87,22 @@ class PythonApiOpTest(unittest.TestCase):
             name="ln",
         )
 
+    def testLayerNormGradWrapperDelegatesToRawOp(self):
+        op = self._patch_raw_op("musa_layer_norm_grad", ("dx", "dgamma", "dbeta"))
+        result = ops.layer_norm_grad(
+            "dy", "x", "gamma", "beta", epsilon=0.1, name="ln_grad"
+        )
+
+        self.assertEqual(result, ("dx", "dgamma", "dbeta"))
+        op.assert_called_once_with(
+            dy="dy",
+            x="x",
+            gamma="gamma",
+            beta="beta",
+            epsilon=0.1,
+            name="ln_grad",
+        )
+
     def testShiftedAffineMapWrapperDelegatesToRawOp(self):
         op = self._patch_raw_op("musa_shifted_affine_map", "result")
         result = ops.shifted_affine_map("data", "mask", "slice", name="sam")
@@ -127,6 +128,18 @@ class PythonApiOpTest(unittest.TestCase):
 
         self.assertEqual(result, "result")
         op.assert_called_once_with(x="x", approximate=True, name="gelu")
+
+    def testGeluGradWrapperDelegatesToRawOp(self):
+        op = self._patch_raw_op("musa_gelu_grad", "grad")
+        result = ops.gelu_grad("dy", "x", approximate=True, name="gelu_grad")
+
+        self.assertEqual(result, "grad")
+        op.assert_called_once_with(
+            dy="dy",
+            x="x",
+            approximate=True,
+            name="gelu_grad",
+        )
 
     def testReshapeMatMulWrapperDelegatesToRawOp(self):
         op = self._patch_raw_op("musa_reshape_mat_mul", "result")
