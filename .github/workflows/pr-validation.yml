@@ -2436,7 +2436,7 @@ jobs:
           LOG_FILE="$JOB_LOG_DIR/training_tests.log"
           ERROR_LOG_DIR="$JOB_LOG_DIR/error_logs"
           pr_training_models=(rankmixer)
-          daily_training_models=(afm autoint bst ccpm dcn dcnmix deepfefm deepfm dien difm din dsin edcn esmm fgcnn fibinet flen fnn fwfm ifm mlr mmoe nfm onn ple pnn wdl wukong xdeepfm)
+          daily_training_models=(rankmixer onetrans tokenmixer-large afm autoint bst ccpm dcn dcnmix deepfefm deepfm dien difm din dsin edcn esmm fgcnn fibinet flen fnn fwfm ifm mlr mmoe nfm onn ple pnn wdl wukong xdeepfm)
           mkdir -p "$JOB_LOG_DIR"
           rm -f "$LOG_FILE"
           rm -rf "$ERROR_LOG_DIR"
@@ -2451,9 +2451,9 @@ jobs:
             lock_file="$GPU_LOCK_FILE"
           fi
 
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+          if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             selected_training_models=("${daily_training_models[@]}")
-            training_mode="daily-remainder"
+            training_mode="daily"
           else
             selected_training_models=("${pr_training_models[@]}")
             training_mode="pr-smoke"
