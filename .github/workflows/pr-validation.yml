@@ -2662,6 +2662,8 @@ jobs:
           SUMMARY_DIR="$RUNNER_TEMP/final-summary"
           SUMMARY_FILE="$SUMMARY_DIR/final-summary.md"
           SUMMARY_JSON="$SUMMARY_DIR/final-summary.json"
+          SUMMARY_ERROR_DIR="$SUMMARY_DIR/error_logs"
+          TRAINING_ERROR_DIR="$LOG_ROOT/training/error_logs"
           mkdir -p "$SUMMARY_DIR"
           FORMAT_STATUS="${{ needs.format.outputs.status || 'skipped' }}"
           FORMAT_RESULT="${{ needs.format.result }}"
@@ -2846,6 +2848,21 @@ jobs:
             fi
           done
 
+          mkdir -p "$SUMMARY_ERROR_DIR"
+          if [[ -d "$TRAINING_ERROR_DIR" ]]; then
+            find "$TRAINING_ERROR_DIR" -maxdepth 1 -type f -name '*_error.log' -exec cp {} "$SUMMARY_ERROR_DIR/" \;
+            copied_error_logs_count="$(find "$SUMMARY_ERROR_DIR" -maxdepth 1 -type f -name '*_error.log' | wc -l | tr -d '[:space:]')"
+          else
+            copied_error_logs_count="0"
+          fi
+
+          {
+            echo
+            echo "## Training Error Logs"
+            echo "- Source dir: $TRAINING_ERROR_DIR"
+            echo "- Copied logs: $copied_error_logs_count"
+          } >> "$SUMMARY_FILE"
+
           echo "===== Final CI Summary ====="
           cat "$SUMMARY_FILE"
           cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
@@ -2879,9 +2896,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: summary-final
-          path: |
-            ${{ steps.final_summary.outputs.summary_file }}
-            ${{ steps.final_summary.outputs.summary_json }}
+          path: ${{ runner.temp }}/final-summary
           if-no-files-found: error
           retention-days: 7
 
