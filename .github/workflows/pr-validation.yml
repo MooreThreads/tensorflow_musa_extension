@@ -2874,9 +2874,56 @@ jobs:
           echo "summary_file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
           echo "summary_json=$SUMMARY_JSON" >> "$GITHUB_OUTPUT"
 
+      - name: Verify final summary files
+        if: always()
+        run: |
+          set -euo pipefail
+
+          SUMMARY_FILE="${{ steps.final_summary.outputs.summary_file }}"
+          SUMMARY_JSON="${{ steps.final_summary.outputs.summary_json }}"
+
+          if [[ -z "$SUMMARY_FILE" || ! -f "$SUMMARY_FILE" ]]; then
+            echo "::error::final summary markdown file not found: ${SUMMARY_FILE:-<empty>}"
+            exit 1
+          fi
+          if [[ -z "$SUMMARY_JSON" || ! -f "$SUMMARY_JSON" ]]; then
+            echo "::error::final summary json file not found: ${SUMMARY_JSON:-<empty>}"
+            exit 1
+          fi
+
+          echo "Final summary files are stored on the runner:"
+          ls -lh "$SUMMARY_FILE" "$SUMMARY_JSON"
+
+      - name: Checkout local action code
+        if: always()
+        run: |
+          set -euo pipefail
+
+          REPO_URL="${{ github.server_url }}/${{ github.repository }}.git"
+          COMMIT_ID="${{ needs.prepare_metadata.outputs.commit_id }}"
+
+          cd "${RUNNER_TEMP:-/tmp}"
+          rm -rf "$GITHUB_WORKSPACE"
+          mkdir -p "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          git init -q
+          git remote add origin "$REPO_URL"
+
+          if git fetch --no-tags --prune --depth=1 origin "$COMMIT_ID"; then
+            git checkout --force FETCH_HEAD
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git fetch --no-tags --prune --depth=1 origin "refs/pull/${{ github.event.pull_request.number }}/merge"
+            git checkout --force FETCH_HEAD
+          else
+            git fetch --no-tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
+            git checkout --force "$COMMIT_ID"
+          fi
+
+          test -f .github/actions/upload-artifact/action.yml
+
       - name: Upload final summary artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: ./.github/actions/upload-artifact
         with:
           name: summary-final
           path: |
