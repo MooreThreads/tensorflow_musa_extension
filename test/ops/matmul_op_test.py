@@ -15,10 +15,27 @@
 
 """Tests for MUSA MatMul operator."""
 
+import os
+os.environ.setdefault("MUSA_ENABLE_TF32", "0")
+
 import tensorflow as tf
 import numpy as np
 
 from musa_test_utils import MUSATestCase
+
+
+def is_tf32_enabled():
+  return int(os.environ.get("MUSA_ENABLE_TF32", "0")) != 0
+
+
+def float32_tolerance(default_rtol=1e-3, default_atol=1e-3):
+  """Return (rtol, atol) appropriate for float32 matmul comparisons.
+
+  When TF32 is enabled (MUSA_ENABLE_TF32=1), MUSA uses 10-bit mantissa
+  precision internally, so errors can reach ~1e-2 for large matrices.
+  When TF32 is disabled (default), full FP32 precision applies.
+  """
+  return (1e-2, 1e-2) if is_tf32_enabled() else (default_rtol, default_atol)
 
 
 class MatMulOpTest(MUSATestCase):
@@ -232,6 +249,109 @@ class MatMulOpTest(MUSATestCase):
           rtol=0,
           atol=0,
       )
+
+  def testBatchMatMulBroadcast3Dx2D(self):
+    """3-D × 2-D broadcast BatchMatMul: in1 is a shared weight matrix.
+
+    Regression test for INVALID_PARAMETER (Status: 1) from mBatchMatMul when
+    the 2-D input is broadcast across the batch dimension.
+
+    Root cause: ReshapeTo3D set shape={out_batch, rows, cols} with stride={0,...}
+    for the 2-D input, but muDNN requires batch_b=1 when stride_b=0.
+    Fix: use shape={1, rows, cols} for the broadcast case.
+
+    This pattern is triggered by AFM's AttentionPooling:
+        e = tf.matmul(interactions, self.W)   # (bs, num_pairs, k) x (k, t)
+        e = tf.matmul(e, self.h)              # (bs, num_pairs, t) x (t, 1)
+
+    Note on tolerance: MUSA defaults to TF32 (MUSA_ENABLE_TF32=1), which has
+    FP16-level mantissa precision (10 bits). For large k (e.g. k=256), errors
+    accumulate to ~1e-2, so float32 on MUSA requires the same tolerance as
+    float16 rather than the full-precision 1e-3.
+
+    For float16, only small-k shapes are tested: fp16 accumulation error scales
+    as k × eps_fp16 ≈ k × 1e-3, which exceeds 1e-2 at k=256. The broadcast
+    fix is dtype-agnostic, so small shapes are sufficient to cover the path.
+    """
+    # float32: test both small and large k (large k validates TF32 tolerance).
+    # float16: small k only — fp16 precision with k=256 exceeds rtol=1e-2.
+    test_shapes = {
+        tf.float32: {
+            "case1": [(4, 10, 16, 8), (8, 45, 256, 64)],
+            "case2": [(4, 10, 8), (8, 45, 64)],
+        },
+        tf.float16: {
+            "case1": [(4, 10, 16, 8)],
+            "case2": [(4, 10, 8)],
+        },
+    }
+
+    for dtype in [tf.float32, tf.float16]:
+      rtol, atol = (1e-2, 1e-2) if dtype == tf.float16 else float32_tolerance()
+      np_dtype = np.float16 if dtype == tf.float16 else np.float32
+
+      # Case 1: (bs, num_pairs, k) x (k, t) — attention W matrix
+      for bs, num_pairs, k, t in test_shapes[dtype]["case1"]:
+        a_np = np.random.uniform(-1, 1, (bs, num_pairs, k)).astype(np_dtype)
+        b_np = np.random.uniform(-1, 1, (k, t)).astype(np_dtype)
+        a = tf.constant(a_np, dtype=dtype)
+        b = tf.constant(b_np, dtype=dtype)
+
+        with tf.device('/CPU:0'):
+          cpu_result = tf.cast(tf.matmul(a, b), tf.float32)
+        with tf.device('/device:MUSA:0'):
+          musa_result = tf.cast(tf.matmul(a, b), tf.float32)
+
+        self.assertAllClose(musa_result.numpy(), cpu_result.numpy(),
+                            rtol=rtol, atol=atol)
+
+      # Case 2: (bs, num_pairs, t) x (t, 1) — attention h vector (n=1)
+      for bs, num_pairs, t in test_shapes[dtype]["case2"]:
+        a_np = np.random.uniform(-1, 1, (bs, num_pairs, t)).astype(np_dtype)
+        b_np = np.random.uniform(-1, 1, (t, 1)).astype(np_dtype)
+        a = tf.constant(a_np, dtype=dtype)
+        b = tf.constant(b_np, dtype=dtype)
+
+        with tf.device('/CPU:0'):
+          cpu_result = tf.cast(tf.matmul(a, b), tf.float32)
+        with tf.device('/device:MUSA:0'):
+          musa_result = tf.cast(tf.matmul(a, b), tf.float32)
+
+        self.assertAllClose(musa_result.numpy(), cpu_result.numpy(),
+                            rtol=rtol, atol=atol)
+
+  def testBatchMatMulBroadcast3Dx2DGrad(self):
+    """Backward pass of 3-D × 2-D broadcast BatchMatMul.
+
+    Verifies that gradients flow correctly through both weight matrices
+    in the AFM AttentionPooling pattern during training.
+    """
+    bs, num_pairs, k, t = 4, 10, 16, 8
+
+    a_np = np.random.uniform(-1, 1, (bs, num_pairs, k)).astype(np.float32)
+    W_np = np.random.uniform(-1, 1, (k, t)).astype(np.float32)
+    h_np = np.random.uniform(-1, 1, (t, 1)).astype(np.float32)
+
+    def run_attention_pooling(device):
+      with tf.device(device):
+        interactions = tf.constant(a_np)
+        W = tf.Variable(W_np)
+        h = tf.Variable(h_np)
+        with tf.GradientTape() as tape:
+          e = tf.nn.relu(tf.matmul(interactions, W))  # (bs, num_pairs, t)
+          e = tf.matmul(e, h)                         # (bs, num_pairs, 1)
+          loss = tf.reduce_sum(e)
+        grads = tape.gradient(loss, [W, h])
+      return grads
+
+    cpu_grads = run_attention_pooling('/CPU:0')
+    musa_grads = run_attention_pooling('/device:MUSA:0')
+
+    rtol, atol = float32_tolerance()
+    self.assertAllClose(musa_grads[0].numpy(), cpu_grads[0].numpy(),
+                        rtol=rtol, atol=atol)
+    self.assertAllClose(musa_grads[1].numpy(), cpu_grads[1].numpy(),
+                        rtol=rtol, atol=atol)
 
 
 if __name__ == "__main__":

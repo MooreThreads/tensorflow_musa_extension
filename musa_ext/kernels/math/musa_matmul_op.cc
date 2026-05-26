@@ -143,13 +143,16 @@ class MusaMatMulOp : public MusaOpKernel {
 
         if (dims != 3) {
           if (batch == 1 && out_batch > 1) {
-            mt.SetNdInfo({out_batch, rows, cols}, {0, cols, 1});
+            // muDNN BatchMatMul broadcast: batch_b must be 1, stride_b=0.
+            // Setting shape as {out_batch, ...} with stride=0 causes
+            // INVALID_PARAMETER; use {1, ...} to match the API contract.
+            mt.SetNdInfo({1, rows, cols}, {0, cols, 1});
           } else {
             mt.SetNdInfo({batch, rows, cols}, {rows * cols, cols, 1});
           }
         } else if (dims == 3) {
           if (batch == 1 && out_batch > 1) {
-            mt.SetNdInfo({out_batch, rows, cols}, {0, cols, 1});
+            mt.SetNdInfo({1, rows, cols}, {0, cols, 1});
           }
         }
       };
