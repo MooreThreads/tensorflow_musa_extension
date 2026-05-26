@@ -18,6 +18,9 @@ namespace musa {
 
 namespace {
 
+constexpr int kWarpSize = 32;
+constexpr int kInTopKBlockSize = 256;
+
 __device__ __forceinline__ float LoadAsFloat(const float* p) { return *p; }
 
 __device__ __forceinline__ float LoadAsFloat(const Eigen::half* p) {
@@ -33,28 +36,69 @@ __device__ __forceinline__ float LoadAsFloat(const bfloat16* p) {
   return res;
 }
 
-template <typename T, typename Tidx>
-__global__ void InTopKKernel(const T* predictions, const Tidx* targets,
-                             bool* output, int batch_size, int num_classes,
-                             int k) {
-  const int row = blockIdx.x * blockDim.x + threadIdx.x;
-  if (row >= batch_size) return;
+template <int BLOCK_SIZE>
+__device__ __forceinline__ int BlockReduceSum(int val, int* shared) {
+  const int tid = threadIdx.x;
+  const int lane = tid & (kWarpSize - 1);
+  const int wid = tid >> 5;
 
-  const T* row_predictions = predictions + row * num_classes;
-  Tidx target_class = targets[row];
-  float target_score = LoadAsFloat(&row_predictions[target_class]);
+#pragma unroll
+  for (int mask = kWarpSize >> 1; mask > 0; mask >>= 1) {
+    val += __shfl_xor_sync(0xffffffff, val, mask);
+  }
 
-  // Count how many classes have strictly higher score than target
-  int count_higher = 0;
-  for (int i = 0; i < num_classes; i++) {
-    float score = LoadAsFloat(&row_predictions[i]);
-    if (score > target_score) {
-      count_higher++;
+  if (lane == 0) {
+    shared[wid] = val;
+  }
+  __syncthreads();
+
+  if (wid == 0) {
+    val = (tid < (BLOCK_SIZE >> 5)) ? shared[lane] : 0;
+#pragma unroll
+    for (int mask = (BLOCK_SIZE >> 6); mask > 0; mask >>= 1) {
+      val += __shfl_xor_sync(0xffffffff, val, mask);
     }
   }
 
-  // Target is in top-k if less than k classes have strictly higher score
-  output[row] = (count_higher < k);
+  return val;
+}
+
+template <typename T, typename Tidx, int BLOCK_SIZE>
+__global__ void InTopKKernel(const T* __restrict__ predictions,
+                             const Tidx* __restrict__ targets,
+                             bool* __restrict__ output, int batch_size,
+                             int num_classes, int k) {
+  const int row = blockIdx.x;
+  if (row >= batch_size) return;
+
+  const T* row_predictions = predictions + row * num_classes;
+  const Tidx target_class = targets[row];
+  const float target_score = LoadAsFloat(&row_predictions[target_class]);
+
+  int count_higher = 0;
+  for (int i = threadIdx.x; i < num_classes && count_higher < k; i += BLOCK_SIZE) {
+    const float score = LoadAsFloat(&row_predictions[i]);
+    count_higher += score > target_score;
+  }
+
+  __shared__ int shared[BLOCK_SIZE / kWarpSize];
+  const int total_count = BlockReduceSum<BLOCK_SIZE>(count_higher, shared);
+  if (threadIdx.x == 0) {
+    output[row] = (total_count < k);
+  }
+}
+
+__global__ void SetBoolKernel(bool* output, int size, bool value) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < size) {
+    output[idx] = value;
+  }
+}
+
+void LaunchSetBool(bool* output, int size, bool value, musaStream_t stream) {
+  constexpr int block_size = 256;
+  const int grid_size = (size + block_size - 1) / block_size;
+  SetBoolKernel<<<grid_size, block_size, 0, stream>>>(output, size, value);
 }
 
 }  // namespace
@@ -64,11 +108,14 @@ template <typename T>
 void LaunchInTopKV2Int32(const T* predictions, const int32_t* targets, bool* output,
                          int batch_size, int num_classes, int k,
                          musaStream_t stream) {
-  const int block_size = 256;
-  const int grid_size = (batch_size + block_size - 1) / block_size;
+  if (k == 0 || k == num_classes) {
+    LaunchSetBool(output, batch_size, k == num_classes, stream);
+    return;
+  }
 
-  InTopKKernel<T, int32_t><<<grid_size, block_size, 0, stream>>>(
-      predictions, targets, output, batch_size, num_classes, k);
+  InTopKKernel<T, int32_t, kInTopKBlockSize>
+      <<<batch_size, kInTopKBlockSize, 0, stream>>>(predictions, targets, output,
+                                                    batch_size, num_classes, k);
 }
 
 // Launcher functions for int64 targets
@@ -76,11 +123,14 @@ template <typename T>
 void LaunchInTopKV2Int64(const T* predictions, const int64_t* targets, bool* output,
                          int batch_size, int num_classes, int k,
                          musaStream_t stream) {
-  const int block_size = 256;
-  const int grid_size = (batch_size + block_size - 1) / block_size;
+  if (k == 0 || k == num_classes) {
+    LaunchSetBool(output, batch_size, k == num_classes, stream);
+    return;
+  }
 
-  InTopKKernel<T, int64_t><<<grid_size, block_size, 0, stream>>>(
-      predictions, targets, output, batch_size, num_classes, k);
+  InTopKKernel<T, int64_t, kInTopKBlockSize>
+      <<<batch_size, kInTopKBlockSize, 0, stream>>>(predictions, targets, output,
+                                                    batch_size, num_classes, k);
 }
 
 // Explicit instantiations for int32 targets
