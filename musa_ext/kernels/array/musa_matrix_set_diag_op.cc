@@ -20,7 +20,7 @@ void ReadAlignment(OpKernelConstruction* context,
   OP_REQUIRES_OK(context, context->GetAttr("align", &align));
 
   *left_align_superdiagonal = align == "LEFT_LEFT" || align == "LEFT_RIGHT";
-  *left_align_subdiagonal = align == "RIGHT_LEFT" || align == "RIGHT_RIGHT";
+  *left_align_subdiagonal = align == "LEFT_LEFT" || align == "RIGHT_LEFT";
 }
 
 template <typename T>
@@ -159,7 +159,7 @@ class MusaMatrixSetDiagOp : public MusaOpKernel {
     musaStream_t stream = GetMusaStreamByCtx(context);
     MusaMatrixSetDiagKernelLauncher<T>(
         stream, input_reshaped, diag_reshaped, output_reshaped,
-        lower_diag_index, upper_diag_index, num_diags,
+        lower_diag_index, upper_diag_index, max_diag_len,
         left_align_superdiagonal_, left_align_subdiagonal_);
   }
 
@@ -171,15 +171,15 @@ class MusaMatrixSetDiagOp : public MusaOpKernel {
   static constexpr int kNumV1Inputs = 2;
 };
 
-#define REGISTER_MATRIX_SET_DIAG_KERNEL(type)                               \
-  REGISTER_KERNEL_BUILDER(                                                  \
-      Name("MusaMatrixSetDiag").Device("MUSA").TypeConstraint<type>("T"),   \
-      MusaMatrixSetDiagOp<type>);                                           \
-  REGISTER_KERNEL_BUILDER(                                                  \
-      Name("MusaMatrixSetDiagV2").Device("MUSA").TypeConstraint<type>("T"), \
-      MusaMatrixSetDiagOp<type>);                                           \
-  REGISTER_KERNEL_BUILDER(                                                  \
-      Name("MusaMatrixSetDiagV3").Device("MUSA").TypeConstraint<type>("T"), \
+#define REGISTER_MATRIX_SET_DIAG_KERNEL(type)                           \
+  REGISTER_KERNEL_BUILDER(                                              \
+      Name("MatrixSetDiag").Device("MUSA").TypeConstraint<type>("T"),   \
+      MusaMatrixSetDiagOp<type>);                                       \
+  REGISTER_KERNEL_BUILDER(                                              \
+      Name("MatrixSetDiagV2").Device("MUSA").TypeConstraint<type>("T"), \
+      MusaMatrixSetDiagOp<type>);                                       \
+  REGISTER_KERNEL_BUILDER(                                              \
+      Name("MatrixSetDiagV3").Device("MUSA").TypeConstraint<type>("T"), \
       MusaMatrixSetDiagOp<type>);
 
 REGISTER_MATRIX_SET_DIAG_KERNEL(float);

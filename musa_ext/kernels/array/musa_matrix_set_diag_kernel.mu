@@ -31,7 +31,7 @@ __global__ void MatrixSetDiagKernel(
     const int batch = batch_and_diag_index / num_diags;
     const int diag_index_in_input = batch_and_diag_index - batch * num_diags;
     const int diag_index = upper_diag_index - diag_index_in_input;
-    index_in_the_diagonal =
+    index_in_the_diagonal +=
         ComputeContentOffset(diag_index, max_diag_len, m, n,
                              left_align_superdiagonal, left_align_subdiagonal);
     const int y_index = index_in_the_diagonal - min(0, diag_index);
@@ -112,7 +112,7 @@ void MusaMatrixSetDiagKernelLauncher(
       musaStream_t, typename TTypes<Scalar, 3>::ConstTensor&, typename TTypes<Scalar, 3>::ConstTensor&, \
       typename TTypes<Scalar, 3>::Tensor&, const Eigen::Index, const Eigen::Index, const Eigen::Index, \
       const bool, const bool);
-      
+
 INSTANTIATE_MATRIX_SET_DIAG_KERNEL(float);
 INSTANTIATE_MATRIX_SET_DIAG_KERNEL(double);
 INSTANTIATE_MATRIX_SET_DIAG_KERNEL(int32_t);

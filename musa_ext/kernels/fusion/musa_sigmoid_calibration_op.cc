@@ -8,6 +8,13 @@
 namespace tensorflow {
 namespace musa {
 
+REGISTER_OP("MusaSigmoidCalibration")
+    .Input("input: T")
+    .Input("scale: T")
+    .Output("output: T")
+    .Attr("T: {float, double, half, bfloat16}")
+    .SetShapeFn(shape_inference::UnchangedShape);
+
 template <typename T>
 void LaunchSigmoidCalibrationKernel(const void*, const void*, void*, int,
                                     musaStream_t);
