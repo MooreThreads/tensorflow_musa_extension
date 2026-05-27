@@ -171,15 +171,15 @@ class MusaMatrixSetDiagOp : public MusaOpKernel {
   static constexpr int kNumV1Inputs = 2;
 };
 
-#define REGISTER_MATRIX_SET_DIAG_KERNEL(type)                               \
-  REGISTER_KERNEL_BUILDER(                                                  \
-    Name("MatrixSetDiag").Device("MUSA").TypeConstraint<type>("T"),   \
-      MusaMatrixSetDiagOp<type>);                                           \
-  REGISTER_KERNEL_BUILDER(                                                  \
-    Name("MatrixSetDiagV2").Device("MUSA").TypeConstraint<type>("T"), \
-      MusaMatrixSetDiagOp<type>);                                           \
-  REGISTER_KERNEL_BUILDER(                                                  \
-    Name("MatrixSetDiagV3").Device("MUSA").TypeConstraint<type>("T"), \
+#define REGISTER_MATRIX_SET_DIAG_KERNEL(type)                           \
+  REGISTER_KERNEL_BUILDER(                                              \
+      Name("MatrixSetDiag").Device("MUSA").TypeConstraint<type>("T"),   \
+      MusaMatrixSetDiagOp<type>);                                       \
+  REGISTER_KERNEL_BUILDER(                                              \
+      Name("MatrixSetDiagV2").Device("MUSA").TypeConstraint<type>("T"), \
+      MusaMatrixSetDiagOp<type>);                                       \
+  REGISTER_KERNEL_BUILDER(                                              \
+      Name("MatrixSetDiagV3").Device("MUSA").TypeConstraint<type>("T"), \
       MusaMatrixSetDiagOp<type>);
 
 REGISTER_MATRIX_SET_DIAG_KERNEL(float);

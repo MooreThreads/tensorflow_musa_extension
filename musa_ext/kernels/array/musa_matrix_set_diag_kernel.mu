@@ -112,7 +112,7 @@ void MusaMatrixSetDiagKernelLauncher(
       musaStream_t, typename TTypes<Scalar, 3>::ConstTensor&, typename TTypes<Scalar, 3>::ConstTensor&, \
       typename TTypes<Scalar, 3>::Tensor&, const Eigen::Index, const Eigen::Index, const Eigen::Index, \
       const bool, const bool);
-      
+
 INSTANTIATE_MATRIX_SET_DIAG_KERNEL(float);
 INSTANTIATE_MATRIX_SET_DIAG_KERNEL(double);
 INSTANTIATE_MATRIX_SET_DIAG_KERNEL(int32_t);

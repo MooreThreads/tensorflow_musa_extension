@@ -840,8 +840,9 @@ Status MusaTensorDotFusion::Apply(GraphDef* graph,
     for (int input_idx = 0; input_idx < node.input_size(); ++input_idx) {
       const std::string producer =
           FusionGraphUtils::GetProducerNodeName(node.input(input_idx));
-      if (producer.empty() || producer == output_name || producer == input_a_name ||
-          producer == input_b_name || !fuse_node_names.count(producer) ||
+      if (producer.empty() || producer == output_name ||
+          producer == input_a_name || producer == input_b_name ||
+          !fuse_node_names.count(producer) ||
           preserved_dependencies.count(producer)) {
         continue;
       }

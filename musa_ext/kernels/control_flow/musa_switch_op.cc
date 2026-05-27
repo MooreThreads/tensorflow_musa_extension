@@ -28,9 +28,9 @@ class MusaSwitchOp : public MusaOpKernel {
   }
 };  // class MusaSwitchOp
 
-#define REGISTER_MUSA_SWITCH(type)                                       \
-  REGISTER_KERNEL_BUILDER(                                               \
-  Name("Switch").Device(DEVICE_MTGPU).TypeConstraint<type>("T"), \
+#define REGISTER_MUSA_SWITCH(type)                                   \
+  REGISTER_KERNEL_BUILDER(                                           \
+      Name("Switch").Device(DEVICE_MTGPU).TypeConstraint<type>("T"), \
       MusaSwitchOp<type>);
 
 REGISTER_MUSA_SWITCH(float);
