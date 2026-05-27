@@ -6,6 +6,11 @@ from musa_test_utils import MUSATestCase
 
 class RealDivOpTest(MUSATestCase):
 
+  def _assert_tensor_on_musa(self, tensor, op_name):
+    self.assertIn(
+        'MUSA', tensor.device,
+        msg=f"{op_name} output landed on {tensor.device!r} instead of MUSA")
+
   def _test_realdiv(self, shape_x, shape_y, dtype, rtol=1e-5, atol=1e-8):
     np_dtype = dtype.as_numpy_dtype
 
@@ -112,6 +117,32 @@ class RealDivOpTest(MUSATestCase):
   def testRealDivLargeTensors(self):
     for dtype in [tf.float32]:
       self._test_realdiv([1024, 1024, 2], [1024, 1024, 2], dtype)
+
+  def testRealDivFloat64ScalarStaysOnMusa(self):
+    with tf.device('/device:MUSA:0'):
+      dividend = tf.constant(100.0, dtype=tf.float64)
+      divisor = tf.constant(1000.0, dtype=tf.float64)
+      result = tf.math.truediv(dividend, divisor)
+
+    self._assert_tensor_on_musa(result, 'RealDiv')
+    self.assertEqual(result.dtype, tf.float64)
+    self.assertEqual(result.shape.rank, 0)
+    self.assertAllClose(result.numpy(), 0.1, rtol=1e-12, atol=1e-12)
+
+  def testInt64TrueDivInsideTfFunctionStaysOnMusa(self):
+    with tf.device('/device:MUSA:0'):
+      step = tf.Variable(100, dtype=tf.int64, name='iterations')
+
+    @tf.function
+    def warmup_scale(step_var):
+      return step_var / 1000
+
+    result = warmup_scale(step)
+
+    self._assert_tensor_on_musa(result, 'tf.function truediv')
+    self.assertEqual(result.dtype, tf.float64)
+    self.assertEqual(result.shape.rank, 0)
+    self.assertAllClose(result.numpy(), 0.1, rtol=1e-12, atol=1e-12)
 
 
 if __name__ == "__main__":
