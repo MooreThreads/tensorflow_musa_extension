@@ -821,6 +821,39 @@ Status MusaTensorDotFusion::Apply(GraphDef* graph,
     fuse_node_names.erase(name);
   }
 
+  // 递归保留 shared node 的上游依赖；否则虽然 shared node 本身会保留，
+  // 但它依赖的内部 shape/perm 辅助节点仍可能被删掉，留下悬空输入。
+  std::vector<std::string> keep_worklist(shared_nodes.begin(),
+                                         shared_nodes.end());
+  std::unordered_set<std::string> preserved_dependencies(shared_nodes.begin(),
+                                                         shared_nodes.end());
+  while (!keep_worklist.empty()) {
+    const std::string node_name = keep_worklist.back();
+    keep_worklist.pop_back();
+
+    const int node_idx = FusionGraphUtils::FindNodeIndex(*graph, node_name);
+    if (node_idx < 0 || node_idx >= graph->node_size()) {
+      continue;
+    }
+
+    const NodeDef& node = graph->node(node_idx);
+    for (int input_idx = 0; input_idx < node.input_size(); ++input_idx) {
+      const std::string producer =
+          FusionGraphUtils::GetProducerNodeName(node.input(input_idx));
+      if (producer.empty() || producer == output_name || producer == input_a_name ||
+          producer == input_b_name || !fuse_node_names.count(producer) ||
+          preserved_dependencies.count(producer)) {
+        continue;
+      }
+
+      VLOG(2) << "[TensorDot::Apply] keeping dependency of shared node: "
+              << producer << " -> " << node_name;
+      fuse_node_names.erase(producer);
+      preserved_dependencies.insert(producer);
+      keep_worklist.push_back(producer);
+    }
+  }
+
   VLOG(2) << "[TensorDot::Apply] will remove " << fuse_node_names.size()
           << " fused sub-graph nodes";
 

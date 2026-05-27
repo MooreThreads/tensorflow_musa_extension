@@ -24,9 +24,8 @@ from musa_test_utils import MUSATestCase
 class SwitchOpTest(MUSATestCase):
   """Tests for tf.raw_ops.Switch on MUSA."""
 
-  def _run_on_device(self, data, pred, device):
-    with tf.device(device):
-      return tf.raw_ops.Switch(data=data, pred=pred)
+  def _run_branch(self, data, pred, branch_index):
+    return tf.raw_ops.Switch(data=data, pred=pred)[branch_index]
 
   def _compare_active_branch(self, dtype, pred_value):
     np_dtype = dtype.as_numpy_dtype
@@ -40,18 +39,32 @@ class SwitchOpTest(MUSATestCase):
     data = tf.constant(data_np, dtype=dtype)
     pred = tf.constant(pred_value)
 
-    cpu_false, cpu_true = self._run_on_device(data, pred, '/CPU:0')
-    musa_false, musa_true = self._run_on_device(data, pred, '/device:MUSA:0')
-
     rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
     atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
 
-    if pred_value:
-      # Only true branch should carry the payload.
-      self.assertAllClose(cpu_true.numpy(), musa_true.numpy(), rtol=rtol, atol=atol)
-    else:
-      # Only false branch should carry the payload.
-      self.assertAllClose(cpu_false.numpy(), musa_false.numpy(), rtol=rtol, atol=atol)
+    active_branch = 1 if pred_value else 0
+    self._compare_cpu_musa_results(
+        lambda input_data, input_pred: self._run_branch(
+            input_data, input_pred, active_branch),
+        [data, pred],
+        dtype,
+        rtol=rtol,
+        atol=atol)
+    self._compare_cpu_musa_results(
+        lambda input_data, input_pred: self._run_branch(
+            input_data, input_pred, 1 - active_branch),
+        [data, pred],
+        dtype,
+        rtol=rtol,
+        atol=atol)
+
+  def _assert_invalid_pred_on_device(self, data, pred, device):
+    with self.assertRaisesRegex(tf.errors.InvalidArgumentError, "must be a scalar"):
+      self._test_op_device_placement(
+          lambda input_data, input_pred: tf.raw_ops.Switch(
+              data=input_data, pred=input_pred),
+          [data, pred],
+          device)
 
   def test_switch_true_branch(self):
     for dtype in [tf.float32, tf.float16, tf.int32, tf.bool]:
@@ -62,10 +75,11 @@ class SwitchOpTest(MUSATestCase):
       self._compare_active_branch(dtype, False)
 
   def test_pred_must_be_scalar(self):
-    with self.assertRaisesRegex(tf.errors.InvalidArgumentError, "must be a scalar"):
-      with tf.device('/device:MUSA:0'):
-        tf.raw_ops.Switch(data=tf.constant([1, 2, 3], dtype=tf.int32),
-                          pred=tf.constant([True, False], dtype=tf.bool))
+    data = tf.constant([1, 2, 3], dtype=tf.int32)
+    pred = tf.constant([True, False], dtype=tf.bool)
+
+    self._assert_invalid_pred_on_device(data, pred, '/CPU:0')
+    self._assert_invalid_pred_on_device(data, pred, '/device:MUSA:0')
 
 
 if __name__ == "__main__":
