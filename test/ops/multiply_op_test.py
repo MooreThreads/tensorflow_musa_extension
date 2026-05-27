@@ -32,30 +32,30 @@ class MultiplyOpTest(MUSATestCase):
     else:
       x_np = np.random.uniform(-1, 1, size=shape_x).astype(dtype.as_numpy_dtype)
       y_np = np.random.uniform(-1, 1, size=shape_y).astype(dtype.as_numpy_dtype)
-    
+
     x = tf.constant(x_np, dtype=dtype)
     y = tf.constant(y_np, dtype=dtype)
-    
+
     # Test on CPU
     with tf.device('/CPU:0'):
       cpu_result = tf.multiply(x, y)
-    
+
     # Test on MUSA
     with tf.device('/device:MUSA:0'):
       musa_result = tf.multiply(x, y)
-    
+
     # Compare results
     if dtype in [tf.float16, tf.bfloat16]:
       cpu_result_f32 = tf.cast(cpu_result, tf.float32)
       musa_result_f32 = tf.cast(musa_result, tf.float32)
-      self.assertAllClose(cpu_result_f32.numpy(), 
+      self.assertAllClose(cpu_result_f32.numpy(),
                          musa_result_f32.numpy(),
-                         rtol=rtol, 
+                         rtol=rtol,
                          atol=atol)
     else:
-      self.assertAllClose(cpu_result.numpy(), 
+      self.assertAllClose(cpu_result.numpy(),
                          musa_result.numpy(),
-                         rtol=rtol, 
+                         rtol=rtol,
                          atol=atol)
 
   def testMultiplyBasic(self):
@@ -102,12 +102,12 @@ class MultiplyOpTest(MUSATestCase):
     y_data = [[1.0, 0.0], [0.0, 3.0]]
     x = tf.constant(x_data, dtype=tf.float32)
     y = tf.constant(y_data, dtype=tf.float32)
-    
+
     expected = [[0.0, 0.0], [0.0, 0.0]]
-    
+
     with tf.device('/device:MUSA:0'):
       result = tf.multiply(x, y)
-    
+
     self.assertAllClose(result.numpy(), expected)
 
 

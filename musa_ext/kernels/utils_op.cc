@@ -74,8 +74,7 @@ mTensor CreateMTensor(const Tensor& t, mFormat format) {
   // Reuse TensorFlow's shape storage directly instead of copying dims into a
   // temporary vector. For small elementwise ops this shaves a bit of host-side
   // wrapper overhead.
-  const int64_t* dims =
-      reinterpret_cast<const int64_t*>(dims_raw.data());
+  const int64_t* dims = reinterpret_cast<const int64_t*>(dims_raw.data());
 
   if (rank >= 4) {
     rst.SetFormat(format);
