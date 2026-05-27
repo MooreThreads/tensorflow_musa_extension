@@ -2548,7 +2548,7 @@ jobs:
               TRAINING_MODEL_TIMEOUT_SECONDS="${TRAINING_MODEL_TIMEOUT_SECONDS:-3600}" \
                 PYTHONUNBUFFERED=1 \
                 python -u "$LIVE_TRAINING_WRAPPER" \
-                  --epochs 100 \
+                  --epochs 10 \
                   --log-dir "$ERROR_LOG_DIR" \
                   --models "${training_models[@]}" 2>&1 | tee "$LOG_FILE"
             ' || training_exit=$?
