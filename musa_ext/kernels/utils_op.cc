@@ -83,7 +83,15 @@ mTensor CreateMTensor(const Tensor& t, mFormat format) {
     rst.SetFormat(mFormat::NCHW);
   }
 
-  rst.SetNdInfo(rank, dims);
+  // muDNN does not accept rank-0 (scalar) tensors; represent scalars as a
+  // rank-1 [1] view so elementwise kernels such as Minimum/Multiply/Add can
+  // still execute on MUSA instead of tripping the error path.
+  if (rank == 0) {
+    const int64_t one = 1;
+    rst.SetNdInfo(1, &one);
+  } else {
+    rst.SetNdInfo(rank, dims);
+  }
   return rst;
 }
 

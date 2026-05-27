@@ -125,6 +125,19 @@ class MultiplyOpTest(MUSATestCase):
         with self.subTest(shape_x=shape_x, shape_y=shape_y, dtype=dtype):
           self._test_multiply(shape_x, shape_y, dtype, rtol=rtol, atol=atol)
 
+  def testMultiplyFloat64StaysOnMusa(self):
+    x = tf.constant([2.0], dtype=tf.float64)
+    y = tf.constant([3.0], dtype=tf.float64)
+
+    with tf.device('/device:MUSA:0'):
+      result = tf.multiply(x, y)
+
+    self.assertIn(
+        'MUSA', result.device,
+        msg=f"Mul(float64) output landed on {result.device!r} instead of MUSA")
+    self.assertEqual(result.dtype, tf.float64)
+    self.assertAllClose(result.numpy(), [6.0], rtol=1e-12, atol=1e-12)
+
 
 if __name__ == "__main__":
   tf.test.main()

@@ -318,6 +318,7 @@ class MusaMultiplyOp : public MusaOpKernel {
       MusaMultiplyOp<TYPE>);
 
 REGISTER_MUSA_MULTIPLY(float);
+REGISTER_MUSA_MULTIPLY(double);
 REGISTER_MUSA_MULTIPLY(Eigen::half);
 REGISTER_MUSA_MULTIPLY(bfloat16);
 REGISTER_MUSA_MULTIPLY(int32);

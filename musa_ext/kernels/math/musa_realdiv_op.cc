@@ -56,7 +56,7 @@ class MusaRealDivOp : public MusaOpKernel {
     mTensor t_out = CreateMTensor(*out, format_);
 
     ::musa::dnn::Binary op;
-    op.SetMode(::musa::dnn::Binary::Mode::DIV);
+    op.SetMode(::musa::dnn::Binary::Mode::TRUEDIV);
 
     auto status = op.Run(handle, t_out, t_dividend, t_divisor);
     OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,

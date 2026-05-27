@@ -54,7 +54,6 @@ using namespace tensorflow;
       ::tensorflow::musa::MusaMinimumOp<type>);
 
 REGISTER_MUSA_MIN(float);
-REGISTER_MUSA_MIN(double);
 REGISTER_MUSA_MIN(int32);
 REGISTER_MUSA_MIN(int64);
 REGISTER_MUSA_MIN(Eigen::half);  // FP16
