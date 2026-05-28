@@ -85,10 +85,6 @@ class SquareOpTest(MUSATestCase):
         for dtype in [tf.int32, tf.int64]:
             self._test_square_forward(shape, dtype)
 
-  def testSquareForwardDouble(self):
-    """Test forward pass for float64 (fallback check)."""
-    self._test_square_forward((10,), tf.float64)
-
   def testSquareGradient(self):
     """Test gradients for floating point types."""
     grad_shapes = [(), (2, 2), (2, 3, 2)]

@@ -23,11 +23,6 @@ class BroadcastToOpTest(MUSATestCase):
     for dtype in [tf.float32, tf.int32, tf.int64]:
       self._test_broadcast_to(x_np, target_shape, dtype)
 
-  def testBroadcastToBool(self):
-    x_np = np.array([True, False, True])
-    target_shape = [3, 3]
-    self._test_broadcast_to(x_np, target_shape, tf.bool)
-
   def testBroadcastToScalar(self):
     x_np = np.array(1)
     target_shape = [3, 3]

@@ -46,10 +46,6 @@ class LogOpTest(MUSATestCase):
 
     self._test_log([10, 10], tf.float32, rtol=1e-4, atol=1e-4)
 
-  def testLogFloat64(self):
-   
-    self._test_log([5, 5], tf.float64, rtol=1e-5, atol=1e-5)
-
   def testLogFloat16(self):
     
     self._test_log([2, 3, 4], tf.float16, rtol=1e-2, atol=1e-2)

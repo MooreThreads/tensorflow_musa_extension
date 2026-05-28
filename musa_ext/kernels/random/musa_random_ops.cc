@@ -92,6 +92,25 @@ void LaunchRandomStandardNormal_float(void* stream, int64_t n, int num_blocks,
 void LaunchRandomStandardNormal_double(void* stream, int64_t n, int num_blocks,
                                        int block_size, MusaPhiloxState state,
                                        double* output);
+void LaunchRandomStandardNormal_half(void* stream, int64_t n, int num_blocks,
+                                     int block_size, MusaPhiloxState state,
+                                     Eigen::half* output);
+void LaunchRandomStandardNormal_bfloat16(void* stream, int64_t n,
+                                         int num_blocks, int block_size,
+                                         MusaPhiloxState state,
+                                         tensorflow::bfloat16* output);
+void LaunchTruncatedNormal_float(void* stream, int64_t n, int num_blocks,
+                                 int block_size, MusaPhiloxState state,
+                                 float* output);
+void LaunchTruncatedNormal_double(void* stream, int64_t n, int num_blocks,
+                                  int block_size, MusaPhiloxState state,
+                                  double* output);
+void LaunchTruncatedNormal_half(void* stream, int64_t n, int num_blocks,
+                                int block_size, MusaPhiloxState state,
+                                Eigen::half* output);
+void LaunchTruncatedNormal_bfloat16(void* stream, int64_t n, int num_blocks,
+                                    int block_size, MusaPhiloxState state,
+                                    tensorflow::bfloat16* output);
 }
 
 namespace tensorflow {
@@ -281,6 +300,14 @@ class MusaNormalOp : public MusaOpKernel {
       if (std::is_same<T, float>::value) {
         LaunchRandomStandardNormal_float(stream, n, num_blocks, block_size,
                                          state, output->flat<float>().data());
+      } else if (std::is_same<T, Eigen::half>::value) {
+        LaunchRandomStandardNormal_half(stream, n, num_blocks, block_size,
+                                        state,
+                                        output->flat<Eigen::half>().data());
+      } else if (std::is_same<T, bfloat16>::value) {
+        LaunchRandomStandardNormal_bfloat16(
+            stream, n, num_blocks, block_size, state,
+            output->flat<bfloat16>().data());
       } else {
         LaunchRandomStandardNormal_double(stream, n, num_blocks, block_size,
                                           state, output->flat<double>().data());
@@ -349,10 +376,74 @@ REGISTER_MUSA_UNIFORM_INT(int64);
                           MusaNormalOp<TYPE>)
 REGISTER_MUSA_NORMAL_KERNEL(float);
 REGISTER_MUSA_NORMAL_KERNEL(double);
+REGISTER_MUSA_NORMAL_KERNEL(Eigen::half);
+REGISTER_MUSA_NORMAL_KERNEL(bfloat16);
+
+// ==========================================
+// TruncatedNormal Op
+// ==========================================
+template <typename T>
+class MusaTruncatedNormalOp : public MusaOpKernel {
+ public:
+  explicit MusaTruncatedNormalOp(OpKernelConstruction* ctx)
+      : MusaOpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, generator_.Init(ctx));
+  }
+
+  void Compute(OpKernelContext* ctx) override {
+    const Tensor& shape_tensor = ctx->input(0);
+    TensorShape shape;
+    OP_REQUIRES_OK(ctx, tensor::MakeShape(shape_tensor, &shape));
+
+    Tensor* output = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, shape, &output));
+    int64_t n = output->NumElements();
+    if (n == 0) return;
+
+    auto philox = generator_.ReserveSamples32(n);
+    MusaPhiloxState state;
+    std::memcpy(&state, &philox, sizeof(MusaPhiloxState));
+
+    const int block_size = 256;
+    int num_blocks = static_cast<int>((n + block_size - 1) / block_size);
+    if (num_blocks > 1024) num_blocks = 1024;
+
+    void* stream = GetStream<T>(ctx);
+    if (std::is_same<T, float>::value) {
+      LaunchTruncatedNormal_float(stream, n, num_blocks, block_size, state,
+                                   output->flat<float>().data());
+    } else if (std::is_same<T, Eigen::half>::value) {
+      LaunchTruncatedNormal_half(stream, n, num_blocks, block_size, state,
+                                  output->flat<Eigen::half>().data());
+    } else if (std::is_same<T, bfloat16>::value) {
+      LaunchTruncatedNormal_bfloat16(stream, n, num_blocks, block_size, state,
+                                      output->flat<bfloat16>().data());
+    } else {
+      LaunchTruncatedNormal_double(stream, n, num_blocks, block_size, state,
+                                    output->flat<double>().data());
+    }
+  }
+
+ private:
+  GuardedPhiloxRandom generator_;
+};
+
+#define REGISTER_MUSA_TRUNCATED_NORMAL(TYPE)                  \
+  REGISTER_KERNEL_BUILDER(Name("TruncatedNormal")             \
+                              .Device("MUSA")                 \
+                              .HostMemory("shape")            \
+                              .TypeConstraint<int32>("T")     \
+                              .TypeConstraint<TYPE>("dtype"), \
+                          MusaTruncatedNormalOp<TYPE>)
+REGISTER_MUSA_TRUNCATED_NORMAL(float);
+REGISTER_MUSA_TRUNCATED_NORMAL(double);
+REGISTER_MUSA_TRUNCATED_NORMAL(Eigen::half);
+REGISTER_MUSA_TRUNCATED_NORMAL(bfloat16);
 
 #undef REGISTER_MUSA_UNIFORM
 #undef REGISTER_MUSA_UNIFORM_INT
 #undef REGISTER_MUSA_NORMAL_KERNEL
+#undef REGISTER_MUSA_TRUNCATED_NORMAL
 
 }  // namespace musa
 }  // namespace tensorflow

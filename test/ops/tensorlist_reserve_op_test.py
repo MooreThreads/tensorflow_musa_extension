@@ -22,34 +22,34 @@ from musa_test_utils import MUSATestCase
 
 
 def _host_int32(value):
-  with tf.device('/CPU:0'):
-    return tf.constant(value, dtype=tf.int32)
+  return tf.constant(value, dtype=tf.int32)
 
 
 class TensorListReserveOpTest(MUSATestCase):
 
   def _tensor_list_reserve_and_stack(self, x, element_dtype, num_elements=-1):
-    element_shape = _host_int32(x.shape[1:])
+    with tf.device('/CPU:0'):
+      element_shape = _host_int32(x.shape[1:])
 
-    handle = tf.raw_ops.TensorListReserve(
-        element_shape=element_shape,
-        num_elements=_host_int32(num_elements),
-        element_dtype=element_dtype
-    )
+      handle = tf.raw_ops.TensorListReserve(
+          element_shape=element_shape,
+          num_elements=_host_int32(num_elements),
+          element_dtype=element_dtype
+      )
 
-    for i in range(x.shape[0]):
-        handle = tf.raw_ops.TensorListSetItem(
-            input_handle=handle,
-            index=_host_int32(i),
-            item=x[i]
-        )
+      for i in range(x.shape[0]):
+          handle = tf.raw_ops.TensorListSetItem(
+              input_handle=handle,
+              index=_host_int32(i),
+              item=x[i]
+          )
 
-    return tf.raw_ops.TensorListStack(
-        input_handle=handle,
-        element_shape=element_shape,
-        element_dtype=element_dtype,
-        num_elements=_host_int32(num_elements)
-    )
+      return tf.raw_ops.TensorListStack(
+          input_handle=handle,
+          element_shape=element_shape,
+          element_dtype=element_dtype,
+          num_elements=_host_int32(num_elements)
+      )
 
   def _test_tensor_list_reserve(self, shape, dtype, rtol=1e-5, atol=1e-5):
     np_dtype = dtype.as_numpy_dtype

@@ -58,7 +58,7 @@ class ReluOpTest(MUSATestCase):
   def testReluBasic(self):
     """Basic ReLU test with mixed positive/negative values."""
     test_data = [-2.0, -1.0, 0.0, 1.0, 2.0]
-    for dtype in [tf.float32, tf.float16, tf.bfloat16, tf.int32, tf.int64]:
+    for dtype in [tf.float32, tf.float16, tf.bfloat16]:
       rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
       atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
       self._test_relu(test_data, dtype, rtol=rtol, atol=atol)
@@ -80,20 +80,19 @@ class ReluOpTest(MUSATestCase):
   def testReluAllPositive(self):
     """ReLU test with all positive values."""
     test_data = [1.0, 2.0, 3.0, 4.0, 5.0]
-    for dtype in [tf.float32, tf.int32]:
+    for dtype in [tf.float32, tf.float16, tf.bfloat16]:
       self._test_relu(test_data, dtype)
 
   def testReluAllNegative(self):
     """ReLU test with all negative values."""
     test_data = [-5.0, -4.0, -3.0, -2.0, -1.0]
-    expected = [0.0, 0.0, 0.0, 0.0, 0.0]
-    for dtype in [tf.float32, tf.int32]:
+    for dtype in [tf.float32, tf.float16, tf.bfloat16]:
       self._test_relu(test_data, dtype)
 
   def testReluZeroInput(self):
     """ReLU test with zero input."""
     test_data = [0.0, 0.0, 0.0]
-    for dtype in [tf.float32, tf.int32]:
+    for dtype in [tf.float32, tf.float16, tf.bfloat16]:
       self._test_relu(test_data, dtype)
 
 

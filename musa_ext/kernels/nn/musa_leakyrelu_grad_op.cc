@@ -1,4 +1,5 @@
 #include <mudnn.h>
+#include <type_traits>
 
 #include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"

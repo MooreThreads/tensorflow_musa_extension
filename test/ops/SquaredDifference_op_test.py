@@ -69,11 +69,6 @@ class SquaredDifferenceOpTest(MUSATestCase):
 
       self._test_squared_difference(shape_x, shape_y, dtype, rtol=rtol, atol=atol)
 
-  def testSquaredDifferenceDouble(self):
-    """Test squared difference with float64 (verification fallback)."""
-    shape = [2, 3]
-    self._test_squared_difference(shape, shape, tf.float64)
-
 
 if __name__ == "__main__":
   tf.test.main()

@@ -40,6 +40,11 @@ void nd_pad_kernel_launcher_uint8(const uint8_t *, uint8_t *, const int,
                                   const int64_t *, const int64_t *,
                                   const uint8_t, const int64_t,
                                   const musaStream_t);
+void nd_pad_kernel_launcher_uint16(const uint16_t *, uint16_t *, const int,
+                                   const int64_t *, const int64_t *,
+                                   const int64_t *, const int64_t *,
+                                   const uint16_t, const int64_t,
+                                   const musaStream_t);
 }
 
 namespace {
@@ -48,6 +53,8 @@ struct DoubleTag {};
 struct Int32Tag {};
 struct Int64Tag {};
 struct Uint8Tag {};
+struct HalfTag {};
+struct BFloat16Tag {};
 struct UnsupportedTag {};
 
 template <typename T>
@@ -75,6 +82,14 @@ template <>
 struct TypeTag<uint8_t> {
   using type = Uint8Tag;
 };
+template <>
+struct TypeTag<Eigen::half> {
+  using type = HalfTag;
+};
+template <>
+struct TypeTag<bfloat16> {
+  using type = BFloat16Tag;
+};
 
 #define DEFINE_PAD_LAUNCHER_IMPL(T, TAG, SUFFIX)                              \
   void CallPadLauncherImpl(                                                   \
@@ -94,6 +109,36 @@ DEFINE_PAD_LAUNCHER_IMPL(int64_t, Int64Tag, int64)
 DEFINE_PAD_LAUNCHER_IMPL(uint8_t, Uint8Tag, uint8)
 
 #undef DEFINE_PAD_LAUNCHER_IMPL
+
+// half and bfloat16 dispatched via uint16 kernel (zero = 0x0000 for both)
+void CallPadLauncherImpl(
+    const Eigen::half *input_data, Eigen::half *output_data, const int dims,
+    const int64_t *in_dims, const int64_t *out_dims,
+    const int64_t *pad_before, const int64_t *pad_after,
+    const Eigen::half pad_value, const int64_t total_out_elements,
+    const musaStream_t stream, HalfTag) {
+  uint16_t pad_bits;
+  memcpy(&pad_bits, &pad_value, sizeof(uint16_t));
+  nd_pad_kernel_launcher_uint16(
+      reinterpret_cast<const uint16_t *>(input_data),
+      reinterpret_cast<uint16_t *>(output_data), dims, in_dims, out_dims,
+      pad_before, pad_after, pad_bits, total_out_elements, stream);
+}
+
+void CallPadLauncherImpl(
+    const bfloat16 *input_data, bfloat16 *output_data, const int dims,
+    const int64_t *in_dims, const int64_t *out_dims,
+    const int64_t *pad_before, const int64_t *pad_after,
+    const bfloat16 pad_value, const int64_t total_out_elements,
+    const musaStream_t stream, BFloat16Tag) {
+  uint16_t pad_bits;
+  memcpy(&pad_bits, &pad_value, sizeof(uint16_t));
+  nd_pad_kernel_launcher_uint16(
+      reinterpret_cast<const uint16_t *>(input_data),
+      reinterpret_cast<uint16_t *>(output_data), dims, in_dims, out_dims,
+      pad_before, pad_after, pad_bits, total_out_elements, stream);
+}
+
 void CallPadLauncherImpl(const void *, void *, const int, const int64_t *,
                          const int64_t *, const int64_t *, const int64_t *,
                          const int64_t, const int64_t, const musaStream_t,
@@ -107,9 +152,6 @@ void CallPadLauncher(const T *input_data, T *output_data, const int dims,
                      const int64_t *pad_before, const int64_t *pad_after,
                      const T pad_value, const int64_t total_out_elements,
                      const musaStream_t stream) {
-  static_assert(!std::is_same<typename TypeTag<T>::type, UnsupportedTag>::value,
-                "Unsupported type for nd_pad_kernel_launcher");
-
   CallPadLauncherImpl(input_data, output_data, dims, in_dims, out_dims,
                       pad_before, pad_after, pad_value, total_out_elements,
                       stream, typename TypeTag<T>::type());
@@ -246,6 +288,8 @@ REGISTER_MUSA_PAD_TYPE(int32);
 REGISTER_MUSA_PAD_TYPE(int64);
 REGISTER_MUSA_PAD_TYPE(double);
 REGISTER_MUSA_PAD_TYPE(uint8);
+REGISTER_MUSA_PAD_TYPE(Eigen::half);
+REGISTER_MUSA_PAD_TYPE(bfloat16);
 
 #undef REGISTER_MUSA_PAD_TYPE
 }  // namespace musa
