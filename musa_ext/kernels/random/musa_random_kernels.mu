@@ -27,7 +27,7 @@ __device__ __forceinline__ float Uint32ToReal<float>(uint32_t x) {
 
 template <>
 __device__ __forceinline__ double Uint32ToReal<double>(uint32_t x) {
-    return x * 2.3283064365386963e-10; 
+    return x * 2.3283064365386963e-10;
 }
 
 template <>
@@ -69,9 +69,9 @@ __device__ __forceinline__ uint4_ ComputePhilox10(uint4_ ctr, uint2_ key) {
         uint64_t p0 = (uint64_t)ctr.x * M0;
         uint64_t p1 = (uint64_t)ctr.z * M1;
         uint4_ res;
-        res.x = (uint32_t)(p1 >> 32) ^ ctr.y ^ k.x; 
+        res.x = (uint32_t)(p1 >> 32) ^ ctr.y ^ k.x;
         res.y = (uint32_t)p1;
-        res.z = (uint32_t)(p0 >> 32) ^ ctr.w ^ k.y; 
+        res.z = (uint32_t)(p0 >> 32) ^ ctr.w ^ k.y;
         res.w = (uint32_t)p0;
         ctr = res;
         k.x += 0x9E3779B9;
@@ -91,6 +91,55 @@ __device__ __forceinline__ void BoxMuller(uint32_t x, uint32_t y, T* out1, T* ou
 }
 
 // ==========================================
+// Float conversion helpers (device)
+// ==========================================
+template <typename T>
+__device__ __forceinline__ T FloatToType(float v);
+
+template <>
+__device__ __forceinline__ float FloatToType<float>(float v) { return v; }
+
+template <>
+__device__ __forceinline__ double FloatToType<double>(float v) {
+    return static_cast<double>(v);
+}
+
+template <>
+__device__ __forceinline__ Eigen::half FloatToType<Eigen::half>(float v) {
+    __half h = __float2half(v);
+    return *reinterpret_cast<Eigen::half*>(&h);
+}
+
+template <>
+__device__ __forceinline__ tensorflow::bfloat16 FloatToType<tensorflow::bfloat16>(float v) {
+    uint32_t bits;
+    memcpy(&bits, &v, sizeof(float));
+    uint16_t bf_bits = static_cast<uint16_t>(bits >> 16);
+    tensorflow::bfloat16 out;
+    memcpy(&out, &bf_bits, sizeof(uint16_t));
+    return out;
+}
+
+// BoxMuller specializations for half/bfloat16 (compute in float, then convert)
+template <>
+__device__ __forceinline__ void BoxMuller<Eigen::half>(uint32_t x, uint32_t y,
+    Eigen::half* out1, Eigen::half* out2) {
+    float z0, z1;
+    BoxMuller<float>(x, y, &z0, &z1);
+    *out1 = FloatToType<Eigen::half>(z0);
+    *out2 = FloatToType<Eigen::half>(z1);
+}
+
+template <>
+__device__ __forceinline__ void BoxMuller<tensorflow::bfloat16>(uint32_t x, uint32_t y,
+    tensorflow::bfloat16* out1, tensorflow::bfloat16* out2) {
+    float z0, z1;
+    BoxMuller<float>(x, y, &z0, &z1);
+    *out1 = FloatToType<tensorflow::bfloat16>(z0);
+    *out2 = FloatToType<tensorflow::bfloat16>(z1);
+}
+
+// ==========================================
 // Kernels
 // ==========================================
 
@@ -99,10 +148,10 @@ __global__ void RandomUniformKernel(int64_t n, MusaPhiloxState state, T* output)
     const int kGroupSize = 4;
     const int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
     const int total_thread_count = gridDim.x * blockDim.x;
-    
+
     uint4_ ctr = {state.counter[0], state.counter[1], state.counter[2], state.counter[3]};
     uint2_ key = {state.key[0], state.key[1]};
-    
+
     ctr = skip_philox(ctr, (uint64_t)thread_id);
     int64_t offset = (int64_t)thread_id * kGroupSize;
 
@@ -152,10 +201,10 @@ __global__ void RandomUniformIntKernel(int64_t n, MusaPhiloxState state, T minva
     const int kGroupSize = 4;
     const int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
     const int total_thread_count = gridDim.x * blockDim.x;
-    
+
     uint4_ ctr = {state.counter[0], state.counter[1], state.counter[2], state.counter[3]};
     uint2_ key = {state.key[0], state.key[1]};
-    
+
     ctr = skip_philox(ctr, (uint64_t)thread_id);
     int64_t offset = (int64_t)thread_id * kGroupSize;
     T range = maxval - minval;
@@ -178,10 +227,10 @@ __global__ void RandomStandardNormalKernel(int64_t n, MusaPhiloxState state, T* 
     const int kGroupSize = 4;
     const int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
     const int total_thread_count = gridDim.x * blockDim.x;
-    
+
     uint4_ ctr = {state.counter[0], state.counter[1], state.counter[2], state.counter[3]};
     uint2_ key = {state.key[0], state.key[1]};
-    
+
     ctr = skip_philox(ctr, (uint64_t)thread_id);
     int64_t offset = (int64_t)thread_id * kGroupSize;
 
@@ -190,7 +239,7 @@ __global__ void RandomStandardNormalKernel(int64_t n, MusaPhiloxState state, T* 
         if (offset < n) {
             T z0, z1, z2, z3;
             BoxMuller(res.x, res.y, &z0, &z1);
-            BoxMuller(res.z, res.w, &z2, &z3); 
+            BoxMuller(res.z, res.w, &z2, &z3);
 
             output[offset + 0] = z0;
             if (offset + 1 < n) output[offset + 1] = z1;
@@ -199,6 +248,46 @@ __global__ void RandomStandardNormalKernel(int64_t n, MusaPhiloxState state, T* 
         }
         offset += (int64_t)total_thread_count * kGroupSize;
         ctr = skip_philox(ctr, (uint64_t)total_thread_count);
+    }
+}
+
+// ==========================================
+// TruncatedNormal Kernel
+// ==========================================
+// Uses float Box-Muller + rejection sampling (accept |z| <= 2.0).
+// Each output index uses a deterministic sub-stream (idx*25 + attempt)
+// so results are reproducible. Acceptance rate per draw pair is ~95.4%,
+// so the first attempt succeeds with very high probability.
+template <typename T>
+__global__ void TruncatedNormalKernel(int64_t n, MusaPhiloxState state, T* output) {
+    const int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
+    const int total_thread_count = gridDim.x * blockDim.x;
+
+    uint4_ base_ctr = {state.counter[0], state.counter[1], state.counter[2], state.counter[3]};
+    uint2_ key = {state.key[0], state.key[1]};
+
+    for (int64_t idx = (int64_t)thread_id; idx < n; idx += total_thread_count) {
+        float sample = 0.0f;
+        bool found = false;
+
+        for (int attempt = 0; attempt < 25 && !found; ++attempt) {
+            uint4_ ctr = skip_philox(base_ctr, (uint64_t)idx * 25 + (uint64_t)attempt);
+            uint4_ res = ComputePhilox10(ctr, key);
+
+            float z0, z1;
+            BoxMuller<float>(res.x, res.y, &z0, &z1);
+            if (!found && z0 >= -2.0f && z0 <= 2.0f) { sample = z0; found = true; }
+            if (!found && z1 >= -2.0f && z1 <= 2.0f) { sample = z1; found = true; }
+
+            if (!found) {
+                float z2, z3;
+                BoxMuller<float>(res.z, res.w, &z2, &z3);
+                if (!found && z2 >= -2.0f && z2 <= 2.0f) { sample = z2; found = true; }
+                if (!found && z3 >= -2.0f && z3 <= 2.0f) { sample = z3; found = true; }
+            }
+        }
+
+        output[idx] = FloatToType<T>(sample);
     }
 }
 
@@ -230,5 +319,23 @@ void LaunchRandomStandardNormal_float(void* stream, int64_t n, int num_blocks, i
 }
 void LaunchRandomStandardNormal_double(void* stream, int64_t n, int num_blocks, int block_size, MusaPhiloxState state, double* output) {
     RandomStandardNormalKernel<double><<<num_blocks, block_size, 0, (musaStream_t)stream>>>(n, state, output);
+}
+void LaunchRandomStandardNormal_half(void* stream, int64_t n, int num_blocks, int block_size, MusaPhiloxState state, Eigen::half* output) {
+    RandomStandardNormalKernel<Eigen::half><<<num_blocks, block_size, 0, (musaStream_t)stream>>>(n, state, output);
+}
+void LaunchRandomStandardNormal_bfloat16(void* stream, int64_t n, int num_blocks, int block_size, MusaPhiloxState state, tensorflow::bfloat16* output) {
+    RandomStandardNormalKernel<tensorflow::bfloat16><<<num_blocks, block_size, 0, (musaStream_t)stream>>>(n, state, output);
+}
+void LaunchTruncatedNormal_float(void* stream, int64_t n, int num_blocks, int block_size, MusaPhiloxState state, float* output) {
+    TruncatedNormalKernel<float><<<num_blocks, block_size, 0, (musaStream_t)stream>>>(n, state, output);
+}
+void LaunchTruncatedNormal_double(void* stream, int64_t n, int num_blocks, int block_size, MusaPhiloxState state, double* output) {
+    TruncatedNormalKernel<double><<<num_blocks, block_size, 0, (musaStream_t)stream>>>(n, state, output);
+}
+void LaunchTruncatedNormal_half(void* stream, int64_t n, int num_blocks, int block_size, MusaPhiloxState state, Eigen::half* output) {
+    TruncatedNormalKernel<Eigen::half><<<num_blocks, block_size, 0, (musaStream_t)stream>>>(n, state, output);
+}
+void LaunchTruncatedNormal_bfloat16(void* stream, int64_t n, int num_blocks, int block_size, MusaPhiloxState state, tensorflow::bfloat16* output) {
+    TruncatedNormalKernel<tensorflow::bfloat16><<<num_blocks, block_size, 0, (musaStream_t)stream>>>(n, state, output);
 }
 }

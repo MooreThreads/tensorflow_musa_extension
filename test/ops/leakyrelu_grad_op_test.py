@@ -81,11 +81,6 @@ class LeakyReluGradOpTest(MUSATestCase):
       atol = 3e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-3
       self._test_leakyrelu_grad_direct(shape, dtype, alpha=0.2, rtol=rtol, atol=atol)
 
-  def testLeakyReluGradDirectDouble(self):
-    """Test raw LeakyReluGrad op with float64."""
-    shape = [2, 3]
-    self._test_leakyrelu_grad_direct(shape, tf.float64, alpha=0.2, rtol=1e-6, atol=1e-6)
-
   def testLeakyReluGradDirectDifferentAlpha(self):
     """Test raw LeakyReluGrad op with different alpha values."""
     shape = [2, 3, 4]

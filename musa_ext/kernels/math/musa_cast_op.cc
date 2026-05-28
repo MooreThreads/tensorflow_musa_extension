@@ -8,7 +8,7 @@ namespace tensorflow {
 namespace musa {
 
 extern "C" void LaunchFloatToBFloat16Copy(const float* src, void* dst,
-                                           int64_t n, musaStream_t stream);
+                                          int64_t n, musaStream_t stream);
 
 class MusaCastOp : public MusaOpKernel {
  public:
@@ -44,8 +44,7 @@ class MusaCastOp : public MusaOpKernel {
       return;
     }
 
-    if (external_src_dtype_ == DT_FLOAT &&
-        external_dst_dtype_ == DT_BFLOAT16) {
+    if (external_src_dtype_ == DT_FLOAT && external_dst_dtype_ == DT_BFLOAT16) {
       LaunchFloatToBFloat16Copy(
           inp.flat<float>().data(),
           reinterpret_cast<void*>(output->flat<bfloat16>().data()),
@@ -108,6 +107,7 @@ REGISTER_CAST_MUSA(int32, int32);
 REGISTER_CAST_MUSA(int32, int64);
 REGISTER_CAST_MUSA(int32, Eigen::half);
 REGISTER_CAST_MUSA(int32, bfloat16);
+REGISTER_CAST_MUSA(int32, float);
 REGISTER_CAST_MUSA(int32, double);
 
 REGISTER_CAST_MUSA(int64, bool);

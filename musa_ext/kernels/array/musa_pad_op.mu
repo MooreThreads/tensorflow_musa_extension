@@ -64,6 +64,7 @@ INSTANTIATE_ND_PAD_KERNEL(double)
 INSTANTIATE_ND_PAD_KERNEL(int32_t)
 INSTANTIATE_ND_PAD_KERNEL(int64_t)
 INSTANTIATE_ND_PAD_KERNEL(uint8_t)
+INSTANTIATE_ND_PAD_KERNEL(uint16_t)
 
 #undef INSTANTIATE_ND_PAD_KERNEL
 
@@ -86,6 +87,9 @@ DEFINE_ND_PAD_LAUNCHER(double, double)
 DEFINE_ND_PAD_LAUNCHER(int32_t, int32)
 DEFINE_ND_PAD_LAUNCHER(int64_t, int64)
 DEFINE_ND_PAD_LAUNCHER(uint8_t, uint8)
+
+// uint16_t launcher used by both half and bfloat16 (same bit-width, zero = 0x0000)
+DEFINE_ND_PAD_LAUNCHER(uint16_t, uint16)
 
 #undef DEFINE_ND_PAD_LAUNCHER
 } // extern "C"

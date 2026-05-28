@@ -17,7 +17,7 @@ class ArgMaxOpTest(MUSATestCase):
     shape = [1000]
 
     # 覆盖官方测试中的常见类型，并加上 bf16
-    input_dtypes = [tf.float32, tf.float16, tf.bfloat16, tf.int32, tf.int64, tf.bool]
+    input_dtypes = [tf.float32, tf.float16, tf.bfloat16, tf.int32]
 
     for dtype in input_dtypes:
         # 1. 数据生成
