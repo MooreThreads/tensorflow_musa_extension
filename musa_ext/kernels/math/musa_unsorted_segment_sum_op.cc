@@ -46,31 +46,25 @@ void LaunchUnsortedSegmentSumInt64Int64(const int64_t* data,
                                         musaStream_t stream);
 // Half/BFloat16 via float accumulation
 void LaunchUnsortedSegmentSumHalfToFloatInt32(const uint16_t* data,
-                                               const int* segment_ids,
-                                               int num_segments, int64_t N,
-                                               int64_t M, float* float_output,
-                                               musaStream_t stream);
+                                              const int* segment_ids,
+                                              int num_segments, int64_t N,
+                                              int64_t M, float* float_output,
+                                              musaStream_t stream);
 void LaunchUnsortedSegmentSumHalfToFloatInt64(const uint16_t* data,
-                                               const int64_t* segment_ids,
-                                               int64_t num_segments, int64_t N,
-                                               int64_t M, float* float_output,
-                                               musaStream_t stream);
-void LaunchUnsortedSegmentSumBFloat16ToFloatInt32(const uint16_t* data,
-                                                   const int* segment_ids,
-                                                   int num_segments, int64_t N,
-                                                   int64_t M,
-                                                   float* float_output,
-                                                   musaStream_t stream);
-void LaunchUnsortedSegmentSumBFloat16ToFloatInt64(const uint16_t* data,
-                                                   const int64_t* segment_ids,
-                                                   int64_t num_segments,
-                                                   int64_t N, int64_t M,
-                                                   float* float_output,
-                                                   musaStream_t stream);
+                                              const int64_t* segment_ids,
+                                              int64_t num_segments, int64_t N,
+                                              int64_t M, float* float_output,
+                                              musaStream_t stream);
+void LaunchUnsortedSegmentSumBFloat16ToFloatInt32(
+    const uint16_t* data, const int* segment_ids, int num_segments, int64_t N,
+    int64_t M, float* float_output, musaStream_t stream);
+void LaunchUnsortedSegmentSumBFloat16ToFloatInt64(
+    const uint16_t* data, const int64_t* segment_ids, int64_t num_segments,
+    int64_t N, int64_t M, float* float_output, musaStream_t stream);
 void LaunchConvertFloatToHalfBits(const float* input, uint16_t* output,
-                                   int64_t n, musaStream_t stream);
+                                  int64_t n, musaStream_t stream);
 void LaunchConvertFloatToBFloat16Bits(const float* input, uint16_t* output,
-                                       int64_t n, musaStream_t stream);
+                                      int64_t n, musaStream_t stream);
 }
 
 namespace tensorflow {
@@ -224,37 +218,34 @@ class UnsortedSegmentSumOpViaFloat : public OpKernel {
     // Allocate float intermediate buffer
     Tensor float_buf;
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT, output_shape, &float_buf));
-    musaMemsetAsync(float_buf.flat<float>().data(), 0,
-                    float_buf.TotalBytes(), stream);
+    musaMemsetAsync(float_buf.flat<float>().data(), 0, float_buf.TotalBytes(),
+                    stream);
 
     const auto* data_bits =
         reinterpret_cast<const uint16_t*>(data.flat<T>().data());
     float* float_out = float_buf.flat<float>().data();
-    auto* out_bits =
-        reinterpret_cast<uint16_t*>(output->flat<T>().data());
+    auto* out_bits = reinterpret_cast<uint16_t*>(output->flat<T>().data());
 
     // Accumulate in float
     if (std::is_same<Tindex, int32>::value) {
-      const int* seg = reinterpret_cast<const int*>(
-          segment_ids.flat<Tindex>().data());
+      const int* seg =
+          reinterpret_cast<const int*>(segment_ids.flat<Tindex>().data());
       if (std::is_same<T, Eigen::half>::value) {
         LaunchUnsortedSegmentSumHalfToFloatInt32(data_bits, seg, num_segments,
-                                                  N, M, float_out, stream);
+                                                 N, M, float_out, stream);
       } else {
-        LaunchUnsortedSegmentSumBFloat16ToFloatInt32(data_bits, seg,
-                                                      num_segments, N, M,
-                                                      float_out, stream);
+        LaunchUnsortedSegmentSumBFloat16ToFloatInt32(
+            data_bits, seg, num_segments, N, M, float_out, stream);
       }
     } else {
-      const int64_t* seg = reinterpret_cast<const int64_t*>(
-          segment_ids.flat<Tindex>().data());
+      const int64_t* seg =
+          reinterpret_cast<const int64_t*>(segment_ids.flat<Tindex>().data());
       if (std::is_same<T, Eigen::half>::value) {
         LaunchUnsortedSegmentSumHalfToFloatInt64(data_bits, seg, num_segments,
-                                                  N, M, float_out, stream);
+                                                 N, M, float_out, stream);
       } else {
-        LaunchUnsortedSegmentSumBFloat16ToFloatInt64(data_bits, seg,
-                                                      num_segments, N, M,
-                                                      float_out, stream);
+        LaunchUnsortedSegmentSumBFloat16ToFloatInt64(
+            data_bits, seg, num_segments, N, M, float_out, stream);
       }
     }
 
@@ -268,7 +259,7 @@ class UnsortedSegmentSumOpViaFloat : public OpKernel {
   }
 };
 
-#define REGISTER_MUSA_SEGMENT_SUM_VF(type, index_type)               \
+#define REGISTER_MUSA_SEGMENT_SUM_VF(type, index_type)                \
   REGISTER_KERNEL_BUILDER(Name("UnsortedSegmentSum")                  \
                               .Device("MUSA")                         \
                               .TypeConstraint<type>("T")              \

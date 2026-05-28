@@ -111,32 +111,33 @@ DEFINE_PAD_LAUNCHER_IMPL(uint8_t, Uint8Tag, uint8)
 #undef DEFINE_PAD_LAUNCHER_IMPL
 
 // half and bfloat16 dispatched via uint16 kernel (zero = 0x0000 for both)
-void CallPadLauncherImpl(
-    const Eigen::half *input_data, Eigen::half *output_data, const int dims,
-    const int64_t *in_dims, const int64_t *out_dims,
-    const int64_t *pad_before, const int64_t *pad_after,
-    const Eigen::half pad_value, const int64_t total_out_elements,
-    const musaStream_t stream, HalfTag) {
+void CallPadLauncherImpl(const Eigen::half *input_data,
+                         Eigen::half *output_data, const int dims,
+                         const int64_t *in_dims, const int64_t *out_dims,
+                         const int64_t *pad_before, const int64_t *pad_after,
+                         const Eigen::half pad_value,
+                         const int64_t total_out_elements,
+                         const musaStream_t stream, HalfTag) {
   uint16_t pad_bits;
   memcpy(&pad_bits, &pad_value, sizeof(uint16_t));
-  nd_pad_kernel_launcher_uint16(
-      reinterpret_cast<const uint16_t *>(input_data),
-      reinterpret_cast<uint16_t *>(output_data), dims, in_dims, out_dims,
-      pad_before, pad_after, pad_bits, total_out_elements, stream);
+  nd_pad_kernel_launcher_uint16(reinterpret_cast<const uint16_t *>(input_data),
+                                reinterpret_cast<uint16_t *>(output_data), dims,
+                                in_dims, out_dims, pad_before, pad_after,
+                                pad_bits, total_out_elements, stream);
 }
 
-void CallPadLauncherImpl(
-    const bfloat16 *input_data, bfloat16 *output_data, const int dims,
-    const int64_t *in_dims, const int64_t *out_dims,
-    const int64_t *pad_before, const int64_t *pad_after,
-    const bfloat16 pad_value, const int64_t total_out_elements,
-    const musaStream_t stream, BFloat16Tag) {
+void CallPadLauncherImpl(const bfloat16 *input_data, bfloat16 *output_data,
+                         const int dims, const int64_t *in_dims,
+                         const int64_t *out_dims, const int64_t *pad_before,
+                         const int64_t *pad_after, const bfloat16 pad_value,
+                         const int64_t total_out_elements,
+                         const musaStream_t stream, BFloat16Tag) {
   uint16_t pad_bits;
   memcpy(&pad_bits, &pad_value, sizeof(uint16_t));
-  nd_pad_kernel_launcher_uint16(
-      reinterpret_cast<const uint16_t *>(input_data),
-      reinterpret_cast<uint16_t *>(output_data), dims, in_dims, out_dims,
-      pad_before, pad_after, pad_bits, total_out_elements, stream);
+  nd_pad_kernel_launcher_uint16(reinterpret_cast<const uint16_t *>(input_data),
+                                reinterpret_cast<uint16_t *>(output_data), dims,
+                                in_dims, out_dims, pad_before, pad_after,
+                                pad_bits, total_out_elements, stream);
 }
 
 void CallPadLauncherImpl(const void *, void *, const int, const int64_t *,

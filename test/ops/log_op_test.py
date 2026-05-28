@@ -23,20 +23,20 @@ from musa_test_utils import MUSATestCase
 
 class LogOpTest(MUSATestCase):
 
-  
+
   def _test_log(self, shape, dtype, rtol=1e-5, atol=1e-5):
     np_dtype = dtype.as_numpy_dtype
     if dtype == tf.bfloat16:
       np_dtype = np.float32
-    
-   
+
+
     x_np = np.abs(np.random.randn(*shape)).astype(np_dtype) + 0.1
     x = tf.constant(x_np, dtype=dtype)
-    
+
 
     self._compare_cpu_musa_results(
-        tf.math.log, 
-        [x], 
+        tf.math.log,
+        [x],
         dtype,
         rtol=rtol,
         atol=atol
@@ -47,11 +47,11 @@ class LogOpTest(MUSATestCase):
     self._test_log([10, 10], tf.float32, rtol=1e-4, atol=1e-4)
 
   def testLogFloat16(self):
-    
+
     self._test_log([2, 3, 4], tf.float16, rtol=1e-2, atol=1e-2)
 
   def testLogBFloat16(self):
-    
+
     self._test_log([10, 10], tf.bfloat16, rtol=1e-2, atol=1e-2)
 
 

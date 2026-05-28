@@ -30,29 +30,29 @@ class ReluOpTest(MUSATestCase):
       input_np = np.array(input_data, dtype=np.float32)
     else:
       input_np = np.array(input_data, dtype=dtype.as_numpy_dtype)
-    
+
     x = tf.constant(input_np, dtype=dtype)
-    
+
     # Test on CPU
     with tf.device('/CPU:0'):
       cpu_result = tf.nn.relu(x)
-    
+
     # Test on MUSA
     with tf.device('/device:MUSA:0'):
       musa_result = tf.nn.relu(x)
-    
+
     # Compare results
     if dtype in [tf.float16, tf.bfloat16]:
       cpu_result_f32 = tf.cast(cpu_result, tf.float32)
       musa_result_f32 = tf.cast(musa_result, tf.float32)
-      self.assertAllClose(cpu_result_f32.numpy(), 
+      self.assertAllClose(cpu_result_f32.numpy(),
                          musa_result_f32.numpy(),
-                         rtol=rtol, 
+                         rtol=rtol,
                          atol=atol)
     else:
-      self.assertAllClose(cpu_result.numpy(), 
+      self.assertAllClose(cpu_result.numpy(),
                          musa_result.numpy(),
-                         rtol=rtol, 
+                         rtol=rtol,
                          atol=atol)
 
   def testReluBasic(self):

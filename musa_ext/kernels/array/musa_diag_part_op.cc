@@ -11,10 +11,10 @@ void MusaDiagPartkernelLauncher(musaStream_t stream, uint64_t size, const T* in,
 
 template <typename T>
 void MusaMatrixDiagPartV3KernelLauncher(musaStream_t stream, int64 batch_size,
-                                         int64 M, int64 N, int k_min, int k_max,
-                                         int64 num_diags, int64 max_diag_len,
-                                         const T padding_value, const T* input,
-                                         T* output);
+                                        int64 M, int64 N, int k_min, int k_max,
+                                        int64 num_diags, int64 max_diag_len,
+                                        const T padding_value, const T* input,
+                                        T* output);
 
 template <typename T>
 class MusaDiagPartOp : public MusaOpKernel {
@@ -99,8 +99,8 @@ class MusaMatrixDiagPartV3Op : public MusaOpKernel {
       k_max = static_cast<int>(k_data[1]);
     }
     OP_REQUIRES(ctx, k_min <= k_max,
-                errors::InvalidArgument("k[0] must be <= k[1], got k=[",
-                                        k_min, ",", k_max, "]"));
+                errors::InvalidArgument("k[0] must be <= k[1], got k=[", k_min,
+                                        ",", k_max, "]"));
 
     const T padding_value = padding_tensor.scalar<T>()();
     const bool scalar_diag = (k_min == k_max);
@@ -108,9 +108,9 @@ class MusaMatrixDiagPartV3Op : public MusaOpKernel {
 
     const TensorShape& in_shape = input.shape();
     const int ndims = in_shape.dims();
-    OP_REQUIRES(ctx, ndims >= 2,
-                errors::InvalidArgument("Input must be at least 2D, got rank ",
-                                        ndims));
+    OP_REQUIRES(
+        ctx, ndims >= 2,
+        errors::InvalidArgument("Input must be at least 2D, got rank ", ndims));
 
     const int64 M = in_shape.dim_size(ndims - 2);
     const int64 N = in_shape.dim_size(ndims - 1);
@@ -125,7 +125,8 @@ class MusaMatrixDiagPartV3Op : public MusaOpKernel {
                 errors::InvalidArgument("k is out of bounds for matrix [", M,
                                         ", ", N, "]"));
 
-    // Build output shape: [...batch_dims..., (num_diags if range,) max_diag_len]
+    // Build output shape: [...batch_dims..., (num_diags if range,)
+    // max_diag_len]
     TensorShape out_shape;
     for (int i = 0; i < ndims - 2; ++i) {
       out_shape.AddDim(in_shape.dim_size(i));
@@ -143,14 +144,14 @@ class MusaMatrixDiagPartV3Op : public MusaOpKernel {
     musaStream_t stream = reinterpret_cast<musaStream_t>(handle.GetStream());
 
     MusaMatrixDiagPartV3KernelLauncher<T>(
-        stream, batch_size, M, N, k_min, k_max,
-        static_cast<int64>(num_diags), max_diag_len, padding_value,
-        input.flat<T>().data(), output->flat<T>().data());
+        stream, batch_size, M, N, k_min, k_max, static_cast<int64>(num_diags),
+        max_diag_len, padding_value, input.flat<T>().data(),
+        output->flat<T>().data());
   }
 };
 
-#define REGISTER_MUSA_MATRIX_DIAG_PART_V3(TYPE)                      \
-  REGISTER_KERNEL_BUILDER(                                            \
+#define REGISTER_MUSA_MATRIX_DIAG_PART_V3(TYPE)                          \
+  REGISTER_KERNEL_BUILDER(                                               \
       Name("MatrixDiagPartV3").Device("MUSA").TypeConstraint<TYPE>("T"), \
       MusaMatrixDiagPartV3Op<TYPE>)
 

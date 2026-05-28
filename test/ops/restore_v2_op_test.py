@@ -62,7 +62,7 @@ class RestoreV2OpTest(MUSATestCase):
         """
         ckpt_path = os.path.join(self.get_temp_dir(), "slice_ckpt")
         var_names = ["var1", "var2"]
-        
+
         # 准备符合 slice spec "3 4" 形状的数据
         # var1: 用空 slice 读取，应恢复完整数据
         data1_np = np.random.randn(3, 4).astype(np.float32)
@@ -75,23 +75,23 @@ class RestoreV2OpTest(MUSATestCase):
         def save_restore_slice_wrapper(prefix, names, slices, d1, d2):
             # 1. 保存完整数据 (此时 slice 传空)
             io_ops.save_v2(prefix, names, ["", ""], [d1, d2])
-            
+
             # 2. 使用指定的 slice spec 恢复
             outputs = io_ops.restore_v2(prefix, names, slices, [tf.float32, tf.float32])
-            
-            # 为了方便对比，我们将两个恢复出来的 Tensor (可能有不同形状) 
+
+            # 为了方便对比，我们将两个恢复出来的 Tensor (可能有不同形状)
             # 展平并拼接成一个 1D Tensor 返回
             return tf.concat([tf.reshape(outputs[0], [-1]), tf.reshape(outputs[1], [-1])], axis=0)
 
         # 构造输入参数
         prefix_t = tf.constant(ckpt_path)
         names_t = tf.constant(var_names)
-        
+
         # 原始测试用例中的 slice spec
         # var1 的 spec: "" (读取全部)
         # var2 的 spec: "3 4 0,1:-" (TensorFlow 扩展切片语法)
         slices_t = tf.constant(["", "3 4 0,1:-"])
-        
+
         d1_t = tf.constant(data1_np)
         d2_t = tf.constant(data2_np)
 

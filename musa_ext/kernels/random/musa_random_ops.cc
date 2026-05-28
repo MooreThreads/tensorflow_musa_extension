@@ -41,8 +41,6 @@
 // This implementation uses Philox random number generator (same as CUDA)
 // to ensure bit-wise identical results with CUDA when possible.
 
-
-
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -196,14 +194,13 @@ class MusaRandomUniformGreaterEqualOp : public MusaOpKernel {
     int num_blocks = static_cast<int>((n + block_size - 1) / block_size);
     if (num_blocks > 4096) num_blocks = 4096;
 
-    const float clamped_threshold =
-        std::min(1.0f, std::max(0.0f, threshold_));
-    const uint32_t threshold_bits = static_cast<uint32_t>(
-        std::ceil(clamped_threshold * 8388608.0f));
+    const float clamped_threshold = std::min(1.0f, std::max(0.0f, threshold_));
+    const uint32_t threshold_bits =
+        static_cast<uint32_t>(std::ceil(clamped_threshold * 8388608.0f));
 
-    LaunchRandomUniformGreaterEqual_bool(
-        GetStream<bool>(ctx), n, num_blocks, block_size, state, threshold_bits,
-        output->flat<bool>().data());
+    LaunchRandomUniformGreaterEqual_bool(GetStream<bool>(ctx), n, num_blocks,
+                                         block_size, state, threshold_bits,
+                                         output->flat<bool>().data());
   }
 
  private:
@@ -305,9 +302,9 @@ class MusaNormalOp : public MusaOpKernel {
                                         state,
                                         output->flat<Eigen::half>().data());
       } else if (std::is_same<T, bfloat16>::value) {
-        LaunchRandomStandardNormal_bfloat16(
-            stream, n, num_blocks, block_size, state,
-            output->flat<bfloat16>().data());
+        LaunchRandomStandardNormal_bfloat16(stream, n, num_blocks, block_size,
+                                            state,
+                                            output->flat<bfloat16>().data());
       } else {
         LaunchRandomStandardNormal_double(stream, n, num_blocks, block_size,
                                           state, output->flat<double>().data());
@@ -411,16 +408,16 @@ class MusaTruncatedNormalOp : public MusaOpKernel {
     void* stream = GetStream<T>(ctx);
     if (std::is_same<T, float>::value) {
       LaunchTruncatedNormal_float(stream, n, num_blocks, block_size, state,
-                                   output->flat<float>().data());
+                                  output->flat<float>().data());
     } else if (std::is_same<T, Eigen::half>::value) {
       LaunchTruncatedNormal_half(stream, n, num_blocks, block_size, state,
-                                  output->flat<Eigen::half>().data());
+                                 output->flat<Eigen::half>().data());
     } else if (std::is_same<T, bfloat16>::value) {
       LaunchTruncatedNormal_bfloat16(stream, n, num_blocks, block_size, state,
-                                      output->flat<bfloat16>().data());
+                                     output->flat<bfloat16>().data());
     } else {
       LaunchTruncatedNormal_double(stream, n, num_blocks, block_size, state,
-                                    output->flat<double>().data());
+                                   output->flat<double>().data());
     }
   }
 

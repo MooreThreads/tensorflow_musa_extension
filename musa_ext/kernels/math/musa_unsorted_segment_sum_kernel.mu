@@ -31,13 +31,13 @@ __global__ void UnsortedSegmentSumKernel(const T* data, const Tindex* segment_id
                                          Tindex num_segments, int64_t N, int64_t M,
                                          T* output) {
   int64_t tid = blockIdx.x * blockDim.x + threadIdx.x;
-  
+
   if (tid < N * M) {
-    int64_t j = tid % M;   
-    int64_t i = tid / M;   
-    
+    int64_t j = tid % M;
+    int64_t i = tid / M;
+
     Tindex segment_id = segment_ids[i];
-    
+
     if (segment_id >= 0 && segment_id < num_segments) {
       atomicAdd(&output[segment_id * M + j], data[tid]);
     }

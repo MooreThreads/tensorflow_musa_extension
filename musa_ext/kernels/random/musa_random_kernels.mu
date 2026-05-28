@@ -27,7 +27,7 @@ __device__ __forceinline__ float Uint32ToReal<float>(uint32_t x) {
 
 template <>
 __device__ __forceinline__ double Uint32ToReal<double>(uint32_t x) {
-    return x * 2.3283064365386963e-10; 
+    return x * 2.3283064365386963e-10;
 }
 
 template <>
@@ -69,9 +69,9 @@ __device__ __forceinline__ uint4_ ComputePhilox10(uint4_ ctr, uint2_ key) {
         uint64_t p0 = (uint64_t)ctr.x * M0;
         uint64_t p1 = (uint64_t)ctr.z * M1;
         uint4_ res;
-        res.x = (uint32_t)(p1 >> 32) ^ ctr.y ^ k.x; 
+        res.x = (uint32_t)(p1 >> 32) ^ ctr.y ^ k.x;
         res.y = (uint32_t)p1;
-        res.z = (uint32_t)(p0 >> 32) ^ ctr.w ^ k.y; 
+        res.z = (uint32_t)(p0 >> 32) ^ ctr.w ^ k.y;
         res.w = (uint32_t)p0;
         ctr = res;
         k.x += 0x9E3779B9;
@@ -148,10 +148,10 @@ __global__ void RandomUniformKernel(int64_t n, MusaPhiloxState state, T* output)
     const int kGroupSize = 4;
     const int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
     const int total_thread_count = gridDim.x * blockDim.x;
-    
+
     uint4_ ctr = {state.counter[0], state.counter[1], state.counter[2], state.counter[3]};
     uint2_ key = {state.key[0], state.key[1]};
-    
+
     ctr = skip_philox(ctr, (uint64_t)thread_id);
     int64_t offset = (int64_t)thread_id * kGroupSize;
 
@@ -201,10 +201,10 @@ __global__ void RandomUniformIntKernel(int64_t n, MusaPhiloxState state, T minva
     const int kGroupSize = 4;
     const int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
     const int total_thread_count = gridDim.x * blockDim.x;
-    
+
     uint4_ ctr = {state.counter[0], state.counter[1], state.counter[2], state.counter[3]};
     uint2_ key = {state.key[0], state.key[1]};
-    
+
     ctr = skip_philox(ctr, (uint64_t)thread_id);
     int64_t offset = (int64_t)thread_id * kGroupSize;
     T range = maxval - minval;
@@ -227,10 +227,10 @@ __global__ void RandomStandardNormalKernel(int64_t n, MusaPhiloxState state, T* 
     const int kGroupSize = 4;
     const int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
     const int total_thread_count = gridDim.x * blockDim.x;
-    
+
     uint4_ ctr = {state.counter[0], state.counter[1], state.counter[2], state.counter[3]};
     uint2_ key = {state.key[0], state.key[1]};
-    
+
     ctr = skip_philox(ctr, (uint64_t)thread_id);
     int64_t offset = (int64_t)thread_id * kGroupSize;
 
@@ -239,7 +239,7 @@ __global__ void RandomStandardNormalKernel(int64_t n, MusaPhiloxState state, T* 
         if (offset < n) {
             T z0, z1, z2, z3;
             BoxMuller(res.x, res.y, &z0, &z1);
-            BoxMuller(res.z, res.w, &z2, &z3); 
+            BoxMuller(res.z, res.w, &z2, &z3);
 
             output[offset + 0] = z0;
             if (offset + 1 < n) output[offset + 1] = z1;
