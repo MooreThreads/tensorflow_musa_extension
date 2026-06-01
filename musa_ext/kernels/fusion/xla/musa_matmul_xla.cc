@@ -83,18 +83,20 @@ class MusaReshapeMatMulXlaOp : public XlaOpKernel {
                                         "2 and w rank == 2"));
     const int64_t k = x_shape.dim_size(x_shape.dims() - 1);
     const int64_t w_k = transpose_b_ ? w_shape.dim_size(1) : w_shape.dim_size(0);
-    const int64_t n = transpose_b_ ? w_shape.dim_size(0) : w_shape.dim_size(1);
     OP_REQUIRES(ctx, k == w_k,
                 errors::InvalidArgument("MusaReshapeMatMul matrix size "
                                         "incompatible"));
 
     const int64_t m = x_shape.num_elements() / k;
-    xla::XlaOp x_2d = xla::Reshape(ctx->Input(0), {m, k});
-    xla::XlaOp y_2d =
-        BatchMatMul(x_2d, /*transpose_a=*/false, ctx->Input(1), transpose_b_);
+    const int64_t n = transpose_b_ ? w_shape.dim_size(0) : w_shape.dim_size(1);
+
+    xla::XlaOp lhs = xla::Reshape(ctx->Input(0), {m, k});
+    xla::XlaOp y =
+        BatchMatMul(lhs, /*transpose_a=*/false, ctx->Input(1), transpose_b_);
+
     std::vector<int64_t> out_dims = DimSizes(x_shape);
     out_dims.back() = n;
-    ctx->SetOutput(0, xla::Reshape(y_2d, out_dims));
+    ctx->SetOutput(0, xla::Reshape(y, out_dims));
   }
 
  private:

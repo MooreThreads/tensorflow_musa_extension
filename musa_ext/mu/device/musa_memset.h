@@ -8,6 +8,13 @@
 namespace tensorflow {
 namespace musa {
 
+#define MTOP_CHECK_MTDNN_STATUS_RET(status)         \
+  do {                                              \
+    if ((status) != ::musa::dnn::Status::SUCCESS) { \
+      return static_cast<mStatus>(1);               \
+    }                                               \
+  } while (0)
+
 using mTensor = ::musa::dnn::Tensor;
 using mHandle = ::musa::dnn::Handle;
 using mStatus = ::musa::dnn::Status;

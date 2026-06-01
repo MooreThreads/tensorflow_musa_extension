@@ -17,6 +17,7 @@
 #include "tensorflow/core/platform/errors.h"
 #include "tensorflow/core/util/bcast.h"
 #include "tsl/platform/tensor_float_32_utils.h"
+#include "xla/client/lib/arithmetic.h"
 #include "xla/client/lib/constants.h"
 #include "xla/client/lib/math.h"
 #include "xla/client/lib/matrix.h"
@@ -131,6 +132,61 @@ inline xla::XlaOp BatchMatMul(xla::XlaOp a, bool transpose_a, xla::XlaOp b,
                        /*preferred_element_type=*/std::nullopt);
 }
 
+inline xla::XlaOp BroadcastRows(xla::XlaOp op, int64_t num_rows,
+                                int64_t row_size) {
+  return xla::BroadcastInDim(op, {num_rows, row_size}, {0, 1});
+}
+
+inline xla::XlaOp BroadcastCols(xla::XlaOp op, int64_t num_rows,
+                                int64_t row_size) {
+  return xla::BroadcastInDim(op, {num_rows, row_size}, {0, 1});
+}
+
+inline xla::XlaOp OnesColumn(xla::XlaBuilder* b, DataType dtype,
+                             int64_t rows) {
+  return xla::Broadcast(XlaHelpers::FloatLiteral(b, dtype, 1.0), {rows, 1});
+}
+
+inline xla::XlaOp OnesRow(xla::XlaBuilder* b, DataType dtype, int64_t cols) {
+  return xla::Broadcast(XlaHelpers::FloatLiteral(b, dtype, 1.0), {1, cols});
+}
+
+inline xla::XlaOp RowWiseSum2D(XlaOpKernelContext* ctx, xla::XlaOp matrix,
+                               DataType dtype, int64_t num_rows,
+                               int64_t row_size) {
+  xla::DotDimensionNumbers dnums;
+  dnums.add_lhs_contracting_dimensions(1);
+  dnums.add_rhs_contracting_dimensions(0);
+  xla::PrecisionConfig precision_config;
+  precision_config.add_operand_precision(
+      tsl::tensor_float_32_execution_enabled() ? xla::PrecisionConfig::DEFAULT
+                                               : xla::PrecisionConfig::HIGHEST);
+  precision_config.add_operand_precision(
+      tsl::tensor_float_32_execution_enabled() ? xla::PrecisionConfig::DEFAULT
+                                               : xla::PrecisionConfig::HIGHEST);
+  return xla::DotGeneral(matrix, OnesColumn(ctx->builder(), dtype, row_size),
+                         dnums, &precision_config,
+                         /*preferred_element_type=*/std::nullopt);
+}
+
+inline xla::XlaOp SumAcrossRows2D(XlaOpKernelContext* ctx, xla::XlaOp matrix,
+                                  DataType dtype, int64_t num_rows,
+                                  int64_t row_size) {
+  xla::DotDimensionNumbers dnums;
+  dnums.add_lhs_contracting_dimensions(1);
+  dnums.add_rhs_contracting_dimensions(0);
+  xla::PrecisionConfig precision_config;
+  precision_config.add_operand_precision(
+      tsl::tensor_float_32_execution_enabled() ? xla::PrecisionConfig::DEFAULT
+                                               : xla::PrecisionConfig::HIGHEST);
+  precision_config.add_operand_precision(
+      tsl::tensor_float_32_execution_enabled() ? xla::PrecisionConfig::DEFAULT
+                                               : xla::PrecisionConfig::HIGHEST);
+  return xla::DotGeneral(OnesRow(ctx->builder(), dtype, num_rows), matrix,
+                         dnums, &precision_config,
+                         /*preferred_element_type=*/std::nullopt);
+}
+
 inline void CompileNormalize(XlaOpKernelContext* ctx, bool use_affine,
                              float epsilon, float max_std,
                              bool layernorm_eps_inside_sqrt);
@@ -243,45 +299,43 @@ inline void CompileNormalize(XlaOpKernelContext* ctx, bool use_affine,
   const DataType compute_type = out_type == DT_DOUBLE ? DT_DOUBLE : DT_FLOAT;
   xla::XlaBuilder* b = ctx->builder();
   xla::XlaOp x = ConvertTo(ctx->Input(0), compute_type);
-  std::vector<int64_t> x_dims = DimSizes(x_shape);
-  std::vector<int64_t> leading_dims = IotaDims(rank - 1);
+  const int64_t num_rows = x_shape.num_elements() / last_dim;
+  xla::XlaOp x_2d = xla::Reshape(x, {num_rows, last_dim});
+  xla::XlaOp divisor = XlaHelpers::FloatLiteral(b, compute_type, last_dim);
 
-  xla::XlaOp sum =
-      xla::Reduce(x, XlaHelpers::Zero(b, compute_type),
-                  *ctx->GetOrCreateAdd(compute_type), {rank - 1});
-  xla::XlaOp mean = sum / XlaHelpers::FloatLiteral(b, compute_type, last_dim);
-  xla::XlaOp mean_b = xla::BroadcastInDim(mean, x_dims, leading_dims);
-  xla::XlaOp centered = x - mean_b;
-  xla::XlaOp sq = centered * centered;
-  xla::XlaOp var_sum =
-      xla::Reduce(sq, XlaHelpers::Zero(b, compute_type),
-                  *ctx->GetOrCreateAdd(compute_type), {rank - 1});
-  xla::XlaOp variance =
-      var_sum / XlaHelpers::FloatLiteral(b, compute_type, last_dim);
+  xla::XlaOp mean_col =
+      RowWiseSum2D(ctx, x_2d, compute_type, num_rows, last_dim) / divisor;
+  xla::XlaOp centered_2d = x_2d - BroadcastCols(mean_col, num_rows, last_dim);
+  xla::XlaOp variance_col =
+      RowWiseSum2D(ctx, centered_2d * centered_2d, compute_type, num_rows,
+                   last_dim) /
+      divisor;
 
-  xla::XlaOp denom;
+  xla::XlaOp denom_col;
   if (layernorm_eps_inside_sqrt) {
-    denom = xla::Sqrt(variance + XlaHelpers::FloatLiteral(b, compute_type,
+    denom_col =
+        xla::Sqrt(variance_col + XlaHelpers::FloatLiteral(b, compute_type,
                                                           epsilon));
   } else {
     xla::XlaOp std = xla::Sqrt(xla::Max(
-        variance, XlaHelpers::FloatLiteral(b, compute_type, 0.0)));
+        variance_col, XlaHelpers::FloatLiteral(b, compute_type, 0.0)));
     xla::XlaOp lo = XlaHelpers::FloatLiteral(b, compute_type, epsilon);
     xla::XlaOp hi = XlaHelpers::FloatLiteral(b, compute_type, max_std);
-    denom = xla::Clamp(lo, std, hi);
+    denom_col = xla::Clamp(lo, std, hi);
   }
-  xla::XlaOp denom_b = xla::BroadcastInDim(denom, x_dims, leading_dims);
-  xla::XlaOp y = centered / denom_b;
+  xla::XlaOp y_2d =
+      centered_2d / BroadcastCols(denom_col, num_rows, last_dim);
 
   if (use_affine) {
     xla::XlaOp gamma = ConvertTo(ctx->Input(1), compute_type);
     xla::XlaOp beta = ConvertTo(ctx->Input(2), compute_type);
-    BroadcastToShape(ctx, &gamma, x_shape);
-    BroadcastToShape(ctx, &beta, x_shape);
-    y = y * gamma + beta;
+    gamma = xla::BroadcastInDim(gamma, {num_rows, last_dim}, {1});
+    beta = xla::BroadcastInDim(beta, {num_rows, last_dim}, {1});
+    y_2d = y_2d * gamma + beta;
   }
 
-  ctx->SetOutput(0, ConvertTo(y, out_type));
+  ctx->SetOutput(
+      0, ConvertTo(xla::Reshape(y_2d, DimSizes(x_shape)), out_type));
 }
 
 }  // namespace tensorflow

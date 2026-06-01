@@ -34,67 +34,57 @@ class MusaLayerNormGradXlaOp : public XlaOpKernel {
                     "MusaLayerNormGrad requires dy/x same rank >= 1 shape"));
     const int64_t rank = x_shape.dims();
     const int64_t last_dim = x_shape.dim_size(rank - 1);
+    const int64_t num_rows = x_shape.num_elements() / last_dim;
     OP_REQUIRES(ctx, gamma_shape.num_elements() == last_dim &&
                          ctx->InputShape(3).num_elements() == last_dim,
                 errors::InvalidArgument(
                     "MusaLayerNormGrad gamma/beta size must match last dim"));
 
     const DataType out_type = ctx->input_type(0);
-    const DataType compute_type = out_type == DT_DOUBLE ? DT_DOUBLE : DT_FLOAT;
+    const DataType compute_type =
+        out_type == DT_DOUBLE ? DT_DOUBLE
+                              : (out_type == DT_FLOAT ? DT_DOUBLE : DT_FLOAT);
     xla::XlaBuilder* b = ctx->builder();
-    xla::XlaOp dy = ConvertTo(ctx->Input(0), compute_type);
-    xla::XlaOp x = ConvertTo(ctx->Input(1), compute_type);
+    xla::XlaOp dy = xla::Reshape(ConvertTo(ctx->Input(0), compute_type),
+                                 {num_rows, last_dim});
+    xla::XlaOp x = xla::Reshape(ConvertTo(ctx->Input(1), compute_type),
+                                {num_rows, last_dim});
     xla::XlaOp gamma = ConvertTo(ctx->Input(2), compute_type);
-    std::vector<int64_t> x_dims = DimSizes(x_shape);
-    std::vector<int64_t> leading_dims = IotaDims(rank - 1);
+    xla::XlaOp divisor = XlaHelpers::FloatLiteral(b, compute_type, last_dim);
 
-    xla::XlaOp sum =
-        xla::Reduce(x, XlaHelpers::Zero(b, compute_type),
-                    *ctx->GetOrCreateAdd(compute_type), {rank - 1});
-    xla::XlaOp mean = sum / XlaHelpers::FloatLiteral(b, compute_type, last_dim);
-    xla::XlaOp mean_b = xla::BroadcastInDim(mean, x_dims, leading_dims);
-    xla::XlaOp centered = x - mean_b;
-    xla::XlaOp var_sum =
-        xla::Reduce(centered * centered, XlaHelpers::Zero(b, compute_type),
-                    *ctx->GetOrCreateAdd(compute_type), {rank - 1});
-    xla::XlaOp variance =
-        var_sum / XlaHelpers::FloatLiteral(b, compute_type, last_dim);
-    xla::XlaOp inv_std = xla::Rsqrt(
-        variance + XlaHelpers::FloatLiteral(b, compute_type, epsilon_));
-    xla::XlaOp inv_std_b = xla::BroadcastInDim(inv_std, x_dims, leading_dims);
-    xla::XlaOp x_hat = centered * inv_std_b;
+    xla::XlaOp mean_col =
+        RowWiseSum2D(ctx, x, compute_type, num_rows, last_dim) / divisor;
+    xla::XlaOp centered = x - BroadcastCols(mean_col, num_rows, last_dim);
+    xla::XlaOp variance_col =
+        RowWiseSum2D(ctx, centered * centered, compute_type, num_rows,
+                     last_dim) /
+        divisor;
+    xla::XlaOp inv_std_col =
+        xla::Rsqrt(variance_col +
+                   XlaHelpers::FloatLiteral(b, compute_type, epsilon_));
+    xla::XlaOp inv_std = BroadcastCols(inv_std_col, num_rows, last_dim);
+    xla::XlaOp x_hat = centered * inv_std;
 
-    xla::XlaOp gamma_b = gamma;
-    BroadcastToShape(ctx, &gamma_b, x_shape);
+    xla::XlaOp gamma_b = xla::BroadcastInDim(gamma, {num_rows, last_dim}, {1});
     xla::XlaOp dxhat = dy * gamma_b;
     xla::XlaOp mean_dxhat =
-        xla::Reduce(dxhat, XlaHelpers::Zero(b, compute_type),
-                    *ctx->GetOrCreateAdd(compute_type), {rank - 1}) /
-        XlaHelpers::FloatLiteral(b, compute_type, last_dim);
+        RowWiseSum2D(ctx, dxhat, compute_type, num_rows, last_dim) / divisor;
     xla::XlaOp mean_dxhat_xhat =
-        xla::Reduce(dxhat * x_hat, XlaHelpers::Zero(b, compute_type),
-                    *ctx->GetOrCreateAdd(compute_type), {rank - 1}) /
-        XlaHelpers::FloatLiteral(b, compute_type, last_dim);
-    xla::XlaOp mean_dxhat_b =
-        xla::BroadcastInDim(mean_dxhat, x_dims, leading_dims);
-    xla::XlaOp mean_dxhat_xhat_b =
-        xla::BroadcastInDim(mean_dxhat_xhat, x_dims, leading_dims);
-    xla::XlaOp dx =
-        inv_std_b * (dxhat - mean_dxhat_b - x_hat * mean_dxhat_xhat_b);
+        RowWiseSum2D(ctx, dxhat * x_hat, compute_type, num_rows, last_dim) /
+        divisor;
+    xla::XlaOp dx_2d = inv_std *
+                       (dxhat - BroadcastCols(mean_dxhat, num_rows, last_dim) -
+                        x_hat *
+                            BroadcastCols(mean_dxhat_xhat, num_rows, last_dim));
 
-    std::vector<int64_t> reduce_axes = IotaDims(rank - 1);
-    xla::XlaOp dgamma = dy * x_hat;
-    xla::XlaOp dbeta = dy;
-    if (!reduce_axes.empty()) {
-      dgamma = xla::Reduce(dgamma, XlaHelpers::Zero(b, compute_type),
-                           *ctx->GetOrCreateAdd(compute_type), reduce_axes);
-      dbeta = xla::Reduce(dbeta, XlaHelpers::Zero(b, compute_type),
-                          *ctx->GetOrCreateAdd(compute_type), reduce_axes);
-    }
-    dgamma = xla::Reshape(dgamma, DimSizes(gamma_shape));
-    dbeta = xla::Reshape(dbeta, DimSizes(ctx->InputShape(3)));
+    xla::XlaOp dgamma = xla::Reshape(
+        SumAcrossRows2D(ctx, dy * x_hat, compute_type, num_rows, last_dim),
+        DimSizes(gamma_shape));
+    xla::XlaOp dbeta = xla::Reshape(
+        SumAcrossRows2D(ctx, dy, compute_type, num_rows, last_dim),
+        DimSizes(ctx->InputShape(3)));
 
-    ctx->SetOutput(0, ConvertTo(dx, out_type));
+    ctx->SetOutput(0, ConvertTo(xla::Reshape(dx_2d, DimSizes(x_shape)), out_type));
     ctx->SetOutput(1, ConvertTo(dgamma, out_type));
     ctx->SetOutput(2, ConvertTo(dbeta, out_type));
   }
