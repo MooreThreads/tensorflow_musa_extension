@@ -1,111 +1,57 @@
-#include <mudnn.h>
+#include <musa_runtime_api.h>
 
-#include <array>
-#include <cstdint>
+#include <limits>
+#include <vector>
 
+#include "../utils_op.h"
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/tensor.h"
-#include "../utils_op.h"
+#include "tensorflow/core/framework/tensor_shape.h"
 
 namespace tensorflow {
 namespace musa {
-namespace {
 
-constexpr int kMaxTileDims = 16;
+constexpr int kMaxInlineTileDims = 8;
 
-struct TileShapeInfo {
-  int dims;
-  int64_t input_dims[kMaxTileDims];
-  int64_t output_dims[kMaxTileDims];
-  int64_t input_strides[kMaxTileDims];
+struct TileDims {
+  int64_t input[kMaxInlineTileDims];
+  int64_t output[kMaxInlineTileDims];
 };
-
-extern "C" {
-void LaunchTileFloat(const float* input, float* output, int64_t total,
-                     TileShapeInfo info, musaStream_t stream);
-void LaunchTileDouble(const double* input, double* output, int64_t total,
-                      TileShapeInfo info, musaStream_t stream);
-void LaunchTileInt32(const int32_t* input, int32_t* output, int64_t total,
-                     TileShapeInfo info, musaStream_t stream);
-void LaunchTileInt64(const int64_t* input, int64_t* output, int64_t total,
-                     TileShapeInfo info, musaStream_t stream);
-void LaunchTileBool(const bool* input, bool* output, int64_t total,
-                    TileShapeInfo info, musaStream_t stream);
-void LaunchTileHalf(const void* input, void* output, int64_t total,
-                    TileShapeInfo info, musaStream_t stream);
-void LaunchTileBFloat16(const void* input, void* output, int64_t total,
-                        TileShapeInfo info, musaStream_t stream);
-}
 
 template <typename T>
-struct TileLauncher;
+void LaunchMusaTileKernel(const T* input, const int64_t* input_dims,
+                          const int64_t* output_dims, int dims,
+                          int64_t output_size, T* output, musaStream_t stream);
 
-template <>
-struct TileLauncher<float> {
-  static void Run(const Tensor& input, Tensor* output, int64_t total,
-                  TileShapeInfo info, musaStream_t stream) {
-    LaunchTileFloat(input.flat<float>().data(), output->flat<float>().data(),
-                    total, info, stream);
-  }
-};
+template <typename T>
+void LaunchMusaTileSmallDimsKernel(const T* input, TileDims tile_dims, int dims,
+                                   int64_t output_size, T* output,
+                                   musaStream_t stream);
 
-template <>
-struct TileLauncher<double> {
-  static void Run(const Tensor& input, Tensor* output, int64_t total,
-                  TileShapeInfo info, musaStream_t stream) {
-    LaunchTileDouble(input.flat<double>().data(), output->flat<double>().data(),
-                     total, info, stream);
-  }
-};
+template <typename T>
+void LaunchMusaTileLastDimKernel(const T* input, int64_t rows, int64_t width,
+                                 int64_t output_size, T* output,
+                                 musaStream_t stream);
 
-template <>
-struct TileLauncher<int32> {
-  static void Run(const Tensor& input, Tensor* output, int64_t total,
-                  TileShapeInfo info, musaStream_t stream) {
-    LaunchTileInt32(input.flat<int32>().data(), output->flat<int32>().data(),
-                    total, info, stream);
-  }
-};
+namespace {
 
-template <>
-struct TileLauncher<int64> {
-  static void Run(const Tensor& input, Tensor* output, int64_t total,
-                  TileShapeInfo info, musaStream_t stream) {
-    LaunchTileInt64(input.flat<int64>().data(), output->flat<int64>().data(),
-                    total, info, stream);
+bool IsLastDimTile(const Tensor& input, const TensorShape& output_shape,
+                   int64_t* rows, int64_t* width) {
+  const int dims = input.dims();
+  if (dims < 2 || output_shape.dims() != dims) return false;
+  const int last_dim = dims - 1;
+  if (input.dim_size(last_dim) != 1 || output_shape.dim_size(last_dim) <= 1) {
+    return false;
   }
-};
-
-template <>
-struct TileLauncher<bool> {
-  static void Run(const Tensor& input, Tensor* output, int64_t total,
-                  TileShapeInfo info, musaStream_t stream) {
-    LaunchTileBool(input.flat<bool>().data(), output->flat<bool>().data(), total,
-                   info, stream);
+  for (int i = 0; i < last_dim; ++i) {
+    if (input.dim_size(i) != output_shape.dim_size(i)) return false;
   }
-};
-
-template <>
-struct TileLauncher<Eigen::half> {
-  static void Run(const Tensor& input, Tensor* output, int64_t total,
-                  TileShapeInfo info, musaStream_t stream) {
-    LaunchTileHalf(input.tensor_data().data(),
-                   const_cast<char*>(output->tensor_data().data()), total, info,
-                   stream);
-  }
-};
-
-template <>
-struct TileLauncher<bfloat16> {
-  static void Run(const Tensor& input, Tensor* output, int64_t total,
-                  TileShapeInfo info, musaStream_t stream) {
-    LaunchTileBFloat16(input.tensor_data().data(),
-                       const_cast<char*>(output->tensor_data().data()), total,
-                       info, stream);
-  }
-};
+  *rows = input.NumElements();
+  *width = output_shape.dim_size(last_dim);
+  return *rows > 0 && *width > 1;
+}
 
 template <typename T, typename Tmultiples>
 class MusaTileOp : public MusaOpKernel {
@@ -118,46 +64,39 @@ class MusaTileOp : public MusaOpKernel {
     const Tensor& input = context->input(0);
     const Tensor& multiples = context->input(1);
 
-    const int input_dims = input.dims();
     OP_REQUIRES(context, TensorShapeUtils::IsVector(multiples.shape()),
-                errors::InvalidArgument("multiples must be a 1-D vector"));
+                errors::InvalidArgument("multiples must be a 1-D tensor"));
+
+    const int input_dims = input.dims();
     OP_REQUIRES(context, multiples.NumElements() == input_dims,
                 errors::InvalidArgument(
                     "Expected multiples argument to be a vector of length ",
                     input_dims, " but got length ", multiples.NumElements()));
-    OP_REQUIRES(context, input_dims <= kMaxTileDims,
-                errors::InvalidArgument("Tile rank ", input_dims,
-                                        " exceeds supported rank ",
-                                        kMaxTileDims));
 
     const Tmultiples* m_data = multiples.flat<Tmultiples>().data();
 
     TensorShape output_shape;
     bool need_tile = false;
-    bool can_use_mudnn_broadcast_tile = true;
-    TileShapeInfo info = {};
-    info.dims = input_dims;
-
-    int64_t stride = 1;
-    for (int i = input_dims - 1; i >= 0; --i) {
-      info.input_strides[i] = stride;
-      stride *= input.dim_size(i);
-    }
+    std::vector<int64_t> input_dims_host(input_dims);
+    std::vector<int64_t> output_dims_host(input_dims);
 
     for (int i = 0; i < input_dims; ++i) {
-      const Tmultiples multiple = m_data[i];
+      const int64_t in_dim = input.dim_size(i);
+      const int64_t multiple = static_cast<int64_t>(m_data[i]);
       OP_REQUIRES(context, multiple >= 0,
                   errors::InvalidArgument("Expected multiples[", i,
-                                          "] >= 0, but got ", multiple));
-      const int64_t input_dim = input.dim_size(i);
-      const int64_t output_dim = input_dim * static_cast<int64_t>(multiple);
-      output_shape.AddDim(output_dim);
-      info.input_dims[i] = input_dim;
-      info.output_dims[i] = output_dim;
-      if (multiple != 1) {
-        need_tile = true;
-        if (input_dim != 1) can_use_mudnn_broadcast_tile = false;
-      }
+                                          "] >= 0, got ", multiple));
+      OP_REQUIRES(
+          context,
+          in_dim == 0 ||
+              multiple <= std::numeric_limits<int64_t>::max() / in_dim,
+          errors::InvalidArgument("Tile output dimension overflow at dim ", i));
+
+      const int64_t out_dim = in_dim * multiple;
+      output_shape.AddDim(out_dim);
+      input_dims_host[i] = in_dim;
+      output_dims_host[i] = out_dim;
+      if (multiple != 1) need_tile = true;
     }
 
     if (input_dims == 0 || !need_tile) {
@@ -167,36 +106,69 @@ class MusaTileOp : public MusaOpKernel {
 
     Tensor* output = nullptr;
     OP_REQUIRES_OK(context, context->allocate_output(0, output_shape, &output));
-    const int64_t total = output->NumElements();
-    if (total == 0) return;
+    if (output->NumElements() == 0) return;
 
-    if (can_use_mudnn_broadcast_tile) {
-      auto& h = GetHandleByCtx(context);
-      auto in_mt = CreateMTensor(input);
-      auto out_mt = CreateMTensor(*output);
-
-      std::array<int64_t, kMaxTileDims> b_dims;
-      std::array<int64_t, kMaxTileDims> b_strides;
-      std::array<int64_t, kMaxTileDims> orig_strides;
-      int64_t stride = 1;
-
-      for (int i = input_dims - 1; i >= 0; --i) {
-        orig_strides[i] = input.dim_size(i) == 1 ? 0 : stride;
-        stride *= input.dim_size(i);
-      }
-      for (int i = 0; i < input_dims; ++i) {
-        b_dims[i] = output_shape.dim_size(i);
-        b_strides[i] = input.dim_size(i) == 1 ? 0 : orig_strides[i];
-      }
-
-      MTOP_CHECK_OK(in_mt.SetNdInfo(input_dims, b_dims.data(), b_strides.data()),
-                    "Tile SetNdInfo", context);
-      ::musa::dnn::Permute op;
-      MTOP_CHECK_OK_RUN(op.Run(h, out_mt, in_mt), "Permute Run for Tile", context);
+    musaStream_t stream = GetMusaStreamByCtx(context);
+    int64_t last_dim_tile_rows = 0;
+    int64_t last_dim_tile_width = 0;
+    if (IsLastDimTile(input, output_shape, &last_dim_tile_rows,
+                      &last_dim_tile_width)) {
+      LaunchMusaTileLastDimKernel<T>(input.flat<T>().data(),
+                                     last_dim_tile_rows, last_dim_tile_width,
+                                     output->NumElements(),
+                                     output->flat<T>().data(), stream);
+      auto launch_status = musaGetLastError();
+      OP_REQUIRES(context, launch_status == musaSuccess,
+                  errors::Internal("Tile last-dim fast path failed: ",
+                                   musaGetErrorString(launch_status)));
       return;
     }
 
-    TileLauncher<T>::Run(input, output, total, info, GetMusaStreamByCtx(context));
+    if (input_dims <= kMaxInlineTileDims) {
+      TileDims tile_dims;
+      for (int i = 0; i < input_dims; ++i) {
+        tile_dims.input[i] = input_dims_host[i];
+        tile_dims.output[i] = output_dims_host[i];
+      }
+      LaunchMusaTileSmallDimsKernel<T>(input.flat<T>().data(), tile_dims,
+                                       input_dims, output->NumElements(),
+                                       output->flat<T>().data(), stream);
+      auto launch_status = musaGetLastError();
+      OP_REQUIRES(context, launch_status == musaSuccess,
+                  errors::Internal("Tile small-dims fast path failed: ",
+                                   musaGetErrorString(launch_status)));
+      return;
+    }
+
+    Tensor input_dims_dev;
+    Tensor output_dims_dev;
+    OP_REQUIRES_OK(context,
+                   context->allocate_temp(DT_INT64, TensorShape({input_dims}),
+                                          &input_dims_dev));
+    OP_REQUIRES_OK(context,
+                   context->allocate_temp(DT_INT64, TensorShape({input_dims}),
+                                          &output_dims_dev));
+
+    const size_t dims_bytes = input_dims * sizeof(int64_t);
+
+    auto copy_status = musaMemcpyAsync(input_dims_dev.flat<int64_t>().data(),
+                                       input_dims_host.data(), dims_bytes,
+                                       musaMemcpyHostToDevice, stream);
+    OP_REQUIRES(context, copy_status == musaSuccess,
+                errors::Internal("Tile input_dims H2D copy failed: ",
+                                 static_cast<int>(copy_status)));
+
+    copy_status = musaMemcpyAsync(output_dims_dev.flat<int64_t>().data(),
+                                  output_dims_host.data(), dims_bytes,
+                                  musaMemcpyHostToDevice, stream);
+    OP_REQUIRES(context, copy_status == musaSuccess,
+                errors::Internal("Tile output_dims H2D copy failed: ",
+                                 static_cast<int>(copy_status)));
+
+    LaunchMusaTileKernel<T>(
+        input.flat<T>().data(), input_dims_dev.flat<int64_t>().data(),
+        output_dims_dev.flat<int64_t>().data(), input_dims,
+        output->NumElements(), output->flat<T>().data(), stream);
   }
 };
 

@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <numeric>
+#include <type_traits>
 #include <vector>
 
 #include "../utils_op.h"
@@ -22,6 +23,10 @@ struct InlinePointers {
   const void* ptrs[MAX_INLINE_ADDN_INPUTS];
 };
 
+struct InlinePointers39 {
+  const void* ptrs[39];
+};
+
 extern "C" {
 void LaunchAddNKernelFloat(const float** inputs, InlinePointers inline_inputs,
                            float* output, int num_inputs, int size,
@@ -35,6 +40,9 @@ void LaunchAddNKernelHalf(const void** inputs, InlinePointers inline_inputs,
 void LaunchAddNKernelBFloat16(const void** inputs, InlinePointers inline_inputs,
                               void* output, int num_inputs, int size,
                               musaStream_t stream);
+void LaunchAddNKernelBFloat16Inline39(InlinePointers39 inline_inputs,
+                                      void* output, int size,
+                                      musaStream_t stream);
 void LaunchAddNKernelInt32(const int** inputs, InlinePointers inline_inputs,
                            int* output, int num_inputs, int size,
                            musaStream_t stream);
@@ -217,6 +225,20 @@ void AddNCompute(OpKernelContext* ctx, mFormat format,
     std::vector<const void*> input_ptrs(num_inputs);
     for (int i = 0; i < num_inputs; ++i)
       input_ptrs[i] = ctx->input(i).tensor_data().data();
+
+    if constexpr (std::is_same<T, bfloat16>::value) {
+      if (num_inputs == 39) {
+        InlinePointers39 inline_inputs_39;
+        for (int i = 0; i < 39; ++i) {
+          inline_inputs_39.ptrs[i] = input_ptrs[i];
+        }
+        void* output_ptr = const_cast<char*>(output->tensor_data().data());
+        LaunchAddNKernelBFloat16Inline39(
+            inline_inputs_39, output_ptr, static_cast<int>(num_elements),
+            stream);
+        return;
+      }
+    }
 
     const void** d_inputs = nullptr;
     InlinePointers inline_inputs;

@@ -1,5 +1,6 @@
+#include <cstdint>
+
 #include "../utils_op.h"
-#include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/types.h"
@@ -7,8 +8,49 @@
 namespace tensorflow {
 namespace musa {
 
-extern "C" void LaunchFloatToBFloat16Copy(const float* src, void* dst,
-                                          int64_t n, musaStream_t stream);
+extern "C" {
+void LaunchMusaCastFloatToBFloat16(const void* src, void* dst, int64_t n,
+                                   musaStream_t stream);
+void LaunchMusaCastBFloat16ToFloat(const void* src, void* dst, int64_t n,
+                                   musaStream_t stream);
+void LaunchMusaCastBoolToBFloat16(const void* src, void* dst, int64_t n,
+                                  musaStream_t stream);
+}
+
+namespace {
+
+bool TryLaunchFastCast(OpKernelContext* ctx, DataType src_dtype,
+                       DataType dst_dtype, const Tensor& input,
+                       Tensor* output) {
+  const int64_t num_elements = input.NumElements();
+  if (num_elements <= 0) return false;
+
+  const void* src = input.tensor_data().data();
+  void* dst = const_cast<char*>(output->tensor_data().data());
+  musaStream_t stream = GetMusaStreamByCtx(ctx);
+  bool launched = true;
+
+  if (src_dtype == DT_FLOAT && dst_dtype == DT_BFLOAT16) {
+    LaunchMusaCastFloatToBFloat16(src, dst, num_elements, stream);
+  } else if (src_dtype == DT_BFLOAT16 && dst_dtype == DT_FLOAT) {
+    LaunchMusaCastBFloat16ToFloat(src, dst, num_elements, stream);
+  } else if (src_dtype == DT_BOOL && dst_dtype == DT_BFLOAT16) {
+    LaunchMusaCastBoolToBFloat16(src, dst, num_elements, stream);
+  } else {
+    launched = false;
+  }
+
+  if (!launched) return false;
+
+  auto status = musaGetLastError();
+  if (status != musaSuccess) {
+    ctx->CtxFailure(errors::Internal("MUSA Cast fast path launch failed: ",
+                                     musaGetErrorString(status)));
+  }
+  return true;
+}
+
+}  // namespace
 
 class MusaCastOp : public MusaOpKernel {
  public:
@@ -44,11 +86,8 @@ class MusaCastOp : public MusaOpKernel {
       return;
     }
 
-    if (external_src_dtype_ == DT_FLOAT && external_dst_dtype_ == DT_BFLOAT16) {
-      LaunchFloatToBFloat16Copy(
-          inp.flat<float>().data(),
-          reinterpret_cast<void*>(output->flat<bfloat16>().data()),
-          static_cast<int64_t>(inp.NumElements()), GetMusaStreamByCtx(ctx));
+    if (TryLaunchFastCast(ctx, external_src_dtype_, external_dst_dtype_, inp,
+                          output)) {
       return;
     }
 
@@ -60,6 +99,7 @@ class MusaCastOp : public MusaOpKernel {
       in_mt.SetFormat(mFormat::NCHW);
     }
 
+    MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     mHandle& h = GetHandleByCtx(ctx);
     ::musa::dnn::Unary op;
 

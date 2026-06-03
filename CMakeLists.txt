@@ -109,10 +109,15 @@ endif()
 set(TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS} -DMUSA_DISABLE_DEBUG_LOGGING -DNDEBUG -DMUSA_DISABLE_AUTO_TRACE -include ${CMAKE_CURRENT_SOURCE_DIR}/musa_ext/tf_status_compat.h")
 
 # Include paths
-include_directories("${TF_INC}" "${MUSA_PATH}/include")
+#
+# MUSA 5.1 ships both a top-level C API header (`include/mudnn.h`) and the
+# C++ API headers under `include/mudnncxx/`. This plugin uses the C++ API
+# (`musa::dnn::*`), so put mudnncxx first to keep existing `#include <mudnn.h>`
+# sites resolving to the C++ aggregate header.
 if(EXISTS "${MUSA_PATH}/include/mudnncxx")
     include_directories("${MUSA_PATH}/include/mudnncxx")
 endif()
+include_directories("${TF_INC}" "${MUSA_PATH}/include")
 
 # Include TensorFlow C++ core headers for common_runtime
 # These are required for accessing BFCAllocator and device-specific headers

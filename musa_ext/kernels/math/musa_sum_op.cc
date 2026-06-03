@@ -1,7 +1,10 @@
 #include <mudnn.h>
 
+#include <algorithm>
+
 #include "../utils_op.h"
 #include "mu/device/musa_memcpy.h"
+#include <musa_runtime.h>
 #include "tensorflow/core/framework/bfloat16.h"
 #include "tensorflow/core/framework/bounds_check.h"
 #include "tensorflow/core/framework/op_kernel.h"
@@ -9,6 +12,55 @@
 
 namespace tensorflow {
 namespace musa {
+
+namespace {
+
+bool IsDeviceReadablePointerForSum(const void* ptr) {
+  musaPointerAttributes attributes;
+  musaError_t attr_err = musaPointerGetAttributes(&attributes, ptr);
+  if (attr_err == musaSuccess) {
+    return attributes.type == musaMemoryTypeDevice ||
+           attributes.type == musaMemoryTypeManaged;
+  }
+
+  musaGetLastError();
+  return false;
+}
+
+template <typename Index>
+Status ReadAxesToHostTyped(const Tensor& tensor, std::vector<int64_t>* axes) {
+  std::vector<Index> raw_axes(tensor.NumElements());
+  if (!raw_axes.empty()) {
+    const Index* input_data = tensor.flat<Index>().data();
+    if (IsDeviceReadablePointerForSum(input_data)) {
+      mStatus copy_status =
+          MusaMemcpyD2H(raw_axes.data(), input_data, tensor.TotalBytes());
+      if (copy_status != mStatus::SUCCESS) {
+        return errors::Internal("MUSA Sum failed to copy reduction_indices to host.");
+      }
+    } else {
+      std::copy(input_data, input_data + raw_axes.size(), raw_axes.data());
+    }
+  }
+
+  axes->resize(raw_axes.size());
+  for (size_t i = 0; i < raw_axes.size(); ++i) {
+    (*axes)[i] = static_cast<int64_t>(raw_axes[i]);
+  }
+  return OkStatus();
+}
+
+Status ReadAxesToHost(const Tensor& tensor, std::vector<int64_t>* axes) {
+  if (tensor.dtype() == DT_INT32) {
+    return ReadAxesToHostTyped<int32>(tensor, axes);
+  }
+  if (tensor.dtype() == DT_INT64) {
+    return ReadAxesToHostTyped<int64>(tensor, axes);
+  }
+  return errors::InvalidArgument("reduction_indices must be int32 or int64");
+}
+
+}  // namespace
 
 template <typename T>
 class MusaSumOp : public MusaOpKernel {
@@ -36,30 +88,14 @@ class MusaSumOp : public MusaOpKernel {
     gtl::InlinedVector<bool, 4> bitmap(input.dims(), false);
 
     if (num_axes > 0) {
-      if (axes_tensor.dtype() == DT_INT32) {
-        auto axes_flat = axes_tensor.flat<int32>();
-        for (int64_t i = 0; i < num_axes; ++i) {
-          int32 index = axes_flat(i);
-          if (index < 0) index += input.dims();
-          if (index >= 0 && index < input.dims() && !bitmap[index]) {
-            bitmap[index] = true;
-            reduce_dims.push_back(static_cast<int>(index));
-          }
+      std::vector<int64_t> axes;
+      OP_REQUIRES_OK(ctx, ReadAxesToHost(axes_tensor, &axes));
+      for (int64_t index : axes) {
+        if (index < 0) index += input.dims();
+        if (index >= 0 && index < input.dims() && !bitmap[index]) {
+          bitmap[index] = true;
+          reduce_dims.push_back(static_cast<int>(index));
         }
-      } else if (axes_tensor.dtype() == DT_INT64) {
-        auto axes_flat = axes_tensor.flat<int64>();
-        for (int64_t i = 0; i < num_axes; ++i) {
-          int64 index = axes_flat(i);
-          if (index < 0) index += input.dims();
-          if (index >= 0 && index < input.dims() && !bitmap[index]) {
-            bitmap[index] = true;
-            reduce_dims.push_back(static_cast<int>(index));
-          }
-        }
-      } else {
-        OP_REQUIRES(ctx, false,
-                    errors::InvalidArgument(
-                        "reduction_indices must be int32 or int64"));
       }
     }
 
