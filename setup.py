@@ -170,6 +170,12 @@ class BuildPluginCommand(Command):
 class BdistWheelCommand(bdist_wheel):
     """Custom bdist_wheel that builds plugin and excludes test directory."""
 
+    def finalize_options(self):
+        super().finalize_options()
+        # The wheel contains libmusa_plugin.so and a CPython pybind module, so
+        # it must be tagged as platform-specific instead of py3-none-any.
+        self.root_is_pure = False
+
     def run(self):
         # Check TensorFlow version first
         check_tensorflow_version()

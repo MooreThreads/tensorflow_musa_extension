@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "tensorflow/core/framework/bfloat16.h"
@@ -15,6 +16,13 @@
 
 namespace tensorflow {
 namespace musa {
+
+extern "C" void LaunchMaxPoolGradFloat(
+    void* stream, const float* input, const float* grad_output,
+    float* grad_input, int64_t total_elements, int64_t batch, int64_t in_h,
+    int64_t in_w, int64_t channels, int64_t out_h, int64_t out_w,
+    int window_h, int window_w, int stride_h, int stride_w, int pad_top,
+    int pad_left);
 
 namespace {
 
@@ -98,6 +106,22 @@ Status RunMusaMaxPoolGrad(OpKernelContext* ctx, const Tensor& orig_input,
                           int window_h, int window_w, int stride_h,
                           int stride_w, int pad_top, int pad_left) {
   auto& handle = GetHandleByCtx(ctx);
+
+  if (std::is_same<T, float>::value) {
+    void* stream = GetMusaStreamByCtx(ctx);
+    if (stream == nullptr) {
+      return errors::Internal("MUSA stream is unavailable for MaxPoolGrad");
+    }
+
+    LaunchMaxPoolGradFloat(
+        stream, orig_input.flat<float>().data(), grad_output.flat<float>().data(),
+        grad_input->flat<float>().data(), grad_input->NumElements(),
+        grad_input->dim_size(0), grad_input->dim_size(1),
+        grad_input->dim_size(2), grad_input->dim_size(3),
+        grad_output.dim_size(1), grad_output.dim_size(2), window_h, window_w,
+        stride_h, stride_w, pad_top, pad_left);
+    return OkStatus();
+  }
 
   // Configure pooling with the same parameters as the forward pass.
   mPooling pool;

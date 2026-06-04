@@ -15,6 +15,32 @@ struct InlinePointers {
   const void* ptrs[MAX_INLINE_ADDN_INPUTS];
 };
 
+struct InlinePointers39 {
+  const void* ptrs[39];
+};
+
+constexpr int kAddNThreadsPerBlock = 256;
+constexpr int kBFloat16AddNItemsPerThread = 4;
+
+__device__ __forceinline__ float BFloat16BitsToFloat(uint16_t value) {
+  return __uint_as_float(static_cast<uint32_t>(value) << 16);
+}
+
+__device__ __forceinline__ uint16_t FloatToBFloat16Bits(float value) {
+  const uint32_t bits = __float_as_uint(value);
+  const uint32_t lsb = (bits >> 16) & 1U;
+  return static_cast<uint16_t>((bits + 0x7fffU + lsb) >> 16);
+}
+
+__device__ __forceinline__ uint64_t PackBFloat16x4(float x, float y, float z,
+                                                   float w) {
+  const uint64_t b0 = FloatToBFloat16Bits(x);
+  const uint64_t b1 = FloatToBFloat16Bits(y);
+  const uint64_t b2 = FloatToBFloat16Bits(z);
+  const uint64_t b3 = FloatToBFloat16Bits(w);
+  return b0 | (b1 << 16) | (b2 << 32) | (b3 << 48);
+}
+
 template <typename T>
 __global__ void AddNKernelInline(InlinePointers inputs, T* output, int num_inputs, int size) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -109,6 +135,94 @@ __global__ void AddNKernelInlineBFloat16(InlinePointers inputs, __mt_bfloat16* o
   }
 }
 
+template <int NumInputs>
+__global__ void AddNKernelInlineBFloat16Fixed(InlinePointers inputs,
+                                              __mt_bfloat16* output,
+                                              int size) {
+  int base = (blockIdx.x * blockDim.x + threadIdx.x) *
+             kBFloat16AddNItemsPerThread;
+#pragma unroll
+  for (int item = 0; item < kBFloat16AddNItemsPerThread; ++item) {
+    const int idx = base + item;
+    if (idx < size) {
+      float sum =
+          __bfloat162float(static_cast<const __mt_bfloat16*>(inputs.ptrs[0])[idx]);
+#pragma unroll
+      for (int i = 1; i < NumInputs; ++i) {
+        sum += __bfloat162float(
+            static_cast<const __mt_bfloat16*>(inputs.ptrs[i])[idx]);
+      }
+      output[idx] = __float2bfloat16(sum);
+    }
+  }
+}
+
+template <int NumInputs>
+__global__ void AddNKernelBFloat16Fixed(const __mt_bfloat16** inputs,
+                                        __mt_bfloat16* output, int size) {
+  int base = (blockIdx.x * blockDim.x + threadIdx.x) *
+             kBFloat16AddNItemsPerThread;
+#pragma unroll
+  for (int item = 0; item < kBFloat16AddNItemsPerThread; ++item) {
+    const int idx = base + item;
+    if (idx < size) {
+      float sum = __bfloat162float(inputs[0][idx]);
+#pragma unroll
+      for (int i = 1; i < NumInputs; ++i) {
+        sum += __bfloat162float(inputs[i][idx]);
+      }
+      output[idx] = __float2bfloat16(sum);
+    }
+  }
+}
+
+__global__ void AddNKernelInlineBFloat16Fixed39(InlinePointers39 inputs,
+                                                __mt_bfloat16* output,
+                                                int size) {
+  int base = (blockIdx.x * blockDim.x + threadIdx.x) *
+             kBFloat16AddNItemsPerThread;
+#pragma unroll
+  for (int item = 0; item < kBFloat16AddNItemsPerThread; ++item) {
+    const int idx = base + item;
+    if (idx < size) {
+      float sum =
+          __bfloat162float(static_cast<const __mt_bfloat16*>(inputs.ptrs[0])[idx]);
+#pragma unroll
+      for (int i = 1; i < 39; ++i) {
+        sum += __bfloat162float(
+            static_cast<const __mt_bfloat16*>(inputs.ptrs[i])[idx]);
+      }
+      output[idx] = __float2bfloat16(sum);
+    }
+  }
+}
+
+__global__ void AddNKernelInlineBFloat16Fixed39Vec4(InlinePointers39 inputs,
+                                                    __mt_bfloat16* output,
+                                                    int vec_size) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  const int stride = blockDim.x * gridDim.x;
+  for (; idx < vec_size; idx += stride) {
+    uint64_t packed =
+        reinterpret_cast<const uint64_t*>(inputs.ptrs[0])[idx];
+    float4 sum;
+    sum.x = BFloat16BitsToFloat(static_cast<uint16_t>(packed));
+    sum.y = BFloat16BitsToFloat(static_cast<uint16_t>(packed >> 16));
+    sum.z = BFloat16BitsToFloat(static_cast<uint16_t>(packed >> 32));
+    sum.w = BFloat16BitsToFloat(static_cast<uint16_t>(packed >> 48));
+#pragma unroll
+    for (int i = 1; i < 39; ++i) {
+      packed = reinterpret_cast<const uint64_t*>(inputs.ptrs[i])[idx];
+      sum.x += BFloat16BitsToFloat(static_cast<uint16_t>(packed));
+      sum.y += BFloat16BitsToFloat(static_cast<uint16_t>(packed >> 16));
+      sum.z += BFloat16BitsToFloat(static_cast<uint16_t>(packed >> 32));
+      sum.w += BFloat16BitsToFloat(static_cast<uint16_t>(packed >> 48));
+    }
+    reinterpret_cast<uint64_t*>(output)[idx] =
+        PackBFloat16x4(sum.x, sum.y, sum.z, sum.w);
+  }
+}
+
 extern "C" {
 
 // Float kernel
@@ -199,7 +313,7 @@ static inline bool IsAligned16(const void* ptr) {
 void LaunchAddNKernelFloat(const float** inputs, InlinePointers inline_inputs,
                            float* output, int num_inputs, int size,
                            musaStream_t stream) {
-  const int threads_per_block = 256;
+  const int threads_per_block = kAddNThreadsPerBlock;
 
   // Fast path for common AddN case in transformer workloads:
   // float, inline 8-input add, 16-byte aligned pointers.
@@ -326,7 +440,7 @@ void LaunchAddNWithSliceGradFloat(InlinePointers base_inputs,
                                   int axis_dim, int slice_start,
                                   int inner_dim, musaStream_t stream) {
   if (size <= 0) return;
-  const int threads_per_block = 256;
+  const int threads_per_block = kAddNThreadsPerBlock;
   if ((size % 4) == 0 && (inner_dim % 4) == 0 && IsAligned16(output) &&
       IsAligned16(slice_grad)) {
     bool all_aligned = true;
@@ -384,7 +498,7 @@ void LaunchAddNWithSliceGradBFloat16(InlinePointers base_inputs,
                                      int axis_dim, int slice_start,
                                      int inner_dim, musaStream_t stream) {
   if (size <= 0) return;
-  const int threads_per_block = 256;
+  const int threads_per_block = kAddNThreadsPerBlock;
   const int blocks = (size + threads_per_block - 1) / threads_per_block;
   AddNWithSliceGradKernelBFloat16<<<blocks, threads_per_block, 0, stream>>>(
       base_inputs, reinterpret_cast<const __mt_bfloat16*>(slice_grad),
@@ -427,7 +541,7 @@ void LaunchConcatWithSliceGradFloat(const float* slice_grad,
                                     musaStream_t stream) {
   const int size = outer * axis_dim * inner_dim;
   if (size <= 0) return;
-  const int threads_per_block = 256;
+  const int threads_per_block = kAddNThreadsPerBlock;
   const int blocks = (size + threads_per_block - 1) / threads_per_block;
   ConcatWithSliceGradKernelFloat<<<blocks, threads_per_block, 0, stream>>>(
       slice_grad, input1, input2, output, outer, axis_dim, slice_start,
@@ -470,7 +584,7 @@ void LaunchConcatWithSliceGradBFloat16(
     musaStream_t stream) {
   const int size = outer * axis_dim * inner_dim;
   if (size <= 0) return;
-  const int threads_per_block = 256;
+  const int threads_per_block = kAddNThreadsPerBlock;
   const int blocks = (size + threads_per_block - 1) / threads_per_block;
   ConcatWithSliceGradKernelBFloat16<<<blocks, threads_per_block, 0, stream>>>(
       reinterpret_cast<const __mt_bfloat16*>(slice_grad),
@@ -481,9 +595,164 @@ void LaunchConcatWithSliceGradBFloat16(
 }
 
 
+
+void LaunchAddNKernelBFloat16(const __mt_bfloat16** inputs,
+                              InlinePointers inline_inputs,
+                              __mt_bfloat16* output, int num_inputs, int size,
+                              musaStream_t stream) {
+  const int threads_per_block = kAddNThreadsPerBlock;
+  const int fixed_blocks =
+      (size + threads_per_block * kBFloat16AddNItemsPerThread - 1) /
+      (threads_per_block * kBFloat16AddNItemsPerThread);
+  const int blocks = (size + threads_per_block - 1) / threads_per_block;
+
+  if (inputs == nullptr && num_inputs <= MAX_INLINE_ADDN_INPUTS) {
+    switch (num_inputs) {
+      case 3:
+        AddNKernelInlineBFloat16Fixed<3>
+            <<<fixed_blocks, threads_per_block, 0, stream>>>(
+                inline_inputs, output, size);
+        return;
+      case 4:
+        AddNKernelInlineBFloat16Fixed<4>
+            <<<fixed_blocks, threads_per_block, 0, stream>>>(
+                inline_inputs, output, size);
+        return;
+      case 5:
+        AddNKernelInlineBFloat16Fixed<5>
+            <<<fixed_blocks, threads_per_block, 0, stream>>>(
+                inline_inputs, output, size);
+        return;
+      case 6:
+        AddNKernelInlineBFloat16Fixed<6>
+            <<<fixed_blocks, threads_per_block, 0, stream>>>(
+                inline_inputs, output, size);
+        return;
+      case 7:
+        AddNKernelInlineBFloat16Fixed<7>
+            <<<fixed_blocks, threads_per_block, 0, stream>>>(
+                inline_inputs, output, size);
+        return;
+      case 8:
+        AddNKernelInlineBFloat16Fixed<8>
+            <<<fixed_blocks, threads_per_block, 0, stream>>>(
+                inline_inputs, output, size);
+        return;
+      case 9:
+        AddNKernelInlineBFloat16Fixed<9>
+            <<<fixed_blocks, threads_per_block, 0, stream>>>(
+                inline_inputs, output, size);
+        return;
+      case 12:
+        AddNKernelInlineBFloat16Fixed<12>
+            <<<fixed_blocks, threads_per_block, 0, stream>>>(
+                inline_inputs, output, size);
+        return;
+      case 16:
+        AddNKernelInlineBFloat16Fixed<16>
+            <<<fixed_blocks, threads_per_block, 0, stream>>>(
+                inline_inputs, output, size);
+        return;
+      case 22:
+        AddNKernelInlineBFloat16Fixed<22>
+            <<<fixed_blocks, threads_per_block, 0, stream>>>(
+                inline_inputs, output, size);
+        return;
+      default:
+        AddNKernelInlineBFloat16<<<blocks, threads_per_block, 0, stream>>>(
+            inline_inputs, output, num_inputs, size);
+        return;
+    }
+  }
+
+  switch (num_inputs) {
+    case 3:
+      AddNKernelBFloat16Fixed<3>
+          <<<fixed_blocks, threads_per_block, 0, stream>>>(
+              inputs, output, size);
+      return;
+    case 4:
+      AddNKernelBFloat16Fixed<4>
+          <<<fixed_blocks, threads_per_block, 0, stream>>>(
+              inputs, output, size);
+      return;
+    case 5:
+      AddNKernelBFloat16Fixed<5>
+          <<<fixed_blocks, threads_per_block, 0, stream>>>(
+              inputs, output, size);
+      return;
+    case 6:
+      AddNKernelBFloat16Fixed<6>
+          <<<fixed_blocks, threads_per_block, 0, stream>>>(
+              inputs, output, size);
+      return;
+    case 7:
+      AddNKernelBFloat16Fixed<7>
+          <<<fixed_blocks, threads_per_block, 0, stream>>>(
+              inputs, output, size);
+      return;
+    case 8:
+      AddNKernelBFloat16Fixed<8>
+          <<<fixed_blocks, threads_per_block, 0, stream>>>(
+              inputs, output, size);
+      return;
+    case 9:
+      AddNKernelBFloat16Fixed<9>
+          <<<fixed_blocks, threads_per_block, 0, stream>>>(
+              inputs, output, size);
+      return;
+    case 12:
+      AddNKernelBFloat16Fixed<12>
+          <<<fixed_blocks, threads_per_block, 0, stream>>>(
+              inputs, output, size);
+      return;
+    case 16:
+      AddNKernelBFloat16Fixed<16>
+          <<<fixed_blocks, threads_per_block, 0, stream>>>(
+              inputs, output, size);
+      return;
+    case 22:
+      AddNKernelBFloat16Fixed<22>
+          <<<fixed_blocks, threads_per_block, 0, stream>>>(
+              inputs, output, size);
+      return;
+    case 39:
+      AddNKernelBFloat16Fixed<39>
+          <<<fixed_blocks, threads_per_block, 0, stream>>>(
+              inputs, output, size);
+      return;
+    default:
+      AddNKernelBFloat16<<<blocks, threads_per_block, 0, stream>>>(
+          inputs, output, num_inputs, size);
+      return;
+  }
+}
+
+void LaunchAddNKernelBFloat16Inline39(InlinePointers39 inline_inputs,
+                                      __mt_bfloat16* output, int size,
+                                      musaStream_t stream) {
+  const int threads_per_block = kAddNThreadsPerBlock;
+  if ((size & 3) == 0) {
+    const int vec_size = size >> 2;
+    const int vec_blocks = (vec_size + threads_per_block - 1) /
+                           threads_per_block;
+    AddNKernelInlineBFloat16Fixed39Vec4
+        <<<vec_blocks, threads_per_block, 0, stream>>>(
+            inline_inputs, output, vec_size);
+    return;
+  }
+
+  const int fixed_blocks =
+      (size + threads_per_block * kBFloat16AddNItemsPerThread - 1) /
+      (threads_per_block * kBFloat16AddNItemsPerThread);
+  AddNKernelInlineBFloat16Fixed39
+      <<<fixed_blocks, threads_per_block, 0, stream>>>(
+          inline_inputs, output, size);
+}
+
 #define DEFINE_ADDN_LAUNCHER(name, kernel, inline_kernel, T) \
   void name(const T** inputs, InlinePointers inline_inputs, T* output, int num_inputs, int size, musaStream_t stream) { \
-    const int threads_per_block = 256; \
+    const int threads_per_block = kAddNThreadsPerBlock; \
     const int blocks = (size + threads_per_block - 1) / threads_per_block; \
     if (inputs == nullptr && num_inputs <= MAX_INLINE_ADDN_INPUTS) { \
       inline_kernel<<<blocks, threads_per_block, 0, stream>>>(inline_inputs, output, num_inputs, size); \
@@ -494,7 +763,6 @@ void LaunchConcatWithSliceGradBFloat16(
 
 DEFINE_ADDN_LAUNCHER(LaunchAddNKernelDouble, AddNKernelDouble, AddNKernelInline<double>, double)
 DEFINE_ADDN_LAUNCHER(LaunchAddNKernelHalf, AddNKernelHalf, AddNKernelInline<half>, half)
-DEFINE_ADDN_LAUNCHER(LaunchAddNKernelBFloat16, AddNKernelBFloat16, AddNKernelInlineBFloat16, __mt_bfloat16)
 DEFINE_ADDN_LAUNCHER(LaunchAddNKernelInt32, AddNKernelInt32, AddNKernelInline<int>, int)
 DEFINE_ADDN_LAUNCHER(LaunchAddNKernelInt64, AddNKernelInt64, AddNKernelInline<int64_t>, int64_t)
 

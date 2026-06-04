@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "tensorflow/core/framework/bfloat16.h"
@@ -11,9 +12,25 @@
 #include "tensorflow/core/util/padding.h"
 #include "tensorflow/core/util/tensor_format.h"
 #include "utils_op.h"
+#include "mu/device/musa_memcpy.h"
+#include <musa_runtime.h>
 
 namespace tensorflow {
 namespace musa {
+
+extern "C" void LaunchConv2DBackpropInputFloat(
+    void* stream, const float* dy, const float* filter, float* dx,
+    int64_t total_elements, int64_t batch, int64_t in_h, int64_t in_w,
+    int64_t in_c, int64_t out_h, int64_t out_w, int64_t out_c,
+    int64_t filter_h, int64_t filter_w, int stride_h, int stride_w,
+    int dilation_h, int dilation_w, int pad_top, int pad_left);
+
+extern "C" void LaunchConv2DBackpropFilterFloat(
+    void* stream, const float* input, const float* dy, float* filter_backprop,
+    int64_t total_elements, int64_t batch, int64_t in_h, int64_t in_w,
+    int64_t in_c, int64_t out_h, int64_t out_w, int64_t out_c,
+    int64_t filter_h, int64_t filter_w, int stride_h, int stride_w,
+    int dilation_h, int dilation_w, int pad_top, int pad_left);
 
 namespace {
 
@@ -53,6 +70,62 @@ Status PermuteTensorOnMusa(OpKernelContext* ctx, const Tensor& input,
   }
 
   return OkStatus();
+}
+
+bool IsDeviceReadablePointer(const void* ptr) {
+  musaPointerAttributes attributes;
+  musaError_t attr_err = musaPointerGetAttributes(&attributes, ptr);
+  if (attr_err == musaSuccess) {
+    return attributes.type == musaMemoryTypeDevice ||
+           attributes.type == musaMemoryTypeManaged;
+  }
+
+  musaGetLastError();
+  return false;
+}
+
+template <typename Index>
+Status ReadIndexVectorToHost(const Tensor& tensor, const char* input_name,
+                             int expected_size,
+                             std::vector<int64_t>* values) {
+  if (tensor.dims() != 1 || tensor.NumElements() != expected_size) {
+    return errors::InvalidArgument(input_name, " must be a 1-D tensor with ",
+                                   expected_size, " elements, got shape ",
+                                   tensor.shape().DebugString());
+  }
+
+  std::vector<Index> raw_values(tensor.NumElements());
+  if (!raw_values.empty()) {
+    const Index* input_data = tensor.flat<Index>().data();
+    if (IsDeviceReadablePointer(input_data)) {
+      mStatus copy_status =
+          MusaMemcpyD2H(raw_values.data(), input_data, tensor.TotalBytes());
+      if (copy_status != mStatus::SUCCESS) {
+        return errors::Internal("MUSA Conv2D failed to copy ", input_name,
+                                " to host.");
+      }
+    } else {
+      std::copy(input_data, input_data + raw_values.size(), raw_values.data());
+    }
+  }
+
+  values->resize(raw_values.size());
+  for (size_t i = 0; i < raw_values.size(); ++i) {
+    (*values)[i] = static_cast<int64_t>(raw_values[i]);
+  }
+  return OkStatus();
+}
+
+Status ReadShapeVectorToHost(const Tensor& tensor, const char* input_name,
+                             std::vector<int64_t>* values) {
+  if (tensor.dtype() == DT_INT32) {
+    return ReadIndexVectorToHost<int32>(tensor, input_name, 4, values);
+  }
+  if (tensor.dtype() == DT_INT64) {
+    return ReadIndexVectorToHost<int64_t>(tensor, input_name, 4, values);
+  }
+  return errors::InvalidArgument(input_name, " must be int32 or int64, got ",
+                                 DataTypeString(tensor.dtype()));
 }
 
 Status ComputeOutputAndPadding2D(int64_t in_h, int64_t in_w, int64_t filter_h,
@@ -111,6 +184,23 @@ Status RunMusaConv2DBackpropInput(OpKernelContext* ctx,
   if (data_format != FORMAT_NHWC) {
     return errors::InvalidArgument(
         "RunMusaConv2DBackpropInput currently expects NHWC tensors.");
+  }
+
+  if (std::is_same<T, float>::value) {
+    void* stream = GetMusaStreamByCtx(ctx);
+    if (stream == nullptr) {
+      return errors::Internal("MUSA stream is unavailable for Conv2DBackpropInput");
+    }
+
+    LaunchConv2DBackpropInputFloat(
+        stream, out_backprop.flat<float>().data(), filter.flat<float>().data(),
+        in_backprop->flat<float>().data(), in_backprop->NumElements(),
+        in_backprop->dim_size(0), in_backprop->dim_size(1),
+        in_backprop->dim_size(2), in_backprop->dim_size(3),
+        out_backprop.dim_size(1), out_backprop.dim_size(2),
+        out_backprop.dim_size(3), filter.dim_size(0), filter.dim_size(1),
+        stride_h, stride_w, dilation_h, dilation_w, pad_top, pad_left);
+    return OkStatus();
   }
 
   // muDNN backward data convolution (gradient w.r.t. input)
@@ -222,6 +312,23 @@ Status RunMusaConv2DBackpropFilter(OpKernelContext* ctx,
   if (data_format != FORMAT_NHWC) {
     return errors::InvalidArgument(
         "RunMusaConv2DBackpropFilter currently expects NHWC tensors.");
+  }
+
+  if (std::is_same<T, float>::value) {
+    void* stream = GetMusaStreamByCtx(ctx);
+    if (stream == nullptr) {
+      return errors::Internal("MUSA stream is unavailable for Conv2DBackpropFilter");
+    }
+
+    LaunchConv2DBackpropFilterFloat(
+        stream, input.flat<float>().data(), out_backprop.flat<float>().data(),
+        filter_backprop->flat<float>().data(), filter_backprop->NumElements(),
+        input.dim_size(0), input.dim_size(1), input.dim_size(2),
+        input.dim_size(3), out_backprop.dim_size(1), out_backprop.dim_size(2),
+        out_backprop.dim_size(3), filter_backprop->dim_size(0),
+        filter_backprop->dim_size(1), stride_h, stride_w, dilation_h,
+        dilation_w, pad_top, pad_left);
+    return OkStatus();
   }
 
   // muDNN backward filter convolution (gradient w.r.t. filter)
@@ -394,18 +501,21 @@ class MusaConv2DBackpropInputOp : public MusaOpKernel {
                 errors::InvalidArgument("out_backprop must be rank 4, got: ",
                                         out_backprop.shape().DebugString()));
 
-    // Parse input_sizes to get the original input shape
-    auto input_sizes_vec = input_sizes.vec<int32>();
-    const int64_t batch = input_sizes_vec(0);
+    // Parse input_sizes to get the original input shape.
+    std::vector<int64_t> input_sizes_vec;
+    OP_REQUIRES_OK(ctx,
+                   ReadShapeVectorToHost(input_sizes, "input_sizes",
+                                         &input_sizes_vec));
+    const int64_t batch = input_sizes_vec[0];
     int64_t in_h, in_w, in_c;
     if (data_format_ == FORMAT_NHWC) {
-      in_h = input_sizes_vec(1);
-      in_w = input_sizes_vec(2);
-      in_c = input_sizes_vec(3);
+      in_h = input_sizes_vec[1];
+      in_w = input_sizes_vec[2];
+      in_c = input_sizes_vec[3];
     } else {
-      in_c = input_sizes_vec(1);
-      in_h = input_sizes_vec(2);
-      in_w = input_sizes_vec(3);
+      in_c = input_sizes_vec[1];
+      in_h = input_sizes_vec[2];
+      in_w = input_sizes_vec[3];
     }
 
     // TF Conv2D filter layout: [KH, KW, IC, OC] (HWIO)
@@ -595,12 +705,15 @@ class MusaConv2DBackpropFilterOp : public MusaOpKernel {
                 errors::InvalidArgument("out_backprop must be rank 4, got: ",
                                         out_backprop.shape().DebugString()));
 
-    // Parse filter_sizes to get the filter shape
-    auto filter_sizes_vec = filter_sizes.vec<int32>();
-    const int64_t filter_h = filter_sizes_vec(0);
-    const int64_t filter_w = filter_sizes_vec(1);
-    const int64_t filter_ic = filter_sizes_vec(2);
-    const int64_t filter_oc = filter_sizes_vec(3);
+    // Parse filter_sizes to get the filter shape.
+    std::vector<int64_t> filter_sizes_vec;
+    OP_REQUIRES_OK(ctx,
+                   ReadShapeVectorToHost(filter_sizes, "filter_sizes",
+                                         &filter_sizes_vec));
+    const int64_t filter_h = filter_sizes_vec[0];
+    const int64_t filter_w = filter_sizes_vec[1];
+    const int64_t filter_ic = filter_sizes_vec[2];
+    const int64_t filter_oc = filter_sizes_vec[3];
 
     // Get input dimensions
     const int n_idx = GetTensorDimIndex(data_format_, 'N');
@@ -652,6 +765,7 @@ class MusaConv2DBackpropFilterOp : public MusaOpKernel {
                 errors::InvalidArgument(
                     "out_backprop channel mismatch: expected ", filter_oc,
                     ", got ", out_backprop.dim_size(c_idx)));
+
 
     // Allocate output tensor for filter gradient
     TensorShape filter_backprop_shape =
@@ -712,12 +826,18 @@ class MusaConv2DBackpropFilterOp : public MusaOpKernel {
 
 #define REGISTER_MUSA_CONV2D_BACKPROP_INPUT(TYPE)                           \
   REGISTER_KERNEL_BUILDER(                                                  \
-      Name("Conv2DBackpropInput").Device("MUSA").TypeConstraint<TYPE>("T"), \
+      Name("Conv2DBackpropInput")                                           \
+          .Device("MUSA")                                                   \
+          .TypeConstraint<TYPE>("T")                                        \
+          .HostMemory("input_sizes"),                                      \
       MusaConv2DBackpropInputOp<TYPE>)
 
 #define REGISTER_MUSA_CONV2D_BACKPROP_FILTER(TYPE)                           \
   REGISTER_KERNEL_BUILDER(                                                   \
-      Name("Conv2DBackpropFilter").Device("MUSA").TypeConstraint<TYPE>("T"), \
+      Name("Conv2DBackpropFilter")                                           \
+          .Device("MUSA")                                                    \
+          .TypeConstraint<TYPE>("T")                                         \
+          .HostMemory("filter_sizes"),                                      \
       MusaConv2DBackpropFilterOp<TYPE>)
 
 REGISTER_MUSA_CONV2D_BACKPROP_INPUT(float);
