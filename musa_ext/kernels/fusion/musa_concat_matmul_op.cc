@@ -159,6 +159,9 @@ REGISTER_OP("MusaConcatMatMul")
     .Attr("transpose_b: bool = false")
     .Attr("num_concat: int >= 1")
     .Attr("concat_input_idx: int")
-    .SetShapeFn(shape_inference::MatMulShape);
+    .SetShapeFn([](shape_inference::InferenceContext* c) {
+      c->set_output(0, c->UnknownShape());
+      return OkStatus();
+    });
 
 }  // namespace tensorflow

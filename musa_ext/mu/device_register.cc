@@ -185,6 +185,8 @@ TFMusaGetTelemetryHealthSnapshot() {
 }
 
 void __attribute__((constructor)) OnMusaPluginLoad() {
+  LOG(INFO) << "[TF_MUSA_EXTENSION_DEBUG] libmusa_plugin.so loaded; "
+               "tensorflow_musa_extension runtime constructor is active.";
   static std::once_flag k_register_musa_device_factory;
   std::call_once(k_register_musa_device_factory, [] {
     if (!tensorflow::musa::plugin_env::UseLegacyCppDevicePath()) {
@@ -361,7 +363,37 @@ void __attribute__((visibility("default"))) TFMusaSetAllowGrowth(int enabled) {
   ::tensorflow::musa::SetMusaAllowGrowthOverride(enabled != 0);
 }
 
+void __attribute__((visibility("default")))
+TFMusaSetTelemetryConfig(int enabled, const char* log_path,
+                         unsigned long long buffer_size, int flush_interval_ms,
+                         int include_stack_trace) {
+  ::tensorflow::musa::TelemetryConfig config;
+  config.enabled = enabled != 0;
+  if (log_path != nullptr) {
+    config.log_path = log_path;
+  }
+  config.buffer_size =
+      buffer_size > 0 ? static_cast<size_t>(buffer_size) : config.buffer_size;
+  config.flush_interval_ms =
+      flush_interval_ms > 0 ? flush_interval_ms : config.flush_interval_ms;
+  config.include_stack_trace = include_stack_trace != 0;
+  ::tensorflow::musa::MusaTelemetry::Instance().Initialize(config);
+}
+
+int __attribute__((visibility("default"))) TFMusaTelemetryIsEnabled() {
+  return ::tensorflow::musa::MusaTelemetry::Instance().IsEnabled() ? 1 : 0;
+}
+
+const char* __attribute__((visibility("default")))
+TFMusaGetTelemetryHealthSnapshot() {
+  static thread_local std::string snapshot;
+  snapshot = ::tensorflow::musa::MusaTelemetry::Instance().GetHealthSnapshot();
+  return snapshot.c_str();
+}
+
 void __attribute__((constructor)) OnMusaPluginLoad() {
+  LOG(INFO) << "[TF_MUSA_EXTENSION_DEBUG] libmusa_plugin.so loaded; "
+               "tensorflow_musa_extension runtime constructor is active.";
   // Initialize telemetry system from environment variables
   auto config = ::tensorflow::musa::TelemetryConfig::FromEnv();
   if (config.enabled) {

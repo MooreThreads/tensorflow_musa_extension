@@ -163,6 +163,11 @@ endif()
 
 # Link paths
 link_directories("${MUSA_PATH}/lib" "${MUSA_PATH}/lib64" "${TF_LIB_DIR}")
+set(TF_CC_LIBRARY "")
+if(EXISTS "${TF_LIB_DIR}/libtensorflow_cc.so.2")
+    set(TF_CC_LIBRARY "${TF_LIB_DIR}/libtensorflow_cc.so.2")
+    message(STATUS "TensorFlow CC Library: ${TF_CC_LIBRARY}")
+endif()
 
 # Automatically collect source files
 file(GLOB_RECURSE CPP_SOURCES
@@ -226,7 +231,7 @@ set_target_properties(musa_plugin PROPERTIES
 )
 
 # Link
-target_link_libraries(musa_plugin PRIVATE ${TF_LINK_FLAGS} musa mublas ${MUSA_DNN_LIBRARY} rt)
+target_link_libraries(musa_plugin PRIVATE ${TF_LINK_FLAGS} ${TF_CC_LIBRARY} musa mublas ${MUSA_DNN_LIBRARY} rt)
 
 # Generate Python runtime configuration bindings.
 add_library(_runtime_config_bindings MODULE
