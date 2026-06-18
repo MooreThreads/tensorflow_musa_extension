@@ -664,7 +664,7 @@ jobs:
               cd "$MODEL_ROOT/inference/prunedGraph"
               timeout 20m python run_inference.py \
                 --device musa \
-                --batch-size 100 \
+                --batch-size 1024 \
                 --infer-iters 1000 2>&1 | tee "$BASELINE_LOG"
             ' || baseline_exit=$?
 
