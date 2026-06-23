@@ -155,6 +155,17 @@ class Conv2DOpTest(MUSATestCase):
             padding="SAME",
             data_format="NHWC")
 
+  def testConv2DResNet50Conv4ShapeNHWC(self):
+    """ResNet50 conv4_block1_2 shape should not use an unstable algorithm."""
+    self._test_conv2d(
+        input_shape=[1, 14, 14, 256],
+        filter_shape=[3, 3, 256, 256],
+        dtype=tf.float32,
+        strides=[1, 1, 1, 1],
+        padding="SAME",
+        data_format="NHWC",
+        seed=2027)
+
   def testConv2DValidNCHW(self):
     """NCHW + VALID + stride=1."""
     for dtype in [tf.float32, tf.float16]:
