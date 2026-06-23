@@ -160,16 +160,7 @@ Status RunMusaConv2D(OpKernelContext* ctx, const Tensor& input,
                             static_cast<int>(status));
   }
 
-  mConvolution::Algorithm algo;
-  status = conv.GetRecommendForwardAlgorithm(handle, algo, y, x, w);
-  if (status != mStatus::SUCCESS) {
-    return errors::Internal(
-        "muDNN Convolution::GetRecommendForwardAlgorithm failed. status=",
-        static_cast<int>(status), ", data_format=NHWC",
-        ", input_shape=", input.shape().DebugString(),
-        ", filter_shape=", filter.shape().DebugString(),
-        ", output_shape=", output->shape().DebugString());
-  }
+  const mConvolution::Algorithm algo = mConvolution::Algorithm::IMPLICIT_GEMM;
 
   size_t workspace_size = 0;
   status = conv.GetForwardWorkspaceSize(handle, workspace_size, y, x, w, algo);
@@ -325,8 +316,7 @@ class MusaConv2DOp : public MusaOpKernel {
       return;
     }
 
-    const bool use_tf32 =
-        tf32_enabled_ && dilation_h_ == 1 && dilation_w_ == 1;
+    const bool use_tf32 = tf32_enabled_ && dilation_h_ == 1 && dilation_w_ == 1;
 
     if (data_format_ == FORMAT_NHWC) {
       OP_REQUIRES_OK(
