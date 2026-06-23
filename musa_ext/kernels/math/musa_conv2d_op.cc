@@ -316,8 +316,7 @@ class MusaConv2DOp : public MusaOpKernel {
       return;
     }
 
-    const bool use_tf32 =
-        tf32_enabled_ && dilation_h_ == 1 && dilation_w_ == 1;
+    const bool use_tf32 = tf32_enabled_ && dilation_h_ == 1 && dilation_w_ == 1;
 
     if (data_format_ == FORMAT_NHWC) {
       OP_REQUIRES_OK(
