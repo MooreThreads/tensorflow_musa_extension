@@ -62,7 +62,7 @@ from ._runtime_config import (
 from . import gradients, ops, raw_ops
 
 # Package version
-__version__ = "0.1.0"
+__version__ = "1.5.0"
 
 # Load plugin automatically on import
 _plugin_loaded = False
