@@ -26,7 +26,7 @@ from wheel.bdist_wheel import bdist_wheel
 # Package metadata
 PACKAGE_NAME = "tensorflow_musa"  # pip install name
 SOURCE_DIR = "python"             # source code directory
-VERSION = "0.1.0"
+VERSION = "1.5.0"
 DESCRIPTION = "High-performance TensorFlow extension for Moore Threads MUSA GPUs"
 AUTHOR = "TensorFlow MUSA Authors"
 LICENSE = "Apache 2.0"
