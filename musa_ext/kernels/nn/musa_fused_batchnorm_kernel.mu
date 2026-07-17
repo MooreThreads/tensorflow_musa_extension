@@ -20,6 +20,14 @@ __global__ void BesselCorrectionKernel(float* data, float factor, int count) {
   }
 }
 
+__global__ void VarianceToInvStdKernel(const float* variance, float* inv_std,
+                                       float epsilon, int count) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < count) {
+    inv_std[idx] = rsqrtf(variance[idx] + epsilon);
+  }
+}
+
 extern "C" {
 
 // Launch Bessel correction kernel on the given stream.
@@ -34,6 +42,17 @@ void LaunchBesselCorrection(float* data, float factor, int count,
   int grid_size = (count + block_size - 1) / block_size;
   BesselCorrectionKernel<<<grid_size, block_size, 0, stream>>>(
       data, factor, count);
+}
+
+// TensorFlow exposes population variance as reserve_space_2, while muDNN's
+// training backward kernel consumes reciprocal standard deviation.
+void LaunchVarianceToInvStd(const float* variance, float* inv_std,
+                            float epsilon, int count, musaStream_t stream) {
+  if (count <= 0) return;
+  int block_size = 256;
+  int grid_size = (count + block_size - 1) / block_size;
+  VarianceToInvStdKernel<<<grid_size, block_size, 0, stream>>>(
+      variance, inv_std, epsilon, count);
 }
 
 }  // extern "C"
