@@ -215,6 +215,46 @@ class FusedBatchNormOpTest(MUSATestCase):
             atol=1e-3,
         )
 
+    def testLayerNormGradNCHWLargeVariance(self):
+        """LayerNorm's NCHW fused-BN backward uses variance correctly.
+
+        Keras implements rank-2 LayerNormalization with FusedBatchNormV3 by
+        reshaping [batch, features] to NCHW [1, batch, features, 1].  TensorFlow
+        passes population variance to FusedBatchNormGradV3, whereas muDNN's
+        training backward API consumes reciprocal standard deviation.  Passing
+        variance directly makes dx grow by many orders of magnitude when the
+        input variance is far from one, as seen in Wukong's FMB blocks.
+        """
+        rng = np.random.default_rng(42)
+        x_np = (10.0 * rng.normal(size=(128, 1536))).astype(np.float32)
+        dy_np = rng.normal(scale=1e-3, size=x_np.shape).astype(np.float32)
+
+        def run(device, dtype):
+            layer_dtype = (
+                "mixed_bfloat16" if dtype == tf.bfloat16 else "float32"
+            )
+            with tf.device(device):
+                x = tf.cast(tf.constant(x_np), dtype)
+                dy = tf.cast(tf.constant(dy_np), dtype)
+                layer = tf.keras.layers.LayerNormalization(
+                    axis=-1, epsilon=1e-3, dtype=layer_dtype
+                )
+                with tf.GradientTape() as tape:
+                    tape.watch(x)
+                    y = layer(x)
+                dx = tape.gradient(y, x, output_gradients=tf.cast(dy, y.dtype))
+            return tf.cast(dx, tf.float32)
+
+        for dtype in (tf.float32, tf.bfloat16):
+            dx_cpu = run("/CPU:0", dtype)
+            dx_musa = run("/device:MUSA:0", dtype)
+            self.assertAllClose(
+                dx_musa.numpy(),
+                dx_cpu.numpy(),
+                rtol=0.15,
+                atol=5e-5,
+            )
+
     def testFusedBatchNormGradDXNotAffectedByPriorMemory(self):
         """BN backward dx must not inherit values from a previously freed buffer.
 

@@ -16,6 +16,8 @@
 extern "C" {
 void LaunchBesselCorrection(float* data, float factor, int count,
                             musaStream_t stream);
+void LaunchVarianceToInvStd(const float* variance, float* inv_std,
+                            float epsilon, int count, musaStream_t stream);
 }
 
 namespace tensorflow {
@@ -260,7 +262,19 @@ class MusaFusedBatchNormGradOp : public MusaOpKernel {
 
     mTensor mt_scale = CreateMTensor(scale, mFormat::NCHW);
     mTensor mt_saved_mean = CreateMTensor(saved_mean, mFormat::NCHW);
-    mTensor mt_saved_var = CreateMTensor(saved_var, mFormat::NCHW);
+    // TensorFlow's reserve_space_2 contains population variance.  muDNN's
+    // training backward kernels interpret their `v` input as reciprocal
+    // standard deviation and use it directly (including inv_std^3 terms).
+    // Passing variance happens to look plausible when variance is near one,
+    // but makes dx scale catastrophically for high-variance inputs.
+    Tensor saved_inv_std;
+    OP_REQUIRES_OK(ctx,
+                   ctx->allocate_temp(DT_FLOAT, saved_var.shape(),
+                                      &saved_inv_std));
+    LaunchVarianceToInvStd(
+        saved_var.flat<float>().data(), saved_inv_std.flat<float>().data(),
+        epsilon_, static_cast<int>(saved_var.NumElements()), stream);
+    mTensor mt_saved_inv_std = CreateMTensor(saved_inv_std, mFormat::NCHW);
 
     mTensor mt_d_scale = CreateMTensor(*d_scale, mFormat::NCHW);
     mTensor mt_d_offset = CreateMTensor(*d_offset, mFormat::NCHW);
@@ -274,7 +288,7 @@ class MusaFusedBatchNormGradOp : public MusaOpKernel {
 
     mStatus status = bn_op.RunBwd(
         handle, mt_dx, mt_d_mean, mt_d_var, mt_d_scale, mt_d_offset, mt_x,
-        mt_dy, mt_saved_mean, mt_saved_var, mt_scale, maintainer);
+        mt_dy, mt_saved_mean, mt_saved_inv_std, mt_scale, maintainer);
 
     OP_REQUIRES(ctx, status == mStatus::SUCCESS,
                 errors::Internal("MUSA BN Backward failed."));
