@@ -7,6 +7,7 @@ TensorFlow MUSA Extension 是面向摩尔线程（Moore Threads）MUSA GPU 的 T
 - 将 MUSA 注册为 TensorFlow 设备。
 - 提供 TensorFlow 常用算子和部分融合路径的 MUSA 实现。
 - 通过 `import tensorflow_musa` 自动加载运行时插件。
+- 可选 OpenXLA-MUSA PJRT 后端，支持 `@tf.function(jit_compile=True)` XLA 编译。
 - 调试和环境变量说明见 [docs/DEBUG_GUIDE.md](docs/DEBUG_GUIDE.md)。
 
 ## 环境要求
@@ -64,6 +65,8 @@ print(y)
 
 ## 测试
 
+### 默认模式（native MUSA kernel）
+
 从已安装的 wheel 运行算子测试：
 
 ```bash
@@ -76,9 +79,80 @@ MUSA_VISIBLE_DEVICES=5 python test/test_runner.py
 MUSA_VISIBLE_DEVICES=5 python test/test_runner.py --single matmul_op_test.py --detail
 ```
 
+### PJRT 模式（OpenXLA-MUSA）
+
+PJRT 模式需要显式开启，且 `LD_LIBRARY_PATH` 必须包含 TensorFlow 库目录：
+
+```bash
+export LD_LIBRARY_PATH=/path/to/tensorflow/site-packages:$LD_LIBRARY_PATH
+export TENSORFLOW_MUSA_ENABLE_PJRT=1
+export TENSORFLOW_MUSA_PJRT_LIBRARY_PATH=/path/to/libmusa_pjrt_plugin_zy.so
+```
+
+PJRT 模式测试：
+
+```bash
+MUSA_VISIBLE_DEVICES=5 python test/pjrt/run_pjrt_tests.py
+```
+
+切回默认模式：
+
+```bash
+unset TENSORFLOW_MUSA_ENABLE_PJRT
+unset TENSORFLOW_MUSA_PJRT_LIBRARY_PATH
+```
+
+## OpenXLA-MUSA PJRT 集成
+
+### 两种执行模式
+
+| 模式 | 如何启用 | Eager 执行 | XLA 编译 |
+|------|---------|-----------|----------|
+| 默认（native） | 什么都不设置 | ✅ native MUSA kernel | ❌ |
+| PJRT | `TENSORFLOW_MUSA_ENABLE_PJRT=1` | ✅ PJRT delegating kernel | ✅ OpenXLA-MUSA |
+
+PJRT 模式下，标准和 `@tf.function(jit_compile=True)` 会将函数编译为 HLO 并通过 OpenXLA-MUSA 后端在 MUSA GPU 上执行。
+
+### 便捷 API
+
+```python
+import tensorflow_musa as tf_musa
+
+# 查看 PJRT 状态
+status = tf_musa.get_pjrt_status()
+print(status)  # {'requested': True, 'state': 'registered', ...}
+
+# 设置 PJRT 环境变量（需要新进程生效）
+tf_musa.enable_xla()
+
+# 取消 PJRT
+tf_musa.disable_xla()
+```
+
+### 必要环境变量
+
+| 变量 | 说明 |
+|------|------|
+| `TENSORFLOW_MUSA_ENABLE_PJRT=1` | 开启 PJRT 模式 |
+| `TENSORFLOW_MUSA_PJRT_LIBRARY_PATH` | 指定 `libmusa_pjrt_plugin_zy.so` 路径 |
+| `LD_LIBRARY_PATH` | 必须包含 TensorFlow site-packages 目录 |
+
+> **注意**：`LD_LIBRARY_PATH` 必须在 shell 级设置（`os.environ` 不影响当前进程 `dlopen`）。
+
+### PJRT 已知限制
+
+| Op | 限制 |
+|---|---|
+| `Slice`, `Split`, `Fill`, `Gather` | JIT 结果不一致 |
+| `Tile`, `GatherNd`, `ScatterNd`, `LogicalXor` | 不支持 |
+| `L2Normalize` | JIT 结果不一致 |
+| `ReduceSum` (2D), `ReduceMean` (2D) | eager 不支持 |
+
+这些限制不影响主流模型训练和推理（`MatMul`、`Add`、`Relu`、`Softmax` 等全部通过）。
+
 ## 调试
 
-日志、GraphDef dump、遥测和运行时调试环境变量请参考 [docs/DEBUG_GUIDE.md](docs/DEBUG_GUIDE.md)。
+日志、GraphDef dump、遥测、运行时调试和 PJRT 诊断请参考 [docs/DEBUG_GUIDE.md](docs/DEBUG_GUIDE.md)。
 
 ## 参与贡献
 

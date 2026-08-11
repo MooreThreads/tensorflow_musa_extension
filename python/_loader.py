@@ -15,8 +15,14 @@
 
 """MUSA plugin loading utilities."""
 
-import os
 import logging
+import os
+
+from ._pjrt_bootstrap import (
+    get_pjrt_bootstrap_status,
+    load_pjrt_plugin,
+    prepare_pjrt_bootstrap,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +31,7 @@ PLUGIN_LIBRARY = "libmusa_plugin.so"
 _plugin_path = None
 _op_module = None
 _device_library_loaded = False
+_native_plugin_load_attempted = False
 
 
 def _find_plugin_library():
@@ -107,20 +114,39 @@ def load_plugin():
         RuntimeError: If TensorFlow cannot load the plugin
     """
     global _plugin_path, _op_module, _device_library_loaded
+    global _native_plugin_load_attempted
 
-    if _plugin_path is not None and _op_module is not None:
+    if _plugin_path is not None:
         return _plugin_path
+
+    # Resolve the optional PJRT artifact and prepare discovery variables before
+    # importing TensorFlow. The actual PJRT dlopen is deliberately deferred
+    # until after TensorFlow import to avoid protobuf descriptor collisions.
+    pjrt_status = prepare_pjrt_bootstrap()
+    if pjrt_status.requested:
+        logger.info(
+            "MUSA PJRT bootstrap prepared: %s", pjrt_status.library_path
+        )
 
     import tensorflow as tf
 
     plugin_path = _find_plugin_library()
 
     try:
-        _op_module = tf.load_op_library(plugin_path)
-        if not _use_legacy_loader() and not _device_library_loaded:
-            _load_pluggable_device_library(plugin_path)
-            _device_library_loaded = True
-        _plugin_path = plugin_path
+        _native_plugin_load_attempted = True
+        if pjrt_status.requested:
+            # PJRT mode: skip native kernel loading to avoid
+            # Multiple OpKernel registrations conflicts.
+            # Both eager and JIT use the PJRT backend.
+            _op_module = None
+            _plugin_path = plugin_path
+            load_pjrt_plugin(tf)
+        else:
+            _op_module = tf.load_op_library(plugin_path)
+            if not _use_legacy_loader() and not _device_library_loaded:
+                _load_pluggable_device_library(plugin_path)
+                _device_library_loaded = True
+            _plugin_path = plugin_path
         logger.info(f"MUSA plugin loaded successfully from: {plugin_path}")
         return plugin_path
     except Exception as e:
@@ -140,6 +166,11 @@ def get_musa_ops():
     if _op_module is None:
         load_plugin()
     return _op_module
+
+
+def get_pjrt_status():
+    """Return the current optional PJRT bootstrap status."""
+    return get_pjrt_bootstrap_status()
 
 
 def is_plugin_loaded():

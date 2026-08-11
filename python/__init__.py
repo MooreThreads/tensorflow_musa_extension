@@ -29,6 +29,7 @@ Example usage:
 
 import logging
 
+from ._pjrt_bootstrap import is_pjrt_requested, find_pjrt_library, prepare_pjrt_environment
 from ._graph_optimizer import (
     DISABLED_FUSION_PATTERNS_PARAM,
     MUSA_GRAPH_OPTIMIZER_NAME,
@@ -49,7 +50,13 @@ from ._graph_optimizer import (
     set_musa_disabled_fusion_patterns,
     set_musa_graph_optimizer_enabled,
 )
-from ._loader import get_musa_devices, get_musa_ops, is_plugin_loaded, load_plugin
+from ._loader import (
+    get_musa_devices,
+    get_musa_ops,
+    get_pjrt_status,
+    is_plugin_loaded,
+    load_plugin,
+)
 from ._optimizers import apply_adam_mixed, apply_sparse_adam_mixed
 from ._runtime_config import (
     disable_musa_telemetry,
@@ -64,6 +71,46 @@ from . import gradients, ops, raw_ops
 # Package version
 __version__ = "1.5.0"
 
+
+def enable_xla(library_path=None):
+    """Enable OpenXLA-MUSA PJRT backend.
+
+    Sets ``TENSORFLOW_MUSA_ENABLE_PJRT=1`` and
+    ``TENSORFLOW_MUSA_PJRT_LIBRARY_PATH``.
+
+    **Important**: PJRT mode requires ``LD_LIBRARY_PATH`` set at the
+    **shell level** before the Python process starts.  Use::
+
+        export LD_LIBRARY_PATH=/path/to/tensorflow:$LD_LIBRARY_PATH
+        export TENSORFLOW_MUSA_ENABLE_PJRT=1
+        export TENSORFLOW_MUSA_PJRT_LIBRARY_PATH=/path/to/libmusa_pjrt_plugin_zy.so
+
+    Then ``import tensorflow_musa`` in a new Python process.
+
+    Args:
+        library_path: Optional path to ``libmusa_pjrt_plugin_zy.so``.
+            If ``None``, auto-searches the package directory and
+            ``openxla_musa/bazel-bin/pjrt_plugin/``.
+    """
+    import os
+    if library_path is None:
+        library_path = find_pjrt_library()
+    os.environ["TENSORFLOW_MUSA_ENABLE_PJRT"] = "1"
+    if library_path:
+        os.environ["TENSORFLOW_MUSA_PJRT_LIBRARY_PATH"] = library_path
+    print("PJRT mode enabled.  Start a new Python process to take effect.")
+    print("  TENSORFLOW_MUSA_ENABLE_PJRT=1")
+    print(f"  TENSORFLOW_MUSA_PJRT_LIBRARY_PATH={library_path}")
+    return get_pjrt_status()
+
+
+def disable_xla():
+    """Disable PJRT and return to native MUSA kernel mode."""
+    import os
+    os.environ.pop("TENSORFLOW_MUSA_ENABLE_PJRT", None)
+    os.environ.pop("TENSORFLOW_MUSA_PJRT_LIBRARY_PATH", None)
+
+
 # Load plugin automatically on import
 _plugin_loaded = False
 
@@ -71,6 +118,10 @@ try:
     load_plugin()
     _plugin_loaded = True
 except Exception as e:
+    if is_pjrt_requested():
+        # PJRT is explicit opt-in. Do not silently downgrade to the native-only
+        # runtime when the requested backend cannot be initialized.
+        raise
     logging.warning(f"Failed to load MUSA plugin: {e}")
     logging.warning(
         "MUSA functionality will not be available. "
@@ -83,8 +134,11 @@ __all__ = [
     "gradients",
     "ops",
     "raw_ops",
+    "enable_xla",
+    "disable_xla",
     "load_plugin",
     "get_musa_ops",
+    "get_pjrt_status",
     "is_plugin_loaded",
     "get_musa_devices",
     "MUSA_GRAPH_OPTIMIZER_NAME",

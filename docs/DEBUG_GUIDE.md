@@ -337,7 +337,89 @@ print(f'Event records: {len(records)}, Event waits: {len(waits)}')
 
 ---
 
-## 6. 故障排查清单
+## 6. OpenXLA PJRT 诊断
+
+### 6.1 启用 PJRT
+
+PJRT 默认关闭，必须显式开启。**`LD_LIBRARY_PATH` 必须在 shell 级设置**（`os.environ` 不影响当前进程 `dlopen`）：
+
+```bash
+export LD_LIBRARY_PATH=/path/to/tensorflow/site-packages:$LD_LIBRARY_PATH
+export TENSORFLOW_MUSA_ENABLE_PJRT=1
+export TENSORFLOW_MUSA_PJRT_LIBRARY_PATH=/path/to/libmusa_pjrt_plugin_zy.so
+```
+
+如果 `libmusa_pjrt_plugin_zy.so` 不在标准路径，可通过以下方式指定：
+
+```bash
+export TENSORFLOW_MUSA_PJRT_LIBRARY_PATH=/path/to/libmusa_pjrt_plugin_zy.so
+```
+
+### 6.2 PJRT 关键环境变量
+
+| 变量名 | 说明 | 默认值 | 示例 |
+|--------|------|--------|------|
+| `TENSORFLOW_MUSA_ENABLE_PJRT` | 启用 PJRT 插件（`1/true/yes/on`） | `0` | `export TENSORFLOW_MUSA_ENABLE_PJRT=1` |
+| `TENSORFLOW_MUSA_PJRT_LIBRARY_PATH` | PJRT 动态库路径或所在目录 | 自动搜索 | `export TENSORFLOW_MUSA_PJRT_LIBRARY_PATH=/path/to/plugin` |
+| `MTCC20X_TOOLS_DIR` | MTGPU 编译工具链目录（llvm-link/opt/llc/lld） | 自动发现 `openxla_musa/mtcc20x_tools/` | 通常不需要手动设置 |
+| `MUSA_TFNPD_IS_PLUGGABLE_DEVICE` | NPD 标记为 PluggableDevice | `1`（自动设置） | 通常不需要手动设置 |
+| `MUSA_TFNPD_COMPILATION_DEVICE_NAME` | NPD 编译设备名 | `XLA_GPU_JIT`（自动设置） | 通常不需要手动设置 |
+| `TF_XLA_FLAGS` | XLA 编译选项 | `--tf_xla_use_device_api=true`（自动追加） | 可追加其他 XLA 选项 |
+
+### 6.3 PJRT 状态查询
+
+```python
+import tensorflow_musa
+status = tensorflow_musa.get_pjrt_status()
+print(status)
+# 预期输出: {'requested': True, 'state': 'registered', 'loaded': True, 'registered': True}
+```
+
+### 6.4 PJRT 测试
+
+```bash
+# 默认模式（native MUSA kernel）
+MUSA_VISIBLE_DEVICES=5 python test/test_runner.py
+
+# PJRT 模式（OpenXLA-MUSA）
+LD_LIBRARY_PATH=/path/to/tensorflow/site-packages:$LD_LIBRARY_PATH \
+TENSORFLOW_MUSA_ENABLE_PJRT=1 \
+TENSORFLOW_MUSA_PJRT_LIBRARY_PATH=/path/to/libmusa_pjrt_plugin_zy.so \
+MUSA_VISIBLE_DEVICES=5 \
+python test/pjrt/run_pjrt_tests.py
+```
+
+### 6.5 两种模式切换
+
+| 模式 | 设置 |
+|------|------|
+| 默认（native） | 不设置任何 PJRT 环境变量 |
+| PJRT | `export TENSORFLOW_MUSA_ENABLE_PJRT=1` + `LD_LIBRARY_PATH` |
+| 切回默认 | `unset TENSORFLOW_MUSA_ENABLE_PJRT` |
+
+### 6.6 常见 PJRT 问题排查
+
+**问题 1：`PJRT_Api not found for device type musa`**
+
+根因：`LD_LIBRARY_PATH` 未包含 TensorFlow site-packages 目录，导致 `libtensorflow_framework.so.2` 无法解析。确认 shell 级设置了 `LD_LIBRARY_PATH`。
+
+**问题 2：`Multiple OpKernel registrations match node`**
+
+根因：native kernel 和 PJRT delegating kernel 同时注册在同一设备类型上。PJRT 模式下 native kernel 不会加载，如果出现此错误说明环境变量未正确生效。
+
+**问题 3：`Unable to locate MTGPU tool llvm-link`**
+
+根因：MTGPU 编译工具链未找到。`_pjrt_bootstrap.py` 自动搜索 `openxla_musa/mtcc20x_tools/`，也可通过 `MTCC20X_TOOLS_DIR` 指定。
+
+**问题 4：PJRT API 版本不匹配**
+
+日志中出现 `PJRT API version 0.76` 与 `framework PJRT API version 0.34` 不匹配是正常现象，当前通过 plugin 兼容层处理。
+
+**问题 5：`ALREADY_EXISTS` 崩溃**
+
+根因：PJRT plugin 被重复加载。确保 `load_plugin()` 只调用一次，幂等保护已修复。
+
+## 7. 故障排查清单
 
 ### 6.1 脏数据（NaN）问题
 
