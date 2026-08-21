@@ -13,6 +13,49 @@ model/JD/real_models/platform/dnn__multi-domain-task-simplifyv3__202602262233578
 
 正式输出为 `WeightedSum/add:0`。脚本默认使用确定性 mock input（`seed=20260421`）；真实业务验证应通过 `--input_npz` 提供输入。
 
+## PJRT 安装与加载要求
+
+PJRT 不是只把一个 `.so` 文件复制到 TensorFlow 的 Python 目录就能保证可用。插件必须与以下组件来自同一套构建/运行环境：
+
+- TensorFlow 2.15 的 Python wheel 和 `libtensorflow_framework.so.2`；
+- MUSA SDK/runtime 及其 `libmusa.so.1`、muDNN 等依赖；
+- OpenXLA-MUSA PJRT 插件 `libmusa_pjrt_plugin_zy.so`；
+- TF2.15 registry bridge `libmusa_tf215_registry_bridge.so`（如果该构建提供）。
+
+普通用户路径是先安装 `tensorflow_musa` 与 `openxla_musa_pjrt` 两个 wheel，再只设置：
+
+```bash
+export TENSORFLOW_MUSA_ENABLE_PJRT=1
+```
+
+此时 `tensorflow_musa` 负责调用 provider，provider 从自身 wheel 的 manifest 自动发现
+plugin、bridge 和工具链；不需要手工复制或传入 `.so` 路径。
+
+本目录的 standalone 脚本还保留了开发期的路径覆盖参数，用于调试未安装的构建产物。如果使用
+自定义开发位置，才显式指定：
+
+```bash
+export TF215_SITE_PACKAGES=/path/to/tf2.15/lib/python3.10/site-packages
+export MUSA_PJRT_PLUGIN_PATH=/path/to/libmusa_pjrt_plugin_zy.so
+export MUSA_TF215_BRIDGE_PATH=/path/to/libmusa_tf215_registry_bridge.so
+export LD_LIBRARY_PATH=/usr/local/musa/lib:$TF215_SITE_PACKAGES/tensorflow:$(dirname "$MUSA_PJRT_PLUGIN_PATH"):$(dirname "$MUSA_TF215_BRIDGE_PATH"):$LD_LIBRARY_PATH
+```
+
+先用短命令验证加载和单次编译，再运行长时间性能测试：
+
+```bash
+python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
+  --device musa --runtime_mode pjrt --device_index 3 \
+  --warmup_runs_per_case 0 --runs_per_case 1
+```
+
+`accuracy` 使用 host-feed 做 CPU golden 对比；`perf` 的 `input_mode=device`、`--no-fetch_output` 是性能路径，不能替代 accuracy。
+
+已验证的普通 wheel 路径是：两个 wheel 安装到同一 Python 环境后，只设置
+`TENSORFLOW_MUSA_ENABLE_PJRT=1`，`tensorflow_musa` 会得到 `phase=ready`，并自动加载
+provider wheel 内的 plugin/bridge。下面的 standalone 模型命令用于仓库级功能/性能回归；命令中
+不需要用户手工填写 `.so` 路径。环境覆盖变量只在调试未安装的构建产物时使用。
+
 ## 目录内运行
 
 建议直接在 [`tensorflow_musa_extension`](../../README.md:1) 仓库根目录运行：
@@ -28,25 +71,76 @@ cd /data/eureka/tensorflow_musa_extension
 [`tf215_graph_accuracy.py`](tf215_graph_accuracy.py:1) 使用相同输入分别执行 CPU no-XLA 和目标 backend，检查 shape、dtype、finite、重复执行稳定性、数值误差和 strict placement。
 功能测试保持 host-feed 语义，适合做 CPU golden 与目标 backend 的端到端正确性验证；device-resident input 只用于性能测试，不用于替代 CPU golden。
 
-### OpenXLA-MUSA PJRT
-
-```bash
-python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
-  --device musa \
-  --runtime_mode pjrt \
-  --device_index 3
-```
-
 ### 原生 TF-MUSA
 
 ```bash
 python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
   --device musa \
   --runtime_mode native \
-  --device_index 3
+  --device_index 3 \
+  --graph_path model/JD/real_models/platform/dnn__multi-domain-task-simplifyv3__2026022622335783__tf_models__frozen_grpah.pb \
+  --output_tensor WeightedSum/add:0 \
+  --batches 1
+```
+
+```bash
+python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
+  --device musa \
+  --runtime_mode native \
+  --device_index 3 \
+  --graph_path model/JD/real_models/platform/sim_graph_2_frozen_graph.pb \
+  --output_tensor Reshape_2:0 \
+  --batches 1 \
+  --int_upper_bound 50
+```
+
+```bash
+python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
+  --device musa \
+  --runtime_mode native \
+  --device_index 3 \
+  --graph_path model/JD/real_models/platform/twin_graph_2_frozen_graph.pb \
+  --output_tensor WeightedSum/add:0 \
+  --batches 1
+```
+
+### OpenXLA-MUSA PJRT
+
+```bash
+python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
+  --device musa \
+  --runtime_mode pjrt \
+  --device_index 3 \
+  --graph_path model/JD/real_models/platform/dnn__multi-domain-task-simplifyv3__2026022622335783__tf_models__frozen_grpah.pb \
+  --output_tensor WeightedSum/add:0 \
+  --batches 1
+```
+
+```bash
+python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
+  --device musa \
+  --runtime_mode pjrt \
+  --device_index 3 \
+  --graph_path model/JD/real_models/platform/sim_graph_2_frozen_graph.pb \
+  --output_tensor Reshape_2:0 \
+  --batches 1
+```
+
+```bash
+python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
+  --device musa \
+  --runtime_mode pjrt \
+  --device_index 3 \
+  --graph_path model/JD/real_models/platform/twin_graph_2_frozen_graph.pb \
+  --output_tensor WeightedSum/add:0 \
+  --batches 1
 ```
 
 默认测试 batch `1,2,8,32,100`，默认容差为 `atol=1e-4, rtol=1e-3`。mock input 下的跨 backend 对齐不能替代真实业务 input/output golden。
+
+当前 native 算子覆盖限制：SIM 图中的 `UnsortedSegmentMax` 和 Twin 图中的 `OneHot` 尚无
+MUSA kernel，因此 strict placement 下 native SIM/Twin accuracy/perf 会在建图或初始化阶段失败。
+这不影响 PJRT 路径；三个模型的 PJRT accuracy/perf 使用 OpenXLA-MUSA 后端验证。
 
 ## 性能测试
 
@@ -55,6 +149,59 @@ python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
 ### Device-resident 纯推理
 
 MUSA/CUDA 默认使用 `input_mode=device`、不取回输出；MUSA 关闭逐 cluster host wait。每轮末尾分别调用一次 `musaDeviceSynchronize()`/`cudaDeviceSynchronize()`。初始化 H2D 不在正式计时范围内，计时边界为 device input ready 到最后一个模型 kernel 完成。
+
+### 原生 TF-MUSA
+
+```bash
+taskset -c 0-31,64-95 \
+python3 test/multi_domain_dnn/tf215_graph_perf.py \
+  --device musa \
+  --runtime_mode native \
+  --device_index 3 \
+  --input_mode device \
+  --graph_path model/JD/real_models/platform/dnn__multi-domain-task-simplifyv3__2026022622335783__tf_models__frozen_grpah.pb \
+  --output_tensor WeightedSum/add:0 \
+  --batchsize 100 \
+  --warmup_runs 20 \
+  --num_runs 200 \
+  --no-fetch_output \
+  --no-wait_execute_done \
+  --json_output tmp/e2e_perf_standalone_native/dnn_perf_report.json
+```
+
+```bash
+taskset -c 0-31,64-95 \
+python3 test/multi_domain_dnn/tf215_graph_perf.py \
+  --device musa \
+  --runtime_mode native \
+  --device_index 0 \
+  --input_mode device \
+  --graph_path model/JD/real_models/platform/sim_graph_2_frozen_graph.pb \
+  --output_tensor Reshape_2:0 \
+  --batchsize 100 \
+  --warmup_runs 20 \
+  --num_runs 200 \
+  --no-fetch_output \
+  --no-wait_execute_done \
+  --json_output tmp/e2e_perf_standalone_native/sim_perf_report.json
+```
+
+```bash
+taskset -c 0-31,64-95 \
+python3 test/multi_domain_dnn/tf215_graph_perf.py \
+  --device musa \
+  --runtime_mode native \
+  --device_index 3 \
+  --input_mode device \
+  --graph_path model/JD/real_models/platform/twin_graph_2_frozen_graph.pb \
+  --output_tensor WeightedSum/add:0 \
+  --batchsize 100 \
+  --warmup_runs 20 \
+  --num_runs 200 \
+  --no-fetch_output \
+  --no-wait_execute_done \
+  --json_output tmp/e2e_perf_standalone_native/twin_perf_report.json
+```
 
 ### OpenXLA-MUSA PJRT
 
@@ -66,27 +213,50 @@ python3 test/multi_domain_dnn/tf215_graph_perf.py \
   --device_index 3 \
   --xla \
   --input_mode device \
+  --graph_path model/JD/real_models/platform/dnn__multi-domain-task-simplifyv3__2026022622335783__tf_models__frozen_grpah.pb \
+  --output_tensor WeightedSum/add:0 \
   --batchsize 100 \
   --warmup_runs 20 \
   --num_runs 200 \
   --no-fetch_output \
-  --no-wait_execute_done
+  --no-wait_execute_done \
+  --json_output tmp/e2e_perf_standalone_pjrt/dnn_perf_report.json
 ```
-
-### 原生 TF-MUSA
 
 ```bash
 taskset -c 0-31,64-95 \
 python3 test/multi_domain_dnn/tf215_graph_perf.py \
   --device musa \
-  --runtime_mode native \
+  --runtime_mode pjrt \
   --device_index 3 \
+  --xla \
   --input_mode device \
+  --graph_path model/JD/real_models/platform/sim_graph_2_frozen_graph.pb \
+  --output_tensor Reshape_2:0 \
   --batchsize 100 \
   --warmup_runs 20 \
   --num_runs 200 \
   --no-fetch_output \
-  --no-wait_execute_done
+  --no-wait_execute_done \
+  --json_output tmp/e2e_perf_standalone_pjrt/sim_perf_report.json
+```
+
+```bash
+taskset -c 0-31,64-95 \
+python3 test/multi_domain_dnn/tf215_graph_perf.py \
+  --device musa \
+  --runtime_mode pjrt \
+  --device_index 3 \
+  --xla \
+  --input_mode device \
+  --graph_path model/JD/real_models/platform/twin_graph_2_frozen_graph.pb \
+  --output_tensor WeightedSum/add:0 \
+  --batchsize 100 \
+  --warmup_runs 20 \
+  --num_runs 200 \
+  --no-fetch_output \
+  --no-wait_execute_done \
+  --json_output tmp/e2e_perf_standalone_pjrt/twin_perf_report.json
 ```
 
 device input 通过一次初始化的 `tf.Variable(use_resource=True)` 驻留在 device 上，再用 `read_value()` 替换 GraphDef Placeholder；初始化 H2D 位于计时外，正式 runs 使用空 `feed_dict`，不再逐轮解析 session handle。每轮仍会读取 resource variables，但输入连接关系和 device buffer 在建图阶段已经固定；该方式不会把输入变成编译期 `Const`。

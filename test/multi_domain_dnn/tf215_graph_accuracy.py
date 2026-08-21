@@ -327,7 +327,12 @@ def load_graph_and_placeholders(tf, graph_pb2, graph_path: Path):
     return graph_def, placeholders
 
 
-def create_mock_data(placeholders: dict, batch_size: int, seed: int) -> dict[str, np.ndarray]:
+def create_mock_data(
+    placeholders: dict,
+    batch_size: int,
+    seed: int,
+    int_upper_bound: int | None = None,
+) -> dict[str, np.ndarray]:
     rng = np.random.default_rng(seed)
     feed_dict = {}
     for name, info in placeholders.items():
@@ -335,12 +340,15 @@ def create_mock_data(placeholders: dict, batch_size: int, seed: int) -> dict[str
         dtype = info["dtype"]
         if dtype == np.float32:
             value = rng.normal(0.0, 1.0, size=shape).astype(np.float32)
-        elif dtype == np.int32:
-            high = max(int(info.get("int_upper_bound") or 100), 1)
-            value = rng.integers(0, high, size=shape, dtype=np.int32)
-        elif dtype == np.int64:
-            high = max(int(info.get("int_upper_bound") or 100), 1)
-            value = rng.integers(0, high, size=shape, dtype=np.int64)
+        elif dtype in {np.int32, np.int64}:
+            inferred_upper_bound = int(info.get("int_upper_bound") or 100)
+            high = (
+                min(inferred_upper_bound, int_upper_bound)
+                if int_upper_bound is not None
+                else inferred_upper_bound
+            )
+            high = max(high, 1)
+            value = rng.integers(0, high, size=shape, dtype=dtype)
         elif dtype == np.bool_:
             value = rng.choice(np.array([False, True], dtype=np.bool_), size=shape)
         elif dtype == np.str_:
@@ -529,6 +537,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output_tensor", default=DEFAULT_OUTPUT_TENSOR)
     parser.add_argument("--batches", type=parse_int_list, default=parse_int_list("1,2,8,32,100"))
     parser.add_argument("--seeds", type=parse_int_list, default=parse_int_list("20260421"))
+    parser.add_argument(
+        "--int_upper_bound",
+        type=int,
+        default=None,
+        help="整型 mock 输入的全局上界；设置后对每个 placeholder 取更小的安全值",
+    )
     parser.add_argument("--device_index", type=int, default=default_device_index())
     parser.add_argument("--warmup_runs_per_case", type=int, default=1)
     parser.add_argument("--runs_per_case", type=int, default=2)
@@ -582,7 +596,12 @@ def generate_manifest(args: argparse.Namespace, output_dir: Path) -> Path:
     for batch in args.batches:
         for seed in args.seeds:
             case_name = f"batch{batch}_seed{seed}"
-            feed_dict = create_mock_data(placeholders, batch, seed)
+            feed_dict = create_mock_data(
+                placeholders,
+                batch,
+                seed,
+                args.int_upper_bound,
+            )
             input_path = input_dir / f"{case_name}.npz"
             np.savez(
                 input_path,

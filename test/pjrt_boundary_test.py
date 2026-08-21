@@ -16,10 +16,10 @@
 """PJRT boundary regression tests: native kernel safety, symbol failures, and
 dual-path integrity.
 
-These tests must be runnable both with and without PJRT enabled.  When PJRT is
-disabled they verify the native PluggableDevice path is undisturbed.  When PJRT
-is enabled they verify the registration satisfies the expected contract without
-breaking pre-existing native kernels.
+These tests must be runnable both with and without PJRT enabled. When PJRT is
+disabled they verify the native PluggableDevice path is undisturbed. When PJRT
+is enabled they verify the isolated PJRT registration contract. Native and
+PJRT plugin binaries must never be loaded into the same process.
 """
 
 import inspect
@@ -40,7 +40,7 @@ import tensorflow_musa._loader as musa_loader
 # ---------------------------------------------------------------------------
 
 def _pjrt_requested():
-    return tensorflow_musa.get_pjrt_status().get("requested", False)
+    return tensorflow_musa.get_pjrt_status().get("mode") == "pjrt"
 
 
 def _assert_source_package():
@@ -56,14 +56,11 @@ def _assert_source_package():
 # ---------------------------------------------------------------------------
 
 class NativeKernelRegressionTest(tf.test.TestCase):
-    """Simple native MUSA kernels must still work when PJRT is off.
+    """Standard MUSA execution regression for the active runtime mode.
 
-    When PJRT is enabled, both libmusa_plugin.so (native SE) and
-    libmusa_pjrt_plugin_zy.so (PJRT/NPD) register kernels on
-    device_type "MUSA", causing ``Multiple OpKernel registrations``
-    errors.  This is a C++-level coexistence limitation; the tests
-    document the current state rather than asserting a final
-    resolution.
+    PJRT mode must surface a duplicate-registration failure directly rather
+    than hiding it with a skip. The production loader prevents the conflict by
+    never loading ``libmusa_plugin.so`` in PJRT mode.
     """
 
     @classmethod
@@ -72,21 +69,7 @@ class NativeKernelRegressionTest(tf.test.TestCase):
         if not tf.config.list_physical_devices("MUSA"):
             raise unittest.SkipTest("No MUSA devices found")
 
-    def _skip_if_duplicate_kernel(self, fn):
-        try:
-            fn()
-        except tf.errors.InvalidArgumentError as e:
-            if "Multiple OpKernel registrations match" in str(e):
-                self.skipTest(
-                    "C++-level native/PJRT kernel conflict (known issue): "
-                    + str(e).split("\n")[0]
-                )
-            raise
-
     def test_basic_arithmetic_on_musa(self):
-        self._skip_if_duplicate_kernel(lambda: self._run_arithmetic())
-
-    def _run_arithmetic(self):
         with tf.device("/device:MUSA:0"):
             a = tf.constant([1.0, 2.0, 3.0], dtype=tf.float32)
             b = tf.constant([4.0, 5.0, 6.0], dtype=tf.float32)
@@ -94,9 +77,6 @@ class NativeKernelRegressionTest(tf.test.TestCase):
         np.testing.assert_allclose(c.numpy(), [5.0, 7.0, 9.0], rtol=1e-5)
 
     def test_matmul_on_musa(self):
-        self._skip_if_duplicate_kernel(lambda: self._run_matmul())
-
-    def _run_matmul(self):
         with tf.device("/device:MUSA:0"):
             a = tf.constant([[1.0, 2.0], [3.0, 4.0]], dtype=tf.float32)
             b = tf.constant([[5.0, 6.0], [7.0, 8.0]], dtype=tf.float32)
@@ -106,9 +86,6 @@ class NativeKernelRegressionTest(tf.test.TestCase):
         )
 
     def test_relu_on_musa(self):
-        self._skip_if_duplicate_kernel(lambda: self._run_relu())
-
-    def _run_relu(self):
         with tf.device("/device:MUSA:0"):
             x = tf.constant([-2.0, -1.0, 0.0, 1.0, 2.0], dtype=tf.float32)
             y = tf.nn.relu(x)
@@ -129,10 +106,12 @@ class NativeKernelRegressionTest(tf.test.TestCase):
 class PjrtRegistrationContractTest(tf.test.TestCase):
     def test_status_is_registered(self):
         status = tensorflow_musa.get_pjrt_status()
-        self.assertEqual(status["state"], "registered")
-        self.assertTrue(status["loaded"])
-        self.assertTrue(status["registered"])
-        self.assertIsNotNone(status["library_path"])
+        self.assertEqual(status["mode"], "pjrt")
+        self.assertEqual(status["phase"], "ready")
+        self.assertIsNotNone(status["provider"])
+        self.assertIsNotNone(status["plugin_path"])
+        self.assertIsNotNone(status["bridge_path"])
+        self.assertIsNone(status["error"])
 
     def test_musa_devices_visible(self):
         devices = tf.config.list_physical_devices("MUSA")
@@ -144,52 +123,35 @@ class PjrtRegistrationContractTest(tf.test.TestCase):
         This test documents the gap without asserting a specific version.
         """
         status = tensorflow_musa.get_pjrt_status()
-        self.assertIn("library_path", status)
+        self.assertIn("plugin_path", status)
 
 
 # ---------------------------------------------------------------------------
 # Dual-path smoke: both native and XLA kernels must coexist
 # ---------------------------------------------------------------------------
 
-class DualPathSmokeTest(tf.test.TestCase):
+class PjrtIsolatedSmokeTest(tf.test.TestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
         if not tf.config.list_physical_devices("MUSA"):
             raise unittest.SkipTest("No MUSA devices found")
 
-    def _skip_if_duplicate_kernel(self, fn):
-        try:
-            fn()
-        except tf.errors.InvalidArgumentError as e:
-            if "Multiple OpKernel registrations match" in str(e):
-                self.skipTest(
-                    "C++-level native/PJRT kernel conflict (known issue): "
-                    + str(e).split("\n")[0]
-                )
-            raise
-
-    def test_native_ops_still_work_after_pjrt_registration(self):
-        self._skip_if_duplicate_kernel(lambda: self._run_native_reduce_sum())
-
-    def _run_native_reduce_sum(self):
+    def test_standard_eager_ops_work_after_pjrt_registration(self):
+        if not _pjrt_requested():
+            self.skipTest("PJRT not enabled")
         with tf.device("/device:MUSA:0"):
             x = tf.constant([1.0, 2.0, 3.0], dtype=tf.float32)
             y = tf.math.reduce_sum(x)
         np.testing.assert_allclose(y.numpy(), 6.0, rtol=1e-5)
 
-    def test_pjrt_jit_and_native_eager_coexist(self):
+    def test_pjrt_jit_and_eager_ops_work_in_one_runtime(self):
         if not _pjrt_requested():
             self.skipTest("PJRT not enabled")
-        self._skip_if_duplicate_kernel(lambda: self._run_native_and_jit())
-
-    def _run_native_and_jit(self):
-        # 1. native eager
         with tf.device("/device:MUSA:0"):
-            native = tf.constant([1.0, 2.0, 3.0], dtype=tf.float32) + 1.0
-        np.testing.assert_allclose(native.numpy(), [2.0, 3.0, 4.0], rtol=1e-5)
+            eager = tf.constant([1.0, 2.0, 3.0], dtype=tf.float32) + 1.0
+        np.testing.assert_allclose(eager.numpy(), [2.0, 3.0, 4.0], rtol=1e-5)
 
-        # 2. XLA jit
         @tf.function(jit_compile=True)
         def add_one(x):
             return x + 1.0
@@ -200,11 +162,11 @@ class DualPathSmokeTest(tf.test.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Missing PJRT library (fail-fast)
+# Missing PJRT provider (fail-fast)
 # ---------------------------------------------------------------------------
 
-class MissingPjrtLibraryTest(tf.test.TestCase):
-    def test_missing_library_is_fail_fast(self):
+class MissingPjrtProviderTest(tf.test.TestCase):
+    def test_missing_provider_is_fail_fast(self):
         script = """
 import os
 os.environ["TENSORFLOW_MUSA_ENABLE_PJRT"] = "1"
@@ -229,8 +191,8 @@ raise SystemExit(1)
             timeout=30,
         )
         out = proc.stdout + proc.stderr
-        self.assertIn("FAIL_FAST:FileNotFoundError", out,
-                      f"Expected fail-fast on missing PJRT library, got: {out}")
+        self.assertIn("FAIL_FAST:ModuleNotFoundError", out,
+                      f"Expected fail-fast on missing PJRT provider, got: {out}")
 
 
 if __name__ == "__main__":

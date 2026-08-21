@@ -119,41 +119,48 @@ def load_plugin():
     if _plugin_path is not None:
         return _plugin_path
 
-    # Resolve the optional PJRT artifact and prepare discovery variables before
-    # importing TensorFlow. The actual PJRT dlopen is deliberately deferred
-    # until after TensorFlow import to avoid protobuf descriptor collisions.
-    pjrt_status = prepare_pjrt_bootstrap()
-    if pjrt_status.requested:
-        logger.info(
-            "MUSA PJRT bootstrap prepared: %s", pjrt_status.library_path
-        )
+    # PJRT preparation occurs before importing TensorFlow so the provider can
+    # publish TensorFlow's plug-in discovery variables. The provider itself is
+    # loaded only on explicit opt-in; native import remains unchanged.
+    pjrt_requested = prepare_pjrt_bootstrap()
 
     import tensorflow as tf
 
-    plugin_path = _find_plugin_library()
-
-    try:
-        _native_plugin_load_attempted = True
-        if pjrt_status.requested:
-            # PJRT mode: skip native kernel loading to avoid
-            # Multiple OpKernel registrations conflicts.
-            # Both eager and JIT use the PJRT backend.
+    if pjrt_requested:
+        # Never resolve or load libmusa_plugin.so in PJRT mode. Native and PJRT
+        # kernels overlap on the MUSA device type and must not coexist.
+        try:
+            load_pjrt_plugin(tf)
+            pjrt_status = get_pjrt_bootstrap_status()
+            plugin_path = pjrt_status["plugin_path"]
+            if not plugin_path:
+                raise RuntimeError("PJRT provider completed without a plugin path")
             _op_module = None
             _plugin_path = plugin_path
-            load_pjrt_plugin(tf)
-        else:
-            _op_module = tf.load_op_library(plugin_path)
-            if not _use_legacy_loader() and not _device_library_loaded:
-                _load_pluggable_device_library(plugin_path)
-                _device_library_loaded = True
-            _plugin_path = plugin_path
+            logger.info("MUSA PJRT provider ready: %s", plugin_path)
+            return plugin_path
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to bootstrap OpenXLA-MUSA PJRT: {e}\n"
+                "PJRT was explicitly enabled; native MUSA fallback is disabled."
+            ) from e
+
+    # Native default path: preserve the existing TF MUSA loading sequence.
+    plugin_path = _find_plugin_library()
+    try:
+        _native_plugin_load_attempted = True
+        _op_module = tf.load_op_library(plugin_path)
+        if not _use_legacy_loader() and not _device_library_loaded:
+            _load_pluggable_device_library(plugin_path)
+            _device_library_loaded = True
+        _plugin_path = plugin_path
         logger.info(f"MUSA plugin loaded successfully from: {plugin_path}")
         return plugin_path
     except Exception as e:
         raise RuntimeError(
             f"Failed to load MUSA plugin from {plugin_path}: {e}\n"
             f"Please ensure TensorFlow and MUSA SDK are properly installed."
-        )
+        ) from e
 
 
 def get_musa_ops():

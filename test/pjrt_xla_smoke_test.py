@@ -51,8 +51,12 @@ def main():
 
     assert package_file is not None
     assert loader_file is not None
-    assert status["state"] == "registered", status
-    assert status["registered"] is True, status
+    assert status["mode"] == "pjrt", status
+    assert status["phase"] == "ready", status
+    assert status["provider"], status
+    assert status["plugin_path"], status
+    assert status["bridge_path"], status
+    assert status["error"] is None, status
     assert musa_devices, "No MUSA devices were registered"
     assert os.environ.get("MTCC20X_TOOLS_DIR"), "MTCC20X_TOOLS_DIR was not auto-set"
     assert os.environ.get("MUSA_TFNPD_IS_PLUGGABLE_DEVICE") == "1"

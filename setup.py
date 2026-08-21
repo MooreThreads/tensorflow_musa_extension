@@ -33,10 +33,6 @@ LICENSE = "Apache 2.0"
 
 # Build configuration
 PLUGIN_LIBRARY = "libmusa_plugin.so"
-PJRT_LIBRARY = "libmusa_pjrt_plugin_zy.so"
-TF215_REGISTRY_BRIDGE_LIBRARY = "libmusa_tf215_registry_bridge.so"
-MTCC20X_TOOLS_DIRECTORY = "mtcc20x_tools"
-MTCC20X_TOOL_NAMES = ("llvm-link", "opt", "llc", "lld")
 RUNTIME_CONFIG_BINDINGS = "_runtime_config_bindings"
 RUNTIME_CONFIG_BINDINGS_PATTERN = f"{RUNTIME_CONFIG_BINDINGS}*.so"
 BUILD_DIR = "build"
@@ -101,18 +97,6 @@ def find_runtime_config_bindings(build_dir):
         if filename.startswith(RUNTIME_CONFIG_BINDINGS) and filename.endswith(".so"):
             return os.path.join(build_dir, filename)
     return None
-
-
-def _pjrt_package_data_patterns():
-    """Return optional PJRT bundle artifacts that should be shipped in wheels."""
-    return [
-        PJRT_LIBRARY,
-        TF215_REGISTRY_BRIDGE_LIBRARY,
-        *[
-            os.path.join(MTCC20X_TOOLS_DIRECTORY, tool)
-            for tool in MTCC20X_TOOL_NAMES
-        ],
-    ]
 
 
 class BuildPluginCommand(Command):
@@ -207,7 +191,6 @@ class BdistWheelCommand(bdist_wheel):
             PACKAGE_NAME: [
                 PLUGIN_LIBRARY,
                 RUNTIME_CONFIG_BINDINGS_PATTERN,
-                *_pjrt_package_data_patterns(),
             ]
         }
         self.distribution.py_modules = None
@@ -263,7 +246,6 @@ setup(
         PACKAGE_NAME: [
             PLUGIN_LIBRARY,
             RUNTIME_CONFIG_BINDINGS_PATTERN,
-            *_pjrt_package_data_patterns(),
         ],
     },
     python_requires=">=3.7",

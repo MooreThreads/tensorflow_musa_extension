@@ -341,18 +341,18 @@ print(f'Event records: {len(records)}, Event waits: {len(waits)}')
 
 ### 6.1 启用 PJRT
 
-PJRT 默认关闭，必须显式开启。**`LD_LIBRARY_PATH` 必须在 shell 级设置**（`os.environ` 不影响当前进程 `dlopen`）：
+PJRT 默认关闭，必须显式开启。正常用户路径先安装 `openxla_musa_pjrt` provider wheel；wheel 固定携带 PJRT plugin、TF 2.15 registry bridge 和 mtcc20x tools。**`LD_LIBRARY_PATH` 必须在 shell 级设置**（`os.environ` 不影响当前进程 `dlopen`）：
 
 ```bash
 export LD_LIBRARY_PATH=/path/to/tensorflow/site-packages:$LD_LIBRARY_PATH
 export TENSORFLOW_MUSA_ENABLE_PJRT=1
-export TENSORFLOW_MUSA_PJRT_LIBRARY_PATH=/path/to/libmusa_pjrt_plugin_zy.so
 ```
 
-如果 `libmusa_pjrt_plugin_zy.so` 不在标准路径，可通过以下方式指定：
+开发调试时可显式覆盖 provider 的固定路径；plugin 与 bridge 必须来自同一构建：
 
 ```bash
 export TENSORFLOW_MUSA_PJRT_LIBRARY_PATH=/path/to/libmusa_pjrt_plugin_zy.so
+export TENSORFLOW_MUSA_PJRT_BRIDGE_PATH=/path/to/libmusa_tf215_registry_bridge.so
 ```
 
 ### 6.2 PJRT 关键环境变量
@@ -360,8 +360,9 @@ export TENSORFLOW_MUSA_PJRT_LIBRARY_PATH=/path/to/libmusa_pjrt_plugin_zy.so
 | 变量名 | 说明 | 默认值 | 示例 |
 |--------|------|--------|------|
 | `TENSORFLOW_MUSA_ENABLE_PJRT` | 启用 PJRT 插件（`1/true/yes/on`） | `0` | `export TENSORFLOW_MUSA_ENABLE_PJRT=1` |
-| `TENSORFLOW_MUSA_PJRT_LIBRARY_PATH` | PJRT 动态库路径或所在目录 | 自动搜索 | `export TENSORFLOW_MUSA_PJRT_LIBRARY_PATH=/path/to/plugin` |
-| `MTCC20X_TOOLS_DIR` | MTGPU 编译工具链目录（llvm-link/opt/llc/lld） | 自动发现 `openxla_musa/mtcc20x_tools/` | 通常不需要手动设置 |
+| `TENSORFLOW_MUSA_PJRT_LIBRARY_PATH` | 开发调试时覆盖 provider 中的 PJRT plugin 路径或所在目录 | provider wheel 固定路径 | `export TENSORFLOW_MUSA_PJRT_LIBRARY_PATH=/path/to/plugin` |
+| `TENSORFLOW_MUSA_PJRT_BRIDGE_PATH` | 开发调试时覆盖 TF 2.15 registry bridge 路径或所在目录 | provider wheel 固定路径 | 与 plugin 使用同一构建 |
+| `MTCC20X_TOOLS_DIR` | MTGPU 编译工具链目录（llvm-link/opt/llc/lld） | provider wheel 的 `mtcc20x_tools/` | 通常不需要手动设置 |
 | `MUSA_TFNPD_IS_PLUGGABLE_DEVICE` | NPD 标记为 PluggableDevice | `1`（自动设置） | 通常不需要手动设置 |
 | `MUSA_TFNPD_COMPILATION_DEVICE_NAME` | NPD 编译设备名 | `XLA_GPU_JIT`（自动设置） | 通常不需要手动设置 |
 | `TF_XLA_FLAGS` | XLA 编译选项 | `--tf_xla_use_device_api=true`（自动追加） | 可追加其他 XLA 选项 |
@@ -372,7 +373,7 @@ export TENSORFLOW_MUSA_PJRT_LIBRARY_PATH=/path/to/libmusa_pjrt_plugin_zy.so
 import tensorflow_musa
 status = tensorflow_musa.get_pjrt_status()
 print(status)
-# 预期输出: {'requested': True, 'state': 'registered', 'loaded': True, 'registered': True}
+# 预期输出: {'mode': 'pjrt', 'phase': 'ready', 'provider': 'openxla_musa_pjrt', 'plugin_path': ..., 'bridge_path': ..., 'error': None}
 ```
 
 ### 6.4 PJRT 测试
@@ -381,10 +382,9 @@ print(status)
 # 默认模式（native MUSA kernel）
 MUSA_VISIBLE_DEVICES=5 python test/test_runner.py
 
-# PJRT 模式（OpenXLA-MUSA）
+# PJRT 模式（OpenXLA-MUSA；已安装 openxla_musa_pjrt provider wheel）
 LD_LIBRARY_PATH=/path/to/tensorflow/site-packages:$LD_LIBRARY_PATH \
 TENSORFLOW_MUSA_ENABLE_PJRT=1 \
-TENSORFLOW_MUSA_PJRT_LIBRARY_PATH=/path/to/libmusa_pjrt_plugin_zy.so \
 MUSA_VISIBLE_DEVICES=5 \
 python test/pjrt/run_pjrt_tests.py
 ```
@@ -409,7 +409,7 @@ python test/pjrt/run_pjrt_tests.py
 
 **问题 3：`Unable to locate MTGPU tool llvm-link`**
 
-根因：MTGPU 编译工具链未找到。`_pjrt_bootstrap.py` 自动搜索 `openxla_musa/mtcc20x_tools/`，也可通过 `MTCC20X_TOOLS_DIR` 指定。
+根因：provider wheel 中的 MTGPU 编译工具链未找到或不完整。确认 wheel 包含 `mtcc20x_tools/`，也可通过 `MTCC20X_TOOLS_DIR` 显式覆盖。
 
 **问题 4：PJRT API 版本不匹配**
 
