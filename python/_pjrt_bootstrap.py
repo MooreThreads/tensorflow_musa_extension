@@ -24,11 +24,14 @@ from __future__ import annotations
 
 import importlib
 import os
+import sys
 from typing import Dict, MutableMapping, Optional, Tuple
 
 PJRT_ENABLE_ENV = "TENSORFLOW_MUSA_ENABLE_PJRT"
 PJRT_LIBRARY_ENV = "TENSORFLOW_MUSA_PJRT_LIBRARY_PATH"
 PJRT_PROVIDER_MODULE_ENV = "TENSORFLOW_MUSA_PJRT_PROVIDER_MODULE"
+PJRT_ENABLE_ARG = "--xla"
+PJRT_DISABLE_ARG = "--no-xla"
 _DEFAULT_PROVIDER_MODULES = ("openxla_musa_pjrt",)
 
 _TRUE_VALUES = frozenset(("1", "true", "yes", "on"))
@@ -60,8 +63,39 @@ def _new_status(
 _status = _new_status()
 
 
-def is_pjrt_requested(environ=None) -> bool:
-    """Return whether PJRT was explicitly requested for this process."""
+def _cli_pjrt_request(argv=None) -> Optional[bool]:
+    """Return the command-line PJRT choice, or ``None`` when unspecified.
+
+    TensorFlow MUSA is imported by user programs before their own argument
+    parser usually runs, so the adapter must inspect the process arguments at
+    import/bootstrap time. Only the exact public switches are recognized;
+    options such as ``--xla_jit_scope`` are intentionally unrelated.
+    """
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if "--" in arguments:
+        arguments = arguments[:arguments.index("--")]
+    enabled = PJRT_ENABLE_ARG in arguments
+    disabled = PJRT_DISABLE_ARG in arguments
+    if enabled and disabled:
+        raise ValueError(
+            f"{PJRT_ENABLE_ARG} and {PJRT_DISABLE_ARG} cannot be used together"
+        )
+    if enabled:
+        return True
+    if disabled:
+        return False
+    return None
+
+
+def is_pjrt_requested(environ=None, argv=None) -> bool:
+    """Return whether PJRT was explicitly requested for this process.
+
+    A command-line choice takes precedence over the legacy environment switch.
+    The environment variable remains supported for wrappers and debugging.
+    """
+    cli_request = _cli_pjrt_request(argv)
+    if cli_request is not None:
+        return cli_request
     env = os.environ if environ is None else environ
     raw = env.get(PJRT_ENABLE_ENV, "0").strip().lower()
     if raw in _TRUE_VALUES:
@@ -70,7 +104,8 @@ def is_pjrt_requested(environ=None) -> bool:
         return False
     raise ValueError(
         f"Invalid {PJRT_ENABLE_ENV}={raw!r}; expected one of "
-        "0/1, false/true, no/yes, or off/on."
+        "0/1, false/true, no/yes, or off/on; or use "
+        f"{PJRT_ENABLE_ARG}/{PJRT_DISABLE_ARG}."
     )
 
 

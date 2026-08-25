@@ -17,6 +17,7 @@
 
 import importlib.util
 import os
+import sys
 import unittest
 from unittest import mock
 
@@ -85,6 +86,36 @@ class PjrtBootstrapTest(unittest.TestCase):
         self.assertEqual(status["mode"], "pjrt")
         self.assertEqual(status["phase"], "failed")
         self.assertIn(_pjrt.PJRT_ENABLE_ENV, status["error"])
+
+    def test_cli_xla_enables_pjrt_without_environment_variable(self):
+        env = {}
+        provider = _FakeProvider()
+        with mock.patch.object(sys, "argv", ["program.py", "--xla"]):
+            with mock.patch.object(
+                _pjrt.importlib, "import_module", return_value=provider
+            ):
+                self.assertTrue(_pjrt.prepare_pjrt_bootstrap(env))
+
+        self.assertEqual(provider.prepare_calls, 1)
+        self.assertEqual(env["PROVIDER_PREPARED"], "1")
+        self.assertEqual(_pjrt.get_pjrt_bootstrap_status()["mode"], "pjrt")
+
+    def test_cli_no_xla_overrides_legacy_environment_switch(self):
+        env = {_pjrt.PJRT_ENABLE_ENV: "1"}
+        with mock.patch.object(sys, "argv", ["program.py", "--no-xla"]):
+            with mock.patch.object(_pjrt.importlib, "import_module") as importer:
+                self.assertFalse(_pjrt.prepare_pjrt_bootstrap(env))
+        importer.assert_not_called()
+        self.assertEqual(_pjrt.get_pjrt_bootstrap_status()["mode"], "native")
+
+    def test_conflicting_cli_switches_fail_fast(self):
+        env = {}
+        with mock.patch.object(
+            sys, "argv", ["program.py", "--xla", "--no-xla"]
+        ):
+            with self.assertRaisesRegex(ValueError, "cannot be used together"):
+                _pjrt.prepare_pjrt_bootstrap(env)
+        self.assertEqual(_pjrt.get_pjrt_bootstrap_status()["phase"], "failed")
 
     def test_requested_mode_delegates_all_runtime_work_to_provider(self):
         provider = _FakeProvider()

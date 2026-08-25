@@ -341,11 +341,16 @@ print(f'Event records: {len(records)}, Event waits: {len(waits)}')
 
 ### 6.1 启用 PJRT
 
-PJRT 默认关闭，必须显式开启。正常用户路径先安装 `openxla_musa_pjrt` provider wheel；wheel 固定携带 PJRT plugin、TF 2.15 registry bridge 和 mtcc20x tools。**`LD_LIBRARY_PATH` 必须在 shell 级设置**（`os.environ` 不影响当前进程 `dlopen`）：
+PJRT 默认关闭，必须显式开启。正常用户路径先安装 `openxla_musa_pjrt` provider wheel；wheel 固定携带 PJRT plugin、TF 2.15 registry bridge 和 mtcc20x tools。运行 TensorFlow 程序时直接加入 `--xla`：
 
 ```bash
-export LD_LIBRARY_PATH=/path/to/tensorflow/site-packages:$LD_LIBRARY_PATH
-export TENSORFLOW_MUSA_ENABLE_PJRT=1
+python your_tensorflow_program.py --xla
+```
+
+兼容旧启动器时仍可使用环境变量：
+
+```bash
+TENSORFLOW_MUSA_ENABLE_PJRT=1 python your_tensorflow_program.py
 ```
 
 开发调试时可显式覆盖 provider 的固定路径；plugin 与 bridge 必须来自同一构建：
@@ -355,11 +360,13 @@ export TENSORFLOW_MUSA_PJRT_LIBRARY_PATH=/path/to/libmusa_pjrt_plugin_zy.so
 export TENSORFLOW_MUSA_PJRT_BRIDGE_PATH=/path/to/libmusa_tf215_registry_bridge.so
 ```
 
-### 6.2 PJRT 关键环境变量
+### 6.2 PJRT 开关与环境变量
 
 | 变量名 | 说明 | 默认值 | 示例 |
 |--------|------|--------|------|
-| `TENSORFLOW_MUSA_ENABLE_PJRT` | 启用 PJRT 插件（`1/true/yes/on`） | `0` | `export TENSORFLOW_MUSA_ENABLE_PJRT=1` |
+| `--xla` | 启用 PJRT 插件，普通用户主入口 | 不启用 | `python program.py --xla` |
+| `--no-xla` | 显式使用 native，并覆盖旧 PJRT 环境变量 | 不启用 | `python program.py --no-xla` |
+| `TENSORFLOW_MUSA_ENABLE_PJRT` | 兼容旧启动器的 PJRT 开关（`1/true/yes/on`） | `0` | `export TENSORFLOW_MUSA_ENABLE_PJRT=1` |
 | `TENSORFLOW_MUSA_PJRT_LIBRARY_PATH` | 开发调试时覆盖 provider 中的 PJRT plugin 路径或所在目录 | provider wheel 固定路径 | `export TENSORFLOW_MUSA_PJRT_LIBRARY_PATH=/path/to/plugin` |
 | `TENSORFLOW_MUSA_PJRT_BRIDGE_PATH` | 开发调试时覆盖 TF 2.15 registry bridge 路径或所在目录 | provider wheel 固定路径 | 与 plugin 使用同一构建 |
 | `MTCC20X_TOOLS_DIR` | MTGPU 编译工具链目录（llvm-link/opt/llc/lld） | provider wheel 的 `mtcc20x_tools/` | 通常不需要手动设置 |
@@ -383,19 +390,16 @@ print(status)
 MUSA_VISIBLE_DEVICES=5 python test/test_runner.py
 
 # PJRT 模式（OpenXLA-MUSA；已安装 openxla_musa_pjrt provider wheel）
-LD_LIBRARY_PATH=/path/to/tensorflow/site-packages:$LD_LIBRARY_PATH \
-TENSORFLOW_MUSA_ENABLE_PJRT=1 \
-MUSA_VISIBLE_DEVICES=5 \
-python test/pjrt/run_pjrt_tests.py
+MUSA_VISIBLE_DEVICES=5 python test/pjrt/run_pjrt_tests.py --xla
 ```
 
 ### 6.5 两种模式切换
 
 | 模式 | 设置 |
 |------|------|
-| 默认（native） | 不设置任何 PJRT 环境变量 |
-| PJRT | `export TENSORFLOW_MUSA_ENABLE_PJRT=1` + `LD_LIBRARY_PATH` |
-| 切回默认 | `unset TENSORFLOW_MUSA_ENABLE_PJRT` |
+| 默认（native） | 不加 `--xla` |
+| PJRT | `python program.py --xla` |
+| 切回默认 | 使用不带 `--xla` 的新进程 |
 
 ### 6.6 常见 PJRT 问题排查
 

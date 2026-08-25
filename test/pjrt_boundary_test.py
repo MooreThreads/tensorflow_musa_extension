@@ -98,11 +98,7 @@ class NativeKernelRegressionTest(tf.test.TestCase):
 # PJRT registration contract (only meaningful when PJRT is enabled)
 # ---------------------------------------------------------------------------
 
-@unittest.skipUnless(
-    os.environ.get("TENSORFLOW_MUSA_ENABLE_PJRT", "0").strip().lower()
-    in {"1", "true", "yes", "on"},
-    "PJRT not enabled",
-)
+@unittest.skipUnless(_pjrt_requested(), "PJRT not enabled")
 class PjrtRegistrationContractTest(tf.test.TestCase):
     def test_status_is_registered(self):
         status = tensorflow_musa.get_pjrt_status()

@@ -11,10 +11,10 @@ TensorFlow MUSA Extension 是面向摩尔线程（Moore Threads）MUSA GPU 的 T
 
 | 模式 | 启用方式 | 运行后端 |
 |---|---|---|
-| native（默认） | 不设置 PJRT 变量 | TensorFlow MUSA native kernel |
-| PJRT（可选） | `TENSORFLOW_MUSA_ENABLE_PJRT=1` | OpenXLA-MUSA PJRT |
+| native（默认） | 不加 `--xla` | TensorFlow MUSA native kernel |
+| PJRT（可选） | `--xla` | OpenXLA-MUSA PJRT |
 
-PJRT 是显式 opt-in：不设置开关时，`tensorflow_musa` 不会导入或加载 PJRT provider，原有 native 使用方式保持不变。
+PJRT 是显式 opt-in：不加 `--xla` 时，`tensorflow_musa` 不会导入或加载 PJRT provider，原有 native 使用方式保持不变。
 
 ## 环境要求
 
@@ -55,15 +55,16 @@ python -m pip install tensorflow_musa-*.whl --no-deps
 python -m pip install openxla_musa_pjrt-*.whl --no-deps
 ```
 
-运行程序时只需设置一个开关：
+运行程序时只需添加一个参数：
 
 ```bash
-TENSORFLOW_MUSA_ENABLE_PJRT=1 python your_tensorflow_program.py
+python your_tensorflow_program.py --xla
 ```
 
 PJRT provider wheel 会自动定位并加载 PJRT plugin、TF registry bridge 和编译工具链。无需复制 `.so` 文件，也无需设置 plugin、bridge 或工具链路径。
 
-`TENSORFLOW_MUSA_ENABLE_PJRT` 只在新进程启动时生效。
+`--xla` 必须在导入 `tensorflow_musa` 的同一进程启动参数中提供。旧版启动器仍可通过 `TENSORFLOW_MUSA_ENABLE_PJRT=1` 兼容启用，但普通用户不需要设置环境变量。
+如需覆盖遗留环境变量并明确使用 native，可传入 `--no-xla`。
 
 ## 快速验证
 
@@ -72,11 +73,12 @@ PJRT provider wheel 会自动定位并加载 PJRT plugin、TF registry bridge �
 python -c 'import tensorflow as tf; import tensorflow_musa; print(tf.config.list_physical_devices("MUSA"))'
 
 # 确认 PJRT 已通过 provider wheel 自动启用
-TENSORFLOW_MUSA_ENABLE_PJRT=1 python -c \
-  'import tensorflow_musa as tm; print(tm.get_pjrt_status())'
+python -c \
+  'import tensorflow_musa as tm; print(tm.get_pjrt_status())' \
+  --xla
 ```
 
-PJRT 检查的预期状态为 `mode: pjrt`、`phase: ready`、`error: None`。不设置开关时，状态应为 `mode: native`、`phase: idle`。
+PJRT 检查的预期状态为 `mode: pjrt`、`phase: ready`、`error: None`。不加 `--xla` 时，状态应为 `mode: native`、`phase: idle`。
 
 ## 测试
 
@@ -87,8 +89,7 @@ PJRT 检查的预期状态为 `mode: pjrt`、`phase: ready`、`error: None`。�
 MUSA_VISIBLE_DEVICES=0 python test/test_runner.py
 
 # PJRT
-MUSA_VISIBLE_DEVICES=0 TENSORFLOW_MUSA_ENABLE_PJRT=1 \
-  python test/pjrt/run_pjrt_tests.py
+MUSA_VISIBLE_DEVICES=0 python test/pjrt/run_pjrt_tests.py --xla
 ```
 
 模型 accuracy/performance 测试见 [test/multi_domain_dnn/README.md](test/multi_domain_dnn/README.md)。

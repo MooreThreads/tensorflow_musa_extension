@@ -4,7 +4,12 @@
 import os, sys, time, unittest
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
-os.environ.setdefault("TENSORFLOW_MUSA_ENABLE_PJRT", "1")
+if (
+    "--xla" not in sys.argv
+    and os.environ.get("TENSORFLOW_MUSA_ENABLE_PJRT", "0").strip().lower()
+    not in {"1", "true", "yes", "on"}
+):
+    raise SystemExit("PJRT tests require --xla (or the legacy PJRT environment switch).")
 
 import tensorflow_musa  # noqa
 import tensorflow as tf

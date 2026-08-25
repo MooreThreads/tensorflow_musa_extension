@@ -75,7 +75,8 @@ __version__ = "1.5.0"
 def enable_xla(enabled=True, library_path=None):
     """Enable or disable OpenXLA-MUSA PJRT mode.
 
-    The normal user-facing contract is a single flag.  When enabled,
+    The normal command-line contract is ``python program.py --xla``. When
+    enabled,
     TensorFlow MUSA expects the OpenXLA-MUSA PJRT wheel/provider to supply
     plugin paths and compatibility metadata internally.  ``library_path`` is
     retained only as a development fallback for manual plugin testing.
