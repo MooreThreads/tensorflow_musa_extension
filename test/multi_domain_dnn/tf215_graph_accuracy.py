@@ -6,24 +6,22 @@
   python3 test/multi_domain_dnn/tf215_graph_accuracy.py
 
 脚本会：
-1. 自动补齐 TensorFlow 2.15 site-packages、MUSA runtime、OpenXLA-MUSA PJRT plugin 相关环境；
+1. 使用当前 Python 环境中的 TensorFlow 2.15 和 MUSA runtime；仅在未安装 TensorFlow 时回退到开发期 site-packages；
 2. 生成确定性 mock inputs；
 3. 在独立 worker 进程中分别运行 CPU no-XLA 与 MUSA XLA；
 4. 对比输出 shape/dtype/finite/allclose，并写出 JSON report。
 
-默认可直接在 tensorflow_musa_extension 仓库根目录运行；如 PJRT 插件或 TF2.15
-site-packages 不在默认位置，可通过环境变量覆盖。
+默认可直接在 tensorflow_musa_extension 仓库根目录运行。普通 wheel 路径不需要 PJRT
+插件路径；开发调试时可用命令行参数覆盖。
 """
 
 from __future__ import annotations
 
 import argparse
-import ctypes
 import hashlib
 import importlib.util
 import json
 import os
-import shlex
 import subprocess
 import sys
 from contextlib import ExitStack
@@ -72,23 +70,6 @@ DEFAULT_TF_SITE_PACKAGES = Path(
         ),
     )
 )
-DEFAULT_MUSA_PLUGIN_PATH = Path(
-    os.environ.get(
-        "TENSORFLOW_MUSA_PJRT_LIBRARY_PATH",
-        os.environ.get(
-            "MUSA_PJRT_PLUGIN_PATH",
-            OPENXLA_MUSA_ROOT / "bazel-bin/pjrt_plugin/libmusa_pjrt_plugin_zy.so",
-        ),
-    )
-)
-DEFAULT_MUSA_BRIDGE_PATH = Path(
-    os.environ.get(
-        "MUSA_TF215_BRIDGE_PATH",
-        OPENXLA_MUSA_ROOT / "bazel-bin/pjrt_plugin/libmusa_tf215_registry_bridge.so",
-    )
-)
-
-
 MUSA_ENV_NAMES = {
     "MUSA_PJRT_ALLOCATION_MODEL",
     "MUSA_PJRT_ALLOW_EVENT_REUSE",
@@ -120,14 +101,11 @@ def ensure_bootstrap_env() -> None:
 
     env = os.environ.copy()
     env[ENV_BOOTSTRAP_MARKER] = "1"
-    selected_device = "musa"
-    for index, value in enumerate(sys.argv[:-1]):
-        if value in {"--device", "--worker"}:
-            selected_device = sys.argv[index + 1]
-    use_bundled_tf = selected_device == "musa" or importlib.util.find_spec("tensorflow") is None
+    # A normal wheel installation has tensorflow==2.15.1 in this interpreter.
+    # Do not shadow it with the OpenXLA checkout merely because the target is MUSA.
+    use_bundled_tf = importlib.util.find_spec("tensorflow") is None
     env[ENV_BUNDLED_TF_MARKER] = "1" if use_bundled_tf else "0"
     env.setdefault("MUSA_HOME", "/usr/local/musa")
-    env.setdefault("MTCC20X_TOOLS_DIR", str(OPENXLA_MUSA_ROOT / "mtcc20x_tools"))
     env.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
     env.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
     env.setdefault("GLOG_minloglevel", "2")
@@ -139,9 +117,6 @@ def ensure_bootstrap_env() -> None:
         [
             Path(env["MUSA_HOME"]) / "lib",
             *([DEFAULT_TF_SITE_PACKAGES / "tensorflow"] if use_bundled_tf else []),
-            DEFAULT_MUSA_PLUGIN_PATH.parent,
-            DEFAULT_MUSA_BRIDGE_PATH.parent,
-            OPENXLA_MUSA_ROOT / "bazel-bin/pjrt_plugin",
             "/usr/local/openmpi/lib",
             "/usr/lib",
             "/usr/lib/x86_64-linux-gnu",
@@ -181,7 +156,7 @@ def default_device_index() -> int:
 
 
 def runtime_mode(args: argparse.Namespace) -> str:
-    return getattr(args, "runtime_mode", "pjrt")
+    return getattr(args, "runtime_mode", "native")
 
 
 def import_tensorflow_musa() -> object:
@@ -193,45 +168,6 @@ def import_tensorflow_musa() -> object:
             "或在包含 tensorflow_musa 的 Python 环境中运行。"
         ) from exc
     return tensorflow_musa
-
-
-def append_env_flag(env_name: str, flag: str) -> None:
-    current = os.environ.get(env_name, "").strip()
-    try:
-        tokens = shlex.split(current) if current else []
-    except ValueError:
-        tokens = current.split()
-    if flag not in tokens:
-        os.environ[env_name] = f"{current} {flag}".strip() if current else flag
-
-
-def append_env_entry(env_name: str, entry: str) -> None:
-    current = os.environ.get(env_name, "").strip()
-    entries = [item.strip() for item in current.split(",") if item.strip()]
-    if entry not in entries:
-        entries.append(entry)
-    os.environ[env_name] = ",".join(entries)
-
-
-def load_dynamic_library(path: Path) -> ctypes.CDLL:
-    mode = getattr(ctypes, "RTLD_GLOBAL", None)
-    return ctypes.CDLL(str(path), mode=mode) if mode is not None else ctypes.CDLL(str(path))
-
-
-def maybe_call_symbol(
-    library: ctypes.CDLL,
-    symbol_name: str,
-    restype=None,
-    argtypes: Optional[list[object]] = None,
-):
-    symbol = getattr(library, symbol_name, None)
-    if symbol is None:
-        return None
-    if argtypes is not None:
-        symbol.argtypes = list(argtypes)
-    if restype is not None:
-        symbol.restype = restype
-    return symbol()
 
 
 def import_tensorflow_v1():
@@ -402,19 +338,16 @@ def session_config(
     return config
 
 
-def load_tensorflow_musa_plugin(tf, plugin_path: Path) -> None:
-    env_plugin_paths = os.environ.get("TF_PLUGGABLE_DEVICE_LIBRARY_PATH", "")
-    if str(plugin_path) in env_plugin_paths:
-        return
-    try:
-        from tensorflow.python.framework import load_library as tf_load_library
-        loader = getattr(tf_load_library, "load_pluggable_device_library", None)
-        if loader is not None:
-            loader(str(plugin_path))
-            return
-    except Exception:
-        pass
-    tf.load_op_library(str(plugin_path))
+def _configure_pjrt_development_overrides(args: argparse.Namespace) -> None:
+    """Apply explicit development-only artifact overrides to the provider."""
+    if args.musa_plugin_path:
+        os.environ["TENSORFLOW_MUSA_PJRT_LIBRARY_PATH"] = str(
+            normalize_path(args.musa_plugin_path)
+        )
+    if args.musa_bridge_path:
+        os.environ["TENSORFLOW_MUSA_PJRT_BRIDGE_PATH"] = str(
+            normalize_path(args.musa_bridge_path)
+        )
 
 
 def prepare_musa_env(args: argparse.Namespace) -> bool:
@@ -423,6 +356,8 @@ def prepare_musa_env(args: argparse.Namespace) -> bool:
         for name in [
             "TENSORFLOW_MUSA_ENABLE_PJRT",
             "TENSORFLOW_MUSA_PJRT_LIBRARY_PATH",
+            "TENSORFLOW_MUSA_PJRT_BRIDGE_PATH",
+            "TENSORFLOW_MUSA_PJRT_PROVIDER_MODULE",
             "TF_PLUGGABLE_DEVICE_LIBRARY_PATH",
             "PJRT_NAMES_AND_LIBRARY_PATHS",
             "NEXT_PLUGGABLE_DEVICE_USE_C_API",
@@ -431,42 +366,23 @@ def prepare_musa_env(args: argparse.Namespace) -> bool:
             "MUSA_PJRT_MAX_INFLIGHT_COMPILES",
             "MUSA_PJRT_MAX_INFLIGHT_TRANSFERS",
             "MUSA_PJRT_MAX_INFLIGHT_EXECUTES",
+            "MTCC20X_TOOLS_DIR",
             "TF_XLA_FLAGS",
         ]:
             os.environ.pop(name, None)
         import_tensorflow_musa()
         return False
 
-    plugin_path = normalize_path(args.musa_plugin_path)
-    bridge_path = normalize_path(args.musa_bridge_path)
-    if not plugin_path.is_file():
-        raise FileNotFoundError(f"MUSA PJRT plugin 不存在: {plugin_path}")
-    os.environ["TENSORFLOW_MUSA_ENABLE_PJRT"] = "1"
-    os.environ["TENSORFLOW_MUSA_PJRT_LIBRARY_PATH"] = str(plugin_path)
-    os.environ.setdefault("NEXT_PLUGGABLE_DEVICE_USE_C_API", "true")
-    os.environ["MUSA_TFNPD_IS_PLUGGABLE_DEVICE"] = "1"
+    _configure_pjrt_development_overrides(args)
     os.environ["MUSA_PJRT_WAIT_EXECUTE_DONE"] = "0"
     os.environ["MUSA_PJRT_MAX_INFLIGHT_COMPILES"] = str(args.musa_pjrt_max_inflight_compiles)
     os.environ["MUSA_PJRT_MAX_INFLIGHT_TRANSFERS"] = str(args.musa_pjrt_max_inflight_transfers)
     os.environ["MUSA_PJRT_MAX_INFLIGHT_EXECUTES"] = str(args.musa_pjrt_max_inflight_executes)
-    append_env_entry("TF_PLUGGABLE_DEVICE_LIBRARY_PATH", str(plugin_path))
-    append_env_entry("PJRT_NAMES_AND_LIBRARY_PATHS", f"MUSA:{plugin_path}")
-    append_env_flag("TF_XLA_FLAGS", "--tf_xla_use_device_api=true")
-    append_env_flag("TF_XLA_FLAGS", "--tf_xla_use_device_api_for_auto_jit=true")
-    append_env_flag("TF_XLA_FLAGS", "--tf_xla_auto_jit=2")
-    append_env_flag("TF_XLA_FLAGS", "--tf_xla_min_cluster_size=1")
-    tf, _ = import_tensorflow_v1()
-    plugin_lib = load_dynamic_library(plugin_path)
-    load_tensorflow_musa_plugin(tf, plugin_path)
-    maybe_call_symbol(plugin_lib, "ForceRegisterMusa")
-    if bridge_path.is_file():
-        bridge_lib = load_dynamic_library(bridge_path)
-        maybe_call_symbol(
-            bridge_lib,
-            "MusaTf215_RegisterRuntimeFactory",
-            restype=ctypes.c_int,
-            argtypes=[],
-        )
+    tensorflow_musa = import_tensorflow_musa()
+    status = tensorflow_musa.get_pjrt_status()
+    if status.get("mode") != "pjrt" or status.get("phase") != "ready":
+        raise RuntimeError(f"OpenXLA-MUSA PJRT bootstrap did not become ready: {status}")
+    print(f"[musa] PJRT_STATUS = {status}")
     return True
 
 
@@ -530,8 +446,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--runtime_mode",
         choices=["native", "pjrt"],
-        default=os.environ.get("TENSORFLOW_MUSA_DNN_RUNTIME", "pjrt"),
-        help="musa 设备执行模式：native 使用 tensorflow_musa 原生 kernel；pjrt 使用 OpenXLA-MUSA PJRT",
+        default=os.environ.get("TENSORFLOW_MUSA_DNN_RUNTIME"),
+        help="兼容参数；优先使用 --xla 表达 PJRT，native 使用原生 kernel",
+    )
+    parser.add_argument(
+        "--xla",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="使用 OpenXLA-MUSA PJRT；不加该参数时默认使用 native",
     )
     parser.add_argument("--graph_path", default=str(DEFAULT_GRAPH_PATH))
     parser.add_argument("--output_tensor", default=DEFAULT_OUTPUT_TENSOR)
@@ -569,14 +491,26 @@ def parse_args() -> argparse.Namespace:
             "tmp/e2e_accuracy_standalone_<native|pjrt>，避免 native/PJRT report 互相覆盖"
         ),
     )
-    parser.add_argument("--musa_plugin_path", default=str(DEFAULT_MUSA_PLUGIN_PATH))
-    parser.add_argument("--musa_bridge_path", default=str(DEFAULT_MUSA_BRIDGE_PATH))
+    parser.add_argument(
+        "--musa_plugin_path",
+        help="开发调试时覆盖 provider wheel 内的 PJRT plugin；正常 wheel 路径无需设置",
+    )
+    parser.add_argument(
+        "--musa_bridge_path",
+        help="开发调试时覆盖 provider wheel 内的 TF registry bridge；正常 wheel 路径无需设置",
+    )
     parser.add_argument("--musa_pjrt_max_inflight_compiles", type=int, default=1)
     parser.add_argument("--musa_pjrt_max_inflight_transfers", type=int, default=1)
     parser.add_argument("--musa_pjrt_max_inflight_executes", type=int, default=1)
     parser.add_argument("--worker", choices=["cpu", "musa", "cuda"], help=argparse.SUPPRESS)
     parser.add_argument("--manifest", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.runtime_mode is None:
+        args.runtime_mode = "pjrt" if args.xla else "native"
+    elif args.xla is not None and (args.runtime_mode == "pjrt") != args.xla:
+        parser.error("--xla/--no-xla 与 --runtime_mode 的模式选择冲突")
+    if args.xla is None:
+        args.xla = args.runtime_mode == "pjrt"
     if args.output_dir is None:
         args.output_dir = str(REPO_ROOT / f"tmp/e2e_accuracy_standalone_{runtime_mode(args)}")
     return args
@@ -741,10 +675,6 @@ def launch_worker(args: argparse.Namespace, manifest_path: Path, worker: str) ->
         str(args.atol),
         "--rtol",
         str(args.rtol),
-        "--musa_plugin_path",
-        str(args.musa_plugin_path),
-        "--musa_bridge_path",
-        str(args.musa_bridge_path),
         "--musa_pjrt_max_inflight_compiles",
         str(args.musa_pjrt_max_inflight_compiles),
         "--musa_pjrt_max_inflight_transfers",
@@ -752,6 +682,11 @@ def launch_worker(args: argparse.Namespace, manifest_path: Path, worker: str) ->
         "--musa_pjrt_max_inflight_executes",
         str(args.musa_pjrt_max_inflight_executes),
     ]
+    command.append("--xla" if args.xla else "--no-xla")
+    if args.musa_plugin_path:
+        command.extend(["--musa_plugin_path", str(args.musa_plugin_path)])
+    if args.musa_bridge_path:
+        command.extend(["--musa_bridge_path", str(args.musa_bridge_path)])
     command.append("--strict_placement" if args.strict_placement else "--no-strict_placement")
     command.append("--xla_jit_scope" if args.xla_jit_scope else "--no-xla_jit_scope")
     command.append("--cuda_disable_tf32" if args.cuda_disable_tf32 else "--no-cuda_disable_tf32")
@@ -823,11 +758,18 @@ def compare_outputs(args: argparse.Namespace, manifest_path: Path) -> bool:
         "device": device_label,
         "atol": args.atol,
         "rtol": args.rtol,
-        "device_plugin_path": str(normalize_path(args.musa_plugin_path)),
+        "device_plugin_path": (
+            str(normalize_path(args.musa_plugin_path))
+            if args.musa_plugin_path
+            else None
+        ),
         "device_plugin_sha256": (
             sha256_file(normalize_path(args.musa_plugin_path))
-            if device_label == "musa"
+            if device_label == "musa" and args.musa_plugin_path
             else None
+        ),
+        "device_plugin_source": (
+            "development override" if args.musa_plugin_path else "provider wheel auto-discovery"
         ),
         "comparisons": comparisons,
     }

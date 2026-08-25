@@ -2,8 +2,10 @@
 
 该目录提供两套运行方式：
 
-- 原生 TensorFlow MUSA：`runtime_mode=native`
-- OpenXLA-MUSA PJRT：`runtime_mode=pjrt`
+- 原生 TensorFlow MUSA：不加 `--xla`
+- OpenXLA-MUSA PJRT：加 `--xla`
+
+`--runtime_mode native|pjrt` 仍保留用于兼容旧脚本；新命令建议只使用 `--xla` 表达 PJRT。
 
 默认模型是 JD multi-domain DNN frozen GraphDef：
 
@@ -22,39 +24,35 @@ PJRT 不是只把一个 `.so` 文件复制到 TensorFlow 的 Python 目录就能
 - OpenXLA-MUSA PJRT 插件 `libmusa_pjrt_plugin_zy.so`；
 - TF2.15 registry bridge `libmusa_tf215_registry_bridge.so`（如果该构建提供）。
 
-普通用户路径是先安装 `tensorflow_musa` 与 `openxla_musa_pjrt` 两个 wheel，再只设置：
-
-```bash
-export TENSORFLOW_MUSA_ENABLE_PJRT=1
-```
+普通用户路径是先安装 `tensorflow_musa` 与 `openxla_musa_pjrt` 两个 wheel，再在运行命令后加入 `--xla`：
 
 此时 `tensorflow_musa` 负责调用 provider，provider 从自身 wheel 的 manifest 自动发现
 plugin、bridge 和工具链；不需要手工复制或传入 `.so` 路径。
 
-本目录的 standalone 脚本还保留了开发期的路径覆盖参数，用于调试未安装的构建产物。如果使用
-自定义开发位置，才显式指定：
+本目录的 standalone 脚本还保留了开发期的路径覆盖参数，用于调试未安装的构建产物。只有这种
+开发场景才显式指定 `.so`：
 
 ```bash
-export TF215_SITE_PACKAGES=/path/to/tf2.15/lib/python3.10/site-packages
-export MUSA_PJRT_PLUGIN_PATH=/path/to/libmusa_pjrt_plugin_zy.so
-export MUSA_TF215_BRIDGE_PATH=/path/to/libmusa_tf215_registry_bridge.so
-export LD_LIBRARY_PATH=/usr/local/musa/lib:$TF215_SITE_PACKAGES/tensorflow:$(dirname "$MUSA_PJRT_PLUGIN_PATH"):$(dirname "$MUSA_TF215_BRIDGE_PATH"):$LD_LIBRARY_PATH
+python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
+  --device musa --xla \
+  --musa_plugin_path /path/to/libmusa_pjrt_plugin_zy.so \
+  --musa_bridge_path /path/to/libmusa_tf215_registry_bridge.so
 ```
 
 先用短命令验证加载和单次编译，再运行长时间性能测试：
 
 ```bash
 python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
-  --device musa --runtime_mode pjrt --device_index 3 \
+  --device musa --xla --device_index 0 \
   --warmup_runs_per_case 0 --runs_per_case 1
 ```
 
 `accuracy` 使用 host-feed 做 CPU golden 对比；`perf` 的 `input_mode=device`、`--no-fetch_output` 是性能路径，不能替代 accuracy。
 
-已验证的普通 wheel 路径是：两个 wheel 安装到同一 Python 环境后，只设置
-`TENSORFLOW_MUSA_ENABLE_PJRT=1`，`tensorflow_musa` 会得到 `phase=ready`，并自动加载
+已验证的普通 wheel 路径是：两个 wheel 安装到同一 Python 环境后，运行命令加入 `--xla`，
+`tensorflow_musa` 会得到 `phase=ready`，并自动加载
 provider wheel 内的 plugin/bridge。下面的 standalone 模型命令用于仓库级功能/性能回归；命令中
-不需要用户手工填写 `.so` 路径。环境覆盖变量只在调试未安装的构建产物时使用。
+不需要用户手工填写 `.so` 路径。路径覆盖参数只在调试未安装的构建产物时使用。
 
 ## 目录内运行
 
@@ -77,7 +75,7 @@ cd /data/eureka/tensorflow_musa_extension
 python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
   --device musa \
   --runtime_mode native \
-  --device_index 3 \
+  --device_index 0 \
   --graph_path model/JD/real_models/platform/dnn__multi-domain-task-simplifyv3__2026022622335783__tf_models__frozen_grpah.pb \
   --output_tensor WeightedSum/add:0 \
   --batches 1
@@ -87,7 +85,7 @@ python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
 python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
   --device musa \
   --runtime_mode native \
-  --device_index 3 \
+  --device_index 0 \
   --graph_path model/JD/real_models/platform/sim_graph_2_frozen_graph.pb \
   --output_tensor Reshape_2:0 \
   --batches 1 \
@@ -98,7 +96,7 @@ python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
 python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
   --device musa \
   --runtime_mode native \
-  --device_index 3 \
+  --device_index 0 \
   --graph_path model/JD/real_models/platform/twin_graph_2_frozen_graph.pb \
   --output_tensor WeightedSum/add:0 \
   --batches 1
@@ -109,8 +107,8 @@ python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
 ```bash
 python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
   --device musa \
-  --runtime_mode pjrt \
-  --device_index 3 \
+  --xla \
+  --device_index 0 \
   --graph_path model/JD/real_models/platform/dnn__multi-domain-task-simplifyv3__2026022622335783__tf_models__frozen_grpah.pb \
   --output_tensor WeightedSum/add:0 \
   --batches 1
@@ -119,18 +117,19 @@ python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
 ```bash
 python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
   --device musa \
-  --runtime_mode pjrt \
-  --device_index 3 \
+  --xla \
+  --device_index 0 \
   --graph_path model/JD/real_models/platform/sim_graph_2_frozen_graph.pb \
   --output_tensor Reshape_2:0 \
-  --batches 1
+  --batches 1 \
+  --int_upper_bound 50
 ```
 
 ```bash
 python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
   --device musa \
-  --runtime_mode pjrt \
-  --device_index 3 \
+  --xla \
+  --device_index 0 \
   --graph_path model/JD/real_models/platform/twin_graph_2_frozen_graph.pb \
   --output_tensor WeightedSum/add:0 \
   --batches 1
@@ -157,7 +156,7 @@ taskset -c 0-31,64-95 \
 python3 test/multi_domain_dnn/tf215_graph_perf.py \
   --device musa \
   --runtime_mode native \
-  --device_index 3 \
+  --device_index 0 \
   --input_mode device \
   --graph_path model/JD/real_models/platform/dnn__multi-domain-task-simplifyv3__2026022622335783__tf_models__frozen_grpah.pb \
   --output_tensor WeightedSum/add:0 \
@@ -166,6 +165,7 @@ python3 test/multi_domain_dnn/tf215_graph_perf.py \
   --num_runs 200 \
   --no-fetch_output \
   --no-wait_execute_done \
+  --profiler_range \
   --json_output tmp/e2e_perf_standalone_native/dnn_perf_report.json
 ```
 
@@ -179,10 +179,12 @@ python3 test/multi_domain_dnn/tf215_graph_perf.py \
   --graph_path model/JD/real_models/platform/sim_graph_2_frozen_graph.pb \
   --output_tensor Reshape_2:0 \
   --batchsize 100 \
+  --int_upper_bound 50 \
   --warmup_runs 20 \
   --num_runs 200 \
   --no-fetch_output \
   --no-wait_execute_done \
+  --profiler_range \
   --json_output tmp/e2e_perf_standalone_native/sim_perf_report.json
 ```
 
@@ -191,7 +193,7 @@ taskset -c 0-31,64-95 \
 python3 test/multi_domain_dnn/tf215_graph_perf.py \
   --device musa \
   --runtime_mode native \
-  --device_index 3 \
+  --device_index 0 \
   --input_mode device \
   --graph_path model/JD/real_models/platform/twin_graph_2_frozen_graph.pb \
   --output_tensor WeightedSum/add:0 \
@@ -200,6 +202,7 @@ python3 test/multi_domain_dnn/tf215_graph_perf.py \
   --num_runs 200 \
   --no-fetch_output \
   --no-wait_execute_done \
+  --profiler_range \
   --json_output tmp/e2e_perf_standalone_native/twin_perf_report.json
 ```
 
@@ -209,9 +212,8 @@ python3 test/multi_domain_dnn/tf215_graph_perf.py \
 taskset -c 0-31,64-95 \
 python3 test/multi_domain_dnn/tf215_graph_perf.py \
   --device musa \
-  --runtime_mode pjrt \
-  --device_index 3 \
   --xla \
+  --device_index 0 \
   --input_mode device \
   --graph_path model/JD/real_models/platform/dnn__multi-domain-task-simplifyv3__2026022622335783__tf_models__frozen_grpah.pb \
   --output_tensor WeightedSum/add:0 \
@@ -220,6 +222,7 @@ python3 test/multi_domain_dnn/tf215_graph_perf.py \
   --num_runs 200 \
   --no-fetch_output \
   --no-wait_execute_done \
+  --profiler_range \
   --json_output tmp/e2e_perf_standalone_pjrt/dnn_perf_report.json
 ```
 
@@ -227,17 +230,18 @@ python3 test/multi_domain_dnn/tf215_graph_perf.py \
 taskset -c 0-31,64-95 \
 python3 test/multi_domain_dnn/tf215_graph_perf.py \
   --device musa \
-  --runtime_mode pjrt \
-  --device_index 3 \
   --xla \
+  --device_index 0 \
   --input_mode device \
   --graph_path model/JD/real_models/platform/sim_graph_2_frozen_graph.pb \
   --output_tensor Reshape_2:0 \
   --batchsize 100 \
+  --int_upper_bound 50 \
   --warmup_runs 20 \
   --num_runs 200 \
   --no-fetch_output \
   --no-wait_execute_done \
+  --profiler_range \
   --json_output tmp/e2e_perf_standalone_pjrt/sim_perf_report.json
 ```
 
@@ -245,9 +249,8 @@ python3 test/multi_domain_dnn/tf215_graph_perf.py \
 taskset -c 0-31,64-95 \
 python3 test/multi_domain_dnn/tf215_graph_perf.py \
   --device musa \
-  --runtime_mode pjrt \
-  --device_index 3 \
   --xla \
+  --device_index 0 \
   --input_mode device \
   --graph_path model/JD/real_models/platform/twin_graph_2_frozen_graph.pb \
   --output_tensor WeightedSum/add:0 \
@@ -256,6 +259,7 @@ python3 test/multi_domain_dnn/tf215_graph_perf.py \
   --num_runs 200 \
   --no-fetch_output \
   --no-wait_execute_done \
+  --profiler_range \
   --json_output tmp/e2e_perf_standalone_pjrt/twin_perf_report.json
 ```
 
@@ -270,8 +274,8 @@ device input 通过一次初始化的 `tf.Variable(use_resource=True)` 驻留在
 ```bash
 python3 test/multi_domain_dnn/tf215_graph_perf.py \
   --device musa \
-  --runtime_mode pjrt \
-  --device_index 3 \
+  --xla \
+  --device_index 0 \
   --input_mode host \
   --batchsize 100 \
   --warmup_runs 20 \
@@ -297,7 +301,10 @@ python3 test/multi_domain_dnn/tf215_graph_perf.py \
 
 ### Profiler Range
 
-`--profiler_range` 只用 profiler API 包围 warmup 后的正式 runs：
+`--profiler_range` 使用 profiler API 包围 warmup 后的正式 runs。无外部采集器时，JSON
+仍报告 `Session.run()` 延迟分布；有 profiler 采集器时，该范围可进一步用于查看 kernel 时间。
+SIM 的 synthetic perf 输入也需 `--int_upper_bound 50`，和 accuracy 相同；该参数只影响自动
+生成的整型 mock input，使用 `--input_npz`/`--input_npy` 时不生效：
 
 ```bash
 msys profile \
@@ -305,7 +312,7 @@ msys profile \
   --capture-range-end=stop \
   -o /path/to/report \
   python3 test/multi_domain_dnn/tf215_graph_perf.py \
-    --device musa --device_index 3 --runtime_mode pjrt --xla --input_mode device \
+    --device musa --device_index 0 --xla --input_mode device \
     --warmup_runs 20 --num_runs 10 --no-fetch_output \
     --no-wait_execute_done --profiler_range
 ```
@@ -318,7 +325,7 @@ TF 的 `--streams` 同样表示 host worker 数，不等价于显式创建 GPU s
 
 ```bash
 python3 test/multi_domain_dnn/tf215_graph_perf.py \
-  --device musa --device_index 1 --runtime_mode pjrt --xla \
+  --device musa --device_index 0 --xla \
   --input_mode device --batchsize 1 \
   --streams 4 --querys 1000 --warmup_runs 20 \
   --no-fetch_output --no-wait_execute_done
@@ -334,7 +341,7 @@ python3 test/multi_domain_dnn/tf215_graph_perf.py \
 
 ```bash
 python3 test/multi_domain_dnn/tf215_graph_perf.py \
-  --device musa --device_index 3 --host_calibration \
+  --device musa --device_index 0 --host_calibration \
   --batchsize 100 --warmup_runs 50 --num_runs 500
 ```
 
@@ -342,7 +349,7 @@ python3 test/multi_domain_dnn/tf215_graph_perf.py \
 
 ## 关键参数
 
-- `--runtime_mode native|pjrt`：MUSA 执行模式；native 使用 `tensorflow_musa` 原生 kernel，pjrt 使用 OpenXLA-MUSA。
+- `--xla`：MUSA 使用 OpenXLA-MUSA PJRT；不加时使用 native。`--runtime_mode native|pjrt` 仅为兼容旧命令保留。
 - `--input_mode host|device`：MUSA/CUDA 默认 `device`，CPU 默认 `host`。
 - `--fetch_output`：取回完整输出；device 纯推理默认关闭。
 - `--wait_execute_done`：控制每个 PJRT Execute 是否 host wait；device 纯推理默认关闭。
