@@ -63,8 +63,7 @@ python your_tensorflow_program.py --xla
 
 PJRT provider wheel 会自动定位并加载 PJRT plugin、TF registry bridge 和编译工具链。无需复制 `.so` 文件，也无需设置 plugin、bridge 或工具链路径。
 
-`--xla` 必须在导入 `tensorflow_musa` 的同一进程启动参数中提供。旧版启动器仍可通过 `TENSORFLOW_MUSA_ENABLE_PJRT=1` 兼容启用，但普通用户不需要设置环境变量。
-如需覆盖遗留环境变量并明确使用 native，可传入 `--no-xla`。
+`--xla` 必须在导入 `tensorflow_musa` 的同一进程启动参数中提供；不加该参数即使用 native。
 
 ## 快速验证
 
@@ -78,7 +77,9 @@ python -c \
   --xla
 ```
 
-PJRT 检查的预期状态为 `mode: pjrt`、`phase: ready`、`error: None`。不加 `--xla` 时，状态应为 `mode: native`、`phase: idle`。
+PJRT 正常启用时状态为 `mode: pjrt`、`phase: ready`、`error: None`。不加 `--xla` 时为
+`mode: native`；如果 PJRT 初始化失败，状态会为 `mode: native`、`phase: fallback`，同时输出
+warning 并继续 native 路径。
 
 ## 测试
 

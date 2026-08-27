@@ -155,8 +155,8 @@ def default_device_index() -> int:
     return int(first) if first else 0
 
 
-def runtime_mode(args: argparse.Namespace) -> str:
-    return getattr(args, "runtime_mode", "native")
+def selected_runtime(args: argparse.Namespace) -> str:
+    return "pjrt" if args.xla else "native"
 
 
 def import_tensorflow_musa() -> object:
@@ -352,9 +352,8 @@ def _configure_pjrt_development_overrides(args: argparse.Namespace) -> None:
 
 def prepare_musa_env(args: argparse.Namespace) -> bool:
     os.environ["MUSA_VISIBLE_DEVICES"] = str(args.device_index)
-    if runtime_mode(args) == "native":
+    if not args.xla:
         for name in [
-            "TENSORFLOW_MUSA_ENABLE_PJRT",
             "TENSORFLOW_MUSA_PJRT_LIBRARY_PATH",
             "TENSORFLOW_MUSA_PJRT_BRIDGE_PATH",
             "TENSORFLOW_MUSA_PJRT_PROVIDER_MODULE",
@@ -444,16 +443,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--device", choices=["musa", "cuda"], default="musa")
     parser.add_argument(
-        "--runtime_mode",
-        choices=["native", "pjrt"],
-        default=os.environ.get("TENSORFLOW_MUSA_DNN_RUNTIME"),
-        help="兼容参数；优先使用 --xla 表达 PJRT，native 使用原生 kernel",
-    )
-    parser.add_argument(
         "--xla",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="使用 OpenXLA-MUSA PJRT；不加该参数时默认使用 native",
+        action="store_true",
+        help="使用 OpenXLA-MUSA PJRT；不加该参数时使用 native",
     )
     parser.add_argument("--graph_path", default=str(DEFAULT_GRAPH_PATH))
     parser.add_argument("--output_tensor", default=DEFAULT_OUTPUT_TENSOR)
@@ -487,7 +479,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output_dir",
         help=(
-            "输出目录；默认按 runtime_mode 分离为 "
+            "输出目录；默认按运行模式分离为 "
             "tmp/e2e_accuracy_standalone_<native|pjrt>，避免 native/PJRT report 互相覆盖"
         ),
     )
@@ -505,14 +497,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--worker", choices=["cpu", "musa", "cuda"], help=argparse.SUPPRESS)
     parser.add_argument("--manifest", help=argparse.SUPPRESS)
     args = parser.parse_args()
-    if args.runtime_mode is None:
-        args.runtime_mode = "pjrt" if args.xla else "native"
-    elif args.xla is not None and (args.runtime_mode == "pjrt") != args.xla:
-        parser.error("--xla/--no-xla 与 --runtime_mode 的模式选择冲突")
-    if args.xla is None:
-        args.xla = args.runtime_mode == "pjrt"
     if args.output_dir is None:
-        args.output_dir = str(REPO_ROOT / f"tmp/e2e_accuracy_standalone_{runtime_mode(args)}")
+        args.output_dir = str(REPO_ROOT / f"tmp/e2e_accuracy_standalone_{selected_runtime(args)}")
     return args
 
 
@@ -661,8 +647,6 @@ def launch_worker(args: argparse.Namespace, manifest_path: Path, worker: str) ->
         str(args.graph_path),
         "--output_tensor",
         args.output_tensor,
-        "--runtime_mode",
-        args.runtime_mode,
         "--output_dir",
         str(args.output_dir),
         "--device_index",
@@ -682,7 +666,8 @@ def launch_worker(args: argparse.Namespace, manifest_path: Path, worker: str) ->
         "--musa_pjrt_max_inflight_executes",
         str(args.musa_pjrt_max_inflight_executes),
     ]
-    command.append("--xla" if args.xla else "--no-xla")
+    if args.xla:
+        command.append("--xla")
     if args.musa_plugin_path:
         command.extend(["--musa_plugin_path", str(args.musa_plugin_path)])
     if args.musa_bridge_path:
@@ -745,7 +730,7 @@ def compare_outputs(args: argparse.Namespace, manifest_path: Path) -> bool:
     report = {
         "passed": all(item["passed"] for item in comparisons),
         "method": "same deterministic mock inputs, CPU no-XLA golden vs selected backend",
-        "runtime_mode": runtime_mode(args),
+        "runtime_mode": selected_runtime(args),
         "graph_path": manifest["graph_path"],
         "graph_sha256": manifest["graph_sha256"],
         "output_tensor": manifest["output_tensor"],

@@ -58,9 +58,9 @@ def _assert_source_package():
 class NativeKernelRegressionTest(tf.test.TestCase):
     """Standard MUSA execution regression for the active runtime mode.
 
-    PJRT mode must surface a duplicate-registration failure directly rather
-    than hiding it with a skip. The production loader prevents the conflict by
-    never loading ``libmusa_plugin.so`` in PJRT mode.
+    The production loader prevents native/PJRT registration conflicts by never
+    loading ``libmusa_plugin.so`` in a successful PJRT mode. If PJRT cannot be
+    initialized, the adapter warns and exercises the unchanged native path.
     """
 
     @classmethod
@@ -158,37 +158,37 @@ class PjrtIsolatedSmokeTest(tf.test.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Missing PJRT provider (fail-fast)
+# Missing PJRT provider (warn and native fallback)
 # ---------------------------------------------------------------------------
 
 class MissingPjrtProviderTest(tf.test.TestCase):
-    def test_missing_provider_is_fail_fast(self):
+    def test_missing_provider_falls_back_to_native(self):
         script = """
-import os
-os.environ["TENSORFLOW_MUSA_ENABLE_PJRT"] = "1"
-os.environ["TENSORFLOW_MUSA_PJRT_LIBRARY_PATH"] = "/does/not/exist/libmusa_pjrt_plugin_zy.so"
-os.environ.pop("PYTHONPATH", None)
 try:
     import tensorflow_musa
 except Exception as e:
-    print("FAIL_FAST:" + type(e).__name__)
-    raise SystemExit(0)
-raise SystemExit(1)
+    print("IMPORT_FAILED:" + type(e).__name__)
+    raise SystemExit(1)
+status = tensorflow_musa.get_pjrt_status()
+print("MODE:" + str(status.get("mode")))
+if status.get("mode") != "native":
+    raise SystemExit(1)
+raise SystemExit(0)
 """
         env = os.environ.copy()
-        env.pop("TENSORFLOW_MUSA_ENABLE_PJRT", None)
-        env.pop("TENSORFLOW_MUSA_PJRT_LIBRARY_PATH", None)
         env.pop("PYTHONPATH", None)
+        env["TENSORFLOW_MUSA_PJRT_PROVIDER_MODULE"] = "missing_openxla_musa_pjrt_provider"
         proc = subprocess.run(
-            [sys.executable, "-c", script],
+            [sys.executable, "-c", script, "--xla"],
             env=env,
             capture_output=True,
             text=True,
             timeout=30,
         )
         out = proc.stdout + proc.stderr
-        self.assertIn("FAIL_FAST:ModuleNotFoundError", out,
-                      f"Expected fail-fast on missing PJRT provider, got: {out}")
+        self.assertEqual(proc.returncode, 0, f"Native fallback subprocess failed: {out}")
+        self.assertIn("MODE:native", out,
+                      f"Expected native fallback on missing PJRT provider, got: {out}")
 
 
 if __name__ == "__main__":

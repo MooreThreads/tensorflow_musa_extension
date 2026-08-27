@@ -19,7 +19,9 @@ import logging
 import os
 
 from ._pjrt_bootstrap import (
+    fallback_to_native,
     get_pjrt_bootstrap_status,
+    is_pjrt_requested,
     load_pjrt_plugin,
     prepare_pjrt_bootstrap,
 )
@@ -120,9 +122,19 @@ def load_plugin():
         return _plugin_path
 
     # PJRT preparation occurs before importing TensorFlow so the provider can
-    # publish TensorFlow's plug-in discovery variables. The provider itself is
-    # loaded only on explicit opt-in; native import remains unchanged.
-    pjrt_requested = prepare_pjrt_bootstrap()
+    # publish TensorFlow's plug-in discovery variables. A failed optional
+    # attempt is rolled back and falls through to the native path.
+    pjrt_requested = False
+    if is_pjrt_requested():
+        try:
+            pjrt_requested = prepare_pjrt_bootstrap()
+        except Exception as e:
+            fallback_to_native(e)
+            logger.warning(
+                "OpenXLA-MUSA PJRT could not be initialized; falling back to "
+                "native MUSA: %s",
+                e,
+            )
 
     import tensorflow as tf
 
@@ -141,8 +153,10 @@ def load_plugin():
             return plugin_path
         except Exception as e:
             raise RuntimeError(
-                f"Failed to bootstrap OpenXLA-MUSA PJRT: {e}\n"
-                "PJRT was explicitly enabled; native MUSA fallback is disabled."
+                "OpenXLA-MUSA PJRT failed after registration began. Native "
+                "fallback is unsafe in this process because PJRT may already "
+                "have registered MUSA kernels; start a new process without "
+                f"--xla. Original error: {e}"
             ) from e
 
     # Native default path: preserve the existing TF MUSA loading sequence.

@@ -27,19 +27,29 @@ import os
 import sys
 from typing import Dict, MutableMapping, Optional, Tuple
 
-PJRT_ENABLE_ENV = "TENSORFLOW_MUSA_ENABLE_PJRT"
-PJRT_LIBRARY_ENV = "TENSORFLOW_MUSA_PJRT_LIBRARY_PATH"
 PJRT_PROVIDER_MODULE_ENV = "TENSORFLOW_MUSA_PJRT_PROVIDER_MODULE"
 PJRT_ENABLE_ARG = "--xla"
-PJRT_DISABLE_ARG = "--no-xla"
 _DEFAULT_PROVIDER_MODULES = ("openxla_musa_pjrt",)
 
-_TRUE_VALUES = frozenset(("1", "true", "yes", "on"))
-_FALSE_VALUES = frozenset(("", "0", "false", "no", "off"))
+# Environment entries published by the provider before TensorFlow is imported.
+# They are snapshotted so a failed optional PJRT attempt can be rolled back
+# without disturbing values supplied by the caller.
+_PJRT_ENV_KEYS = (
+    "LD_LIBRARY_PATH",
+    "TF_PLUGGABLE_DEVICE_LIBRARY_PATH",
+    "PJRT_NAMES_AND_LIBRARY_PATHS",
+    "NEXT_PLUGGABLE_DEVICE_USE_C_API",
+    "MUSA_TFNPD_IS_PLUGGABLE_DEVICE",
+    "MUSA_TFNPD_COMPILATION_DEVICE_NAME",
+    "MTCC20X_TOOLS_DIR",
+    "TF_XLA_FLAGS",
+)
+
 _STATUS_KEYS = ("mode", "phase", "provider", "plugin_path", "bridge_path", "error")
 
 _provider = None
 _status: Dict[str, Optional[str]] = {}
+_prepared_env_snapshot: Optional[Dict[str, Optional[str]]] = None
 
 
 def _new_status(
@@ -63,50 +73,19 @@ def _new_status(
 _status = _new_status()
 
 
-def _cli_pjrt_request(argv=None) -> Optional[bool]:
-    """Return the command-line PJRT choice, or ``None`` when unspecified.
+def is_pjrt_requested(environ=None, argv=None) -> bool:
+    """Return whether PJRT was requested by the public ``--xla`` switch.
 
     TensorFlow MUSA is imported by user programs before their own argument
     parser usually runs, so the adapter must inspect the process arguments at
-    import/bootstrap time. Only the exact public switches are recognized;
+    import/bootstrap time. Only the exact public switch is recognized;
     options such as ``--xla_jit_scope`` are intentionally unrelated.
     """
+    del environ  # Kept for source compatibility; mode selection is CLI-only.
     arguments = list(sys.argv[1:] if argv is None else argv)
     if "--" in arguments:
         arguments = arguments[:arguments.index("--")]
-    enabled = PJRT_ENABLE_ARG in arguments
-    disabled = PJRT_DISABLE_ARG in arguments
-    if enabled and disabled:
-        raise ValueError(
-            f"{PJRT_ENABLE_ARG} and {PJRT_DISABLE_ARG} cannot be used together"
-        )
-    if enabled:
-        return True
-    if disabled:
-        return False
-    return None
-
-
-def is_pjrt_requested(environ=None, argv=None) -> bool:
-    """Return whether PJRT was explicitly requested for this process.
-
-    A command-line choice takes precedence over the legacy environment switch.
-    The environment variable remains supported for wrappers and debugging.
-    """
-    cli_request = _cli_pjrt_request(argv)
-    if cli_request is not None:
-        return cli_request
-    env = os.environ if environ is None else environ
-    raw = env.get(PJRT_ENABLE_ENV, "0").strip().lower()
-    if raw in _TRUE_VALUES:
-        return True
-    if raw in _FALSE_VALUES:
-        return False
-    raise ValueError(
-        f"Invalid {PJRT_ENABLE_ENV}={raw!r}; expected one of "
-        "0/1, false/true, no/yes, or off/on; or use "
-        f"{PJRT_ENABLE_ARG}/{PJRT_DISABLE_ARG}."
-    )
+    return PJRT_ENABLE_ARG in arguments
 
 
 def _provider_module_names(environ=None) -> Tuple[str, ...]:
@@ -177,17 +156,17 @@ def prepare_pjrt_bootstrap(environ: Optional[MutableMapping[str, str]] = None) -
     through :func:`get_pjrt_bootstrap_status`; provider failures are raised
     immediately because PJRT is an explicit user choice.
     """
-    global _status
+    global _status, _prepared_env_snapshot
     env = os.environ if environ is None else environ
-    try:
-        requested = is_pjrt_requested(env)
-    except ValueError as exc:
-        _record_failure(exc)
-        raise
+    requested = is_pjrt_requested()
     if not requested:
+        _prepared_env_snapshot = None
         _status = _new_status()
         return False
 
+    _prepared_env_snapshot = {
+        key: env.get(key) for key in _PJRT_ENV_KEYS
+    }
     provider = None
     try:
         provider = _load_provider(env)
@@ -205,15 +184,43 @@ def prepare_pjrt_bootstrap(environ: Optional[MutableMapping[str, str]] = None) -
         raise
 
 
+def fallback_to_native(
+    error: Exception,
+    environ: Optional[MutableMapping[str, str]] = None,
+) -> None:
+    """Undo provider-published pre-import state before native fallback.
+
+    This helper is only used when ``prepare()`` fails, before PJRT has begun
+    loading or registering its shared libraries. A failure during
+    ``bootstrap()`` cannot safely fall back in the same process because PJRT
+    may already have registered MUSA kernels.
+    """
+    global _status, _prepared_env_snapshot
+    env = os.environ if environ is None else environ
+    if _prepared_env_snapshot is not None:
+        for key, previous in _prepared_env_snapshot.items():
+            if previous is None:
+                env.pop(key, None)
+            else:
+                env[key] = previous
+    _prepared_env_snapshot = None
+    _status = _new_status(
+        mode="native",
+        phase="fallback",
+        error=str(error)[:600],
+    )
+
+
 def load_pjrt_plugin(tf_module) -> None:
     """Delegate post-import PJRT loading and registration to the provider."""
-    global _status
+    global _status, _prepared_env_snapshot
     if not is_pjrt_requested():
         return
     provider = _load_provider()
     try:
         provider.bootstrap(tf_module)
         _status = _provider_status(provider)
+        _prepared_env_snapshot = None
     except Exception as exc:
         try:
             _status = _provider_status(provider)

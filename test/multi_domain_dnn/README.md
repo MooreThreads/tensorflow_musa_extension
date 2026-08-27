@@ -5,8 +5,6 @@
 - 原生 TensorFlow MUSA：不加 `--xla`
 - OpenXLA-MUSA PJRT：加 `--xla`
 
-`--runtime_mode native|pjrt` 仍保留用于兼容旧脚本；新命令建议只使用 `--xla` 表达 PJRT。
-
 默认模型是 JD multi-domain DNN frozen GraphDef：
 
 ```text
@@ -74,7 +72,6 @@ cd /data/eureka/tensorflow_musa_extension
 ```bash
 python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
   --device musa \
-  --runtime_mode native \
   --device_index 0 \
   --graph_path model/JD/real_models/platform/dnn__multi-domain-task-simplifyv3__2026022622335783__tf_models__frozen_grpah.pb \
   --output_tensor WeightedSum/add:0 \
@@ -84,7 +81,6 @@ python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
 ```bash
 python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
   --device musa \
-  --runtime_mode native \
   --device_index 0 \
   --graph_path model/JD/real_models/platform/sim_graph_2_frozen_graph.pb \
   --output_tensor Reshape_2:0 \
@@ -95,7 +91,6 @@ python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
 ```bash
 python3 test/multi_domain_dnn/tf215_graph_accuracy.py \
   --device musa \
-  --runtime_mode native \
   --device_index 0 \
   --graph_path model/JD/real_models/platform/twin_graph_2_frozen_graph.pb \
   --output_tensor WeightedSum/add:0 \
@@ -155,7 +150,6 @@ MUSA/CUDA 默认使用 `input_mode=device`、不取回输出；MUSA 关闭逐 cl
 taskset -c 0-31,64-95 \
 python3 test/multi_domain_dnn/tf215_graph_perf.py \
   --device musa \
-  --runtime_mode native \
   --device_index 0 \
   --input_mode device \
   --graph_path model/JD/real_models/platform/dnn__multi-domain-task-simplifyv3__2026022622335783__tf_models__frozen_grpah.pb \
@@ -173,7 +167,6 @@ python3 test/multi_domain_dnn/tf215_graph_perf.py \
 taskset -c 0-31,64-95 \
 python3 test/multi_domain_dnn/tf215_graph_perf.py \
   --device musa \
-  --runtime_mode native \
   --device_index 0 \
   --input_mode device \
   --graph_path model/JD/real_models/platform/sim_graph_2_frozen_graph.pb \
@@ -192,7 +185,6 @@ python3 test/multi_domain_dnn/tf215_graph_perf.py \
 taskset -c 0-31,64-95 \
 python3 test/multi_domain_dnn/tf215_graph_perf.py \
   --device musa \
-  --runtime_mode native \
   --device_index 0 \
   --input_mode device \
   --graph_path model/JD/real_models/platform/twin_graph_2_frozen_graph.pb \
@@ -349,7 +341,7 @@ python3 test/multi_domain_dnn/tf215_graph_perf.py \
 
 ## 关键参数
 
-- `--xla`：MUSA 使用 OpenXLA-MUSA PJRT；不加时使用 native。`--runtime_mode native|pjrt` 仅为兼容旧命令保留。
+- `--xla`：MUSA 使用 OpenXLA-MUSA PJRT；不加时使用 native。
 - `--input_mode host|device`：MUSA/CUDA 默认 `device`，CPU 默认 `host`。
 - `--fetch_output`：取回完整输出；device 纯推理默认关闭。
 - `--wait_execute_done`：控制每个 PJRT Execute 是否 host wait；device 纯推理默认关闭。

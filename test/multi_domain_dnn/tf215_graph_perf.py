@@ -134,8 +134,8 @@ def default_device_index() -> int:
     return int(first) if first else 0
 
 
-def runtime_mode(args: argparse.Namespace) -> str:
-    return getattr(args, "runtime_mode", "native")
+def selected_runtime(args: argparse.Namespace) -> str:
+    return "pjrt" if args.xla else "native"
 
 
 def import_tensorflow_musa() -> object:
@@ -542,10 +542,9 @@ def prepare_runtime(args: argparse.Namespace):
         return
 
     os.environ["MUSA_VISIBLE_DEVICES"] = str(args.device_index)
-    if runtime_mode(args) == "native":
+    if not args.xla:
         args.xla = False
         for name in [
-            "TENSORFLOW_MUSA_ENABLE_PJRT",
             "TENSORFLOW_MUSA_PJRT_LIBRARY_PATH",
             "TENSORFLOW_MUSA_PJRT_BRIDGE_PATH",
             "TENSORFLOW_MUSA_PJRT_PROVIDER_MODULE",
@@ -767,7 +766,7 @@ def build_stats(
     return {
         "device": args.device,
         "execution_device": execution_device,
-        "runtime_mode": runtime_mode(args),
+        "runtime_mode": selected_runtime(args),
         "input_mode": input_mode,
         "host_calibration": args.host_calibration,
         "device_index": args.device_index,
@@ -980,16 +979,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Standalone TF2.15 GraphDef performance runner")
     parser.add_argument("--device", choices=["cpu", "cuda", "musa"], default=default_device)
     parser.add_argument(
-        "--runtime_mode",
-        choices=["native", "pjrt"],
-        default=os.environ.get("TENSORFLOW_MUSA_DNN_RUNTIME"),
-        help="兼容参数；优先使用 --xla 表达 PJRT，native 使用原生 kernel",
-    )
-    parser.add_argument(
         "--xla",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="使用 OpenXLA-MUSA PJRT；不加该参数时默认使用 native",
+        action="store_true",
+        help="使用 OpenXLA-MUSA PJRT；不加该参数时使用 native",
     )
     parser.add_argument("--device_index", type=int, default=default_device_index())
     parser.add_argument("--graph_path", default=str(DEFAULT_GRAPH_PATH))
@@ -1050,7 +1042,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--json_output",
         help=(
-            "输出文件；默认按 runtime_mode 分离为 "
+            "输出文件；默认按运行模式分离为 "
             "tmp/e2e_perf_standalone_<native|pjrt>/perf_report.json，避免 native/PJRT report 互相覆盖"
         ),
     )
@@ -1060,18 +1052,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--musa_pjrt_max_inflight_transfers", type=int, default=1)
     parser.add_argument("--musa_pjrt_max_inflight_executes", type=int)
     args = parser.parse_args()
-    if args.runtime_mode is None:
-        args.runtime_mode = "pjrt" if args.xla else "native"
-    elif args.xla is not None and (args.runtime_mode == "pjrt") != args.xla:
-        parser.error("--xla/--no-xla 与 --runtime_mode 的模式选择冲突")
-    if args.xla is None:
-        args.xla = args.runtime_mode == "pjrt"
-    if args.xla and "--xla" not in sys.argv:
-        # Keep the legacy --runtime_mode=pjrt compatibility path equivalent to
-        # the public CLI contract before tensorflow_musa is imported.
-        sys.argv.append("--xla")
     if args.json_output is None:
-        args.json_output = str(REPO_ROOT / f"tmp/e2e_perf_standalone_{runtime_mode(args)}/perf_report.json")
+        args.json_output = str(REPO_ROOT / f"tmp/e2e_perf_standalone_{selected_runtime(args)}/perf_report.json")
     return args
 
 
@@ -1103,8 +1085,8 @@ def main() -> None:
         raise ValueError("warmup/runs/batchsize/streams/querys must be positive")
     if (args.streams > 1 or args.querys is not None) and args.input_mode != "device":
         raise ValueError("multi-stream mode requires --input_mode device")
-    if args.device == "cpu" or (args.device == "musa" and runtime_mode(args) == "native"):
-        args.xla = False if args.xla is True else args.xla
+    if args.device == "cpu":
+        args.xla = False
 
     total_start = time.perf_counter()
     prepare_runtime(args)

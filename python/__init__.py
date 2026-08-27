@@ -72,47 +72,6 @@ from . import gradients, ops, raw_ops
 __version__ = "1.5.0"
 
 
-def enable_xla(enabled=True, library_path=None):
-    """Enable or disable OpenXLA-MUSA PJRT mode.
-
-    The normal command-line contract is ``python program.py --xla``. When
-    enabled,
-    TensorFlow MUSA expects the OpenXLA-MUSA PJRT wheel/provider to supply
-    plugin paths and compatibility metadata internally.  ``library_path`` is
-    retained only as a development fallback for manual plugin testing.
-    """
-    import os
-    if enabled:
-        os.environ["TENSORFLOW_MUSA_ENABLE_PJRT"] = "1"
-        if library_path:
-            os.environ["TENSORFLOW_MUSA_PJRT_LIBRARY_PATH"] = library_path
-        print("PJRT mode enabled. Start a new Python process to take effect.")
-        print("  TENSORFLOW_MUSA_ENABLE_PJRT=1")
-        if library_path:
-            print("  TENSORFLOW_MUSA_PJRT_LIBRARY_PATH=<development fallback set>")
-    else:
-        disable_xla()
-    return get_pjrt_status()
-
-
-def enable_pjrt(enabled=True, library_path=None):
-    """Alias for ``enable_xla`` with PJRT terminology."""
-    return enable_xla(enabled=enabled, library_path=library_path)
-
-
-def disable_xla():
-    """Disable PJRT and return to native MUSA kernel mode."""
-    import os
-    os.environ.pop("TENSORFLOW_MUSA_ENABLE_PJRT", None)
-    os.environ.pop("TENSORFLOW_MUSA_PJRT_LIBRARY_PATH", None)
-
-
-def disable_pjrt():
-    """Alias for ``disable_xla`` with PJRT terminology."""
-    disable_xla()
-    return get_pjrt_status()
-
-
 # Load plugin automatically on import
 _plugin_loaded = False
 
@@ -120,9 +79,7 @@ try:
     load_plugin()
     _plugin_loaded = True
 except Exception as e:
-    if is_pjrt_requested():
-        # PJRT is explicit opt-in. Do not silently downgrade to the native-only
-        # runtime when the requested backend cannot be initialized.
+    if is_pjrt_requested() and get_pjrt_status().get("phase") != "fallback":
         raise
     logging.warning(f"Failed to load MUSA plugin: {e}")
     logging.warning(
@@ -136,10 +93,6 @@ __all__ = [
     "gradients",
     "ops",
     "raw_ops",
-    "enable_xla",
-    "enable_pjrt",
-    "disable_xla",
-    "disable_pjrt",
     "load_plugin",
     "get_musa_ops",
     "get_pjrt_status",

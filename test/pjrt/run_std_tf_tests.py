@@ -2,17 +2,14 @@
 """PJRT mode: run standard TF op tests from test/ops/ (excluding MUSA custom ops).
 
 Usage:
-    LD_LIBRARY_PATH=/path/to/tensorflow:$LD_LIBRARY_PATH \
-    TENSORFLOW_MUSA_ENABLE_PJRT=1 \
-    TENSORFLOW_MUSA_PJRT_LIBRARY_PATH=/path/to/libmusa_pjrt_plugin_zy.so \
-    MUSA_VISIBLE_DEVICES=5 \
-    python test/pjrt/run_std_tf_tests.py
+    MUSA_VISIBLE_DEVICES=5 python test/pjrt/run_std_tf_tests.py --xla
 """
 
 import os, sys, time, unittest, warnings
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
-os.environ.setdefault("TENSORFLOW_MUSA_ENABLE_PJRT", "1")
+if "--xla" not in sys.argv:
+    raise SystemExit("PJRT tests require --xla.")
 
 # MUSA custom op tests to skip (require libmusa_plugin.so)
 MUSA_OP_TESTS = {

@@ -67,25 +67,17 @@ class PjrtBootstrapTest(unittest.TestCase):
     def setUp(self):
         _pjrt._provider = None
         _pjrt._status = _pjrt._new_status()
+        _pjrt._prepared_env_snapshot = None
 
     def test_disabled_by_default_does_not_import_provider_or_mutate_environment(self):
         env = {"EXISTING": "value"}
-        with mock.patch.object(_pjrt.importlib, "import_module") as importer:
-            self.assertFalse(_pjrt.prepare_pjrt_bootstrap(env))
+        with mock.patch.object(sys, "argv", ["program.py"]):
+            with mock.patch.object(_pjrt.importlib, "import_module") as importer:
+                self.assertFalse(_pjrt.prepare_pjrt_bootstrap(env))
         importer.assert_not_called()
         self.assertEqual(env, {"EXISTING": "value"})
         self.assertEqual(_pjrt.get_pjrt_bootstrap_status()["mode"], "native")
         self.assertEqual(_pjrt.get_pjrt_bootstrap_status()["phase"], "idle")
-
-    def test_invalid_switch_is_rejected_and_recorded(self):
-        env = {_pjrt.PJRT_ENABLE_ENV: "sometimes"}
-        with self.assertRaisesRegex(ValueError, _pjrt.PJRT_ENABLE_ENV):
-            _pjrt.prepare_pjrt_bootstrap(env)
-
-        status = _pjrt.get_pjrt_bootstrap_status()
-        self.assertEqual(status["mode"], "pjrt")
-        self.assertEqual(status["phase"], "failed")
-        self.assertIn(_pjrt.PJRT_ENABLE_ENV, status["error"])
 
     def test_cli_xla_enables_pjrt_without_environment_variable(self):
         env = {}
@@ -100,33 +92,23 @@ class PjrtBootstrapTest(unittest.TestCase):
         self.assertEqual(env["PROVIDER_PREPARED"], "1")
         self.assertEqual(_pjrt.get_pjrt_bootstrap_status()["mode"], "pjrt")
 
-    def test_cli_no_xla_overrides_legacy_environment_switch(self):
-        env = {_pjrt.PJRT_ENABLE_ENV: "1"}
-        with mock.patch.object(sys, "argv", ["program.py", "--no-xla"]):
+    def test_xla_after_argument_separator_is_ignored(self):
+        env = {}
+        with mock.patch.object(sys, "argv", ["program.py", "--", "--xla"]):
             with mock.patch.object(_pjrt.importlib, "import_module") as importer:
                 self.assertFalse(_pjrt.prepare_pjrt_bootstrap(env))
         importer.assert_not_called()
-        self.assertEqual(_pjrt.get_pjrt_bootstrap_status()["mode"], "native")
-
-    def test_conflicting_cli_switches_fail_fast(self):
-        env = {}
-        with mock.patch.object(
-            sys, "argv", ["program.py", "--xla", "--no-xla"]
-        ):
-            with self.assertRaisesRegex(ValueError, "cannot be used together"):
-                _pjrt.prepare_pjrt_bootstrap(env)
-        self.assertEqual(_pjrt.get_pjrt_bootstrap_status()["phase"], "failed")
 
     def test_requested_mode_delegates_all_runtime_work_to_provider(self):
         provider = _FakeProvider()
         env = {
-            _pjrt.PJRT_ENABLE_ENV: "true",
             _pjrt.PJRT_PROVIDER_MODULE_ENV: provider.__name__,
         }
-        with mock.patch.dict(os.environ, env, clear=False):
-            with mock.patch.object(_pjrt.importlib, "import_module", return_value=provider) as importer:
-                self.assertTrue(_pjrt.prepare_pjrt_bootstrap(env))
-                _pjrt.load_pjrt_plugin(object())
+        with mock.patch.object(sys, "argv", ["program.py", "--xla"]):
+            with mock.patch.dict(os.environ, env, clear=False):
+                with mock.patch.object(_pjrt.importlib, "import_module", return_value=provider) as importer:
+                    self.assertTrue(_pjrt.prepare_pjrt_bootstrap(env))
+                    _pjrt.load_pjrt_plugin(object())
 
         importer.assert_called_once_with(provider.__name__)
         self.assertEqual(provider.prepare_calls, 1)
@@ -138,13 +120,38 @@ class PjrtBootstrapTest(unittest.TestCase):
         self.assertEqual(status["provider"], provider.__name__)
         self.assertIsNone(status["error"])
 
-    def test_missing_provider_is_fail_fast(self):
-        env = {_pjrt.PJRT_ENABLE_ENV: "1"}
+    def test_missing_provider_is_recorded_for_fallback(self):
+        env = {}
         missing = ModuleNotFoundError("not installed", name="openxla_musa_pjrt")
-        with mock.patch.object(_pjrt.importlib, "import_module", side_effect=missing):
-            with self.assertRaisesRegex(ModuleNotFoundError, "provider is not installed"):
-                _pjrt.prepare_pjrt_bootstrap(env)
+        with mock.patch.object(sys, "argv", ["program.py", "--xla"]):
+            with mock.patch.object(_pjrt.importlib, "import_module", side_effect=missing):
+                with self.assertRaisesRegex(ModuleNotFoundError, "provider is not installed"):
+                    _pjrt.prepare_pjrt_bootstrap(env)
         self.assertEqual(_pjrt.get_pjrt_bootstrap_status()["phase"], "failed")
+
+    def test_fallback_to_native_restores_provider_environment(self):
+        env = {"LD_LIBRARY_PATH": "/usr/lib", "TF_XLA_FLAGS": "--existing"}
+        env["TF_PLUGGABLE_DEVICE_LIBRARY_PATH"] = "/provider/plugin.so"
+        env["PJRT_NAMES_AND_LIBRARY_PATHS"] = "MUSA:/provider/plugin.so"
+        _pjrt._prepared_env_snapshot = {
+            "LD_LIBRARY_PATH": "/usr/lib",
+            "TF_PLUGGABLE_DEVICE_LIBRARY_PATH": None,
+            "PJRT_NAMES_AND_LIBRARY_PATHS": None,
+            "NEXT_PLUGGABLE_DEVICE_USE_C_API": None,
+            "MUSA_TFNPD_IS_PLUGGABLE_DEVICE": None,
+            "MUSA_TFNPD_COMPILATION_DEVICE_NAME": None,
+            "MTCC20X_TOOLS_DIR": None,
+            "TF_XLA_FLAGS": "--existing",
+        }
+        _pjrt.fallback_to_native(RuntimeError("broken provider"), env)
+
+        self.assertNotIn("TF_PLUGGABLE_DEVICE_LIBRARY_PATH", env)
+        self.assertNotIn("PJRT_NAMES_AND_LIBRARY_PATHS", env)
+        self.assertEqual(env["LD_LIBRARY_PATH"], "/usr/lib")
+        self.assertEqual(env["TF_XLA_FLAGS"], "--existing")
+        status = _pjrt.get_pjrt_bootstrap_status()
+        self.assertEqual(status["mode"], "native")
+        self.assertEqual(status["phase"], "fallback")
 
 
 if __name__ == "__main__":
