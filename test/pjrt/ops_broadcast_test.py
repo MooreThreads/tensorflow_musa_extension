@@ -2,6 +2,7 @@
 """PJRT mode: broadcast and shape ops test (eager + JIT)."""
 
 import numpy as np
+import tensorflow_musa  # noqa: F401
 import tensorflow as tf
 from pjrt.pjrt_test_utils import PjrtTestCase
 
@@ -31,4 +32,3 @@ class BroadcastOpsTest(PjrtTestCase):
             a = tf.constant([[1., 2.]], dtype=dtype)
             b = tf.constant([[3., 4.]], dtype=dtype)
             self._testBothEagerAndJit(lambda x, y: tf.concat([x, y], 0), a, b)
-

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""PJRT mode: run standard TF op tests from test/ops/ (excluding MUSA custom ops).
+"""Experimental PJRT compatibility scan for selected standard TF op tests.
+
+This is not part of the PJRT validation gate. ``test/ops`` contains legacy
+MUSA-native tests and kernels that are intentionally unavailable in a
+successful PJRT process; the supported PJRT contract lives under ``test/pjrt``.
 
 Usage:
     MUSA_VISIBLE_DEVICES=5 python test/pjrt/run_std_tf_tests.py --xla
@@ -13,7 +17,7 @@ if "--xla" not in sys.argv:
 
 # MUSA custom op tests to skip (require libmusa_plugin.so)
 MUSA_OP_TESTS = {
-    "apply_adagrad_op_test", "apply_adamax_op_test",
+    "apply_adagrad_op_test", "apply_adamax_op_test", "addn_op_test",
     "apply_gradient_descent_op_test", "apply_resource_op_test",
     "apply_rmsprop_op_test", "assign_add_op_test", "assign_op_test",
     "biasadd_grad_op_test", "broadcast_gradient_args_op_test",
@@ -34,8 +38,12 @@ MUSA_OP_TESTS = {
     "rsqrt_op_test",
 }
 
-import tensorflow_musa  # noqa: F401
+import tensorflow_musa
 import tensorflow as tf
+status = tensorflow_musa.get_pjrt_status()
+if status.get("mode") != "pjrt" or status.get("phase") != "ready":
+    raise SystemExit(f"PJRT provider is not ready: {status}")
+print("PJRT_STATUS =", status)
 tf.get_logger().setLevel("ERROR")
 
 test_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ops")
@@ -49,7 +57,7 @@ if __name__ == "__main__":
     for fname in sorted(os.listdir(test_dir)):
         if not fname.endswith("_test.py") and not fname.endswith("_op_test.py"):
             continue
-        if fname in MUSA_OP_TESTS:
+        if os.path.splitext(fname)[0] in MUSA_OP_TESTS:
             continue
         if fname.startswith("xla_"):
             continue

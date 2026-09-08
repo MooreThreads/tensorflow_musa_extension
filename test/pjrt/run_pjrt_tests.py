@@ -7,8 +7,12 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 if "--xla" not in sys.argv:
     raise SystemExit("PJRT tests require --xla.")
 
-import tensorflow_musa  # noqa
+import tensorflow_musa
 import tensorflow as tf
+status = tensorflow_musa.get_pjrt_status()
+if status.get("mode") != "pjrt" or status.get("phase") != "ready":
+    raise SystemExit(f"PJRT provider is not ready: {status}")
+print("PJRT_STATUS =", status)
 tf.get_logger().setLevel("ERROR")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

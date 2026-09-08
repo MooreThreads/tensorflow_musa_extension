@@ -1,6 +1,7 @@
 # Copyright 2026 The TensorFlow MUSA Authors. All Rights Reserved.
 """PJRT mode: comparison ops test (eager + JIT)."""
 
+import tensorflow_musa  # noqa: F401
 import tensorflow as tf
 from pjrt.pjrt_test_utils import PjrtTestCase
 

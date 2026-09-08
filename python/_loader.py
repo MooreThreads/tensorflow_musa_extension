@@ -17,6 +17,7 @@
 
 import logging
 import os
+import sys
 
 from ._pjrt_bootstrap import (
     fallback_to_native,
@@ -126,6 +127,12 @@ def load_plugin():
     # attempt is rolled back and falls through to the native path.
     pjrt_requested = False
     if is_pjrt_requested():
+        if "tensorflow" in sys.modules:
+            raise RuntimeError(
+                "PJRT requires importing tensorflow_musa before tensorflow; "
+                "start a new process and move 'import tensorflow_musa' ahead "
+                "of 'import tensorflow'."
+            )
         try:
             pjrt_requested = prepare_pjrt_bootstrap()
         except Exception as e:

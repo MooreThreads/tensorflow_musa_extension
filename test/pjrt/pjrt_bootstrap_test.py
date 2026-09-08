@@ -23,7 +23,7 @@ from unittest import mock
 
 
 _MODULE_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "python",
     "_pjrt_bootstrap.py",
 )
@@ -155,4 +155,7 @@ class PjrtBootstrapTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    # ``--xla`` is a TensorFlow-MUSA runtime switch, not a unittest option.
+    # The individual tests patch argv when they need to exercise each mode.
+    sys.argv[1:] = [arg for arg in sys.argv[1:] if arg not in ("--xla", "--no-xla")]
     unittest.main()

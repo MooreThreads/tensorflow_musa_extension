@@ -2,6 +2,7 @@
 """PJRT mode: matrix operations test (eager + JIT)."""
 
 import numpy as np
+import tensorflow_musa  # noqa: F401
 import tensorflow as tf
 from pjrt.pjrt_test_utils import PjrtTestCase
 

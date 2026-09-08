@@ -66,7 +66,11 @@ from ._runtime_config import (
     set_musa_allow_growth,
     set_musa_telemetry_config,
 )
-from . import gradients, ops, raw_ops
+# ``gradients`` imports TensorFlow at module import time. Keep the historical
+# native import order, but defer these helpers in PJRT mode until the loader
+# has completed provider preparation and registration.
+if not is_pjrt_requested():
+    from . import gradients, ops, raw_ops
 
 # Package version
 __version__ = "1.5.0"
@@ -86,6 +90,9 @@ except Exception as e:
         "MUSA functionality will not be available. "
         "Please ensure the plugin is built and MUSA SDK is installed."
     )
+
+if is_pjrt_requested():
+    from . import gradients, ops, raw_ops
 
 # Public API
 __all__ = [

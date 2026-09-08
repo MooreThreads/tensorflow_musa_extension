@@ -13,8 +13,8 @@
 # limitations under the License.
 # ==============================================================================
 
-"""PJRT boundary regression tests: native kernel safety, symbol failures, and
-dual-path integrity.
+"""PJRT boundary regression tests: native safety, provider registration, and
+isolated PJRT execution.
 
 These tests must be runnable both with and without PJRT enabled. When PJRT is
 disabled they verify the native PluggableDevice path is undisturbed. When PJRT
@@ -29,9 +29,8 @@ import sys
 import unittest
 
 import numpy as np
-import tensorflow as tf
-
 import tensorflow_musa
+import tensorflow as tf
 import tensorflow_musa._loader as musa_loader
 
 
@@ -49,6 +48,26 @@ def _assert_source_package():
     assert pkg is not None, "tensorflow_musa.__file__ is None"
     assert loader is not None, "load_plugin source file is None"
     return pkg, loader
+
+
+def _clean_child_environment():
+    """Return a child env without PJRT state inherited from this process."""
+    env = os.environ.copy()
+    for key in (
+        "TENSORFLOW_MUSA_ENABLE_PJRT",
+        "TENSORFLOW_MUSA_PJRT_PROVIDER_MODULE",
+        "TENSORFLOW_MUSA_PJRT_LIBRARY_PATH",
+        "TENSORFLOW_MUSA_PJRT_BRIDGE_PATH",
+        "TF_PLUGGABLE_DEVICE_LIBRARY_PATH",
+        "PJRT_NAMES_AND_LIBRARY_PATHS",
+        "NEXT_PLUGGABLE_DEVICE_USE_C_API",
+        "MUSA_TFNPD_IS_PLUGGABLE_DEVICE",
+        "MUSA_TFNPD_COMPILATION_DEVICE_NAME",
+        "MTCC20X_TOOLS_DIR",
+        "TF_XLA_FLAGS",
+    ):
+        env.pop(key, None)
+    return env
 
 
 # ---------------------------------------------------------------------------
@@ -122,8 +141,28 @@ class PjrtRegistrationContractTest(tf.test.TestCase):
         self.assertIn("plugin_path", status)
 
 
+class ImportOrderContractTest(tf.test.TestCase):
+    """PJRT must be selected before the first TensorFlow import."""
+
+    def test_tensorflow_first_is_rejected_for_xla(self):
+        script = """
+import tensorflow
+import tensorflow_musa
+"""
+        proc = subprocess.run(
+            [sys.executable, "-c", script, "--xla"],
+            env=_clean_child_environment(),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        out = proc.stdout + proc.stderr
+        self.assertNotEqual(proc.returncode, 0, out)
+        self.assertIn("importing tensorflow_musa before tensorflow", out)
+
+
 # ---------------------------------------------------------------------------
-# Dual-path smoke: both native and XLA kernels must coexist
+# PJRT eager/JIT smoke: both execution styles use the active PJRT backend
 # ---------------------------------------------------------------------------
 
 class PjrtIsolatedSmokeTest(tf.test.TestCase):
@@ -175,7 +214,7 @@ if status.get("mode") != "native":
     raise SystemExit(1)
 raise SystemExit(0)
 """
-        env = os.environ.copy()
+        env = _clean_child_environment()
         env.pop("PYTHONPATH", None)
         env["TENSORFLOW_MUSA_PJRT_PROVIDER_MODULE"] = "missing_openxla_musa_pjrt_provider"
         proc = subprocess.run(
@@ -192,4 +231,7 @@ raise SystemExit(0)
 
 
 if __name__ == "__main__":
+    # Let tensorflow_musa consume the runtime switch during import above, then
+    # keep unittest from treating it as an unknown test argument.
+    sys.argv[1:] = [arg for arg in sys.argv[1:] if arg not in ("--xla", "--no-xla")]
     unittest.main()

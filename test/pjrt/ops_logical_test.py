@@ -1,6 +1,7 @@
 # Copyright 2026 The TensorFlow MUSA Authors. All Rights Reserved.
 """PJRT mode: logical ops test (eager + JIT)."""
 
+import tensorflow_musa  # noqa: F401
 import tensorflow as tf
 from pjrt.pjrt_test_utils import PjrtTestCase
 
@@ -19,4 +20,3 @@ class LogicalOpsTest(PjrtTestCase):
     def testLogicalNot(self):
         a = tf.constant([True, False, True])
         self._testBothEagerAndJit(tf.logical_not, a)
-

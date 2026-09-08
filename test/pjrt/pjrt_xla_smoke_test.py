@@ -19,9 +19,8 @@ import inspect
 import os
 
 import numpy as np
-import tensorflow as tf
-
 import tensorflow_musa
+import tensorflow as tf
 import tensorflow_musa._loader as musa_loader
 
 
