@@ -279,7 +279,6 @@ class MusaFusedApplyAdagradV2Op : public MusaOpKernel {
     }
 
     ctx->forward_ref_input_to_ref_output(0, 0);
-    ctx->forward_ref_input_to_ref_output(1, 1);
   }
 
   bool IsExpensive() override { return true; }

@@ -24,11 +24,9 @@ class MusaBiasAddOp : public MusaOpKernel {
     const Tensor& input = ctx->input(0);
     const Tensor& bias = ctx->input(1);
 
-    if (input.NumElements() == 0 || bias.NumElements() == 0) {
-      Tensor* output = nullptr;
-      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &output));
-      return;
-    }
+    OP_REQUIRES(ctx, input.dims() >= 2 && bias.dims() == 1,
+                errors::InvalidArgument(
+                    "BiasAdd requires rank >= 2 input and vector bias"));
 
     int channel_dim = (data_format_ == FORMAT_NCHW) ? 1 : input.dims() - 1;
     OP_REQUIRES(ctx, bias.dim_size(0) == input.dim_size(channel_dim),
@@ -36,6 +34,7 @@ class MusaBiasAddOp : public MusaOpKernel {
 
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &output));
+    if (output->NumElements() == 0) return;
 
     MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);

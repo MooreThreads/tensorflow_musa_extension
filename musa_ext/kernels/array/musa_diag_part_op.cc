@@ -48,6 +48,7 @@ class MusaDiagPartOp : public MusaOpKernel {
 
     Tensor* output = nullptr;
     OP_REQUIRES_OK(context, context->allocate_output(0, out_shape, &output));
+    if (output->NumElements() == 0) return;
 
     // Get stream
     MUSA_OP_REQUIRES_MUDNN_HANDLE(context);

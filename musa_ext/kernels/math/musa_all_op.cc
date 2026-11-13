@@ -1,3 +1,4 @@
+#include "../empty_reduction.h"
 #include <mudnn.h>
 
 #include "../utils_op.h"
@@ -22,10 +23,11 @@ class MusaAllOp : public MusaOpKernel {
     const Tensor& input = context->input(0);
     const Tensor& axes_tensor = context->input(1);
 
-    if (input.NumElements() == 0) {
-      context->set_output(0, input);
-      return;
-    }
+    bool handled_empty = false;
+    OP_REQUIRES_OK(context, HandleEmptyReduction<bool>(context, keep_dims_,
+                                                       EmptyReduction::kAll,
+                                                       &handled_empty));
+    if (handled_empty) return;
 
     int64_t num_axes = axes_tensor.NumElements();
     std::vector<int> reduce_dims;

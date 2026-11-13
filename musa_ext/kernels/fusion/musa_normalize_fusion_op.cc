@@ -72,7 +72,6 @@ class MusaNormalizeOp : public MusaOpKernel {
                 errors::InvalidArgument("Input rank must be >= 1"));
 
     const int64_t last_dim = x.dim_size(x.dims() - 1);
-    const int64_t num_rows = x.NumElements() / last_dim;
 
     Tensor* y = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, x.shape(), &y));
@@ -81,6 +80,8 @@ class MusaNormalizeOp : public MusaOpKernel {
       VLOG(1) << "MusaNormalizeOp::Compute skipped empty tensor";
       return;
     }
+
+    const int64_t num_rows = x.NumElements() / last_dim;
 
     const T* input_ptr = x.flat<T>().data();
     T* output_ptr = y->flat<T>().data();

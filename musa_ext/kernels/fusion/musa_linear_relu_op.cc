@@ -1,3 +1,4 @@
+#include "../empty_matmul.h"
 #include <mudnn.h>
 #include <mudnn_xmma.h>
 
@@ -86,6 +87,11 @@ class MusaLinearActivationOp : public MusaOpKernel {
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
     if (output->NumElements() == 0) {
+      return;
+    }
+    if (k == 0) {
+      OP_REQUIRES_OK(ctx,
+                     InitializeEmptyMatMul(ctx, output, &bias_input, true));
       return;
     }
 

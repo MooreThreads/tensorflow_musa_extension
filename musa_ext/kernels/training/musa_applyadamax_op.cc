@@ -104,6 +104,7 @@ Status RunAdaMaxUpdate(OpKernelContext* ctx, mFormat format, Tensor* var_t,
                        Tensor* m_t, Tensor* v_t, const Tensor& grad,
                        T beta1_power, T lr, T beta1, T beta2, T epsilon,
                        const char* op_name) {
+  if (var_t->NumElements() == 0) return OkStatus();
   if (QueryMusaKernelRuntimeView(ctx).mudnn_handle == nullptr) {
     return MusaMudnnHandleRequiredError();
   }

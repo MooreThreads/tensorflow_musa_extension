@@ -1,3 +1,4 @@
+#include "../empty_reduction.h"
 #include <mudnn.h>
 
 #include <algorithm>
@@ -78,10 +79,11 @@ class MusaSumOp : public MusaOpKernel {
     const Tensor& input = ctx->input(0);
     const Tensor& axes_tensor = ctx->input(1);
 
-    if (input.NumElements() == 0) {
-      ctx->set_output(0, input);
-      return;
-    }
+    bool handled_empty = false;
+    OP_REQUIRES_OK(
+        ctx, HandleEmptyReduction<T>(ctx, keep_dims_, EmptyReduction::kSum,
+                                     &handled_empty));
+    if (handled_empty) return;
 
     int64_t num_axes = axes_tensor.NumElements();
     std::vector<int> reduce_dims;

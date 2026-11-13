@@ -228,6 +228,7 @@ class MusaResourceApplyAdamOp : public MusaOpKernel {
     const T beta2 = ctx->input(7).scalar<T>()();
     const T epsilon = ctx->input(8).scalar<T>()();
     // grad already declared above for shape validation
+    if (var_t.NumElements() == 0) return;
 
     // Calculate bias-corrected learning rate
     // Formula: alpha = lr * sqrt(1 - beta2^t) / (1 - beta1^t)
@@ -433,17 +434,21 @@ class MusaApplyAdamKernelOp : public MusaOpKernel {
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
-    Var* var = nullptr;
-    Var* m = nullptr;
-    Var* v = nullptr;
-    OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 0), &var));
-    OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 1), &m));
-    OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 2), &v));
-    core::ScopedUnref var_unref(var), m_unref(m), v_unref(v);
-
-    Tensor* var_t = var->tensor();
-    Tensor* m_t = m->tensor();
-    Tensor* v_t = v->tensor();
+    std::vector<mutex*> mutexes = {ctx->input_ref_mutex(0),
+                                   ctx->input_ref_mutex(1),
+                                   ctx->input_ref_mutex(2)};
+    std::sort(mutexes.begin(), mutexes.end());
+    mutexes.erase(std::unique(mutexes.begin(), mutexes.end()), mutexes.end());
+    std::vector<std::unique_ptr<mutex_lock>> locks;
+    if (use_exclusive_lock_) {
+      for (mutex* mu : mutexes) locks.emplace_back(std::make_unique<mutex_lock>(*mu));
+    }
+    Tensor var_tensor = ctx->mutable_input(0, use_exclusive_lock_);
+    Tensor m_tensor = ctx->mutable_input(1, use_exclusive_lock_);
+    Tensor v_tensor = ctx->mutable_input(2, use_exclusive_lock_);
+    Tensor* var_t = &var_tensor;
+    Tensor* m_t = &m_tensor;
+    Tensor* v_t = &v_tensor;
 
     OP_REQUIRES(
         ctx,
@@ -477,6 +482,10 @@ class MusaApplyAdamKernelOp : public MusaOpKernel {
     const T beta2 = ctx->input(7).scalar<T>()();
     const T epsilon = ctx->input(8).scalar<T>()();
     // grad already declared above for shape validation
+    if (var_t->NumElements() == 0) {
+      ctx->forward_ref_input_to_ref_output(0, 0);
+      return;
+    }
 
     MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);

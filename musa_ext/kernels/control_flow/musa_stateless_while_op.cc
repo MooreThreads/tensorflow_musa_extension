@@ -76,12 +76,27 @@ class MusaStatelessWhileOp : public OpKernel {
     FunctionLibraryRuntime::Handle cond_handle;
     FunctionLibraryRuntime::Handle body_handle;
 
-    Status s = flr->Instantiate(cond_func_.name(),
-                                AttrSlice(&cond_func_.attr()), &cond_handle);
+    // This kernel registers all loop values as HostMemory. Instantiate its
+    // functions on the host as well, including their _Arg/_Retval nodes.
+    FunctionLibraryRuntime::InstantiateOptions instantiate_options;
+    const string device_name = ctx->device()->name();
+    const auto device_pos = device_name.rfind("/device:");
+    instantiate_options.target =
+        device_name.substr(0, device_pos) + "/device:CPU:0";
+    instantiate_options.is_multi_device_function = true;
+    instantiate_options.input_devices.assign(num_inputs,
+                                             instantiate_options.target);
+    instantiate_options.output_devices.assign(1, instantiate_options.target);
+
+    Status s =
+        flr->Instantiate(cond_func_.name(), AttrSlice(&cond_func_.attr()),
+                         instantiate_options, &cond_handle);
     OP_REQUIRES_OK(ctx, s);
 
+    instantiate_options.output_devices.assign(num_inputs,
+                                              instantiate_options.target);
     s = flr->Instantiate(body_func_.name(), AttrSlice(&body_func_.attr()),
-                         &body_handle);
+                         instantiate_options, &body_handle);
     OP_REQUIRES_OK(ctx, s);
 
     // Create runtime options

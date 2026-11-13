@@ -1,3 +1,5 @@
+#include <limits>
+#include "mu/device/musa_memcpy.h"
 #include <list>
 #include <vector>
 
@@ -46,6 +48,13 @@ class MusaFusedBatchNormOp : public MusaOpKernel {
     const Tensor& est_mean = ctx->input(3);
     const Tensor& est_var = ctx->input(4);
 
+    OP_REQUIRES(
+        ctx,
+        x.dims() >= 2 && scale.dims() == 1 && offset.shape() == scale.shape() &&
+            scale.NumElements() == x.dim_size(is_nhwc_ ? x.dims() - 1 : 1),
+        errors::InvalidArgument(
+            "Invalid FusedBatchNorm input/scale/offset shapes"));
+
     Tensor* y = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, x.shape(), &y));
     Tensor* batch_mean = nullptr;
@@ -59,7 +68,38 @@ class MusaFusedBatchNormOp : public MusaOpKernel {
     Tensor* reserve_3 = nullptr;
     // CPU FusedBatchNormV3 allocates reserve_3 as a 0-D scalar TensorShape({}).
     // muDNN does not populate this field; zero-initialise for safety.
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(5, TensorShape({}), &reserve_3));
+    Tensor reserve_3_storage;
+    if (ctx->num_outputs() > 5) {
+      OP_REQUIRES_OK(ctx, ctx->allocate_output(5, TensorShape({}), &reserve_3));
+    } else {
+      OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT, TensorShape({}),
+                                             &reserve_3_storage));
+      reserve_3 = &reserve_3_storage;
+    }
+
+    if (x.NumElements() == 0) {
+      Tensor host(DT_FLOAT, scale.shape());
+      host.flat<float>().setConstant(std::numeric_limits<float>::quiet_NaN());
+      for (Tensor* stat : {batch_mean, batch_var}) {
+        if (stat->NumElements() > 0) {
+          OP_REQUIRES(
+              ctx,
+              MusaMemcpyH2D(stat->data(), host.data(), host.TotalBytes()) ==
+                  mStatus::SUCCESS,
+              errors::Internal("Failed to initialize empty batch statistics"));
+        }
+      }
+      for (Tensor* reserve : {saved_mean, saved_var, reserve_3}) {
+        if (reserve->NumElements() > 0) {
+          OP_REQUIRES(
+              ctx,
+              musaMemsetAsync(reserve->data(), 0, reserve->TotalBytes(),
+                              GetMusaStreamByCtx(ctx)) == musaSuccess,
+              errors::Internal("Failed to initialize empty batch reserve"));
+        }
+      }
+      return;
+    }
 
     MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
@@ -240,6 +280,8 @@ class MusaFusedBatchNormGradOp : public MusaOpKernel {
                     d_mean->NumElements() * sizeof(float), stream);
     musaMemsetAsync(d_var->flat<float>().data(), 0,
                     d_var->NumElements() * sizeof(float), stream);
+
+    if (x.NumElements() == 0) return;
 
     std::list<Tensor> workspace_holder;
     auto maintainer_func = [&](size_t size) -> ::musa::dnn::MemoryHandler {

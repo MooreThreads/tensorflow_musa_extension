@@ -40,6 +40,9 @@ class MusaRsqrtGradOp : public MusaOpKernel {
   void Compute(OpKernelContext* context) override {
     const Tensor& y = context->input(0);
     const Tensor& dy = context->input(1);
+    OP_REQUIRES(context, y.NumElements() == dy.NumElements(),
+                errors::InvalidArgument(
+                    "Gradient inputs must have the same number of elements"));
 
     Tensor* dx = nullptr;
     OP_REQUIRES_OK(context, context->allocate_output(0, y.shape(), &dx));

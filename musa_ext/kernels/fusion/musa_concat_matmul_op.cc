@@ -1,3 +1,4 @@
+#include "../empty_matmul.h"
 #include <mudnn.h>
 #include <mudnn_xmma.h>
 #include <musa_runtime.h>
@@ -58,6 +59,20 @@ class MusaConcatMatMulOp : public MusaOpKernel {
     const Tensor& ref =
         ctx->input(first_non_empty_idx == -1 ? 0 : first_non_empty_idx);
     int normalized_axis = axis_val < 0 ? axis_val + ref.dims() : axis_val;
+    OP_REQUIRES(
+        ctx,
+        ref.dims() >= 2 && normalized_axis >= 0 && normalized_axis < ref.dims(),
+        errors::InvalidArgument("Invalid ConcatMatMul rank or axis"));
+    for (int i = 0; i < num_concat_; ++i) {
+      const Tensor& t = ctx->input(i);
+      OP_REQUIRES(ctx, t.dims() == ref.dims(),
+                  errors::InvalidArgument("Concat input ranks must match"));
+      for (int d = 0; d < ref.dims(); ++d) {
+        OP_REQUIRES(
+            ctx, d == normalized_axis || t.dim_size(d) == ref.dim_size(d),
+            errors::InvalidArgument("Concat input dimensions must match"));
+      }
+    }
 
     for (int i = 0; i < num_concat_; ++i) {
       concat_dim_total += ctx->input(i).dim_size(normalized_axis);
@@ -77,13 +92,16 @@ class MusaConcatMatMulOp : public MusaOpKernel {
         mudnn_ins.push_back(CreateMTensor(ctx->input(i)));
       }
     }
-    ::musa::dnn::Tensor mudnn_concat_out = CreateMTensor(concat_out_tensor);
-    ::musa::dnn::Concat concat_op;
-    concat_op.SetAxis(normalized_axis);
-    auto status = concat_op.Run(handle, mudnn_concat_out, mudnn_ins.size(),
-                                mudnn_ins.data());
-    OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
-                errors::Internal("MUSA Concat failed in MusaConcatMatMul."));
+    auto status = ::musa::dnn::Status::SUCCESS;
+    if (concat_out_tensor.NumElements() > 0) {
+      ::musa::dnn::Tensor mudnn_concat_out = CreateMTensor(concat_out_tensor);
+      ::musa::dnn::Concat concat_op;
+      concat_op.SetAxis(normalized_axis);
+      status = concat_op.Run(handle, mudnn_concat_out, mudnn_ins.size(),
+                             mudnn_ins.data());
+      OP_REQUIRES(ctx, status == ::musa::dnn::Status::SUCCESS,
+                  errors::Internal("MUSA Concat failed in MusaConcatMatMul."));
+    }
 
     // 3. MatMul
     const Tensor& other_input = ctx->input(num_concat_ + 1);
@@ -92,6 +110,13 @@ class MusaConcatMatMulOp : public MusaOpKernel {
     const Tensor& in1 =
         (concat_input_idx_ == 1) ? concat_out_tensor : other_input;
 
+    OP_REQUIRES(ctx, in0.dims() >= 2 && in1.dims() >= 2,
+                errors::InvalidArgument("MatMul operands must have rank >= 2"));
+    const int64_t k0 = in0.dim_size(in0.dims() - (trans_a_ ? 2 : 1));
+    const int64_t k1 = in1.dim_size(in1.dims() - (trans_b_ ? 1 : 2));
+    OP_REQUIRES(
+        ctx, k0 == k1,
+        errors::InvalidArgument("MatMul contraction dimensions must match"));
     MatMulBCast bcast(in0.shape().dim_sizes(), in1.shape().dim_sizes());
     OP_REQUIRES(ctx, bcast.IsValid(),
                 errors::InvalidArgument(
@@ -108,6 +133,11 @@ class MusaConcatMatMulOp : public MusaOpKernel {
 
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, mm_out_shape, &output));
+    if (output->NumElements() == 0) return;
+    if (k0 == 0) {
+      OP_REQUIRES_OK(ctx, InitializeEmptyMatMul(ctx, output));
+      return;
+    }
 
     mTensor mt_a = CreateMTensor(in0);
     mTensor mt_b = CreateMTensor(in1);

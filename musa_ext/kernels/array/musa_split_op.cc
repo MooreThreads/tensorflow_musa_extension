@@ -63,7 +63,7 @@ class MusaSplitOp : public OpKernel {
       Tensor* output = nullptr;
       OP_REQUIRES_OK(context, context->allocate_output(i, out_shape, &output));
 
-      if (delta == 0) continue;
+      if (output->NumElements() == 0) continue;
 
       auto in_mt = CreateMTensor(input);
       auto out_mt = CreateMTensor(*output);

@@ -20,8 +20,10 @@ class MusaUniqueOp : public MusaOpKernel {
 
     const int64_t input_num = input.NumElements();
     if (input_num == 0) {
-      ctx->set_output(0, Tensor(input.dtype(), TensorShape()));
-      ctx->set_output(1, Tensor(DataTypeToEnum<OutIdxT>::value, TensorShape()));
+      Tensor* values = nullptr;
+      Tensor* indices = nullptr;
+      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, TensorShape({0}), &values));
+      OP_REQUIRES_OK(ctx, ctx->allocate_output(1, TensorShape({0}), &indices));
       return;
     }
 

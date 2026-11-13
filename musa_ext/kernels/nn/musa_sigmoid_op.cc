@@ -45,6 +45,9 @@ class MusaSigmoidGradOp : public MusaOpKernel {
   void Compute(OpKernelContext* ctx) override {
     const Tensor& y = ctx->input(0);
     const Tensor& dy = ctx->input(1);
+    OP_REQUIRES(ctx, y.NumElements() == dy.NumElements(),
+                errors::InvalidArgument(
+                    "Gradient inputs must have the same number of elements"));
 
     Tensor* dz = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, y.shape(), &dz));

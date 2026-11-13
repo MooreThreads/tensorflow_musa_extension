@@ -30,6 +30,8 @@ class MusaSparseSoftMaxCrossEntroyWithLogitsOp : public MusaOpKernel {
 
     const int64 batch_size = logits.dim_size(0);
     const int64 num_classes = logits.dim_size(1);
+    OP_REQUIRES(context, num_classes > 0,
+                errors::InvalidArgument("Must have at least one class"));
 
     Tensor* loss_tensor = nullptr;
     OP_REQUIRES_OK(context,

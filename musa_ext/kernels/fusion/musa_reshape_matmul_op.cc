@@ -1,3 +1,4 @@
+#include "../empty_matmul.h"
 /* Copyright 2026 The TensorFlow MUSA Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -55,6 +56,11 @@ REGISTER_OP("MusaReshapeMatMul")
 
       TF_RETURN_IF_ERROR(c->WithRankAtLeast(x_shape, 2, &x_shape));
       TF_RETURN_IF_ERROR(c->WithRank(w_shape, 2, &w_shape));
+
+      if (!c->RankKnown(x_shape)) {
+        c->set_output(0, c->UnknownShape());
+        return OkStatus();
+      }
 
       bool transpose_b = false;
       TF_RETURN_IF_ERROR(c->GetAttr("transpose_b", &transpose_b));
@@ -117,6 +123,10 @@ class MusaReshapeMatMulOp : public MusaOpKernel {
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, out_shape, &output));
     if (output->NumElements() == 0) {
+      return;
+    }
+    if (k == 0) {
+      OP_REQUIRES_OK(ctx, InitializeEmptyMatMul(ctx, output));
       return;
     }
 

@@ -1,3 +1,4 @@
+#include "../empty_matmul.h"
 #include <mublas.h>
 
 #include "../utils_op.h"
@@ -29,7 +30,11 @@ class MusaInteractOp : public OpKernel {
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape, &output));
 
-    if (input.NumElements() == 0) return;
+    if (output->NumElements() == 0) return;
+    if (embed_dim == 0) {
+      OP_REQUIRES_OK(ctx, InitializeEmptyMatMul(ctx, output));
+      return;
+    }
 
     MusaKernelRuntimeView runtime = QueryMusaKernelRuntimeView(ctx);
     OP_REQUIRES(ctx, runtime.mublas_handle != nullptr,

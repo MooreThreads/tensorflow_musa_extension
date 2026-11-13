@@ -3,6 +3,7 @@
 #include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
+#include "tensorflow/core/util/bcast.h"
 
 namespace tensorflow {
 namespace musa {
@@ -19,8 +20,14 @@ class MusaMinimumOp : public MusaOpKernel {
     const Tensor& in0 = ctx->input(0);
     const Tensor& in1 = ctx->input(1);
 
+    BCast bcast(BCast::FromShape(in0.shape()), BCast::FromShape(in1.shape()));
+    OP_REQUIRES(ctx, bcast.IsValid(),
+                errors::InvalidArgument("Incompatible shapes for Minimum: ",
+                                        in0.shape().DebugString(), " and ",
+                                        in1.shape().DebugString()));
     Tensor* out = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, in0.shape(), &out));
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(
+                            0, BCast::ToShape(bcast.output_shape()), &out));
 
     if (out->NumElements() == 0) return;
 

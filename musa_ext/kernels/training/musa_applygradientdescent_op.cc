@@ -159,6 +159,8 @@ class MusaResourceApplyGradientDescentOp : public MusaOpKernel {
                     var_t.shape().DebugString(),
                     " grad: ", grad_t.shape().DebugString()));
 
+    if (var_t.NumElements() == 0) return;
+
     if (TryLaunchFastResourceApplyGradientDescent<T>(ctx, &var_t, lr_t,
                                                      grad_t)) {
       return;
@@ -470,12 +472,18 @@ template <typename T>
 class MusaApplyGradientDescentOp : public MusaOpKernel {
  public:
   explicit MusaApplyGradientDescentOp(OpKernelConstruction* ctx)
-      : MusaOpKernel(ctx) {}
+      : MusaOpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("use_locking", &use_locking_));
+  }
 
   bool IsExpensive() override { return true; }
 
   void Compute(OpKernelContext* ctx) override {
-    const Tensor& var_t = ctx->input(0);
+    std::unique_ptr<mutex_lock> lock;
+    if (use_locking_) {
+      lock = std::make_unique<mutex_lock>(*ctx->input_ref_mutex(0));
+    }
+    Tensor var_t = ctx->mutable_input(0, use_locking_);
     const Tensor& lr_t = ctx->input(1);
     const Tensor& grad_t = ctx->input(2);
 
@@ -486,9 +494,9 @@ class MusaApplyGradientDescentOp : public MusaOpKernel {
         ctx, var_t.shape().IsSameSize(grad_t.shape()),
         errors::InvalidArgument("var and grad must have the same shape"));
 
-    // Allocate output
-    Tensor* out_t;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, var_t.shape(), &out_t));
+    ctx->forward_ref_input_to_ref_output(0, 0);
+    if (var_t.NumElements() == 0) return;
+    Tensor* out_t = &var_t;
 
     MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
@@ -529,11 +537,10 @@ class MusaApplyGradientDescentOp : public MusaOpKernel {
     b_op.SetMode(::musa::dnn::Binary::Mode::SUB);
     b_op.Run(handle, t_out, t_var, t_lr_grad);
 
-    // Forward input to output for reference types
-    if (IsRefType(ctx->input_dtype(0))) {
-      ctx->forward_ref_input_to_ref_output(0, 0);
-    }
   }
+
+ private:
+  bool use_locking_ = false;
 };
 
 #define REGISTER_APPLY_GRADIENT_DESCENT(T)             \

@@ -1,3 +1,4 @@
+#include "../empty_reduction.h"
 #include <mudnn.h>
 
 #include <functional>
@@ -24,6 +25,12 @@ class MusaMaxOp : public MusaOpKernel {
   void Compute(OpKernelContext* ctx) override {
     const Tensor& input = ctx->input(0);
     const Tensor& axes_tensor = ctx->input(1);
+
+    bool handled_empty = false;
+    OP_REQUIRES_OK(
+        ctx, HandleEmptyReduction<T>(ctx, keep_dims_, EmptyReduction::kMax,
+                                     &handled_empty));
+    if (handled_empty) return;
 
     const int rank = input.dims();
     const int64_t num_axes = axes_tensor.NumElements();

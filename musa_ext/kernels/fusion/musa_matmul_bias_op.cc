@@ -1,3 +1,4 @@
+#include "../empty_matmul.h"
 #include <cstdlib>
 #include <vector>
 
@@ -53,16 +54,6 @@ class MusaMatMulBiasAddOp : public MusaOpKernel {
             "MatMulBiasAdd requires bias to be 1D or [1, N], got shape ",
             bias.shape().DebugString()));
 
-    if (a.NumElements() == 0 || b.NumElements() == 0 ||
-        bias.NumElements() == 0) {
-      TensorShape out_shape;
-      OP_REQUIRES_OK(ctx, ComputeOutputShape(a, b, &out_shape));
-
-      Tensor* output = nullptr;
-      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, out_shape, &output));
-      return;
-    }
-
     const int64_t a_rows = a.dim_size(0);
     const int64_t a_cols = a.dim_size(1);
     const int64_t b_rows = b.dim_size(0);
@@ -89,6 +80,11 @@ class MusaMatMulBiasAddOp : public MusaOpKernel {
     TensorShape out_shape({m, n});
     Tensor* output = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, out_shape, &output));
+    if (output->NumElements() == 0) return;
+    if (a.NumElements() == 0 || b.NumElements() == 0) {
+      OP_REQUIRES_OK(ctx, InitializeEmptyMatMul(ctx, output, &bias));
+      return;
+    }
 
     MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);

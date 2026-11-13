@@ -39,7 +39,9 @@ class MusaSigmoidCalibrationOp : public MusaOpKernel {
     const Tensor& input = ctx->input(0);
     const Tensor& scale = ctx->input(1);
 
-    if (input.NumElements() == 0) return;
+    Tensor* output;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &output));
+    if (output->NumElements() == 0) return;
 
     MUSA_OP_REQUIRES_MUDNN_HANDLE(ctx);
     auto& handle = GetHandleByCtx(ctx);
@@ -57,8 +59,6 @@ class MusaSigmoidCalibrationOp : public MusaOpKernel {
                       ctx);
 
     // 2. Compute S / (S + Scale * (1 - S))
-    Tensor* output;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, input.shape(), &output));
     musaStream_t stream = GetMusaStreamByCtx(ctx);
     LaunchSigmoidCalibrationKernel<T>(
         sigmoid_mt.GetImpl(), scale_mt.GetImpl(), output->flat<T>().data(),

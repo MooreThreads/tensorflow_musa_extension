@@ -1,3 +1,4 @@
+#include "../empty_matmul.h"
 /* Copyright 2026 The TensorFlow MUSA Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -258,6 +259,10 @@ class MusaTensorDotOp : public MusaOpKernel {
 
     // 空张量快速返回
     if (output->NumElements() == 0) {
+      return;
+    }
+    if (a.NumElements() == 0 || b.NumElements() == 0) {
+      OP_REQUIRES_OK(ctx, InitializeEmptyMatMul(ctx, output));
       return;
     }
 

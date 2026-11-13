@@ -1,3 +1,4 @@
+#include "../empty_matmul.h"
 #include <mudnn.h>
 #include <mudnn_xmma.h>
 #include <musa_runtime.h>
@@ -67,6 +68,7 @@ class MusaBiasAddReluMatMulOp : public MusaOpKernel {
       TensorShape out_shape;
       OP_REQUIRES_OK(ctx, InferOutputShape(input, other, &out_shape));
       OP_REQUIRES_OK(ctx, ctx->allocate_output(0, out_shape, &output));
+      OP_REQUIRES_OK(ctx, InitializeEmptyMatMul(ctx, output));
       return;
     }
 

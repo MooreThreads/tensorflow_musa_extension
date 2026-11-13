@@ -19,6 +19,9 @@ class MusaSqrtGradOp : public MusaOpKernel {
   void Compute(OpKernelContext* ctx) override {
     const Tensor& y = ctx->input(0);
     const Tensor& dy = ctx->input(1);
+    OP_REQUIRES(ctx, y.NumElements() == dy.NumElements(),
+                errors::InvalidArgument(
+                    "Gradient inputs must have the same number of elements"));
 
     BCast bcast(BCast::FromShape(y.shape()), BCast::FromShape(dy.shape()),
                 false);

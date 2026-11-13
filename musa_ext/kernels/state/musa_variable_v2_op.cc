@@ -57,7 +57,7 @@ class MusaVariableV2Op : public OpKernel {
 
       // If first time, allocate storage tensor with required shape.
       if (var->tensor()->dtype() == DT_INVALID || has_placeholder_shape) {
-        *var->tensor() = Tensor(dtype, shape_);
+        OP_REQUIRES_OK(ctx, ctx->allocate_temp(dtype, shape_, var->tensor()));
         var->is_initialized = false;  // VariableV2 itself does not initialize.
       } else {
         // Validate dtype/shape consistency if the variable already exists.
