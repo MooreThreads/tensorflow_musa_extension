@@ -1,5 +1,8 @@
 #include <musa_runtime.h>
 
+#include <cstdint>
+#include <cstring>
+
 #include "../utils_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -132,10 +135,20 @@ class UnsortedSegmentSumOp : public OpKernel {
 // scalar using its actual dtype, then keep the value 64-bit through allocation
 // and kernel launch (including when segment_ids is int32).
 inline int64_t ReadNumSegments(const Tensor& num_segments) {
+  // Host scalars created from TensorProto int_val are packed as
+  // {value, HostScalarTensorBuffer}. For int32 the 4-byte value is immediately
+  // followed by the buffer refcount, so an 8-byte load reads a second copy of
+  // the value (for example 3 becomes 0x0000000300000003) and allocates an
+  // enormous output. Load only the bytes that belong to the scalar.
+  const void* data = num_segments.tensor_data().data();
   if (num_segments.dtype() == DT_INT32) {
-    return num_segments.scalar<int32>()();
+    int32_t value = 0;
+    std::memcpy(&value, data, sizeof(value));
+    return static_cast<int64_t>(value);
   }
-  return num_segments.scalar<int64_t>()();
+  int64_t value = 0;
+  std::memcpy(&value, data, sizeof(value));
+  return value;
 }
 
 #define SPECIALIZE_LAUNCHER(T, Tindex, FuncName)                              \
