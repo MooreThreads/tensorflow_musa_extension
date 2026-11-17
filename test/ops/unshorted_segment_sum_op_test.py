@@ -25,7 +25,8 @@ class UnsortedSegmentSumOpTest(MUSATestCase):
   """Tests for MUSA UnsortedSegmentSum operator."""
 
   def _test_unsorted_segment_sum(self, data, segment_ids, num_segments, dtype,
-                                 index_type=tf.int32, rtol=1e-5, atol=1e-8):
+                                 index_type=tf.int32, num_segments_type=None,
+                                 rtol=1e-5, atol=1e-8):
     """Test unsorted_segment_sum operation."""
     np_dtype = dtype.as_numpy_dtype
 
@@ -39,7 +40,9 @@ class UnsortedSegmentSumOpTest(MUSATestCase):
     x = tf.constant(data, dtype=dtype)
     ids = tf.constant(segment_ids, dtype=index_type)
 
-    num_seg_tensor = tf.constant(num_segments, dtype=index_type)
+    if num_segments_type is None:
+        num_segments_type = index_type
+    num_seg_tensor = tf.constant(num_segments, dtype=num_segments_type)
 
     def op_func(data_in, ids_in):
         return tf.math.unsorted_segment_sum(data_in, ids_in, num_seg_tensor)
@@ -66,6 +69,22 @@ class UnsortedSegmentSumOpTest(MUSATestCase):
 
     for index_type in [tf.int32, tf.int64]:
         self._test_unsorted_segment_sum(inputs, segment_ids, num_segments, tf.float32, index_type=index_type)
+
+  def testIndependentIndicesAndNumSegmentsTypes(self):
+    """Tindices and Tnumsegments are independent TensorFlow attributes."""
+    inputs = [[1, 2], [3, 4], [5, 6]]
+    segment_ids = [1, 0, 1]
+    num_segments = 3
+
+    for index_type in [tf.int32, tf.int64]:
+      for num_segments_type in [tf.int32, tf.int64]:
+        for dtype in [tf.float32, tf.float16, tf.bfloat16]:
+          rtol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-5
+          atol = 1e-2 if dtype in [tf.float16, tf.bfloat16] else 1e-8
+          self._test_unsorted_segment_sum(
+              inputs, segment_ids, num_segments, dtype,
+              index_type=index_type, num_segments_type=num_segments_type,
+              rtol=rtol, atol=atol)
 
   def testEmpty(self):
     """Test empty input and empty indices."""

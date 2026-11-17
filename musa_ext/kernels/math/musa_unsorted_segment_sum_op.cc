@@ -11,7 +11,7 @@
 extern "C" {
 void LaunchUnsortedSegmentSumFloatInt32(const float* data,
                                         const int* segment_ids,
-                                        int num_segments, int64_t N, int64_t M,
+                                        int64_t num_segments, int64_t N, int64_t M,
                                         float* output, musaStream_t stream);
 void LaunchUnsortedSegmentSumFloatInt64(const float* data,
                                         const int64_t* segment_ids,
@@ -20,7 +20,7 @@ void LaunchUnsortedSegmentSumFloatInt64(const float* data,
                                         musaStream_t stream);
 void LaunchUnsortedSegmentSumDoubleInt32(const double* data,
                                          const int* segment_ids,
-                                         int num_segments, int64_t N, int64_t M,
+                                         int64_t num_segments, int64_t N, int64_t M,
                                          double* output, musaStream_t stream);
 void LaunchUnsortedSegmentSumDoubleInt64(const double* data,
                                          const int64_t* segment_ids,
@@ -28,7 +28,7 @@ void LaunchUnsortedSegmentSumDoubleInt64(const double* data,
                                          int64_t M, double* output,
                                          musaStream_t stream);
 void LaunchUnsortedSegmentSumInt32Int32(const int* data, const int* segment_ids,
-                                        int num_segments, int64_t N, int64_t M,
+                                        int64_t num_segments, int64_t N, int64_t M,
                                         int* output, musaStream_t stream);
 void LaunchUnsortedSegmentSumInt32Int64(const int* data,
                                         const int64_t* segment_ids,
@@ -37,7 +37,7 @@ void LaunchUnsortedSegmentSumInt32Int64(const int* data,
                                         musaStream_t stream);
 void LaunchUnsortedSegmentSumInt64Int32(const int64_t* data,
                                         const int* segment_ids,
-                                        int num_segments, int64_t N, int64_t M,
+                                        int64_t num_segments, int64_t N, int64_t M,
                                         int64_t* output, musaStream_t stream);
 void LaunchUnsortedSegmentSumInt64Int64(const int64_t* data,
                                         const int64_t* segment_ids,
@@ -47,7 +47,7 @@ void LaunchUnsortedSegmentSumInt64Int64(const int64_t* data,
 // Half/BFloat16 via float accumulation
 void LaunchUnsortedSegmentSumHalfToFloatInt32(const uint16_t* data,
                                               const int* segment_ids,
-                                              int num_segments, int64_t N,
+                                              int64_t num_segments, int64_t N,
                                               int64_t M, float* float_output,
                                               musaStream_t stream);
 void LaunchUnsortedSegmentSumHalfToFloatInt64(const uint16_t* data,
@@ -56,7 +56,7 @@ void LaunchUnsortedSegmentSumHalfToFloatInt64(const uint16_t* data,
                                               int64_t M, float* float_output,
                                               musaStream_t stream);
 void LaunchUnsortedSegmentSumBFloat16ToFloatInt32(
-    const uint16_t* data, const int* segment_ids, int num_segments, int64_t N,
+    const uint16_t* data, const int* segment_ids, int64_t num_segments, int64_t N,
     int64_t M, float* float_output, musaStream_t stream);
 void LaunchUnsortedSegmentSumBFloat16ToFloatInt64(
     const uint16_t* data, const int64_t* segment_ids, int64_t num_segments,
@@ -69,6 +69,8 @@ void LaunchConvertFloatToBFloat16Bits(const float* input, uint16_t* output,
 
 namespace tensorflow {
 namespace musa {
+
+inline int64_t ReadNumSegments(const Tensor& num_segments);
 
 template <typename T, typename Tindex>
 class UnsortedSegmentSumOp : public OpKernel {
@@ -83,7 +85,7 @@ class UnsortedSegmentSumOp : public OpKernel {
     OP_REQUIRES(ctx, TensorShapeUtils::IsScalar(num_segments_t.shape()),
                 errors::InvalidArgument("num_segments should be a scalar."));
 
-    const Tindex num_segments = num_segments_t.scalar<Tindex>()();
+    const int64_t num_segments = ReadNumSegments(num_segments_t);
 
     OP_REQUIRES(ctx, num_segments > 0,
                 errors::InvalidArgument("num_segments should be positive."));
@@ -122,14 +124,24 @@ class UnsortedSegmentSumOp : public OpKernel {
 
  private:
   void LaunchKernel(const T* data, const Tindex* segment_ids,
-                    Tindex num_segments, int64 N, int64 M, T* output,
+                    int64_t num_segments, int64 N, int64 M, T* output,
                     musaStream_t stream);
 };
+
+// Tindices and Tnumsegments are independent TensorFlow attributes. Read the
+// scalar using its actual dtype, then keep the value 64-bit through allocation
+// and kernel launch (including when segment_ids is int32).
+inline int64_t ReadNumSegments(const Tensor& num_segments) {
+  if (num_segments.dtype() == DT_INT32) {
+    return num_segments.scalar<int32>()();
+  }
+  return num_segments.scalar<int64_t>()();
+}
 
 #define SPECIALIZE_LAUNCHER(T, Tindex, FuncName)                              \
   template <>                                                                 \
   void UnsortedSegmentSumOp<T, Tindex>::LaunchKernel(                         \
-      const T* data, const Tindex* segment_ids, Tindex num_segments, int64 N, \
+      const T* data, const Tindex* segment_ids, int64_t num_segments, int64 N, \
       int64 M, T* output, musaStream_t stream) {                              \
     FuncName(data, segment_ids, num_segments, N, M, output, stream);          \
   }
@@ -183,7 +195,7 @@ class UnsortedSegmentSumOpViaFloat : public OpKernel {
     OP_REQUIRES(ctx, TensorShapeUtils::IsScalar(num_segments_t.shape()),
                 errors::InvalidArgument("num_segments should be a scalar."));
 
-    const Tindex num_segments = num_segments_t.scalar<Tindex>()();
+    const int64_t num_segments = ReadNumSegments(num_segments_t);
     OP_REQUIRES(ctx, num_segments > 0,
                 errors::InvalidArgument("num_segments should be positive."));
 
@@ -250,7 +262,7 @@ class UnsortedSegmentSumOpViaFloat : public OpKernel {
     }
 
     // Convert float -> T
-    int64_t out_count = static_cast<int64_t>(num_segments) * M;
+    int64_t out_count = num_segments * M;
     if (std::is_same<T, Eigen::half>::value) {
       LaunchConvertFloatToHalfBits(float_out, out_bits, out_count, stream);
     } else {
