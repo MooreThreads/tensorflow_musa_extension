@@ -28,7 +28,7 @@ __device__ __forceinline__ long atomicAdd(long* address, long val) {
 
 template <typename T, typename Tindex>
 __global__ void UnsortedSegmentSumKernel(const T* data, const Tindex* segment_ids,
-                                         Tindex num_segments, int64_t N, int64_t M,
+                                         int64_t num_segments, int64_t N, int64_t M,
                                          T* output) {
   int64_t tid = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -38,7 +38,7 @@ __global__ void UnsortedSegmentSumKernel(const T* data, const Tindex* segment_id
 
     Tindex segment_id = segment_ids[i];
 
-    if (segment_id >= 0 && segment_id < num_segments) {
+    if (segment_id >= 0 && static_cast<int64_t>(segment_id) < num_segments) {
       atomicAdd(&output[segment_id * M + j], data[tid]);
     }
   }
@@ -47,7 +47,7 @@ __global__ void UnsortedSegmentSumKernel(const T* data, const Tindex* segment_id
 extern "C" {
 
 #define DEFINE_SEGMENT_SUM_LAUNCHER(Name, T, Tindex) \
-  void Name(const T* data, const Tindex* segment_ids, Tindex num_segments, \
+  void Name(const T* data, const Tindex* segment_ids, int64_t num_segments, \
             int64_t N, int64_t M, T* output, musaStream_t stream) { \
     int64_t total = N * M; \
     if (total == 0) return; \
@@ -94,14 +94,14 @@ __device__ __forceinline__ uint16_t FloatToBFloat16Bits_(float v) {
 
 template <typename Tindex>
 __global__ void UnsortedSegmentSumKernelHalfToFloat(
-    const uint16_t* data, const Tindex* segment_ids, Tindex num_segments,
+    const uint16_t* data, const Tindex* segment_ids, int64_t num_segments,
     int64_t N, int64_t M, float* float_output) {
     int64_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (tid < N * M) {
         int64_t j = tid % M;
         int64_t i = tid / M;
         Tindex segment_id = segment_ids[i];
-        if (segment_id >= 0 && segment_id < num_segments) {
+        if (segment_id >= 0 && static_cast<int64_t>(segment_id) < num_segments) {
             float val = HalfBitsToFloat_(data[tid]);
             atomicAdd(&float_output[segment_id * M + j], val);
         }
@@ -110,14 +110,14 @@ __global__ void UnsortedSegmentSumKernelHalfToFloat(
 
 template <typename Tindex>
 __global__ void UnsortedSegmentSumKernelBFloat16ToFloat(
-    const uint16_t* data, const Tindex* segment_ids, Tindex num_segments,
+    const uint16_t* data, const Tindex* segment_ids, int64_t num_segments,
     int64_t N, int64_t M, float* float_output) {
     int64_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (tid < N * M) {
         int64_t j = tid % M;
         int64_t i = tid / M;
         Tindex segment_id = segment_ids[i];
-        if (segment_id >= 0 && segment_id < num_segments) {
+        if (segment_id >= 0 && static_cast<int64_t>(segment_id) < num_segments) {
             float val = BFloat16BitsToFloat_(data[tid]);
             atomicAdd(&float_output[segment_id * M + j], val);
         }
@@ -139,7 +139,7 @@ __global__ void ConvertFloatToBFloat16BitsKernel(const float* input,
 extern "C" {
 #define DEFINE_HALF_ACCUM_LAUNCHER(FuncName, AccumKernel, Tindex)               \
   void FuncName(const uint16_t* data, const Tindex* segment_ids,                \
-                Tindex num_segments, int64_t N, int64_t M,                      \
+                int64_t num_segments, int64_t N, int64_t M,                     \
                 float* float_output, musaStream_t stream) {                     \
     int64_t total = N * M;                                                      \
     if (total == 0) return;                                                     \
