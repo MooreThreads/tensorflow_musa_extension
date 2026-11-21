@@ -8,3 +8,5 @@ core.*
 *.mudmp
 *.whl
 *.so
+tmp
+model

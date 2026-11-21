@@ -29,6 +29,7 @@ Example usage:
 
 import logging
 
+from ._pjrt_bootstrap import is_pjrt_requested
 from ._graph_optimizer import (
     DISABLED_FUSION_PATTERNS_PARAM,
     MUSA_GRAPH_OPTIMIZER_NAME,
@@ -49,7 +50,13 @@ from ._graph_optimizer import (
     set_musa_disabled_fusion_patterns,
     set_musa_graph_optimizer_enabled,
 )
-from ._loader import get_musa_devices, get_musa_ops, is_plugin_loaded, load_plugin
+from ._loader import (
+    get_musa_devices,
+    get_musa_ops,
+    get_pjrt_status,
+    is_plugin_loaded,
+    load_plugin,
+)
 from ._optimizers import apply_adam_mixed, apply_sparse_adam_mixed
 from ._runtime_config import (
     disable_musa_telemetry,
@@ -59,10 +66,15 @@ from ._runtime_config import (
     set_musa_allow_growth,
     set_musa_telemetry_config,
 )
-from . import gradients, ops, raw_ops
+# ``gradients`` imports TensorFlow at module import time. Keep the historical
+# native import order, but defer these helpers in PJRT mode until the loader
+# has completed provider preparation and registration.
+if not is_pjrt_requested():
+    from . import gradients, ops, raw_ops
 
 # Package version
 __version__ = "1.5.0"
+
 
 # Load plugin automatically on import
 _plugin_loaded = False
@@ -71,11 +83,16 @@ try:
     load_plugin()
     _plugin_loaded = True
 except Exception as e:
+    if is_pjrt_requested() and get_pjrt_status().get("phase") != "fallback":
+        raise
     logging.warning(f"Failed to load MUSA plugin: {e}")
     logging.warning(
         "MUSA functionality will not be available. "
         "Please ensure the plugin is built and MUSA SDK is installed."
     )
+
+if is_pjrt_requested():
+    from . import gradients, ops, raw_ops
 
 # Public API
 __all__ = [
@@ -85,6 +102,7 @@ __all__ = [
     "raw_ops",
     "load_plugin",
     "get_musa_ops",
+    "get_pjrt_status",
     "is_plugin_loaded",
     "get_musa_devices",
     "MUSA_GRAPH_OPTIMIZER_NAME",

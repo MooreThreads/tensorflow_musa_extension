@@ -337,7 +337,80 @@ print(f'Event records: {len(records)}, Event waits: {len(waits)}')
 
 ---
 
-## 6. 故障排查清单
+## 6. OpenXLA PJRT 诊断
+
+### 6.1 启用 PJRT
+
+PJRT 默认关闭，必须显式开启。正常用户路径先安装 `openxla_musa_pjrt` provider wheel；wheel 固定携带 PJRT plugin、TF 2.15 registry bridge 和 mtcc20x tools。运行 TensorFlow 程序时直接加入 `--xla`：
+
+```bash
+python your_tensorflow_program.py --xla
+```
+
+### 6.2 PJRT 模式
+
+普通用户只需要在启动命令中加入 `--xla`。provider wheel 会自动处理 plugin、bridge、工具链
+以及 TensorFlow 的内部发现配置；这些内部配置不属于用户接口，也不需要手动设置。
+
+如果 provider wheel 缺失或其资源检查在注册前失败，TensorFlow MUSA 会输出 warning，并继续
+尝试 native 路径。此时可通过 `tensorflow_musa.get_pjrt_status()` 查看最终模式和错误信息。
+
+若 PJRT 已开始加载或注册动态库后才失败，为避免 native/PJRT 重复注册，进程会报错退出；使用
+不带 `--xla` 的新进程即可回到 native。
+
+### 6.3 PJRT 状态查询
+
+```python
+import tensorflow_musa
+status = tensorflow_musa.get_pjrt_status()
+print(status)
+# 预期输出: {'mode': 'pjrt', 'phase': 'ready', 'provider': 'openxla_musa_pjrt', 'plugin_path': ..., 'bridge_path': ..., 'error': None}
+```
+
+### 6.4 PJRT 测试
+
+```bash
+# 默认模式（native MUSA kernel）
+MUSA_VISIBLE_DEVICES=5 python test/test_runner.py
+
+# PJRT 模式（OpenXLA-MUSA；已安装 openxla_musa_pjrt provider wheel）
+MUSA_VISIBLE_DEVICES=5 python test/pjrt/run_pjrt_tests.py --xla
+```
+
+### 6.5 两种模式切换
+
+| 模式 | 设置 |
+|------|------|
+| 默认（native） | 不加 `--xla` |
+| PJRT | `python program.py --xla` |
+
+### 6.6 常见 PJRT 问题排查
+
+**问题 1：`PJRT_Api not found for device type musa`**
+
+正常 wheel 安装不需要手动设置 `LD_LIBRARY_PATH`；provider 会在导入 TensorFlow 前处理内部加载路径。
+如果仍出现该错误，优先确认 TensorFlow MUSA 与 provider wheel 来自匹配的构建。
+
+**问题 2：`Multiple OpKernel registrations match node` 或 PJRT fallback warning**
+
+根因：native kernel 和 PJRT delegating kernel 同时注册在同一设备类型上，或 PJRT provider
+初始化失败后回退到了 native。确认两个 wheel 安装在同一 Python 环境，并检查
+`get_pjrt_status()` 返回的 `error`。
+
+**问题 3：`Unable to locate MTGPU tool llvm-link`**
+
+根因：provider wheel 中的 MTGPU 编译工具链未找到或不完整。确认 provider wheel 包含完整的
+`mtcc20x_tools/` 目录，并与当前 Python 环境匹配。
+
+**问题 4：PJRT API 版本不匹配**
+
+日志中出现 `PJRT API version 0.76` 与 `framework PJRT API version 0.34` 不匹配是正常现象，当前通过 plugin 兼容层处理。
+
+**问题 5：`ALREADY_EXISTS` 崩溃**
+
+根因：PJRT plugin 被重复加载。确保 `load_plugin()` 只调用一次，幂等保护已修复。
+
+## 7. 故障排查清单
 
 ### 6.1 脏数据（NaN）问题
 

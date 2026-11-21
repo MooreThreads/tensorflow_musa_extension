@@ -15,8 +15,17 @@
 
 """MUSA plugin loading utilities."""
 
-import os
 import logging
+import os
+import sys
+
+from ._pjrt_bootstrap import (
+    fallback_to_native,
+    get_pjrt_bootstrap_status,
+    is_pjrt_requested,
+    load_pjrt_plugin,
+    prepare_pjrt_bootstrap,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +34,7 @@ PLUGIN_LIBRARY = "libmusa_plugin.so"
 _plugin_path = None
 _op_module = None
 _device_library_loaded = False
+_native_plugin_load_attempted = False
 
 
 def _find_plugin_library():
@@ -107,15 +117,59 @@ def load_plugin():
         RuntimeError: If TensorFlow cannot load the plugin
     """
     global _plugin_path, _op_module, _device_library_loaded
+    global _native_plugin_load_attempted
 
-    if _plugin_path is not None and _op_module is not None:
+    if _plugin_path is not None:
         return _plugin_path
+
+    # PJRT preparation occurs before importing TensorFlow so the provider can
+    # publish TensorFlow's plug-in discovery variables. A failed optional
+    # attempt is rolled back and falls through to the native path.
+    pjrt_requested = False
+    if is_pjrt_requested():
+        if "tensorflow" in sys.modules:
+            raise RuntimeError(
+                "PJRT requires importing tensorflow_musa before tensorflow; "
+                "start a new process and move 'import tensorflow_musa' ahead "
+                "of 'import tensorflow'."
+            )
+        try:
+            pjrt_requested = prepare_pjrt_bootstrap()
+        except Exception as e:
+            fallback_to_native(e)
+            logger.warning(
+                "OpenXLA-MUSA PJRT could not be initialized; falling back to "
+                "native MUSA: %s",
+                e,
+            )
 
     import tensorflow as tf
 
-    plugin_path = _find_plugin_library()
+    if pjrt_requested:
+        # Never resolve or load libmusa_plugin.so in PJRT mode. Native and PJRT
+        # kernels overlap on the MUSA device type and must not coexist.
+        try:
+            load_pjrt_plugin(tf)
+            pjrt_status = get_pjrt_bootstrap_status()
+            plugin_path = pjrt_status["plugin_path"]
+            if not plugin_path:
+                raise RuntimeError("PJRT provider completed without a plugin path")
+            _op_module = None
+            _plugin_path = plugin_path
+            logger.info("MUSA PJRT provider ready: %s", plugin_path)
+            return plugin_path
+        except Exception as e:
+            raise RuntimeError(
+                "OpenXLA-MUSA PJRT failed after registration began. Native "
+                "fallback is unsafe in this process because PJRT may already "
+                "have registered MUSA kernels; start a new process without "
+                f"--xla. Original error: {e}"
+            ) from e
 
+    # Native default path: preserve the existing TF MUSA loading sequence.
+    plugin_path = _find_plugin_library()
     try:
+        _native_plugin_load_attempted = True
         _op_module = tf.load_op_library(plugin_path)
         if not _use_legacy_loader() and not _device_library_loaded:
             _load_pluggable_device_library(plugin_path)
@@ -127,7 +181,7 @@ def load_plugin():
         raise RuntimeError(
             f"Failed to load MUSA plugin from {plugin_path}: {e}\n"
             f"Please ensure TensorFlow and MUSA SDK are properly installed."
-        )
+        ) from e
 
 
 def get_musa_ops():
@@ -140,6 +194,11 @@ def get_musa_ops():
     if _op_module is None:
         load_plugin()
     return _op_module
+
+
+def get_pjrt_status():
+    """Return the current optional PJRT bootstrap status."""
+    return get_pjrt_bootstrap_status()
 
 
 def is_plugin_loaded():

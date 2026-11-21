@@ -188,7 +188,10 @@ class BdistWheelCommand(bdist_wheel):
         # Force only the tensorflow_musa package (source is in python directory)
         self.distribution.packages = ["tensorflow_musa"]
         self.distribution.package_data = {
-            PACKAGE_NAME: [PLUGIN_LIBRARY, RUNTIME_CONFIG_BINDINGS_PATTERN]
+            PACKAGE_NAME: [
+                PLUGIN_LIBRARY,
+                RUNTIME_CONFIG_BINDINGS_PATTERN,
+            ]
         }
         self.distribution.py_modules = None
         # Map tensorflow_musa package name to python source directory
@@ -240,7 +243,10 @@ setup(
     # Package name (pip install tensorflow_musa)
     packages=["tensorflow_musa"],
     package_data={
-        PACKAGE_NAME: [PLUGIN_LIBRARY, RUNTIME_CONFIG_BINDINGS_PATTERN],
+        PACKAGE_NAME: [
+            PLUGIN_LIBRARY,
+            RUNTIME_CONFIG_BINDINGS_PATTERN,
+        ],
     },
     python_requires=">=3.7",
     # NOTE: tensorflow is NOT listed in install_requires to prevent pip from
